@@ -6,6 +6,7 @@ from pulumi_kubernetes.core.v1 import ContainerArgs, PodSpecArgs, PodTemplateSpe
 
 
 def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provider:
+    '''Create a new k8s provider with default namespace.'''
     if createNs:
         k8s.core.v1.Namespace(
             ns, metadata=ObjectMetaArgs(name=ns), opts=pulumi.ResourceOptions(delete_before_replace=True)
@@ -13,13 +14,18 @@ def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provide
 
     providerArgs = {
         **providerArgs,
+        # Provider is only replaced when this identifer changes
+        'cluster_identifier': f'kluster-{ns}',
+        'enable_server_side_apply': True,
         'namespace': ns,
         'suppress_deprecation_warnings': True,
+        'suppress_helm_hook_warnings': True,
     }
     return k8s.Provider(f'{ns}-provider', **providerArgs)
 
 
-def setup() -> None:
+def main() -> None:
+    '''Main function called from scripts/stack.py.'''
     app_labels = {'app': 'nginx'}
 
     deployment = Deployment(

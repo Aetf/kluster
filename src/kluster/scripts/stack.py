@@ -3,4 +3,4 @@ import kluster.main
 
 def main():
     """A Kubernetes Python Pulumi program"""
-    return kluster.main.setup()
+    return kluster.main.main()

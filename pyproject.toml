@@ -27,9 +27,6 @@ dev = [
     "ipython>=8.30.0",
     "tqdm>=4.67.1",
 ]
-types = [
-    "types-requests>=2.32.0.20241016",
-]
 ##
 ## Project management section
 ##
