@@ -1,17 +1,24 @@
+from http.client import HTTPResponse
+from io import BytesIO
 import logging
 import logging.config
 import os
 import re
+import shutil
 import subprocess as sp
 import sys
 import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, IO, Generator, Mapping
+from contextlib import contextmanager
 
 import pulumi_kubernetes
 import requests
 import yaml
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
+from tqdm.contrib import tenumerate
 
 DEFAULT_LOGGING = {
     'version': 1,
@@ -29,6 +36,13 @@ logging.config.dictConfig(DEFAULT_LOGGING)
 log = logging.getLogger(__name__)
 
 
+@contextmanager
+def tqdm_wrap_file_read(fileobj: IO[bytes], /, **kwargs) -> Generator[IO[bytes], None, None]:
+    kwargs = {'unit': 'B', 'unit_scale': True, 'unit_divisor': 1024, 'miniters': 1, **kwargs}
+    with tqdm.wrapattr(fileobj, 'read', **kwargs) as wrapped:
+        yield wrapped
+
+
 def download_github_release(repo_name: str, pattern_str: str, output_dir: Path = Path('.')) -> Path:
     pattern = re.compile(pattern_str)
     resp = requests.get(f'https://api.github.com/repos/{repo_name}/releases/latest')
@@ -38,10 +52,15 @@ def download_github_release(repo_name: str, pattern_str: str, output_dir: Path =
     else:
         raise ValueError(f'Not found: {repo_name}, {pattern}, {output_dir}')
 
-    with requests.get(asset['browser_download_url'], stream=True) as rx, tarfile.open(
-        fileobj=rx.raw, mode='r:gz'
-    ) as tarobj:
-        tarobj.extractall(output_dir, filter='data')
+    url = asset['browser_download_url']
+    log.info(f'Downloading from {url}')
+    with requests.get(url, stream=True) as rx:
+        total = int(rx.headers.get('content-length', 0))
+        # rx.raw is urllib3 HTTPResponse, which is supposed to be fileobj-like
+        # according to its documentation, but typing doesn't say so.
+        with tqdm_wrap_file_read(rx.raw, desc=f'Downloading {repo_name}', total=total) as f_in:  # type: ignore[reportArgumentType]
+            with tarfile.open(fileobj=f_in, mode='r:gz') as tarobj:
+                tarobj.extractall(output_dir, filter='data')
 
     # find the binary executable
     for path in output_dir.rglob('*'):
@@ -51,90 +70,65 @@ def download_github_release(repo_name: str, pattern_str: str, output_dir: Path =
     raise ValueError('No executable found')
 
 
-def fix_crds(crds) -> List[Dict[str, Any]]:
+def fix_crds(crds: Mapping[str, Any]) -> List[Dict[str, Any]]:
     items = crds['items']
 
-    # remove unwanted fields
-    for item in items:
+    for item in tqdm(items, desc='Removing unwanted fields'):
         del item['status']
 
-    # remove unwanted crd
+    log.info('Removing unwanted CRD')
     items = [item for item in items if item['spec']['group'] != 'traefik.containo.us']
-
-    # fix crd with object default, which crd2pulumi can't yet handle (fix not released yet)
-    # See https://github.com/pulumi/crd2pulumi/pull/136
-    def recursive_remove_default(obj: Union[List[Dict[str, Any]], Dict[str, Any]], prev_key: str):
-        if isinstance(obj, dict):
-            for k in list(obj.keys()):
-                next_key = f'{prev_key}.{k}'
-
-                if k == 'default' and isinstance(obj[k], dict):
-                    del obj[k]
-                else:
-                    recursive_remove_default(obj[k], next_key)
-        elif isinstance(obj, list):
-            for idx, item in enumerate(obj):
-                recursive_remove_default(item, f'{prev_key}.[{idx}]')
-
-    recursive_remove_default(items, 'items')
 
     return items
 
 
 def fix_generated(output: Path):
-    # fix version not actually set in setup.py
-    log.info('Fix version not actually set in setup.py')
-    sp.check_call(
-        [
-            'sed',
-            '-E',
-            f's/VERSION = "0.0.0"/VERSION = "{pulumi_kubernetes._utilities.get_version()}"/',
-            '-i',
-            str(output / 'setup.py'),
-        ]
-    )
-    log.info('Fix requests version')
-    sp.check_call(
-        [
-            'sed',
-            '-E',
-            f"""s/'requests>=2.21.0,<2.22.0'/'requests>=2.21.0'/""",
-            '-i',
-            str(output / 'setup.py'),
-        ]
-    )
+    pass
 
 
 def main():
-    output = Path('./lib/crds')
+    with logging_redirect_tqdm():
+        output = Path('./packages/crds')
+        output_bak = output.with_suffix('.bak')
 
-    log.info(f'CRDs directory: {output.resolve()}')
+        log.info(f'CRDs directory: {output.resolve()}')
 
-    with TemporaryDirectory(prefix='update_crds-', delete=True) as dir:
-        dir = Path(dir)
-        log.info(f'Working directory: {dir.resolve()}')
-        crd2pulumi = download_github_release('pulumi/crd2pulumi', 'linux-amd64', output_dir=dir)
+        with TemporaryDirectory(prefix='update_crds-', delete=True) as dir:
+            dir = Path(dir)
+            log.info(f'Working directory: {dir.resolve()}')
+            crd2pulumi = download_github_release('pulumi/crd2pulumi', 'linux-amd64', output_dir=dir)
 
-        crds_yaml = sp.check_output(['kubectl', 'get', 'crds', '-o', 'yaml'])
-        crds = fix_crds(yaml.safe_load(crds_yaml))
-        log.info(f'Loaded {len(crds)} CRD from k8s')
+            log.info('Downloading CRDs from k8s')
+            kubectl = shutil.which('kubectl')
+            if kubectl is None:
+                raise ValueError('Can not find kubectl in PATH')
+            crds_yaml = sp.check_output([kubectl, 'get', 'crds', '-o', 'yaml'])
+            with tqdm_wrap_file_read(BytesIO(crds_yaml), desc='Loading CRD yaml', total=len(crds_yaml)) as crds_yaml:
+                crds = yaml.safe_load(crds_yaml)
+            crds = fix_crds(crds)
+            log.info(f'Loaded {len(crds)} CRD from k8s')
 
-        # write to multiple yml files, as crd2pulumi can't work with combined doc
-        files: List[str] = []
-        for idx, crd in enumerate(crds):
-            yml_file = dir / f'crd_{idx}.yml'
-            with yml_file.open('w') as f:
-                yaml.safe_dump(crd, f)
-            files.append(str(yml_file))
-        log.info(f'Wrote to {len(files)} yml files')
+            # Write to multiple yml files, as crd2pulumi can't work with combined doc
+            files: List[str] = []
+            for idx, crd in tenumerate(crds, desc='Writing to CRD yml files'):
+                yml_file = dir / f'crd_{idx}.yml'
+                with yml_file.open('w') as f:
+                    yaml.safe_dump(crd, f)
+                files.append(str(yml_file))
+            log.info(f'Wrote to {len(files)} yml files')
 
-        log.info('Generating new crd bindings')
-        pulumi_kubernetes_version = pulumi_kubernetes._utilities.get_version()
-        sp.check_call(
-            [crd2pulumi, '--force', '--python', '--pythonPath', str(output), '--version', pulumi_kubernetes_version]
-            + files
-        )
+            log.info('Backup existing crd bindings')
+            shutil.rmtree(output_bak, ignore_errors=True)
+            output.replace(output_bak)
 
-        fix_generated(output)
+            log.info('Generating new crd bindings')
+            pulumi_kubernetes_version = pulumi_kubernetes._utilities.get_version()
+            sp.check_call(
+                [crd2pulumi, '--python', '--pythonPath', str(output), '--version', pulumi_kubernetes_version] + files
+            )
 
-        log.info('All done')
+            fix_generated(output)
+
+            log.info('All done')
+
+            shutil.rmtree(output_bak, ignore_errors=True)
