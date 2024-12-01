@@ -2,6 +2,8 @@
 Pulumi/asyncio helpers.
 
 Most of this just deals with annoying boilerplate (@task, @background).
+
+From https://github.com/dingbots/putils/blob/master/putils/aws.py
 """
 
 import asyncio

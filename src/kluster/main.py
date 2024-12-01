@@ -4,6 +4,7 @@ from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
 from pulumi_kubernetes.meta.v1 import LabelSelectorArgs, ObjectMetaArgs
 from pulumi_kubernetes.core.v1 import ContainerArgs, PodSpecArgs, PodTemplateSpecArgs
 
+from . import physical
 
 def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provider:
     '''Create a new k8s provider with default namespace.'''
@@ -26,18 +27,5 @@ def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provide
 
 def main() -> None:
     '''Main function called from scripts/stack.py.'''
-    app_labels = {'app': 'nginx'}
+    physical.setup()
 
-    deployment = Deployment(
-        'nginx',
-        spec=DeploymentSpecArgs(
-            selector=LabelSelectorArgs(match_labels=app_labels),
-            replicas=1,
-            template=PodTemplateSpecArgs(
-                metadata=ObjectMetaArgs(labels=app_labels),
-                spec=PodSpecArgs(containers=[ContainerArgs(name='nginx', image='nginx')]),
-            ),
-        ),
-    )
-
-    pulumi.export('name', deployment.metadata['name'])

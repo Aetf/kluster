@@ -223,8 +223,9 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
-    { name = "pip" },
     { name = "pulumi" },
+    { name = "pulumi-aws" },
+    { name = "pulumi-awsx" },
     { name = "pulumi-crds" },
     { name = "pulumi-kubernetes" },
     { name = "pyyaml" },
@@ -236,15 +237,13 @@ dev = [
     { name = "ipython" },
     { name = "tqdm" },
 ]
-types = [
-    { name = "types-requests" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "jinja2", specifier = ">=3.1.4" },
-    { name = "pip", specifier = ">=24.0" },
     { name = "pulumi", specifier = ">=3.117.0" },
+    { name = "pulumi-aws", specifier = ">=6.61.0" },
+    { name = "pulumi-awsx", specifier = ">=2.19.0" },
     { name = "pulumi-crds", editable = "packages/crds" },
     { name = "pulumi-kubernetes", specifier = ">=4.12.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
@@ -256,7 +255,6 @@ dev = [
     { name = "ipython", specifier = ">=8.30.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-types = [{ name = "types-requests", specifier = ">=2.32.0.20241016" }]
 
 [[package]]
 name = "markupsafe"
@@ -343,15 +341,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pip"
-version = "24.3.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/f4/b1/b422acd212ad7eedddaf7981eee6e5de085154ff726459cf2da7c5a184c1/pip-24.3.1.tar.gz", hash = "sha256:ebcb60557f2aefabc2e0f918751cd24ea0d56d8ec5445fe1807f1d2109660b99", size = 1931073 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/7d/500c9ad20238fcfcb4cb9243eede163594d7020ce87bd9610c9e02771876/pip-24.3.1-py3-none-any.whl", hash = "sha256:3790624780082365f47549d032f3770eeb2b1e8bd1f7b2e02dace1afa361b4ed", size = 1822182 },
-]
-
-[[package]]
 name = "prompt-toolkit"
 version = "3.0.48"
 source = { registry = "https://pypi.org/simple" }
@@ -404,6 +393,36 @@ wheels = [
 ]
 
 [[package]]
+name = "pulumi-aws"
+version = "6.61.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/bd/beb599918d5f61547ea16ef4dbdd9e9e8ecc0af1c0e1ed414b90b829f9ac/pulumi_aws-6.61.0.tar.gz", hash = "sha256:7907416bbb3fb70afe042b17f053f593db77d517538ec2110cca7f0d1cb36126", size = 7251434 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/a8/5a092f6d3f2562083e0d39abba11f148ca7801a8d10e43a0e2c54ee92955/pulumi_aws-6.61.0-py3-none-any.whl", hash = "sha256:749d73f42e5d0ca0be4d0cbfbc50ba85e5397bee096391785015a4c3e85c15cb", size = 9902237 },
+]
+
+[[package]]
+name = "pulumi-awsx"
+version = "2.19.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "pulumi-aws" },
+    { name = "pulumi-docker" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/37/15/cd7ea05de64059ed3963278baf1d11adfa62a586372881c6edaf34fc3513/pulumi_awsx-2.19.0.tar.gz", hash = "sha256:3618e377b0d159ca6cfccb6152bc3aa9b6d8526970af0958462575f72bfda59e", size = 100376 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/23/66/8f7a2f1711c87f5332558c8649f0c8edc7e4af61e9cabdd3fa5e125dd07f/pulumi_awsx-2.19.0-py3-none-any.whl", hash = "sha256:f994ca165787a8904d0ad20a61b153e2c4854f2f1826ffd5d34142cd59b688ac", size = 115638 },
+]
+
+[[package]]
 name = "pulumi-crds"
 version = "4.18.0"
 source = { editable = "packages/crds" }
@@ -423,6 +442,20 @@ requires-dist = [
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11" },
+]
+
+[[package]]
+name = "pulumi-docker"
+version = "4.5.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/e8/234dfeec4843af93c2f3c1244c4dc04486a7d5f5f588a54a338d7e1ffc00/pulumi_docker-4.5.7.tar.gz", hash = "sha256:19f8f9dce3055abd2da2ff10b867231610880e201c98d844036d6280e81b292c", size = 90361 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/95/34dc4ab16ba018374c6c6ccdc9d2e1c81823193c6c53bdb31ff94a17b985/pulumi_docker-4.5.7-py3-none-any.whl", hash = "sha256:f8bebfee982151e46f39dc52a53af1edd21658722406c3d4327824dc4f724067", size = 110059 },
 ]
 
 [[package]]
@@ -550,18 +583,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/eb/79/72064e6a701c2183016abbbfedaba506d81e30e232a68c9f0d6f6fcd1574/traitlets-5.14.3.tar.gz", hash = "sha256:9ed0579d3502c94b4b3732ac120375cda96f923114522847de4b3bb98b96b6b7", size = 161621 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/00/c0/8f5d070730d7836adc9c9b6408dec68c6ced86b304a9b26a14df072a6e8c/traitlets-5.14.3-py3-none-any.whl", hash = "sha256:b74e89e397b1ed28cc831db7aea759ba6640cb3de13090ca145426688ff1ac4f", size = 85359 },
-]
-
-[[package]]
-name = "types-requests"
-version = "2.32.0.20241016"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/3c/4f2a430c01a22abd49a583b6b944173e39e7d01b688190a5618bd59a2e22/types-requests-2.32.0.20241016.tar.gz", hash = "sha256:0d9cad2f27515d0e3e3da7134a1b6f28fb97129d86b867f24d9c726452634d95", size = 18065 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/01/485b3026ff90e5190b5e24f1711522e06c79f4a56c8f4b95848ac072e20f/types_requests-2.32.0.20241016-py3-none-any.whl", hash = "sha256:4195d62d6d3e043a4eaaf08ff8a62184584d2e8684e9d2aa178c7915a7da3747", size = 15836 },
 ]
 
 [[package]]

@@ -99,7 +99,12 @@ class Component(pulumi.ComponentResource):
             self._process_outs(outs, futures)
 
     def _process_outs(self, outs: Optional[pulumi.Inputs], futures=None):
-        pulumi.Output.all()
+        '''Process outputs in `outs`.
+
+        This registers outputs with pulumi, and the value either
+          * ressolves the associated output future, or
+          * pass to setattr on `self`
+        '''
         if outs is None:
             outs = {}
         self.register_outputs(outs)
@@ -110,4 +115,10 @@ class Component(pulumi.ComponentResource):
                 setattr(self, name, value)
 
     def setup(self, name: str, *pargs, opts: Optional[pulumi.ResourceOptions], **kwargs) -> Optional[pulumi.Inputs]:
+        '''
+        Setup the custom component.
+
+        This method can optionally be async.
+
+        '''
         pass
