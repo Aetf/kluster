@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "skills": {
+    "package-usage": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "05dbb7673eaa44a6df2c9aa95e6b0ca4fdbbfc823e18457b2e0996e4ccc7c8b0"
+    },
+    "provider-upgrade": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "90dbaa3072953d2a58665d17163b41afc35c727e49637e0bf05d517a22e24f26"
+    },
+    "pulumi-automation-api": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "2d19e88634977983169523fc68b227efb170e776a02b53895fce7f34b2d9c390"
+    },
+    "pulumi-best-practices": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "cbbaa9f2a7b3a52eb5ed0e0c60e50b4440ed884113dc919bb83c0a5723cd487f"
+    },
+    "pulumi-component": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "b3e3d1ff41bc3f3c8afa215d46de11e148ae771731540568a6d5467eeb45711f"
+    },
+    "pulumi-esc": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "0476a30cbf9595b1011eb1a5ae4e7bae99c0a2a3bcb15eed1626f4deaaf38a3f"
+    },
+    "pulumi-upgrade-provider": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "551e1ebae09ec54f64d7b8d7d05610c57d9c6177962a3110242a118af05e35ed"
+    },
+    "upstream-patches": {
+      "source": "pulumi/agent-skills",
+      "sourceType": "github",
+      "computedHash": "280be570d7ef31a78a2703b2d176cb30abf2da58d0e507b7bd8aead0a30d6501"
+    }
+  }
+}
