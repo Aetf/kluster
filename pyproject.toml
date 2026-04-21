@@ -28,6 +28,8 @@ update_crds = 'kluster.scripts.update_crds:main'
 dev = [
     "ipython>=8.30.0",
     "tqdm>=4.67.1",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]
 ##
 ## Project management section
