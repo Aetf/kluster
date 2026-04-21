@@ -12,10 +12,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, IO, Generator, Mapping
 from contextlib import contextmanager
+import argparse
 
 import pulumi_kubernetes
 import requests
-import yaml
+from ruamel.yaml import YAML
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 from tqdm.contrib import tenumerate
@@ -87,6 +88,11 @@ def fix_generated(output: Path):
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Update CRD bindings')
+    parser.add_argument('--file', type=str, help='Path to crds.yaml file instead of running kubectl')
+    parser.add_argument('--version', type=str, default='4.18.0', help='Pulumi Kubernetes version to target')
+    args = parser.parse_args()
+
     with logging_redirect_tqdm():
         output = Path('./packages/crds')
         output_bak = output.with_suffix('.bak')
@@ -98,22 +104,31 @@ def main():
             log.info(f'Working directory: {dir.resolve()}')
             crd2pulumi = download_github_release('pulumi/crd2pulumi', 'linux-amd64', output_dir=dir)
 
-            log.info('Downloading CRDs from k8s')
-            kubectl = shutil.which('kubectl')
-            if kubectl is None:
-                raise ValueError('Can not find kubectl in PATH')
-            crds_yaml = sp.check_output([kubectl, 'get', 'crds', '-o', 'yaml'])
-            with tqdm_wrap_file_read(BytesIO(crds_yaml), desc='Loading CRD yaml', total=len(crds_yaml)) as crds_yaml:
-                crds = yaml.safe_load(crds_yaml)
+            if args.file:
+                log.info(f'Reading CRDs from file: {args.file}')
+                with open(args.file, 'rb') as f:
+                    crds_yaml = f.read()
+            else:
+                log.info('Downloading CRDs from k8s')
+                kubectl = shutil.which('kubectl')
+                if kubectl is None:
+                    raise ValueError('Can not find kubectl in PATH')
+                crds_yaml = sp.check_output([kubectl, 'get', 'crds', '-o', 'yaml'])
+
+            ryaml = YAML(typ='safe')
+            with tqdm_wrap_file_read(
+                BytesIO(crds_yaml), desc='Loading CRD yaml', total=len(crds_yaml)
+            ) as crds_yaml_stream:
+                crds = ryaml.load(crds_yaml_stream)
             crds = fix_crds(crds)
-            log.info(f'Loaded {len(crds)} CRD from k8s')
+            log.info(f'Loaded {len(crds)} CRD')
 
             # Write to multiple yml files, as crd2pulumi can't work with combined doc
             files: List[str] = []
             for idx, crd in tenumerate(crds, desc='Writing to CRD yml files'):
                 yml_file = dir / f'crd_{idx}.yml'
                 with yml_file.open('w') as f:
-                    yaml.safe_dump(crd, f)
+                    ryaml.dump(crd, f)
                 files.append(str(yml_file))
             log.info(f'Wrote to {len(files)} yml files')
 

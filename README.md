@@ -4,7 +4,13 @@ Pulumi python code to build my k8s cluster using Talos on GCP.
 
 Project managed by [uv](https://github.com/astral-sh/uv) and mise.
 
-To run pulumi, use `mise x -- pulumi`.
+## Tools
+
+**pulumi**: `mise x -- pulumi`.
+
+Anything installed by `uv`:
+
+**ruff**: `mise x uv -- uv run ruff`.
 
 ## Architecture
 
