@@ -153,33 +153,39 @@ class SealedSecret(crds.bitnami.v1alpha1.SealedSecret):
         # Workaround https://github.com/pulumi/crd2pulumi/issues/26
         self._name = name
 
-        metadata = k8s.meta.v1.ObjectMetaArgs(**{
-            **metadata.__dict__,
-            'name': name,
-            'annotations': {
-                "sealedsecrets.bitnami.com/namespace-wide": "true",
+        metadata = k8s.meta.v1.ObjectMetaArgs(
+            **{
+                **metadata.__dict__,
+                'name': name,
+                'annotations': {
+                    'sealedsecrets.bitnami.com/namespace-wide': 'true',
+                },
             }
-        })
+        )
 
         template = template or crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs()
         spec = crds.bitnami.v1alpha1.SealedSecretSpecArgs(
             encrypted_data=encrypted_data,
-            template=crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs(**{
-                **template.__dict__,
-                'metadata': k8s.meta.v1.ObjectMetaArgs(**{
-                    **(template.metadata or {}).__dict__,
-                    'annotations': {
-                        "sealedsecrets.bitnami.com/namespace-wide": "true",
-                    }
-                })
-            })
+            template=crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs(
+                **{
+                    **template.__dict__,
+                    'metadata': k8s.meta.v1.ObjectMetaArgs(
+                        **{
+                            **(template.metadata or {}).__dict__,
+                            'annotations': {
+                                'sealedsecrets.bitnami.com/namespace-wide': 'true',
+                            },
+                        }
+                    ),
+                }
+            ),
         )
 
         # Delete before replace because name is fixed
         opts = opts or pulumi.ResourceOptions()
         opts.delete_before_replace = True
 
-        super().__init__( name, metadata=metadata, spec=spec, opts=opts)
+        super().__init__(name, metadata=metadata, spec=spec, opts=opts)
 
     def mount(self, dest: pulumi.Input[str], src: pulumi.Input[str] | None = None):
         raise NotImplementedError('mount')

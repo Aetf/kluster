@@ -6,8 +6,9 @@ from pulumi_kubernetes.core.v1 import ContainerArgs, PodSpecArgs, PodTemplateSpe
 
 from . import physical
 
+
 def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provider:
-    '''Create a new k8s provider with default namespace.'''
+    """Create a new k8s provider with default namespace."""
     if createNs:
         k8s.core.v1.Namespace(
             ns, metadata=ObjectMetaArgs(name=ns), opts=pulumi.ResourceOptions(delete_before_replace=True)
@@ -26,6 +27,5 @@ def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provide
 
 
 def main() -> None:
-    '''Main function called from scripts/stack.py.'''
+    """Main function called from scripts/stack.py."""
     physical.setup()
-
