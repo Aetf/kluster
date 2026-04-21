@@ -2,13 +2,14 @@
 Setups up resources on AWS.
 """
 
+import requests
 import ipaddress
 import itertools
 from typing import List
 
 import pulumi
 import pulumi_aws as aws
-import pulumi_awsx as awsx
+import pulumi_github as gh
 
 
 def create_subnet(
@@ -93,11 +94,22 @@ def setup_networks():
 
     pulumi.export('vpcId', vpc.id)
 
+    aws_config = pulumi.Config('aws')
 
-def setup_vms():
-    pass
+    def get_talos_ami():
+        resp = requests.get('https://github.com/siderolabs/talos/releases/download/v1.8.3/cloud-images.json')
+        for img in resp.json():
+            if img.cloud != 'aws':
+                continue
+            if img.region != aws_config.require('region'):
+                continue
+            if img.arch != 'amd64':
+                continue
+            return img.id
+        raise ValueError('Suitable talos AMI not found!')
+
+    ami = get_talos_ami()
 
 
 def setup():
     setup_networks()
-    setup_vms()

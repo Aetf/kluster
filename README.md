@@ -5,10 +5,14 @@ Pulumi python code to build my k8s cluster using Talos on GCP.
 Project managed by [uv](https://github.com/astral-sh/uv)
 
 ## GCP
-* n2d-standard-2 spot
-  * 30G boot disk
+### GCE 3 control plane + 1 worker
 
-$32.67/month
+https://cloud.google.com/products/calculator?hl=en&dl=CjhDaVE0WlRrM01XRTBNaTB4T0dNNExUUTBOREF0WWpFd05DMWtNV016WXpCa1pXTTFPRGdRQVE9PRAIGiQ5NTZFMTkwQy05OEQxLTRFQjctODc4NS1BQjhGRjE0NkUxQ0I
+
+control plane: t4d-standard-2 (2 vCPU, 8G) x 3
+worker: t4d-standard-4 (4 vGPU, 16G) + 100G PD
+
+39.97 for 3Y CUD
 
 ## AWS
 
@@ -32,13 +36,15 @@ Need to move S3 to us-west-2 region.
 
 __Not possible to use any BGP or ARP based load balancer on Cloud__
 
-Since all nodes has public IP, use HostPort for traefik
+There is no ServiceLB, which can only be used in k3s.
 
-traefik deployment on all control nodes, and host port for all entry points
+But we can use traefik to achieve a similar effect. Since all nodes has public IP, use HostPort for traefik
+
+traefik deployment on all workers, and host port for all entry points
 
 use tcp entrypoint and tcp router for other cluster services like hath
 
-use multiple AAAA records for load balancing among notes
+use multiple AAAA records for load balancing among nodes
 
 still kube router can be used for in-cluster cluster IP and service IP routing, as well as BGP with DMSE...
 
@@ -63,3 +69,10 @@ kube-router as cni, service proxy (disable kube-proxy in talos) and load balance
   need to set cluster ip (ip assigned to clusterIP service) range
 
   need to advertise cluster ip on lan host
+
+
+## Talos
+
+Networking: do not use kubespan, use zerotier with system extionsion https://github.com/siderolabs/extensions/tree/main/network/zerotier
+
+Use pregenerated identity secrets

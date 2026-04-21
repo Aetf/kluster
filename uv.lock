@@ -227,6 +227,7 @@ dependencies = [
     { name = "pulumi-aws" },
     { name = "pulumi-awsx" },
     { name = "pulumi-crds" },
+    { name = "pulumi-github" },
     { name = "pulumi-kubernetes" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -245,6 +246,7 @@ requires-dist = [
     { name = "pulumi-aws", specifier = ">=6.61.0" },
     { name = "pulumi-awsx", specifier = ">=2.19.0" },
     { name = "pulumi-crds", editable = "packages/crds" },
+    { name = "pulumi-github", specifier = ">=6.4.0" },
     { name = "pulumi-kubernetes", specifier = ">=4.12.0" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "requests", specifier = ">=2" },
@@ -456,6 +458,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/eb/e8/234dfeec4843af93c2f3c1244c4dc04486a7d5f5f588a54a338d7e1ffc00/pulumi_docker-4.5.7.tar.gz", hash = "sha256:19f8f9dce3055abd2da2ff10b867231610880e201c98d844036d6280e81b292c", size = 90361 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3e/95/34dc4ab16ba018374c6c6ccdc9d2e1c81823193c6c53bdb31ff94a17b985/pulumi_docker-4.5.7-py3-none-any.whl", hash = "sha256:f8bebfee982151e46f39dc52a53af1edd21658722406c3d4327824dc4f724067", size = 110059 },
+]
+
+[[package]]
+name = "pulumi-github"
+version = "6.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/a1/22f13dc6e9053042e884a356ed86eaf01e6117dea810e1c53f3f33bfbae3/pulumi_github-6.4.0.tar.gz", hash = "sha256:a62a6d8c53e022d5b3665849581e61fcaf688206bf84d3c71dba8ff6e02a7310", size = 193481 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dc/a1/cf795436fbbac1cf0d19099c5250eb235d0033bf587c28afb0c41a8ad1bf/pulumi_github-6.4.0-py3-none-any.whl", hash = "sha256:6dfdf1c02c5da61818ae98bd3d252d6fed95fd099131a6715a374ab3bbf25e92", size = 357577 },
 ]
 
 [[package]]
