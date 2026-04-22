@@ -305,7 +305,7 @@ requires-dist = [
     { name = "pulumi-awsx", specifier = ">=2.19.0" },
     { name = "pulumi-crds", editable = "packages/crds" },
     { name = "pulumi-github", specifier = ">=6.4.0" },
-    { name = "pulumi-kubernetes", specifier = ">=4.29.0" },
+    { name = "pulumi-kubernetes", specifier = ">=4.23.0" },
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
     { name = "requests", specifier = ">=2.32.3" },
 ]
@@ -623,7 +623,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-crds"
-version = "4.18.0"
+version = "4.29.0"
 source = { editable = "packages/crds" }
 dependencies = [
     { name = "parver" },
@@ -636,11 +636,11 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "parver", specifier = ">=0.2.1" },
-    { name = "pulumi", specifier = ">=3.109.0,<4.0.0" },
-    { name = "pulumi-kubernetes", specifier = ">=4.18.0" },
+    { name = "pulumi", specifier = ">=3.165.0,<4.0.0" },
+    { name = "pulumi-kubernetes", specifier = "==4.23.0" },
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]
 
 [[package]]
@@ -673,7 +673,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-kubernetes"
-version = "4.29.0"
+version = "4.23.0"
 source = { registry = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/simple/" }
 dependencies = [
     { name = "parver" },
@@ -681,9 +681,9 @@ dependencies = [
     { name = "requests" },
     { name = "semver" },
 ]
-sdist = { url = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/pulumi-kubernetes/pulumi_kubernetes-4.29.0.tar.gz", hash = "sha256:3f823f7f10faa256c23c26b619cc2c8b840df366aaad2492b2b2c31708db29ae" }
+sdist = { url = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/pulumi-kubernetes/pulumi_kubernetes-4.23.0.tar.gz", hash = "sha256:6b697146039d7367f397db77dc1d2b23d918202f4276071bfa105652bb5e5fd4" }
 wheels = [
-    { url = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/pulumi-kubernetes/pulumi_kubernetes-4.29.0-py3-none-any.whl", hash = "sha256:423bd42dbc1bb521d518abd16e7b1d02341047f08852c65c5f7e0afdd8a32846" },
+    { url = "https://us-python.pkg.dev/artifact-foundry-prod/ah-3p-staging-python/pulumi-kubernetes/pulumi_kubernetes-4.23.0-py3-none-any.whl", hash = "sha256:4866c00259170e5e1604c0a3335063036e80c29000bf9b88a380cd600fe44c4e" },
 ]
 
 [[package]]

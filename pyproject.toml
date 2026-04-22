@@ -10,7 +10,7 @@ requires-python = ">= 3.12"
 
 dependencies = [
     "pulumi>=3.231.0",
-    "pulumi-kubernetes>=4.29.0",
+    "pulumi-kubernetes>=4.23.0",
     "pulumi-awsx>=2.19.0",
     "pulumi-aws>=6.61.0",
     "requests>=2.32.3",
@@ -62,7 +62,7 @@ packages = ["src/kluster"]
 [tool.ruff]
 line-length = 120
 # In addition to the standard set of exclusions, omit all tests, plus a specific file.
-extend-exclude = ["lib"]
+extend-exclude = ["lib", "packages/crds"]
 
 [tool.ruff.format]
 quote-style = "single"

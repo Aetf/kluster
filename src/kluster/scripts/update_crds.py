@@ -115,7 +115,7 @@ def main():
                     raise ValueError('Can not find kubectl in PATH')
                 crds_yaml = sp.check_output([kubectl, 'get', 'crds', '-o', 'yaml'])
 
-            ryaml = YAML(typ='safe')
+            ryaml = YAML(typ='rt')
             with tqdm_wrap_file_read(
                 BytesIO(crds_yaml), desc='Loading CRD yaml', total=len(crds_yaml)
             ) as crds_yaml_stream:
