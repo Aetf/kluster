@@ -4,37 +4,26 @@ Objective: Design a Python framework for Pulumi that reduces boilerplate, handle
 
 ## 1. Core Concepts
 
-### 1.1 Async Generators for Resource Definition
+### 1.1 Coroutines for Async Setup
 
-To avoid chaining `.apply()` calls or dealing with complex async setup in components, we propose using Python generators. A generator function defines the stack or component, yielding resource definitions or awaitables. A framework driver handles execution.
+To avoid complex async setup in components, we use standard Python coroutines (`async def` and `await`). This allows writing sequential-looking code for asynchronous operations without building custom driver loops.
 
 This pattern is especially useful inside `ComponentResource` setup to provide a clean experience.
-
-**Pattern for Stack**:
-```python
-def my_stack():
-    # Yield an async operation (e.g., fetching data, reading files)
-    data = yield read_file_async("config.json")
-    
-    # Yield a resource definition
-    vpc = yield (Resource, "my-vpc", {"cidr": "10.0.0.0/16", "data": data})
-    
-    # Use the resource (and its outputs) in the next step
-    subnet = yield (Resource, "my-subnet", {"vpc_id": vpc.id, "cidr": "10.0.1.0/24"})
-```
 
 **Pattern for Component**:
 ```python
 class MyComponent(Component):
-    def setup(self, name, opts):
-        # setup can be a generator too!
-        data = yield read_file_async("config.json")
-        vpc = yield (Resource, "my-vpc", {"cidr": "10.0.0.0/16", "data": data})
+    async def setup(self, name, opts):
+        # setup can be a coroutine!
+        data = await read_file_async("config.json")
         
-        # The framework driver will handle resolving these yields
+        with parent(self):
+            vpc = create(Resource, "my-vpc", cidr="10.0.0.0/16", data=data)
+        
+        return {'vpc_id': vpc.id}
 ```
 
-**Driver**: A driver function iterates over the generator. If a yielded value is an awaitable, it awaits it. If it's a resource definition (e.g., a tuple of Class, name, and args), it creates the resource and sends the result back to the generator.
+**Why not Generators?**: We considered using generators to reduce boilerplate further, but standard coroutines are preferred because they are supported out-of-the-box by Python tooling and avoid the need for custom driver code in the framework.
 
 ### 1.2 Context Managers for Parent Propagation
 
@@ -58,7 +47,7 @@ The existing proof-of-concept library in `src/putils` already provides a base fo
 -   `paio.py`: Handles bridging `asyncio` with Pulumi.
 -   `component.py`: Provides a `Component` class that reduces boilerplate for `ComponentResource` and supports async `setup`.
 
-We will enhance this library to include the generator driver and context manager patterns described above, ensuring they work well within the `Component` class.
+We have enhanced this library to include the `parent` context manager and `create` wrapper, and verified that it supports async `setup` methods natively.
 
 ## 3. Layering & Stack Structure
 
