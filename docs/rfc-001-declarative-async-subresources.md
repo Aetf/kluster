@@ -1,10 +1,9 @@
 # RFC 001: Declarative Native Async Sub-Resources for Pulumi Python Components
 
-*   **Status:** Proposed
+*   **Status:** Accepted
 *   **Author:** Jetski & pfyu
 *   **Created:** 2026-06-01
-*   **Updated:** 2026-06-02 (Refined with OOP Direct Property Access &
-    Constructor Inspection)
+*   **Updated:** 2026-06-03 (Implemented & Verified)
 
 --------------------------------------------------------------------------------
 
@@ -126,19 +125,20 @@ class MyComponent(Component):
     (e.g. `self.existing_vpc`) are seamlessly tracked when awaited via `await
     resolve(self.existing_vpc.id)` without requiring signature declarations.
 
-6.  **Preview-Safe Exception Bypass with Async Generators**: In `pulumi preview`, if
-    `resolve(output)` encounters an unknown output property, it immediately
-    raises `UnknownValueException` to abort downstream execution early
-    (preventing Python TypeErrors). The task runner catches this, resolves any
-    fields that were already `yield`ed using their concrete values, and marks
-    the remaining un-yielded fields as Pulumi's `UNKNOWN` sentinel. This preserves
-    fine-grained property diffs.
+6.  **Preview-Safe Exception Bypass with Async Generators**: In `pulumi
+    preview`, if `resolve(output)` encounters an unknown output property, it
+    immediately raises `UnknownValueException` to abort downstream execution
+    early (preventing Python TypeErrors). The task runner catches this, resolves
+    any fields that were already `yield`ed using their concrete values, and
+    marks the remaining un-yielded fields as Pulumi's `UNKNOWN` sentinel. This
+    preserves fine-grained property diffs.
 
 7.  **Explicit resource-level `depends_on`**: To prevent DAG corruption when the
     async task aborts early, developers can explicitly declare dependencies:
     `@setup("subnet", depends_on=["vpc"])`. The framework pre-registers these
-    statically, ensuring they are not lost if `resolve()` is skipped. It also acts
-    as a general escape hatch for physical dependencies that don't consume outputs.
+    statically, ensuring they are not lost if `resolve()` is skipped. It also
+    acts as a general escape hatch for physical dependencies that don't consume
+    outputs.
 
 --------------------------------------------------------------------------------
 
@@ -264,12 +264,21 @@ the resources themselves or handled via standard wrapper components.
 
 ### 4.2 Fine-Grained Preview Diffs Require Generators
 
-While standard `.apply()` chains preserve known property values perfectly during preview, the async abort mechanism (throwing `UnknownValueException`) inherently prevents the function from reaching the end.
-To mitigate the loss of fine-grained preview diffs, developers **must** use the `yield` generator pattern to emit known values before calling `resolve()`. If a standard `return dict` is used and the function aborts, the entire resource will become an opaque `UNKNOWN` blob.
+While standard `.apply()` chains preserve known property values perfectly during
+preview, the async abort mechanism (throwing `UnknownValueException`) inherently
+prevents the function from reaching the end. To mitigate the loss of
+fine-grained preview diffs, developers **must** use the `yield` generator
+pattern to emit known values before calling `resolve()`. If a standard `return
+dict` is used and the function aborts, the entire resource will become an opaque
+`UNKNOWN` blob.
 
 ### 4.3 Strict Key Declaration Requirement
 
-Because we abandoned the `inspect.signature` approach to solve engine performance bloat, the framework now strictly requires developers to declare their output keys (either via `TypedDict` return hints or the explicit `keys=["..."]` escape hatch). If neither is provided, the framework will throw a hard validation error at runtime to prevent silent failures.
+Because we abandoned the `inspect.signature` approach to solve engine
+performance bloat, the framework now strictly requires developers to declare
+their output keys (either via `TypedDict` return hints or the explicit
+`keys=["..."]` escape hatch). If neither is provided, the framework will throw a
+hard validation error at runtime to prevent silent failures.
 
 --------------------------------------------------------------------------------
 
@@ -282,9 +291,9 @@ Because we abandoned the `inspect.signature` approach to solve engine performanc
 2.  **Targeted Key Discovery via Type Hints**:
     -   In `Component.__init__`, scan subclass annotations to discover
         sub-resource types.
-    -   For each discovered type, inspect the `return` (or `yield`) type hint
-        of its `@setup` method using `typing.get_type_hints` (e.g., retrieving
-        keys from a `TypedDict`).
+    -   For each discovered type, inspect the `return` (or `yield`) type hint of
+        its `@setup` method using `typing.get_type_hints` (e.g., retrieving keys
+        from a `TypedDict`).
     -   If no type hint is provided, fallback to explicitly defined keys in the
         decorator: `@setup("name", keys=["..."])`.
     -   If neither is provided, raise a hard validation error.
@@ -322,16 +331,15 @@ Implement a comprehensive verification suite covering:
     resolve(self.vpc.id)`) without parameters.
 2.  **Parent and URN correctness**: Assert via mock monitor that child URNs
     contain the parent component resource namespace (`parent=self`).
-3.  **Strict Key Declaration Enforcement**: Verify that missing return annotations
-    and missing explicit `keys` correctly raise hard validation errors, and that
-    valid `TypedDict` annotations successfully restrict the provisioned dummy outputs.
-4.  **Dry-Run Preview Safety & Async Generators**: Verify that previews abort early via
-    `UnknownValueException`, successfully preserving yielded values for fine-grained
-    diffs while marking the rest as `UNKNOWN`.
+3.  **Strict Key Declaration Enforcement**: Verify that missing return
+    annotations and missing explicit `keys` correctly raise hard validation
+    errors, and that valid `TypedDict` annotations successfully restrict the
+    provisioned dummy outputs.
+4.  **Dry-Run Preview Safety & Async Generators**: Verify that previews abort
+    early via `UnknownValueException`, successfully preserving yielded values
+    for fine-grained diffs while marking the rest as `UNKNOWN`.
 5.  **ContextVar Task-Safety**: Verify that dependencies are captured correctly
     even when awaited inside `asyncio.gather()` or concurrent task hierarchies.
 6.  **External Resource Dependency Tracking**: Verify that constructor-passed
     external resources are correctly tracked in the engine DAG when resolved
     inside setups.
-
-
