@@ -40,6 +40,14 @@ dev = [
 managed = true
 default-groups = ["dev"]
 
+# Pin the package index so locking doesn't pick up ambient registry settings
+# (e.g. UV_INDEX_URL pointing at a private mirror). Note CLI flags and env
+# vars still take precedence over this if explicitly set.
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
+
 [tool.uv.sources]
 pulumi-crds = { workspace = true }
 
