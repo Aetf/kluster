@@ -14,4 +14,15 @@ Anything installed by `uv`:
 
 ## Architecture
 
-The architecture design has been consolidated and updated in [docs/architecture.md](file:///usr/local/google/home/pfyu/projects/kluster/docs/architecture.md). Please refer to that file for the current design.
+The architecture design has been consolidated and updated in
+[docs/architecture.md](docs/architecture.md). Please refer to that file for the
+current design.
+
+## Docs
+
+- [docs/pulumi.md](docs/pulumi.md) — the Pulumi Python framework: `Component`,
+  `async_output`/`resolve`, stack layering. Start here, §1.4 has cookbook
+  examples.
+- [docs/rfc-001-native-async-inputs.md](docs/rfc-001-native-async-inputs.md) —
+  design rationale and mechanics of the native async inputs framework.
+- [docs/testing.md](docs/testing.md) — unit testing Pulumi code with mocks.

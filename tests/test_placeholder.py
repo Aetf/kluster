@@ -1,6 +1,7 @@
 import asyncio
 import pulumi
 import pytest
+import pytest_asyncio
 
 # Define the Mocks
 class MyMocks(pulumi.runtime.Mocks):
@@ -12,8 +13,9 @@ class MyMocks(pulumi.runtime.Mocks):
         return {}
 
 # Setup the test environment
-@pytest.fixture(autouse=True)
-def setup_mocks():
+# Must be an async fixture: set_mocks needs the test's running event loop.
+@pytest_asyncio.fixture(autouse=True)
+async def setup_mocks():
     pulumi.runtime.set_mocks(
         MyMocks(),
         project="my-project",

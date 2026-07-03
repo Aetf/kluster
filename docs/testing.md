@@ -67,8 +67,8 @@ async def test_my_component():
 
 ## 3. Testing Next-Gen Components (RFC-001)
 
-When writing unit tests for components using the `putils.component.Component`
-base class and its `@setup` decorators:
+When writing unit tests for components using the `putils.Component` base class
+with `async_output`/`resolve` inputs:
 
 ### 3.1 Mocking `propertyDependencies`
 
@@ -94,10 +94,11 @@ class MyMockMonitor(pulumi.runtime.MockMonitor):
 
 ### 3.2 Asserting Dependencies via URNs
 
-When Pulumi tracks dynamic dependencies inside setup coroutines, it recreates
-dependency instances as `DependencyResource` synthetic resources. **Do not use
-object identity (`is` or `==`)** to compare resource dependencies returned by
-`Output.resources()`. Instead, extract and assert on their `urn` strings:
+When Pulumi tracks dynamic dependencies inside `async_output` coroutines, it
+recreates dependency instances as `DependencyResource` synthetic resources.
+**Do not use object identity (`is` or `==`)** to compare resource dependencies
+returned by `Output.resources()`. Instead, extract and assert on their `urn`
+strings:
 
 ```python
 # Correct assertion pattern:
@@ -109,10 +110,10 @@ assert vpc.urn in dep_urns
 ### 3.3 Dry-Run/Preview Safety
 
 In dry-run tests (where `preview=True`), unresolved output properties return the
-`UNKNOWN` sentinel. Awaiting outputs that contain unknowns throws an
-`UnknownValueException`. If testing preview behavior, retrieve the output's
-future using `.future(with_unknowns=True)` to inspect if it's an instance of
-`Unknown`:
+`UNKNOWN` sentinel. Awaiting such outputs via `resolve` raises
+`UnknownValueException`, which `async_output` converts into an unknown output.
+If testing preview behavior, retrieve the output's future using
+`.future(with_unknowns=True)` to inspect if it's an instance of `Unknown`:
 
 ```python
 from pulumi.output import Unknown
