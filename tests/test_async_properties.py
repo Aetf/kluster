@@ -202,27 +202,68 @@ async def test_exception_in_async_input_propagates(mocks):
 
 
 @pytest.mark.asyncio
-async def test_legacy_sync_setup(mocks):
-    class LegacyProbe(Component, pulumi_type='test:LegacyProbe'):
-        namespace: pulumi.Output[str]
+async def test_preview_unknown_abort_still_attaches_deps():
+    # RFC-001 §4.2: dependencies awaited before the unknown abort must still be
+    # recorded on the resulting (unknown) output.
+    pulumi.runtime.set_mocks(
+        MyMocks(unknown_network_id=True),
+        project="my-project", stack="dev", preview=True,
+    )
 
-        def setup(self, name, *pargs, opts=None, **kwargs):
-            return {'namespace': 'default'}
+    vpc = VPC("abort-vpc")
 
-    comp = LegacyProbe("probe")
-    assert await asyncio.wait_for(comp.namespace.future(), 5) == 'default'
+    async def prepare():
+        vpc_id = await resolve(vpc.id)
+        return f"subnet-for-{vpc_id}"
+
+    out = async_output(prepare)
+    assert await out.is_known() is False
+    dep_urns = {await r.urn.future() for r in await out.resources()}
+    assert await vpc.urn.future() in dep_urns
 
 
 @pytest.mark.asyncio
-async def test_legacy_async_setup(mocks):
-    class LegacyAsync(Component, pulumi_type='test:LegacyAsync'):
-        vpc_id: pulumi.Output[str]
+async def test_secret_propagation(mocks):
+    secret_in = pulumi.Output.secret("s3cret")
+    plain_in = pulumi.Output.from_input("plain")
 
-        async def setup(self, name, *pargs, opts=None, **kwargs):
-            vpc = VPC(f'{name}-vpc', opts=pulumi.ResourceOptions(parent=self))
-            return {'vpc_id': vpc.id}
+    async def uses_secret():
+        return await resolve(secret_in)
 
-    comp = LegacyAsync("legacy-async")
-    vpc_id = await asyncio.wait_for(comp.vpc_id.future(), 5)
-    # vpc_id output resolves to the inner Output's value once unwrapped
-    assert await pulumi.Output.from_input(vpc_id).future() == 'legacy-async-vpc_id'
+    async def uses_plain():
+        return await resolve(plain_in)
+
+    secret_out = async_output(uses_secret)
+    assert await secret_out.future() == "s3cret"
+    assert await secret_out.is_secret() is True
+
+    plain_out = async_output(uses_plain)
+    assert await plain_out.future() == "plain"
+    assert await plain_out.is_secret() is False
+
+
+@pytest.mark.asyncio
+async def test_upstream_output_failure_propagates(mocks):
+    # An output whose future fails (e.g. its resource registration failed)
+    # must fail the async_output instead of hanging it.
+    async def fail():
+        raise RuntimeError("upstream boom")
+
+    async def known():
+        return True
+
+    bad = pulumi.Output(set(), fail(), known())
+
+    async def consume():
+        return await resolve(bad)
+
+    out = async_output(consume)
+    with pytest.raises(RuntimeError, match="upstream boom"):
+        await asyncio.wait_for(out.future(), 5)
+
+
+@pytest.mark.asyncio
+async def test_resolve_outside_async_output_raises(mocks):
+    vpc = VPC("ctx-vpc")
+    with pytest.raises(RuntimeError, match="async_output"):
+        await resolve(vpc.id)

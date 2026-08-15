@@ -1,7 +1,7 @@
 from pathlib import Path
 import fnmatch
 import re
-from typing import Any, List, Sequence, override
+from typing import Any, List, Sequence
 
 from jinja2 import Environment, PackageLoader
 import pulumi
@@ -28,17 +28,17 @@ class Node(k8s.core.v1.NodePatch):
 class NamespaceProbe(Component, pulumi_type='kluster:utils:NamespaceProbe'):
     namespace: pulumi.Output[str]
 
-    @override
-    def setup(self, name: str, *pargs, **kwargs):
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
+        super().__init__(name, opts=opts)
         cm = k8s.core.v1.ConfigMap(
             name,
             data={
                 'comment': 'This is a workaround for pulumi not able to get namespace from the provider',
             },
-            opts=pulumi.ResourceOptions(parent=self),
+            opts=self.child_opts(),
         )
-
-        return {'namespace': cm.metadata.namespace}
+        self.namespace = cm.metadata.namespace
+        self.register_outputs({'namespace': self.namespace})
 
 
 class HelmChart(k8s.helm.v4.Chart):

@@ -14,7 +14,7 @@ import contextvars
 import functools
 import inspect
 import traceback
-from typing import Any, Awaitable, Callable, ParamSpec, Self, TypeVar, overload, TypeAlias
+from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar
 
 import pulumi
 import pulumi.runtime
@@ -24,31 +24,6 @@ __all__ = 'task', 'background', 'async_output', 'resolve', 'UnknownValueExceptio
 
 
 T = TypeVar('T')
-
-
-@overload
-def mkfuture(val: Awaitable[T]) -> asyncio.Future[T]: ...
-
-
-@overload
-def mkfuture(val: T) -> asyncio.Future[T]: ...
-
-
-def mkfuture(val) -> asyncio.Future[Any]:
-    """
-    Wrap the given value in a future (turn into a task).
-
-    Intelligentally handles awaitables vs not.
-
-    Note: Does not perform error handling for the task.
-    """
-    if inspect.isawaitable(val):
-        return asyncio.ensure_future(val)
-    else:
-        f = asyncio.get_event_loop().create_future()
-        f.set_result(val)
-        return f
-
 
 Nested: TypeAlias = T | Awaitable['Nested[T]']
 
@@ -71,6 +46,12 @@ async def unwrap(value: Nested[T]) -> T:
         return value
 
 
+def _log_error(what: object) -> None:
+    """Log the current exception with traceback, so failures don't go unreported."""
+    traceback.print_exc()
+    pulumi.error(f'Error in {what}')
+
+
 Param = ParamSpec('Param')
 
 
@@ -85,8 +66,7 @@ def task(func: Callable[Param, Awaitable[T]]):
         try:
             return await func(*pargs, **kwargs)
         except Exception:
-            traceback.print_exc()
-            pulumi.error(f'Error in {func}')
+            _log_error(func)
             raise
 
     @functools.wraps(func)
@@ -110,11 +90,6 @@ def background(func):
     return wrapper
 
 
-def from_nothing() -> tuple[pulumi.Output, asyncio.Future[Any]]:
-    fut = asyncio.Future()
-    return pulumi.Output.from_input(fut), fut
-
-
 class UnknownValueException(Exception):
     """
     Raised by `resolve` during preview when an awaited output is unknown.
@@ -125,51 +100,26 @@ class UnknownValueException(Exception):
     """
 
 
-#: Resources awaited via `resolve` in the current task tree. `async_output`
-#: installs a fresh set before running its coroutine. Tasks spawned inside
-#: (including via asyncio.gather) inherit the same set instance, so in-place
+class _AsyncOutputCtx:
+    """Per-`async_output` accumulator for what `resolve` observed."""
+
+    __slots__ = ('deps', 'secret')
+
+    def __init__(self):
+        self.deps: set[pulumi.Resource] = set()
+        self.secret: bool = False
+
+
+#: Context of the enclosing `async_output` coroutine. `async_output` installs
+#: a fresh instance before running its coroutine. Tasks spawned inside
+#: (including via asyncio.gather) inherit the same instance, so in-place
 #: mutations propagate back regardless of task nesting.
-_current_dependencies: contextvars.ContextVar[set[pulumi.Resource] | None] = contextvars.ContextVar(
-    '_current_dependencies', default=None
+_async_output_ctx: contextvars.ContextVar[_AsyncOutputCtx | None] = contextvars.ContextVar(
+    '_async_output_ctx', default=None
 )
 
 
-class _ResolvedOutputs:
-    """Awaitable for one or more outputs. See `resolve`."""
-
-    def __init__(self, outputs: tuple):
-        self._outputs = outputs
-
-    def __await__(self):
-        # Record the resources behind every awaited output *before* waiting on
-        # values, so dependencies are captured even if the wait aborts early
-        # on an unknown during preview.
-        deps = _current_dependencies.get()
-        for out in self._outputs:
-            if isinstance(out, pulumi.Output) and deps is not None:
-                deps.update((yield from out.resources().__await__()))
-
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
-
-        def on_resolved(values):
-            def settle():
-                if fut.done():
-                    return
-                if pulumi.runtime.is_dry_run() and contains_unknowns(values):
-                    fut.set_exception(UnknownValueException())
-                else:
-                    fut.set_result(values[0] if len(self._outputs) == 1 else tuple(values))
-
-            loop.call_soon_threadsafe(settle)
-
-        # run_with_unknowns so the callback still fires during preview instead
-        # of never resolving.
-        pulumi.Output.all(*self._outputs).apply(on_resolved, run_with_unknowns=True)
-        return (yield from fut.__await__())
-
-
-def resolve(*outputs: pulumi.Output | Any):
+def resolve(*outputs: pulumi.Output | Any) -> Awaitable[Any]:
     """
     Natively await one or more Pulumi outputs inside an `async_output` coroutine.
 
@@ -180,12 +130,42 @@ def resolve(*outputs: pulumi.Output | Any):
         vpc_id, subnet_id = await resolve(vpc.id, subnet.id)
 
     The resources behind the outputs are recorded as dependencies of the
-    enclosing `async_output`. During preview, raises `UnknownValueException`
-    if any awaited value is unknown.
+    enclosing `async_output`, and their secretness propagates to it. During
+    preview, raises `UnknownValueException` if any awaited value is unknown.
+
+    Only valid inside an `async_output` coroutine. Anywhere else it raises
+    `RuntimeError`: dependencies would be silently dropped, and an unknown
+    during preview would crash the program instead of degrading to an
+    unknown output.
     """
     if not outputs:
         raise TypeError('resolve() requires at least one output')
-    return _ResolvedOutputs(outputs)
+    return _resolve(outputs)
+
+
+async def _resolve(outputs: tuple) -> Any:
+    ctx = _async_output_ctx.get()
+    if ctx is None:
+        raise RuntimeError(
+            'resolve() must be awaited inside an async_output coroutine; '
+            'outside one, dependency tracking and preview unknown-handling cannot work'
+        )
+
+    outs = [pulumi.Output.from_input(o) for o in outputs]
+    # Record dependencies and secretness *before* waiting on values, so they
+    # are captured even if the wait aborts on an unknown during preview.
+    for resources in await asyncio.gather(*(o.resources() for o in outs)):
+        ctx.deps.update(resources)
+    ctx.secret = ctx.secret or any(await asyncio.gather(*(o.is_secret() for o in outs)))
+
+    # Exceptions from upstream outputs (e.g. a failed resource registration)
+    # propagate naturally out of these awaits.
+    values = await asyncio.gather(*(o.future(with_unknowns=True) for o in outs))
+    if pulumi.runtime.is_dry_run() and (
+        contains_unknowns(values) or not all(await asyncio.gather(*(o.is_known() for o in outs)))
+    ):
+        raise UnknownValueException()
+    return values[0] if len(outputs) == 1 else tuple(values)
 
 
 def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output[T]:
@@ -195,31 +175,31 @@ def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output
 
     The coroutine awaits other outputs via `resolve`, which records the
     resources behind them; the returned Output carries those as dependencies
-    so the Pulumi DAG stays intact. During preview, if the coroutine hits an
-    unknown value, the returned Output becomes unknown -- other inputs of the
-    same resource are unaffected, preserving fine-grained diffs.
+    so the Pulumi DAG stays intact, and is marked secret if any resolved
+    output was secret. During preview, if the coroutine hits an unknown
+    value, the returned Output becomes unknown -- other inputs of the same
+    resource are unaffected, preserving fine-grained diffs.
 
     Accepts either a coroutine function (called immediately) or a coroutine
     object.
     """
 
-    async def run() -> tuple[set[pulumi.Resource], Any, bool]:
-        deps: set[pulumi.Resource] = set()
-        token = _current_dependencies.set(deps)
+    async def run() -> tuple[set[pulumi.Resource], Any, bool, bool]:
+        ctx = _AsyncOutputCtx()
+        token = _async_output_ctx.set(ctx)
         try:
             value = await unwrap(fn() if callable(fn) else fn)
-            return deps, value, True
+            return ctx.deps, value, True, ctx.secret
         except UnknownValueException:
             if not pulumi.runtime.is_dry_run():
                 # resolve() only aborts during preview; anything else is a bug.
                 raise
-            return deps, None, False
+            return ctx.deps, None, False, ctx.secret
         except Exception:
-            traceback.print_exc()
-            pulumi.error(f'Error in async_output {fn}')
+            _log_error(f'async_output {fn}')
             raise
         finally:
-            _current_dependencies.reset(token)
+            _async_output_ctx.reset(token)
 
     result = asyncio.ensure_future(run())
 
@@ -230,5 +210,5 @@ def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output
         asyncio.ensure_future(pick(0)),  # resources
         asyncio.ensure_future(pick(1)),  # value
         asyncio.ensure_future(pick(2)),  # is_known
-        mkfuture(False),  # is_secret
+        asyncio.ensure_future(pick(3)),  # is_secret
     )
