@@ -9,7 +9,6 @@ from typing import List
 
 import pulumi
 import pulumi_aws as aws
-import pulumi_github as gh
 
 
 def create_subnet(
@@ -108,7 +107,8 @@ def setup_networks():
             return img.id
         raise ValueError('Suitable talos AMI not found!')
 
-    ami = get_talos_ami()
+    # TODO: launch talos instances on the subnets using this AMI
+    ami = get_talos_ami()  # noqa: F841
 
 
 def setup():

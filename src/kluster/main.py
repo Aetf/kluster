@@ -1,8 +1,6 @@
 import pulumi
 import pulumi_kubernetes as k8s
-from pulumi_kubernetes.apps.v1 import Deployment, DeploymentSpecArgs
-from pulumi_kubernetes.meta.v1 import LabelSelectorArgs, ObjectMetaArgs
-from pulumi_kubernetes.core.v1 import ContainerArgs, PodSpecArgs, PodTemplateSpecArgs
+from pulumi_kubernetes.meta.v1 import ObjectMetaArgs
 
 from . import physical
 

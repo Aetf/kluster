@@ -1,4 +1,3 @@
-from http.client import HTTPResponse
 from io import BytesIO
 import logging
 import logging.config

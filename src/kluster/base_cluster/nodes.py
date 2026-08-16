@@ -1,6 +1,5 @@
 from typing import Mapping, Optional
 
-import pulumi
 import pulumi_kubernetes as k8s
 
 from kluster.kx import Node
