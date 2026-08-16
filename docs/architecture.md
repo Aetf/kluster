@@ -2,6 +2,12 @@
 
 Objective: Deploy a high-performance hybrid Kubernetes cluster spanning a GCP VPC and a Homelab LAN. Ensure low stack complexity, minimal vendor lock-in, and declarative management using Pulumi.
 
+> **Status**: This is the canonical architecture document; the plan moved from
+> AWS to GCP in April 2026 (commit `487ebd4`) and was consolidated here. The
+> code in `src/kluster/physical/aws.py` predates that move and will be replaced
+> by the GCP implementation during detailed design. Provider-agnostic
+> alternatives evaluated during the AWS era are preserved in §6.
+
 ## 1. Architecture Overview
 
 ### 1.1 High-Level Design
@@ -68,12 +74,12 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 
 ## 2. Core Infrastructure Components
 
-### 2.1 Talos Linux Features
+### 2.1 Talos Linux Features ([Docs](https://www.talos.dev/))
 
 -   **KubeSpan**: Native WireGuard mesh. Handles NAT traversal automatically because the GCP node has a public IP, allowing the Homelab node to initiate the connection.
 -   **KubePrism**: A local HAProxy load balancer running on every node (localhost:7445). All worker nodes and internal components point to this instead of a hardcoded external API IP.
 
-### 2.2 Cilium eBPF CNI
+### 2.2 Cilium eBPF CNI ([Docs](https://docs.cilium.io/))
 
 -   **Kube-Proxy Replacement**: kube-proxy is disabled in Talos. Cilium handles all L3/L4 routing directly in the kernel using eBPF, eliminating iptables bottlenecks.
 -   **Bootstrap Requirement**: Because kube-proxy is disabled, the Cilium Helm chart must explicitly point to KubePrism (k8sServiceHost: localhost, k8sServicePort: 7445) to reach the API server on startup.
@@ -121,7 +127,7 @@ The entire stack is deployed via Pulumi using multiple providers:
 
 ### 5.1 Infrastructure Provisioning
 
-1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab physical server. Outputs the dynamically assigned local IP.
+1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab physical server (passing through NIC/macvlan). Outputs the dynamically assigned local IP.
 2.  **GCP (pulumi-gcp)**: Provisions the Compute Engine instance (Dual-Stack) and Firewall Rules.
     -   Required Firewall Rules: Allow 80, 443 (Ingress), 51820 UDP (WireGuard/KubeSpan).
 3.  **UniFi (pulumiverse/unifi)**: Configures port forwarding on the DMSE to allow the GCP node to reach the Homelab Control Plane.
@@ -143,3 +149,33 @@ address-family ipv4 unicast
  neighbor {Homelab_VM_IP} activate  
 exit-address-family  
 ```
+
+## 6. Alternatives Considered
+
+Evaluated during the earlier AWS iteration of this plan; the reasoning is
+provider-agnostic and carried over to GCP unchanged.
+
+### 6.1 IPv6-Only VPC + NAT64
+
+-   **The Idea**: Use an IPv6-only VPC to avoid the monthly public IPv4
+    address charge, relying on public DNS64/NAT64 (e.g., nat64.net) or a
+    cloud-managed NAT gateway for IPv4-only destinations.
+-   **Why it was rejected**:
+    1.  **Cost Trap**: Cloud-managed NAT gateways cost ~$32/mo minimum, far
+        exceeding the cost of a single static IPv4 address.
+    2.  **CLAT Limitations**: Apps that hardcode IPv4 (0.0.0.0, 1.1.1.1) fail
+        entirely in IPv6-only environments without complex CLAT translation on
+        the node.
+    3.  **Stability**: Relying on free, third-party NAT64 introduces a massive
+        single point of failure for pulling containers from legacy registries
+        like ghcr.io.
+
+### 6.2 Three-Node HA Control Plane (1 Home, 2 Cloud)
+
+-   **The Idea**: Distribute control plane nodes across the Homelab and the
+    cloud for high availability.
+-   **Why it was rejected**: etcd requires low-latency Raft consensus.
+    Stretching it over a WAN adds 15ms-50ms+ latency to every API write,
+    starving the cluster. Additionally, "tiny" cloud VMs are prone to OOM
+    kills running etcd. A single, powerful Homelab node with S3 backups is
+    significantly faster and more stable.
