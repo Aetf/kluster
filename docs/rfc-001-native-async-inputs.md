@@ -5,6 +5,9 @@
 *   **Created:** 2026-06-01
 *   **Updated:** 2026-07-02 (Rev 2: per-input redesign, supersedes the
     per-resource `@setup` design)
+*   **Updated:** 2026-08-15 (Rev 3: secretness propagation, hard error on
+    `resolve` outside `async_output`, simplified implementation, legacy
+    `setup()` flow removed, relationship to upstream `pulumi.run`)
 
 --------------------------------------------------------------------------------
 
@@ -74,9 +77,11 @@ Two small primitives in `putils.paio`, plus one convenience helper on
 
 *   **`async_output(fn) -> pulumi.Output`** — runs a coroutine and exposes its
     result as an Output usable directly as a resource input, carrying every
-    dependency the coroutine touched.
+    dependency the coroutine touched and the secretness of every output it
+    resolved.
 *   **`await resolve(*outputs)`** — natively awaits Pulumi outputs inside such
-    a coroutine, recording the resources behind them as dependencies.
+    a coroutine, recording the resources behind them as dependencies and
+    their secretness.
 *   **`Component.child_opts(**opts)`** — `ResourceOptions(parent=self, ...)`
     without the boilerplate.
 
@@ -160,19 +165,27 @@ sequenceDiagram
     end
 ```
 
-### 4.1 Dependency tracking via ContextVar accumulator
+### 4.1 Dependency & secretness tracking via ContextVar accumulator
 
-`async_output` installs a fresh **mutable `set`** into a `ContextVar` before
-running the coroutine. Every `await resolve(...)` adds the resources behind its
-arguments to that set — *before* waiting on the values, so dependencies are
-captured even if the wait later aborts on an unknown.
+`async_output` installs a fresh **mutable accumulator** (a dependency set plus
+a secretness flag) into a `ContextVar` before running the coroutine. Every
+`await resolve(...)` adds the resources behind its arguments to the set and
+ORs in their secretness — *before* waiting on the values, so both are captured
+even if the wait later aborts on an unknown.
 
 Because asyncio tasks inherit the context of their creation point, nested tasks
-and concurrent `asyncio.gather()` blocks all see the same set instance;
+and concurrent `asyncio.gather()` blocks all see the same accumulator instance;
 in-place mutations propagate back to the enclosing `async_output` regardless of
 task nesting. The accumulated set becomes the `resources` of the returned
 Output, so the engine records real edges (including property dependencies) for
-downstream resources.
+downstream resources; the flag becomes its `is_secret`, so a value derived from
+a secret stays secret in state (at whole-value granularity — if any resolved
+output was secret, the entire result is marked secret).
+
+`resolve` awaited *outside* an `async_output` coroutine raises `RuntimeError`
+immediately: there, dependencies would be silently dropped and a preview
+unknown would crash the program instead of degrading to an unknown output.
+This includes the `pulumi.run` program entrypoint (§5a).
 
 ### 4.2 Preview safety (unknown values)
 
@@ -181,9 +194,14 @@ return a real value, and returning a dummy would poison subsequent Python logic
 with `TypeError`s. Instead, `resolve` raises `UnknownValueException`, aborting
 the coroutine early. `async_output` catches it and resolves its Output as
 **unknown** (`is_known=False`) while still attaching all dependencies gathered
-so far. Outside of dry-run the exception is never raised by `resolve`; if it
-somehow escapes anyway, `async_output` re-raises it as a hard error rather than
-masking a real value loss.
+so far. Unknowns are detected both as `UNKNOWN` sentinels in the values and
+via the outputs' own `is_known` flags. Outside of dry-run the exception is
+never raised by `resolve`; if it somehow escapes anyway, `async_output`
+re-raises it as a hard error rather than masking a real value loss.
+
+Failures propagate: if an awaited output's future carries an exception (e.g.
+its resource registration failed), the exception flows out of `resolve` and
+fails the `async_output` — nothing is left hanging.
 
 ### 4.3 `resolve` return shape
 
@@ -210,14 +228,39 @@ independent — it gathers all dependencies at once and wakes up once.
     will hang `pulumi up` with no diagnostics. Keep coroutines straight-line
     and short; a component's async inputs should only await resources created
     *earlier* in its `__init__` (or passed in from outside).
-4.  **Secretness does not propagate through `resolve`.** The returned Output of
-    `async_output` is never marked secret, and values unwrapped by `resolve`
-    lose their secret flag. Do not route secrets through async inputs; pass
-    them as plain inputs (possibly via `pulumi.Output.secret`). Lifting this is
-    future work.
-5.  **Legacy flow retained.** Components that declare `pulumi.Output`
-    annotations and override `setup()` (sync or async) keep working; new code
-    should prefer the pattern above.
+4.  **Secretness propagates at whole-value granularity.** If any output
+    resolved by the coroutine is secret, the entire `async_output` result is
+    marked secret. When only a fragment of the result is actually sensitive,
+    prefer passing the secret as a separate plain input so the non-sensitive
+    inputs keep readable diffs.
+5.  **`resolve` is only valid inside `async_output`.** Anywhere else —
+    including the `pulumi.run` entrypoint or a bare `@task` coroutine — it
+    raises `RuntimeError` (see §4.1).
+
+--------------------------------------------------------------------------------
+
+## 5a. Relationship with `pulumi.run` (upstream, v3.254.0)
+
+Pulumi v3.254.0 shipped `pulumi.run(main)`
+([pulumi/pulumi#23945](https://github.com/pulumi/pulumi/pull/23945)): the
+program registers a zero-argument async entrypoint which the runtime awaits on
+its event loop after top-level module code finishes; a returned mapping is
+exported as stack outputs.
+
+The two features are complementary, at different layers:
+
+*   **`pulumi.run`** provides the async context for *program-level* work:
+    calling external APIs, reading files, `StackReference` output details —
+    anything async that does not consume resource outputs. This repo's
+    `__main__.py` uses it.
+*   **`async_output` / `resolve`** remain the only correct way to feed
+    *resource outputs* through async code into other resources' inputs: they
+    provide the dependency tracking and preview unknown-safety that a plain
+    `await` in the entrypoint does not (awaiting an unknown output's value
+    there yields `None`/sentinels with no graph edge).
+
+Consequently `resolve` refuses to run in the entrypoint (§5.5); pass values
+into components and let their `async_output` coroutines do the awaiting.
 
 --------------------------------------------------------------------------------
 
@@ -225,11 +268,11 @@ independent — it gathers all dependencies at once and wakes up once.
 
 | API | Where | Summary |
 | --- | --- | --- |
-| `async_output(fn)` | `putils.paio` | Run coroutine (function or object), return `pulumi.Output` with tracked deps; unknown in preview on abort. |
-| `await resolve(*outputs)` | `putils.paio` | Await outputs natively; single value or tuple. Records deps. Raises `UnknownValueException` on unknowns during preview. |
+| `async_output(fn)` | `putils.paio` | Run coroutine (function or object), return `pulumi.Output` with tracked deps and secretness; unknown in preview on abort. |
+| `await resolve(*outputs)` | `putils.paio` | Await outputs natively; single value or tuple. Records deps and secretness. Raises `UnknownValueException` on unknowns during preview; `RuntimeError` outside `async_output`. |
 | `UnknownValueException` | `putils.paio` | Abort signal used by the two above; user code should not catch it. |
-| `Component` | `putils.component` | `ComponentResource` with auto `pulumi_type`, `child_opts()`, and the legacy `setup()` flow. |
-| `Component.child_opts(**opts)` | `putils.component` | `ResourceOptions(parent=self, **opts)`, mergeable with an explicit `opts=`. |
+| `Component` | `putils.component` | `ComponentResource` with auto `pulumi_type` and `child_opts()`. |
+| `Component.child_opts(*, opts=None, **kwargs)` | `putils.component` | `ResourceOptions(parent=self, **kwargs)`, mergeable with an explicit `opts=` (which wins). |
 
 --------------------------------------------------------------------------------
 
@@ -237,14 +280,17 @@ independent — it gathers all dependencies at once and wakes up once.
 
 *   `src/putils/paio.py` hosts the async bridge (`UnknownValueException`,
     `resolve`, `async_output`) alongside the existing asyncio helpers; the
-    ContextVar accumulator is module-private.
-*   `src/putils/component.py` shrinks to the `Component` base class. The legacy
-    `_get_outputs` scan now walks only the subclass's own MRO annotations
-    (below `Component`), which both fixes a crash on `pulumi.Output[str]`
-    generic aliases (`issubclass` on a non-class) and removes the need to
-    monkeypatch `pulumi.resource` globals for `get_type_hints`.
-*   `async_output` reuses the same error-logging convention as `putils.task`
-    so failures in async inputs are reported even if Pulumi's own error path
+    ContextVar accumulator is module-private. `resolve` is a plain async
+    function over the SDK's public async Output accessors (`resources()`,
+    `is_secret()`, `future(with_unknowns=True)`, `is_known()`), so upstream
+    exceptions propagate naturally — no hand-rolled `__await__` machinery.
+*   `src/putils/component.py` is just the `Component` base class
+    (auto `pulumi_type` + `child_opts()`). The Rev 1/Rev 2 legacy flow —
+    `pulumi.Output` annotation scanning and the overridable `setup()` — was
+    removed in Rev 3 after its last two users migrated to new-style
+    `__init__` components.
+*   `async_output` and `putils.task` share one error-logging helper so
+    failures in async inputs are reported even if Pulumi's own error path
     is delayed.
 
 --------------------------------------------------------------------------------
@@ -262,8 +308,11 @@ independent — it gathers all dependencies at once and wakes up once.
     into the component.
 4.  **Preview safety & fine-grained diffs** — with an unknown upstream, the
     async input resolves unknown while sibling plain inputs keep concrete
-    values.
-5.  **Error propagation** — exceptions in async inputs surface when awaiting
-    the output.
-6.  **Legacy flow regression** — sync and async `setup()` components still
-    resolve their declared outputs.
+    values; dependencies gathered before the abort stay attached to the
+    unknown output.
+5.  **Secretness propagation** — resolving a secret output marks the
+    `async_output` result secret; resolving only plain outputs does not.
+6.  **Error propagation** — exceptions raised inside the coroutine *and*
+    exceptions carried by upstream outputs surface when awaiting the output.
+7.  **Context enforcement** — `resolve` outside an `async_output` coroutine
+    raises `RuntimeError`.

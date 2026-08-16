@@ -17,7 +17,8 @@ Sub-resources are constructed synchronously in the component's `__init__`,
 exactly like plain Pulumi code. Any input that needs async preparation is
 wrapped with `async_output`; inside the coroutine, other outputs are awaited
 natively via `resolve()`, which also captures the resources behind them as
-dependencies (both internal children and external constructor-passed ones).
+dependencies (both internal children and external constructor-passed ones)
+and propagates their secretness to the resulting input.
 
 #### Pattern for Component:
 
@@ -155,6 +156,24 @@ self.app = Deployment(
 )
 ```
 
+#### Program-level async work (`pulumi.run`)
+
+The program entrypoint itself is async (`__main__.py` registers
+`kluster.main.main` via `pulumi.run`, Pulumi >= 3.254). Async work that does
+*not* consume resource outputs — external APIs, files, stack references —
+belongs there, and a returned mapping becomes stack outputs:
+
+```python
+async def main() -> pulumi.Inputs | None:
+    ami = await fetch_talos_ami()      # plain asyncio, no outputs involved
+    cluster = Cluster('kluster', ami=ami)
+    return {'endpoint': cluster.endpoint}
+```
+
+`resolve` deliberately refuses to run there (`RuntimeError`): feeding resource
+outputs through async code is the job of `async_output` inside components,
+which tracks dependencies and stays preview-safe.
+
 #### What happens during `pulumi preview`
 
 You don't need to do anything. If an awaited value is unknown (e.g. the VPC
@@ -167,7 +186,7 @@ unknown in the diff; inputs passed plainly keep their concrete values. During
 The framework is implemented in the proof-of-concept library `src/putils`:
 
 -   `component.py`: Provides the base `Component` class (auto `pulumi_type`,
-    `child_opts()`, legacy `setup()` flow).
+    `child_opts()`).
 -   `paio.py`: Handles bridging `asyncio` with Pulumi, including `async_output`
     and `resolve`.
 
