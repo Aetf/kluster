@@ -26,6 +26,10 @@ def namespaced(ns: str, *, createNs: bool = True, **providerArgs) -> k8s.Provide
     return k8s.Provider(f'{ns}-provider', **providerArgs)
 
 
-def main() -> None:
-    """Main function called from scripts/stack.py."""
+async def main() -> None:
+    """Program entrypoint, awaited on the Pulumi event loop via pulumi.run().
+
+    Async pre-work (external APIs, stack output details, file reads) can be
+    awaited here directly before or between resource declarations.
+    """
     physical.setup()

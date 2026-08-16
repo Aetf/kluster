@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">= 3.12"
 
 dependencies = [
-    "pulumi>=3.231.0",
+    "pulumi>=3.254.0",
     "pulumi-kubernetes>=4.23.0",
     "pulumi-awsx>=2.19.0",
     "pulumi-aws>=6.61.0",
@@ -21,7 +21,6 @@ dependencies = [
 ]
 
 [project.scripts]
-stack = 'kluster.scripts.stack:main'
 update_crds = 'kluster.scripts.update_crds:main'
 
 [dependency-groups]
@@ -62,7 +61,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kluster"]
+packages = ["src/kluster", "src/putils"]
 
 ##
 ## Formatter and linter
