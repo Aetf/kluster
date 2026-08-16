@@ -41,6 +41,6 @@ Other services (Authelia, Nextcloud, Syncthing, etc.) will follow the general mi
 
 ## 4. Rollback Plan
 In case of failure during migration:
-1.  Abound the migration of the specific application.
+1.  Abandon the migration of the specific application.
 2.  Scale up the deployment in the legacy cluster to resume service.
 3.  Investigate and resolve the issue before attempting again.

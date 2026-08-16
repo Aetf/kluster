@@ -183,7 +183,8 @@ unknown in the diff; inputs passed plainly keep their concrete values. During
 
 ## 2. Integration with `putils`
 
-The framework is implemented in the proof-of-concept library `src/putils`:
+The framework is implemented in the library `src/putils` (stable; verified by
+`tests/test_async_properties.py`):
 
 -   `component.py`: Provides the base `Component` class (auto `pulumi_type`,
     `child_opts()`).
@@ -194,6 +195,10 @@ The framework is implemented in the proof-of-concept library `src/putils`:
 
 To balance DRY principles and stack isolation, we propose a layered stack
 structure. This allows changing one layer without necessarily affecting others.
+
+> **Status**: proposal only — the repo is currently a single stack. To be
+> decided before building the infra layer (see README "Status & open
+> decisions").
 
 ### Proposed Layers
 

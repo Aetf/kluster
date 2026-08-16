@@ -7,16 +7,11 @@ using Pulumi mocks and `pytest`.
 
 The project uses `pytest` and `pytest-asyncio` for unit testing.
 
-> [!WARNING] There might be issues resolving dependencies (e.g.,
-> `pulumi-kubernetes`) due to private registry authentication issues in this
-> environment. If `uv run pytest` fails to resolve dependencies, you may need to
-> configure your registry credentials or run it in an environment with proper
-> access.
-
-To run the tests:
+To run the tests (always with a timeout — a coroutine that never resolves its
+futures hangs forever instead of failing):
 
 ```bash
-uv run pytest
+timeout 60 mise x uv -- uv run pytest
 ```
 
 ## 2. Writing Tests
@@ -30,9 +25,9 @@ Create a file named `test_*.py` (e.g., `test_network.py`) in a `tests`
 directory.
 
 ```python
-import asyncio
 import pulumi
 import pytest
+import pytest_asyncio
 
 # Define the Mocks
 class MyMocks(pulumi.runtime.Mocks):
@@ -45,8 +40,9 @@ class MyMocks(pulumi.runtime.Mocks):
         return {}
 
 # Setup the test environment
-@pytest.fixture(autouse=True)
-def setup_mocks():
+# Must be an async fixture: set_mocks needs the test's running event loop.
+@pytest_asyncio.fixture(autouse=True)
+async def setup_mocks():
     pulumi.runtime.set_mocks(
         MyMocks(),
         project="my-project",
@@ -73,23 +69,28 @@ with `async_output`/`resolve` inputs:
 ### 3.1 Mocking `propertyDependencies`
 
 During registration, the Pulumi engine needs to know which outputs a resource
-property depends on. Your mock monitor's `new_resource` (or `RegisterResource`
-override) must preserve and return `propertyDependencies` from the request to
-the response, otherwise downstream dependency resolution will fail.
+property depends on. The SDK's `MockMonitor` drops `propertyDependencies` from
+the response, so downstream dependency assertions would always come back
+empty. The test suite patches it once at module import — before any Pulumi
+code runs (this is the actual pattern used in
+`tests/test_async_properties.py`):
 
 ```python
-class MyMockMonitor(pulumi.runtime.MockMonitor):
-    def register_resource(self, req):
-        # Register resource and obtain URN and ID
-        urn = f"urn:pulumi:stack::project::type::{req.name}"
-        id_ = f"{req.name}_id"
-        # Crucial: Echo back propertyDependencies
-        return pulumi.runtime.RegisterResourceResponse(
-            urn=urn,
-            id=id_,
-            object=req.object,
-            property_dependencies=req.propertyDependencies,
-        )
+import pulumi.runtime.mocks
+from pulumi.runtime.proto import resource_pb2
+
+original_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
+
+
+def patched_register_resource(self, request):
+    resp = original_register_resource(self, request)
+    if isinstance(resp, resource_pb2.RegisterResourceResponse):
+        for k, v in request.propertyDependencies.items():
+            resp.propertyDependencies[k].urns.extend(v.urns)
+    return resp
+
+
+pulumi.runtime.mocks.MockMonitor.RegisterResource = patched_register_resource
 ```
 
 ### 3.2 Asserting Dependencies via URNs
@@ -98,13 +99,15 @@ When Pulumi tracks dynamic dependencies inside `async_output` coroutines, it
 recreates dependency instances as `DependencyResource` synthetic resources.
 **Do not use object identity (`is` or `==`)** to compare resource dependencies
 returned by `Output.resources()`. Instead, extract and assert on their `urn`
-strings:
+strings. Note that `resolve` cannot be used in test code — it raises
+`RuntimeError` outside an `async_output` coroutine (RFC-001 Rev 3); await
+output futures directly:
 
 ```python
 # Correct assertion pattern:
 deps = await my_component.subnet.network_id.resources()
-dep_urns = {await resolve(d.urn) for d in deps}
-assert vpc.urn in dep_urns
+dep_urns = {await d.urn.future() for d in deps}
+assert await vpc.urn.future() in dep_urns
 ```
 
 ### 3.3 Dry-Run/Preview Safety
@@ -126,8 +129,9 @@ assert isinstance(val, Unknown)
 
 1.  **Mock Early**: Always set mocks before importing or executing any Pulumi
     code that creates resources.
-2.  **Test Outputs**: Use `.apply()`, `pulumi.Output.all()`, or `resolve` helper
-    to check values of outputs, as they resolve asynchronously.
+2.  **Test Outputs**: Await `.future()` (or use `.apply()` /
+    `pulumi.Output.all()`) to check values of outputs, as they resolve
+    asynchronously; `resolve` is only usable inside `async_output` coroutines.
 3.  **Always Use Timers**: When running unit tests, wrap the execution with a
     timeout (e.g. `timeout 15` in shell or using a test runner timeout) to
     prevent hanging tests when coroutines fail to resolve their futures.
