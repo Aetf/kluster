@@ -44,9 +44,9 @@ docs: physical, dns, cluster-infra, workloads).
   egress economics, cloud worker pricing (reopened 2026-08-22 after the
   Hetzner US price hike; Vultr recommended), homelab host inventory & VM
   sizing, HA tiers.
-- [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path, Longhorn,
-  NAS, object storage), backup architecture, JuiceFS root causes &
-  containment policy.
+- [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path +
+  VolSync, NAS, object storage; Longhorn deferred), backup architecture,
+  JuiceFS root causes & containment policy.
 - [docs/cluster/migration.md](docs/cluster/migration.md) — workload/data migration plan from
   the legacy cluster.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
@@ -94,6 +94,7 @@ Open items to settle before / during detailed design, roughly in order:
    port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
    (architecture.md §5.1).
 8. **Storage residue** (docs/cluster/storage.md): B2 bucket decided; JuiceFS CSI
-   not installed; second homelab worker VM deferred (Longhorn starts all
-   replica=1 + backups). Remaining check: Longhorn ≥1.12 (dual-stack
-   support) must be GA by bootstrap time.
+   not installed (one quarantined per-app user: VPS syncthing/dav);
+   Longhorn deferred out of the initial build — local-path + VolSync is
+   the default, adoption criteria on file (§3.2); second homelab worker
+   VM deferred.

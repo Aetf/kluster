@@ -33,7 +33,7 @@ the Homelab. This means the cloud node needs:
     must support custom images/ISOs. This excludes AWS Lightsail (blueprint
     images only) and most "managed VPS" products.
 -   Disk: 40–60 GB. Talos itself is tiny; the rest is image cache +
-    local-path/Longhorn volumes for internet-pool workloads (see
+    local-path volumes for internet-pool workloads (see
     [storage.md](storage.md)).
 
 ## 2. The deciding factor is egress, not compute
@@ -196,9 +196,11 @@ a migration-blocking item to verify early, not late.
 
 -   **CP/worker VM**: **12–16 vCPU / 20 GiB RAM**, disk on local NVMe.
     RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1 (qemu/host
-    overhead) ≈ 21 GiB. That covers today's ~16 GiB workload set plus
-    Longhorn's 2–4 GiB (storage.md §3) with little slack — **a RAM
-    upgrade is the designated relief valve**, cheaper than any
+    overhead) ≈ 21 GiB. Today's ~16 GiB in-cluster usage already includes
+    ~5 GiB of infra tax that the economy program (§4.4) shrinks to a
+    projected ~4–4.5 GiB *including* what the new design adds — so
+    ~20 GiB carries the workload set plus qbittorrent with modest slack.
+    **A RAM upgrade is the designated relief valve**, cheaper than any
     architectural workaround (board verified 2026-08-22: ROG Maximus
     Z690 Hero, DDR5, 4×DIMM up to 128 GB).
 -   **Disk**: target 100+ GB qcow2/raw on NVMe, but only ~85 GB is free
@@ -217,11 +219,40 @@ a migration-blocking item to verify early, not late.
 
 Decided 2026-08-22 (was an open question): a single large VM. On one
 physical host, multiple VMs add no real fault isolation but each costs a
-fixed overhead (kubelet + Cilium + OS ≈ 1 GiB, plus a Longhorn
-instance-manager CPU reservation per node) from a 32 GB budget that has
-none to spare. The legitimate second-VM use cases (Longhorn replica=2,
-maintenance drains) are exactly the deferred §4.2 option — one *more* VM
-later, not N small ones now.
+fixed overhead (kubelet + Cilium + OS ≈ 1 GiB per node) from a 32 GB
+budget that has none to spare. The legitimate second-VM use cases
+(same-site storage replicas, maintenance drains) are exactly the deferred
+§4.2 option — one *more* VM later, not N small ones now.
+
+### 4.4 Infrastructure tax, measured, and the economy program
+
+The "how much of the machine is control plane / infra?" question,
+answered with `kubectl top` on the legacy cluster (2026-08-22), of
+~16 GiB in use on the homelab node:
+
+| Infra component | Measured | Fate in the new cluster |
+| --- | --- | --- |
+| k3s server + containerd (host procs) | ~1.7 GiB | Talos CP static pods ≈ same; no lever, accepted |
+| Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB |
+| Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design; one per-app sidecar mount ~0.2 GiB (storage.md §6) |
+| Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept minus sealed-secrets (secrets flow from Pulumi state directly) and the JuiceFS dashboard |
+| CNPG operator + traefik | ~0.3 GiB | CNPG stays; traefik → the two Envoy gateways (similar) |
+| **Total** | **~5 GiB (~30%)** | **projected ~4–4.5 GiB** |
+
+The projection *includes* what the new design adds (Cilium agents are
+heavier than flannel+kube-proxy, two gateways, VolSync controller) and
+excludes what it refuses: Longhorn's 2–4 GiB was the largest single new
+infra item on the table and is deferred with criteria (storage.md §3.2).
+Rule going forward: **standing infra must pay standing rent** — a
+component that idles waiting for rare events (mobility layers,
+dashboards nobody opens) is bought as a procedure (restore, redeploy)
+instead of a daemon.
+
+Cloud-node corollary: without Longhorn, the 4 GB instance carries
+Cilium + Envoy + kubelet (~1.5 GiB) + hath + syncthing/dav (+ sidecar)
+comfortably; a 2 GB instance (~$12 on Vultr) becomes a *plausible*
+economy fallback, though 4 GB stays the recommendation for page-cache
+headroom on hath's cache.
 
 ## 5. High availability, honestly
 
@@ -232,8 +263,8 @@ makes cross-site Raft good. What HA means here, in tiers:
 -   **Tier 0 — declarative rebuild + backups (adopted)**: the cluster *is*
     the Pulumi program plus Talos machine configs. HA against permanent loss
     comes from: hourly etcd snapshots shipped to object storage (Talos
-    `etcd snapshot` or the built-in snapshotter), Longhorn backups and CNPG
-    barman to the same bucket (storage.md §5), and a periodically *drilled*
+    `etcd snapshot` or the built-in snapshotter), VolSync volume backups
+    and CNPG barman to the same bucket (storage.md §5), and a periodically *drilled*
     restore (same discipline as the legacy CNPG restore drill). Target:
     RPO ≤ 1 h, RTO ~1–2 h hands-on. This explicitly includes a
     **control-plane cold-standby drill**: re-bootstrapping a temporary CP

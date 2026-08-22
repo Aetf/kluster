@@ -356,6 +356,15 @@ drives gw-config**:
     qbittorrent v6 pinhole, §3.5) go through the regular unifi provider,
     not this one. Secrets/backup pulls stay in the gw-config repo's own
     tooling for now.
+-   **Images: Pulumi pins and deploys, CI builds.** Image *building* stays
+    in homelab-containers' CI (renovate keeps bases fresh; builds are
+    slow, cache-dependent, and don't belong inside `pulumi up` —
+    pulumi-docker-build exists and is deliberately not used). Pulumi's
+    input is a **digest-pinned reference** to a CI-built artifact
+    (nspawn rootfs release, or a registry image for in-cluster
+    workloads); bumping the pin is the previewed, reviewable deploy
+    event. Same discipline as the mise commit-pin pattern already used
+    for homelab-ops tooling.
 
 ## 6. Alternatives Considered
 

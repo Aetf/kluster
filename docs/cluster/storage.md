@@ -8,10 +8,11 @@ resort, object storage used directly where an app supports it.
 
 > **Status**: Reviewed interactively 2026-08-21; decided: B2 as the backup
 > bucket (§4), JuiceFS CSI **not installed** (§6), second homelab VM
-> deferred so all Longhorn volumes start at replica=1 (§3), hath cache
-> lives on the cloud node's local disk (nodes.md §2.1). 2026-08-22:
-> JuiceFS root causes documented (§1), Longhorn resource budget added
-> (§3), VPS syncthing/dav disposition decided (§6). Companion to
+> deferred, hath cache lives on the cloud node's local disk (nodes.md
+> §2.1). 2026-08-22: JuiceFS root causes documented (§1), VPS
+> syncthing/dav disposition decided (§6), and — economy pass —
+> **Longhorn deferred out of the initial build** in favor of local-path +
+> VolSync (§3), with adoption criteria on file. Companion to
 > [nodes.md](nodes.md); topology and pools per
 > [architecture.md](architecture.md). Not implemented.
 
@@ -22,9 +23,12 @@ resort, object storage used directly where an app supports it.
     (CNPG) and backups, not from a distributed filesystem.
 2.  **Mobility is a first-class requirement, durability is not** (for the
     block layer). The legacy cluster's pain was *moving* local-path data
-    between nodes (claimRef surgery, tar-over-SSH, permission bits). Longhorn
-    is adopted primarily as the mobility layer: detach/attach anywhere,
-    replica rebuild to relocate, S3 backup/restore.
+    between nodes (claimRef surgery, tar-over-SSH, permission bits). The
+    mobility mechanism is **backup/restore via VolSync** (§3): moves are
+    rare, planned events, so they may cost a restore — what they must not
+    cost is archaeology. Longhorn (a standing 2–4 GiB service for the
+    same affordance) is deferred until move frequency proves it out
+    (§3.2).
 3.  **No storage stretches the WAN synchronously.** The homelab↔cloud RTT
     (~tens of ms) goes into every write of any cross-site replica. Replicas
     stay within a site; cross-site movement is asynchronous (backup/restore
@@ -45,7 +49,8 @@ resort, object storage used directly where an app supports it.
 | Class | Backing | Access | Use for | Not for |
 | --- | --- | --- | --- | --- |
 | `local-path` (default) | Talos hostPath under `/var/mnt/storage` on each node | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
-| `longhorn` | Longhorn v1 engine, local disk per node | RWO (RWX possible but avoid) | stateful apps without built-in replication; any volume that plausibly moves | high-IOPS databases; bulk media |
+| `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
+| ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, hath cache, large read-mostly sets | cloud-pool workloads; databases |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined) | object storage + per-app metadata | RWX | last resort only (§6) | everything else |
@@ -58,52 +63,64 @@ Per-workload decision rules, in order:
     **local-path**, ≥2 instances across nodes where HA matters, plus
     barman/object backups.
 3.  Bulk media / large read-mostly data in the homelab pool → **NAS**.
-4.  Everything else stateful → **Longhorn**.
+4.  Everything else stateful → **local-path + a VolSync backup schedule**
+    (§3.1).
 5.  Genuinely needs POSIX RWX across nodes and NAS can't serve it →
     justify **JuiceFS** per §6, in writing, per app.
 
-## 3. Longhorn specifics
+## 3. Block-layer mobility: VolSync now, Longhorn later
 
--   **Version floor**: the cluster is dual-stack IPv4-primary
-    (architecture.md §1.3). Longhorn supports single-stack v4/v6 clusters
-    from v1.10 but *dual-stack clusters* only from **v1.12** (IPv4-family
-    -first). Pin the chart at ≥1.12 and treat it as a bootstrap-order
-    constraint; do not deploy an older Longhorn "temporarily".
--   **Talos prerequisites**: `siderolabs/iscsi-tools` and
-    `siderolabs/util-linux-tools` system extensions in the machine config,
-    a dedicated `/var/lib/longhorn` mount on the storage disk, and the
-    namespace labeled for privileged pod security. These go into the Talos
-    machine config in Pulumi, not into a runbook.
--   **Replica policy**: default `numberOfReplicas: 1` + `dataLocality:
-    best-effort`. One replica on the node running the workload gives
-    near-local performance while keeping every Longhorn affordance
-    (snapshots, S3 backup, detach/reattach, rebuild-to-move).
-    `replica=2` is allowed only when both replicas land in the same site —
-    which requires the optional second homelab VM (nodes.md §4). Cross-site
-    `replica=2` is prohibited (principle 3).
--   **Moving a volume between nodes** becomes: cordon → scale down → (same
-    site: temporarily raise replica count / let rebuild land on target;
-    cross-site: backup to S3, restore into the other pool) → scale up. No
-    claimRef surgery.
--   **Resource budget** (the JuiceFS lesson applied in advance — VM and
-    cloud-instance sizing must include the storage layer, nodes.md §4.2):
-    Longhorn's official floor is 4 vCPU/4 GB per node; the
-    instance-manager's *default* CPU request is 12% of node allocatable
-    (tunable per node); replicas hold a read index of ~256 MB RAM per TB
-    of volume. Budget **2–4 GiB on the homelab VM** (10–20 volumes) and
-    **0.5–1 GiB on the 4 GB cloud node**, where Longhorn is kept to a few
-    small volumes with a lowered instance-manager reservation — bulk data
-    on the cloud side belongs to hath's local-path cache, not Longhorn.
-    (v1.11 shipped an instance-manager memory leak, #12668 — one more
-    reason the ≥1.12 pin above is a floor, not a suggestion.)
--   **Backup target**: the backup bucket (§5) configured cluster-wide;
-    recurring snapshots + backups for every Longhorn volume by default.
--   **v2 engine**: not adopted — its IPv6/dual-stack support lags v1 and the
-    performance win doesn't matter at this scale. Revisit ~v1.13.
+### 3.1 VolSync on local-path (the initial build)
+
+Every rule-4 volume (local-path, no app-level replication) gets a VolSync
+`ReplicationSource` with the restic mover: scheduled backups to the
+backup bucket (§4), retention policy per app. VolSync needs no CSI
+snapshots — it mounts the PVC directly; mover pods exist only while a
+backup/restore runs, and the controller idles at well under 100 Mi. This
+one mechanism serves as:
+
+-   **Backup** (§5): the recurring job every stateful app gets by default.
+-   **Mobility**: moving a volume = scale down → final `ReplicationSource`
+    sync → `ReplicationDestination` restore into a fresh PVC on the target
+    node/pool → scale up pointing at it. Works identically same-site and
+    cross-site, no claimRef surgery, and it exercises the restore path —
+    every move is a restore drill for free.
+-   **DR**: same restore, onto a rebuilt node.
+
+The cost is planned downtime proportional to volume size per move —
+acceptable because moves are rare, deliberate events (the legacy cluster
+saw about one per year).
+
+### 3.2 Longhorn: deferred (2026-08-22), with adoption criteria
+
+Longhorn buys live detach/reattach, near-instant rebuild-to-move, and
+volume snapshots — for a **standing** cost of 2–4 GiB RAM on the homelab
+VM + 0.5–1 GiB on the cloud node, a 12%-of-node instance-manager CPU
+request, ~256 MB RAM per TB of replica, and one more operator to run
+(nodes.md §4.4 is the measured argument for refusing standing infra
+costs that idle). It enters the cluster only when observed reality meets
+one of:
+
+-   volume moves become frequent enough that VolSync downtime measurably
+    hurts (guideline: >~1 move/quarter on volumes where the downtime
+    matters), or
+-   a workload genuinely needs in-cluster RWX that NAS cannot serve, or
+-   same-site replica=2 becomes real (requires the second homelab VM,
+    nodes.md §4.2, which is itself deferred).
+
+Adoption-day facts (verified 2026-08, so future-us doesn't re-research):
+pin **≥1.12** — dual-stack cluster support starts there and v1.11 shipped
+an instance-manager memory leak (#12668); Talos needs the
+`siderolabs/iscsi-tools` + `util-linux-tools` extensions, a dedicated
+`/var/lib/longhorn` mount, and a privileged-PSS namespace (machine-config
+items in Pulumi, not a runbook); default `numberOfReplicas: 1` +
+`dataLocality: best-effort`; cross-site replica=2 stays prohibited
+(principle 3); v2 engine not adopted (dual-stack lags v1).
 
 ## 4. Object storage provider
 
-Needs: S3-compatible API (Longhorn, CNPG barman, restic all speak S3),
+Needs: S3-compatible API (restic/VolSync, CNPG barman, and Longhorn if
+ever adopted all speak S3),
 priced for ~100 GB–1 TB, and cheap *restore* traffic — restore drills are
 part of the design, so egress-free matters more than the last cent on
 storage.
@@ -131,8 +148,9 @@ Per nodes.md §5, durability = declarative rebuild + backups, drilled:
     `b2://…/etcd/`, retained ~14 days. Restore path is documented Talos
     `--recover-from-snapshot` bootstrap — drilled both in-place and onto a
     substitute node (the CP cold-standby path, nodes.md §5 Tier 0).
-2.  **Longhorn**: recurring snapshot (daily) + backup (daily) jobs on all
-    volumes, same bucket, retention ~30 days.
+2.  **Volumes**: VolSync restic backups (daily) on every rule-4 PVC
+    (§3.1), same bucket, retention ~30 days; restores double as the
+    volume-move mechanism, so the path stays exercised.
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill).
@@ -210,6 +228,12 @@ The dav share serves the same dataset and follows the same mount.
 -   **Rook/Ceph**: proper distributed storage, but wants ≥3 storage nodes
     per site and an operational budget this cluster doesn't have. Strictly
     overkill for 2–3 nodes.
+-   **Longhorn from day one** (the 2026-08-21 plan): rejected 2026-08-22
+    in the economy pass — 2–4 GiB standing RAM + CPU reservations to keep
+    a mobility affordance idling for events that historically happen
+    about once a year. VolSync restore-moves cover the requirement at
+    ~zero idle cost; Longhorn keeps documented adoption criteria (§3.2)
+    instead of a default seat.
 -   **OpenEBS Mayastor / local ZFS replication**: less turnkey than Longhorn
     for the one feature we're buying (S3 backup + detach/attach mobility);
     Mayastor's RAM/hugepages appetite is hostile to small nodes.
