@@ -4,36 +4,43 @@ Objective: Deploy a high-performance hybrid Kubernetes cluster spanning a
 cloud VPS and a Homelab LAN. Ensure low stack complexity, minimal vendor
 lock-in, and declarative management using Pulumi.
 
-> **Status**: This is the canonical architecture document. The plan moved
-> from AWS to GCP in April 2026 (commit `487ebd4`); the 2026-08-21 review
-> tentatively picked Hetzner, which the 2026-06-15 Hetzner US price hike
-> then voided — **cloud provider selection is reopened** and argued in
-> [nodes.md](nodes.md) §3; this document is provider-agnostic ("cloud
-> node" = whichever instance nodes.md lands on). The 2026-08-22 iteration
-> unified ingress into the two-pool LoadBalancer model (§3), automated the
-> UDM side (§5.2), and adopted HAOS into the physical layer (§5.1, §6.8).
-> The code in `src/kluster/physical/aws.py` predates all of this and will
-> be replaced during implementation.
+> **Status**: This is the canonical architecture document, describing the
+> design **as decided 2026-08-22** (control plane in the cloud on 3× OCI
+> A1 nodes; two-pool LoadBalancer ingress; UDM automated via a gw-config
+> provider; HAOS adopted into the physical layer). Superseded approaches
+> and their reasoning live in §6; sizing, provider pricing, and HA tiers
+> live in [nodes.md](nodes.md); storage in [storage.md](storage.md). The
+> code in `src/kluster/physical/aws.py` predates all of this and will be
+> replaced during implementation.
 
 ## 1. Architecture Overview
 
 ### 1.1 High-Level Design
 
--   **Control Plane**: Single-node powerful VM in the Homelab. Avoids
-    WAN-latency penalties on etcd.
--   **Worker Nodes**: one cloud instance (provider selection reopened —
-    nodes.md §3) handles public ingress and stable-IP workloads (hath);
-    the Homelab VM handles internal workloads and bulk-egress workloads.
--   **OS**: Talos Linux (Immutable, API-driven).
+-   **Cloud site (OCI, Ashburn)**: **three A1.Flex nodes (1 OCPU / 8 GB
+    each) forming the HA control plane** — etcd quorum stays within one
+    region, so Raft never crosses the WAN — and simultaneously serving as
+    the ingress/worker pool for internet-facing and stable-IP workloads
+    (hath). Sits inside the OCI free envelope today; ≤ ~$21/mo worst case
+    (nodes.md §3.2).
+-   **Homelab site**: one large Talos **worker** VM on the physical server
+    (libvirt) for internal, NAS-coupled, GPU, and bulk-egress workloads.
+    The home site holds the data gravity; the cloud site holds the
+    control plane and the public face. **No inbound ports are required at
+    the home network** (§5.1).
+-   **OS**: Talos Linux (immutable, API-driven) on every node; the entire
+    machine config is Pulumi-rendered.
 -   **Transport / Underlay**: Talos KubeSpan (WireGuard mesh) for encrypted
-    node-to-node communication across the public internet.
--   **CNI & Routing**: Cilium (eBPF-based, bypassing kube-proxy and iptables).
+    node-to-node communication across the public internet; the homelab
+    worker initiates outbound to the cloud nodes' public endpoints.
+-   **CNI & Routing**: Cilium (eBPF-based, kube-proxy replacement).
 -   **Ingress (both sides, unified)**: every exposed app is a
     `type: LoadBalancer` Service drawing from one of two Cilium LB IPAM
-    pools — `internet` (routed public IPs on the cloud node) or `lan`
-    (dedicated dual-stack subnet BGP-announced to the UDM SE). HTTP/S goes
-    through Cilium Gateway API (Envoy) gateways that are themselves
-    LoadBalancer Services from these pools (§3).
+    pools — `internet` (the cloud nodes' primary public IPs, fronted by
+    the free OCI NLB) or `lan` (dedicated dual-stack subnet BGP-announced
+    to the UDM SE). HTTP/S goes through Cilium Gateway API (Envoy)
+    gateways that are themselves LoadBalancer Services from these pools
+    (§3).
 -   **Egress**: default per-node local egress; bulk egress stays on the home
     uplink; Cilium Egress Gateway available for stable-IP steering (§3.5).
 
@@ -45,43 +52,38 @@ graph TD
  User(Public Users)  
  end  
   
- subgraph "Cloud Site (provider TBD, nodes.md §3)"  
- Cloud_Worker[Cloud Worker Node <br> primary IPs = internet VIP]  
- Envoy1(internet-gw Envoy <br> LB Service on VIP: 80/443)  
- RawTCP(LB Services on shared VIP <br> syncthing, hath, ...)  
- Cloud_Worker --- Envoy1  
- Cloud_Worker --- RawTCP  
+ subgraph "Cloud Site (OCI Ashburn, one VCN)"  
+ NLB(OCI Network Load Balancer <br> free; stable public v4+v6 <br> DNS anchor; source-IP preserving)  
+ CP1[cloud-1 CP+ingress <br> 1 OCPU / 8 GB]  
+ CP2[cloud-2 CP+ingress <br> 1 OCPU / 8 GB <br> hath pinned here]  
+ CP3[cloud-3 CP+ingress <br> 1 OCPU / 8 GB]  
+ NLB --> CP1  
+ NLB --> CP2  
+ NLB --> CP3  
  end  
   
  subgraph "Homelab Site"  
  DMSE[Ubiquiti UDM SE Router <br> BGP AS 65000]  
    
 subgraph "Homelab Physical Server"  
- Homelab_VM[Talos CP/Worker VM <br> LAN IP: 192.168.80.238]  
+ Homelab_VM[Talos Worker VM <br> LAN IP: 192.168.80.238]  
  end  
    
-subgraph "Kubernetes Logical Networks"  
- Pods(Pod CIDR: 10.244.0.0/16)  
- SVC(Service CIDR: 10.96.0.0/12)  
  LB_Pool(Cilium lan LB pool <br> v4 192.168.70.0/24 <br> v6 ULA /64)  
- end  
-   
-VLAN_IoT(IoT VLAN)  
  ZT_Net(ZeroTier Personal Devices)  
  end  
   
  %% Routing Flow  
- User -- "AAAA/A Record" --> Cloud_Worker  
+ User -- "A/AAAA → NLB IP" --> NLB  
+ User -- "hath: cloud-2 primary IP" --> CP2  
  DMSE -- "FRR BGP Peering (v4+v6)" --> Homelab_VM  
- DMSE --- VLAN_IoT  
  DMSE --- ZT_Net  
    
 %% KubeSpan  
- Cloud_Worker <== "KubeSpan (WireGuard UDP 51820)" ==> Homelab_VM  
+ CP1 <== "KubeSpan (WireGuard, outbound from home)" ==> Homelab_VM  
   
 %% Logical internal links  
- Homelab_VM -. "Hosts" .-> Pods  
- Homelab_VM -. "Hosts" .-> SVC  
+ Homelab_VM -. "next hop for" .-> LB_Pool  
 ```
 
 ### 1.3 IP Stack Architecture: Dual-Stack (IPv4 Primary)
@@ -106,11 +108,12 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 ### 2.1 Talos Linux Features ([Docs](https://www.talos.dev/))
 
 -   **KubeSpan**: Native WireGuard mesh. Handles NAT traversal automatically
-    because the cloud node has a public IP, allowing the Homelab node to
-    initiate the connection.
+    because the cloud nodes have public IPs, allowing the Homelab worker to
+    initiate all connections outbound — no home-side pinholes.
 -   **KubePrism**: A local HAProxy load balancer running on every node
-    (localhost:7445). All worker nodes and internal components point to this
-    instead of a hardcoded external API IP.
+    (localhost:7445) that balances across all three apiservers. Every node
+    and in-cluster component points at this instead of any hardcoded API
+    IP; external clients use the NLB endpoint instead (§3.2).
 
 ### 2.2 Cilium eBPF CNI ([Docs](https://docs.cilium.io/))
 
@@ -132,7 +135,7 @@ reach the VIP differs:
 
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
-| `internet` | The cloud node's **primary** public IPv4 + IPv6 (§3.2) | The provider already routes the IP to the node; no announcement needed |
+| `internet` | The three cloud nodes' **primary** public IPv4 + IPv6 (§3.2) | OCI routes each IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
 | `lan` | Dedicated dual-stack subnet, e.g. `192.168.70.0/24` + a ULA `/64` — deliberately *not* inside the LAN's `192.168.80.0/24` | BGP-announced to the UDM SE (§3.4) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
@@ -161,57 +164,72 @@ Mechanics shared by both pools:
     when the backends are pinned to the VIP-owning node. DSR is not usable
     across the WG/NAT path — stick with SNAT.
 
-### 3.2 The internet VIP: the node's primary IPs
+### 3.2 The internet side: NLB in front, primary IPs underneath
 
-The `internet` pool contains the cloud node's **primary** public IPs
-(v4 + v6). This costs nothing extra (a reserved/floating additional IP is
-~$3/mo on most providers) and — decisively — makes node egress SNAT and
-the ingress VIP the *same address*, so hath's same-IP-in/out requirement
-is satisfied by an ordinary LoadBalancer Service with its pod pinned to
-the cloud node; no hostPort, no exception, no OS-level SNAT games.
+Internet ingress is two layers, both free:
 
-Datapath-wise this is identical to the retired `externalIPs`-on-primary-IP
-design (§6.6): KPR treats externalIP and LB-VIP frontends as the same
-class, claiming only the declared service ports and leaving host traffic
-(KubeSpan 51820, Talos apid) untouched. Two caveats, accepted knowingly:
+1.  **The NLB is the stable public anchor.** All public A/AAAA records
+    point at the free OCI Network Load Balancer's IP — which is
+    independent of every instance, so node rebuilds never touch DNS. The
+    NLB is L3/4 pass-through with **source-IP preservation** and health
+    checks; one listener per public port (80, 443, syncthing 22000/tcp+udp,
+    …), backend set = the three cloud nodes.
+2.  **Cilium terminates on the node primary IPs.** The `internet` pool
+    contains all three nodes' primary IPs; every internet Service
+    requests *all three* via the `lbipam.cilium.io/ips` annotation (plus
+    a `sharing-key`, ports disambiguate). The NLB DNATs the front IP to a
+    healthy backend node's primary IP, where the KPR datapath matches the
+    frontend and forwards to a pod — locally (`externalTrafficPolicy:
+    Local`, client IP preserved end-to-end through the pass-through NLB)
+    or via SNAT to another node (`Cluster`).
 
--   Cilium doesn't officially bless a pool containing a node's own IP (LB
-    IPAM only validates pool-vs-pool overlap) — **verify during bootstrap**,
-    with a provider reserved IP as the trivial fallback (+$3/mo).
--   The public address is coupled to the instance lifecycle: a node
-    rebuild changes it. Acceptable because all DNS is Pulumi-managed
-    (§5.1) — the change is one previewed diff, and hath tolerates IP
-    changes (it re-registers).
+Datapath-wise the node-side half is identical to `externalIPs` handling
+(KPR treats both frontend classes the same, claiming only declared
+service ports and leaving host traffic — KubeSpan, Talos apid — alone).
+Caveats accepted knowingly, each with a cheap fallback:
 
-**Two-node cloud pool variant** (nodes.md §3.2, recommended on OCI):
-the `internet` pool then contains both cloud nodes' primary IPs; a free
-OCI Network Load Balancer (L3/4 pass-through, client IPs preserved,
-health checks) provides the single DNS-stable front IP for HTTP and
-shared-VIP TCP/UDP across both nodes, while hath stays pinned to node
-A's primary IP directly (same-IP in/out bypasses the NLB). On a
-single-node provider (Vultr fallback) the design degrades gracefully to
-the one-node description above.
+-   Cilium doesn't officially bless a pool containing node IPs (LB IPAM
+    validates only pool-vs-pool overlap) — **verify at bootstrap**;
+    fallback is a reserved additional IP per node ($0 on OCI).
+-   NLB dual-stack (v6 listener) and exact source-preservation semantics
+    on a dual-stack VCN — **verify at bootstrap**; fallback is
+    multi-A/AAAA DNS straight at the three node primary IPs (loses
+    health-checked failover, keeps everything else).
+
+**hath bypasses the NLB.** hath needs inbound and outbound on the same
+IP; node egress SNATs from the node's own primary IP, so hath is an
+ordinary LoadBalancer Service requesting *only its pinned node's*
+primary IP. Its protocol is DNS-free and tolerates IP change on the rare
+rebuild of that node (it re-registers).
+
+**The management plane rides the same NLB**: listeners for 6443
+(kube-apiserver) and 50000 (Talos apid) across the three CP nodes give
+kubectl/talosctl one stable, health-checked, mTLS-authenticated public
+endpoint (cert SANs include the NLB IP). No home-side path is involved
+in managing the cluster.
 
 **Escape hatch — client-IP-sensitive non-HTTP on the homelab pool**: if a
 raw TCP/UDP service ever both needs real client IPs *and* must run
-homelab-side (too big for the cloud node), the cloud VIP can't serve it
-(`Cluster` policy SNATs, `Local` needs local backends, DSR can't cross
-WG/NAT). Expose it via the **home uplink** instead: UDM port-forward to
-its `lan` VIP — DNAT preserves the source address end-to-end. Costs:
-home-IP DNS (dynamic) and home upload bandwidth. No current workload
-needs this; it exists so the constraint never forces a redesign.
+homelab-side (too big for the cloud pool), the cloud path can't serve it
+(`Cluster` SNATs, `Local` needs local backends, DSR can't cross WG/NAT).
+Expose it via the **home uplink** instead: UDM port-forward to its `lan`
+VIP — DNAT preserves the source address end-to-end. Costs: home-IP DNS
+(dynamic) and home upload bandwidth. No current workload needs this; it
+exists so the constraint never forces a redesign.
 
 ### 3.3 HTTP/S: two Gateways, shared routes
 
 Cilium Gateway API provides two `Gateway`s: `internet-gw` and `lan-gw`,
-each a LoadBalancer Service from its pool (the previous hostNetwork-Envoy
-design is retired — §6.6). An app publishes an `HTTPRoute` with one or both
-as `parentRefs`; split-horizon apps (immich) attach to both.
+each a LoadBalancer Service from its pool. An app publishes an
+`HTTPRoute` with one or both as `parentRefs`; split-horizon apps
+(immich) attach to both.
 
-Client-IP note: pin each gateway's Envoy onto the node owning its VIP
-(cloud node for `internet-gw`, homelab VM for `lan-gw`) and use
-`externalTrafficPolicy: Local`, so access logs and auth see real client
-IPs without X-Forwarded-For games.
+Client-IP note: `internet-gw`'s Envoy runs as replicas across the cloud
+nodes (every NLB backend has a local Envoy) with
+`externalTrafficPolicy: Local` — real client IPs flow through the
+pass-through NLB into Envoy's access logs and auth decisions without
+X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
+(the node owning its `lan` VIP), likewise `Local`.
 
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 
@@ -238,8 +256,12 @@ IPs without X-Forwarded-For games.
 
 ### 3.5 Egress Design
 
--   **Default**: pods egress via their own node (cloud node → cloud IP,
-    homelab → home uplink).
+-   **Default**: pods egress via their own node (cloud pods → that
+    node's primary IP, homelab → home uplink). The three cloud nodes
+    thus present three egress identities — irrelevant to every current
+    workload; anything ever needing one fixed cloud egress IP steers
+    through a Cilium Egress Gateway policy via a chosen node. The OCI
+    10 TB/mo egress allowance is tenancy-wide, shared by all three.
 -   **Bulk egress (qbittorrent, seeding, large syncs)**: pinned to the
     homelab pool; leaves via the home uplink. Never routed through a
     metered-egress cloud path.
@@ -253,17 +275,17 @@ IPs without X-Forwarded-For games.
     reachable outbound; inbound v4 continues via the existing port
     forward).
 -   **Stable-IP workloads (hath)**: hath requires its inbound port and
-    outbound connections on the same stable public IP. Preferred placement:
-    **run hath on the cloud node itself** as a LoadBalancer Service on the
-    primary-IP VIP (§3.2; cache on local disk; in/out are naturally the
-    same IP since egress SNAT uses the same primary IP; no
-    steering machinery at all). Fallback if its storage outgrows the cloud
-    disk: keep hath in the homelab and steer its egress through a **Cilium
-    Egress Gateway** policy via the cloud node (SNAT to the cloud IP over
-    KubeSpan) — this replaces the legacy hand-rolled WireGuard-gateway-pod
-    + initContainer-route hack entirely. Egress Gateway is v4-mature; v6
-    exists from Cilium 1.18 (explicit v6 egressIP only in newer releases)
-    — irrelevant for hath (v4-only).
+    outbound connections on the same stable public IP. Placement: pinned
+    to one cloud node, LoadBalancer Service on that node's primary IP
+    only, NLB bypassed (§3.2); cache on the node's block volume; in/out
+    are naturally the same IP since egress SNAT uses the same primary
+    IP — no steering machinery at all. Fallback if its storage outgrows
+    the free block allowance: keep hath in the homelab and steer its
+    egress through a **Cilium Egress Gateway** policy via its cloud node
+    (SNAT over KubeSpan) — this replaces the legacy hand-rolled
+    WireGuard-gateway-pod + initContainer-route hack entirely. Egress
+    Gateway is v4-mature; v6 exists from Cilium 1.18 — irrelevant for
+    hath (v4-only).
 
 ### 3.6 Workload Routing Decision Matrix
 
@@ -272,12 +294,12 @@ Deploying an app now answers exactly two questions — *which pool(s)* and
 
 | Workload | Pool | Route kind |
 | --- | --- | --- |
-| Public HTTP/S (blog, authelia, splitpro) | `internet` | HTTPRoute → `internet-gw` |
+| Public HTTP/S (blog, authelia, splitpro) | `internet` | HTTPRoute → `internet-gw` (via NLB) |
 | LAN HTTP/S (jellyfin, immich fast path) | `lan` | HTTPRoute → `lan-gw` |
 | Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
-| Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service (shared VIP) |
+| Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service + NLB listener |
 | LAN raw TCP/UDP | `lan` | LoadBalancer Service |
-| hath | `internet` | LoadBalancer Service, pod pinned to the cloud node (same-IP in/out, §3.2) |
+| hath | `internet` | LoadBalancer Service on its pinned node's primary IP, NLB bypassed (§3.2) |
 
 Placement (which node runs the pods) is orthogonal — set by scheduling
 constraints, with §3.5's egress rules deciding it for bulk-egress and
@@ -314,18 +336,21 @@ The entire stack is deployed via Pulumi using multiple providers:
     assigned local IP. The same provider also adopts the **existing HAOS
     VM** into the physical layer (import, then declare) — HAOS stays a
     host-level libvirt domain, deliberately outside the cluster (§6.8).
-2.  **Cloud provider (per nodes.md §3)**: Provisions the cloud instance
-    (Talos via custom image/ISO), its primary IPs (v4+v6, doubling as the
-    `internet` pool VIP, §3.2), and firewall rules.
-    -   Required Firewall Rules: 80, 443 (Ingress), 51820 UDP
-        (WireGuard/KubeSpan), and the shared-VIP raw TCP/UDP service
-        ports (§3.6) — all on the primary IPs.
-3.  **UniFi (pulumiverse/unifi)**: Configures port forwarding on the DMSE to
-    allow the cloud node (and CI) to reach the Homelab Control Plane.
-    -   Required Ports: 6443 (Kube API), 50000 (Talos API). Both are
-        mTLS-authenticated; optionally restrict sources to the cloud node
-        and CI egress IPs. Human remote administration does not use these:
-        personal devices reach the API over ZeroTier via the UDM.
+2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
+    v6), the three A1 instances (Talos via custom image import), their
+    primary IPs, the NLB (listeners + backend sets, §3.2), block
+    volumes, and security lists.
+    -   Security-list ingress: 80/443 + raw service ports (NLB and node
+        IPs), 51820 UDP (KubeSpan), 6443/50000 (mTLS management via
+        NLB), intra-VCN open.
+    -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
+        shapes to the free envelope + budget alerts.
+3.  **UniFi (pulumiverse/unifi)**: firewall rules only — the `lan` pool
+    subnet policy (§3.4) and the qbittorrent v6 pinhole (§3.5).
+    **No inbound port-forwards exist at the home network**: the control
+    plane lives cloud-side, the homelab worker dials out (KubeSpan), and
+    management traffic terminates at the NLB. Personal devices continue
+    to reach LAN services over ZeroTier.
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move into
     Pulumi. The standalone DNSControl repo
     ([Aetf/dns](https://github.com/Aetf/dns), `dnsconfig.js`) is absorbed
@@ -377,9 +402,9 @@ drives gw-config**:
 
 ## 6. Alternatives Considered
 
-§6.1–6.2 were evaluated during the earlier AWS iteration of this plan; the
-reasoning is provider-agnostic and carried over unchanged. §6.3–6.6 were
-settled in the 2026-08-21 detailed-design review.
+Superseded designs and rejected ideas, kept with their reasoning so they
+are not re-litigated from scratch. §6.5 documents the largest reversal
+(control-plane placement, 2026-08-22).
 
 ### 6.1 IPv6-Only VPC + NAT64
 
@@ -399,15 +424,16 @@ settled in the 2026-08-21 detailed-design review.
         single point of failure for pulling containers from legacy registries
         like ghcr.io.
 
-### 6.2 Three-Node HA Control Plane (1 Home, 2 Cloud)
+### 6.2 WAN-Stretched HA Control Plane (1 Home, 2 Cloud)
 
 -   **The Idea**: Distribute control plane nodes across the Homelab and the
     cloud for high availability.
--   **Why it was rejected**: etcd requires low-latency Raft consensus.
-    Stretching it over a WAN adds 15ms-50ms+ latency to every API write,
-    starving the cluster. Additionally, "tiny" cloud VMs are prone to OOM
-    kills running etcd. A single, powerful Homelab node with S3 backups is
-    significantly faster and more stable.
+-   **Why it was rejected (and stays rejected)**: etcd requires
+    low-latency Raft consensus. Stretching it over a WAN adds 15–50 ms+
+    to every API write, starving the cluster. The adopted design (§1.1)
+    gets CP HA *without* violating this: all three etcd members sit in
+    one cloud region; only kubelet↔apiserver traffic from the homelab
+    worker crosses the WAN, which is ordinary edge-worker behavior.
 
 ### 6.3 Cloud-site provider selection
 
@@ -428,30 +454,36 @@ settled in the 2026-08-21 detailed-design review.
     cost — new public apps require a Pulumi change — is acceptable since app
     deployment is a Pulumi change anyway.
 
-### 6.5 Cloud-Hosted or Free-Tier Control Plane
+### 6.5 Homelab-Hosted Control Plane (the previous design)
 
--   **The Idea** (revisited 2026-08-21): move the control plane off the
-    Homelab — either combined onto the cloud worker (upsized), a
-    dedicated small cloud instance, or 3× Oracle Always-Free ARM VMs as a
-    same-region HA control plane (which, unlike §6.2, would not stretch
-    etcd across a WAN).
--   **Why it was rejected**: a control-plane outage does not stop running
-    workloads (kubelet, Cilium datapath, and Envoy keep working; only
-    scheduling/config changes stop), and the cluster's data gravity is in
-    the Homelab — when the home site is down, a surviving API has almost
-    nothing useful to manage. Against that narrow benefit: a cloud CP costs
-    real money and/or co-locates etcd (all cluster secrets) with the
-    public attack surface; GCP's free e2-micro (1 GB) is exactly the
-    OOM-prone tiny-VM etcd host §6.2 warns about; Oracle's free tier is
-    spec-sufficient but adds a third site + provider and entrusts etcd to a
-    reclaimable free tenancy. Note also that remote *management* needs no
-    cloud CP in normal operation: personal devices reach the Homelab API
-    over ZeroTier (via the UDM), so kubectl/talosctl work from anywhere
-    while the home uplink is up — the cloud-CP benefit shrinks to the
-    full-home-outage case only. Instead, the Homelab CP is backstopped by a
-    **drilled cold-standby path**: re-bootstrap a temporary CP from the
-    hourly etcd snapshot (e.g., on the cloud node) in ~30–60 min during an
-    extended home outage (nodes.md §5 Tier 0).
+-   **The Idea**: a single powerful CP/worker VM in the Homelab, cloud
+    node as worker only — this document's design until 2026-08-22, itself
+    motivated by the legacy cluster's history: the k3s server on the 8 GB
+    VPS was starved (memory pressure throttled the API and broke timely
+    workload eviction), so the CP fled to the homelab's abundant RAM.
+-   **Why it was superseded** by the 3× cloud-node quorum (§1.1):
+    1.  The legacy failure mode was *resource starvation*, not "CP in the
+        cloud" per se — 3× dedicated-core A1 nodes with an honest ~4 GB
+        CP budget each and working kubelet eviction don't reproduce it.
+    2.  The home uplink is the system's least reliable component (UDM
+        auto-firmware outage history); a homelab CP freezes cluster
+        management — including the healthy cloud side — on every home
+        outage. Cloud CP inverts this: a home outage degrades to "one
+        worker NotReady" while the public face and management stay up.
+    3.  The objections that killed the cloud-CP idea on 2026-08-21 fell
+        one by one: cost ($0 today, ≤~$21/mo, nodes.md §3.2), third
+        provider (OCI is now *the* cloud site), tiny-VM OOM (8 GB
+        dedicated-core shapes are not e2-micro), and management path
+        (ZeroTier is no longer load-bearing for kubectl).
+    4.  What the homelab CP protected — etcd near the data gravity — was
+        worth little: when the home site is down, the API has nothing
+        homelab-side to manage anyway, and etcd's durability comes from
+        hourly snapshots + the cold-standby drill in either design.
+-   Residual risks carried consciously: etcd (cluster secrets) lives in a
+    $0-trust tenancy → etcd encryption at rest + hourly snapshots to B2;
+    total-tenancy loss → the cold-standby drill runs in reverse
+    (bootstrap a temporary single-node CP on the homelab host from the
+    latest snapshot, ~30–60 min, nodes.md §5).
 
 ### 6.6 hostNetwork Envoy + `externalIPs`/hostPort as the cloud ingress
 

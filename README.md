@@ -1,7 +1,7 @@
 # kluster-py
 
 Pulumi Python code for the next-generation hybrid Kubernetes cluster: Talos
-Linux spanning a GCP VPC and the Homelab LAN, with Cilium networking. This
+Linux spanning an OCI VCN and the Homelab LAN, with Cilium networking. This
 repo succeeds `~/projects/kluster-code` (the k3s-based legacy cluster); it
 will run nearly the same workloads on new infrastructure, with everything —
 cloud instances, gateways, storage, DNS — managed by Pulumi.
@@ -38,12 +38,13 @@ Organized by topic: `docs/cluster/` (what we're building and why),
 docs: physical, dns, cluster-infra, workloads).
 
 - [docs/cluster/architecture.md](docs/cluster/architecture.md) — the canonical cluster
-  architecture (cloud + Homelab, Talos, KubeSpan, Cilium; two-pool
-  LoadBalancer ingress model), including alternatives considered.
-- [docs/cluster/nodes.md](docs/cluster/nodes.md) — node & provider selection: measured
-  egress economics, cloud worker pricing (reopened 2026-08-22 after the
-  Hetzner US price hike; Vultr recommended), homelab host inventory & VM
-  sizing, HA tiers.
+  architecture (3× OCI A1 combined CP+ingress nodes + Homelab worker;
+  Talos, KubeSpan, Cilium; two-pool LoadBalancer ingress behind the free
+  NLB), including superseded alternatives.
+- [docs/cluster/nodes.md](docs/cluster/nodes.md) — node & provider selection (OCI
+  decided, Vultr scripted fallback; all prices verified against official
+  sources), OCI commercial-model deep dive, homelab host inventory & VM
+  sizing, measured infra tax & economy program, HA tiers.
 - [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path +
   VolSync, NAS, object storage; Longhorn deferred), backup architecture,
   JuiceFS root causes & containment policy.
@@ -84,13 +85,14 @@ Open items to settle before / during detailed design, roughly in order:
    Talos/Cilium design; rewrite alongside the new base cluster. Regenerate
    `packages/crds` for the new chart set (Cilium, Gateway API, ...) when it
    firms up.
-6. **Cloud provider — reopened 2026-08-22** (docs/cluster/nodes.md §3.1,
-   architecture.md §6.3): the 2026-08-21 Hetzner pick was voided by
-   Hetzner's 2026-06-15 US price hike (CPX21 $14 → $38). Current
-   recommendation: **OCI A1.Flex under PAYG ($0, 4 OCPU / 24 GB, 10 TB;
-   PAYG exempts idle-reclaim and kept the full free allowance), with
-   Vultr 4 GB (~$24) as the scripted fallback**. Awaiting user's final
-   call.
+6. **Cloud site — decided 2026-08-22** (docs/cluster/nodes.md §3.1-3.2):
+   **OCI, 3× A1.Flex 1 OCPU/8 GB under PAYG as combined CP+ingress
+   nodes** ($0 today; ≤~$21/mo if the free-allowance halving reaches
+   PAYG), Vultr vhp 4 GB ($24, single node + homelab CP) as the scripted
+   fallback. Control plane moves cloud-side (architecture.md §6.5 for
+   the reversal rationale). Remaining bootstrap verifications: LB-IPAM
+   pool containing node primary IPs; NLB dual-stack + source-preservation
+   semantics; etcd fsync on OCI block volumes; A1 capacity at creation.
 7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
    port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
    (architecture.md §5.1).

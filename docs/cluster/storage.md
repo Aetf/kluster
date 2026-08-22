@@ -8,7 +8,8 @@ resort, object storage used directly where an app supports it.
 
 > **Status**: Reviewed interactively 2026-08-21; decided: B2 as the backup
 > bucket (§4), JuiceFS CSI **not installed** (§6), second homelab VM
-> deferred, hath cache lives on the cloud node's local disk (nodes.md
+> deferred, hath cache lives on a block volume on its pinned cloud
+> node (nodes.md
 > §2.1). 2026-08-22: JuiceFS root causes documented (§1), VPS
 > syncthing/dav disposition decided (§6), and — economy pass —
 > **Longhorn deferred out of the initial build** in favor of local-path +
@@ -51,7 +52,8 @@ resort, object storage used directly where an app supports it.
 | `local-path` (default) | Talos hostPath under `/var/mnt/storage` on each node | RWO, node-pinned | Databases (CNPG), caches, anything an app replicates itself | anything that may need to change nodes |
 | `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
-| NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, hath cache, large read-mostly sets | cloud-pool workloads; databases |
+| NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
+| Cloud block volume | OCI block volume on a cloud node (200 GB boot+block free) | RWO, node-pinned | hath cache, cloud-pool local-path backing | homelab-pool workloads |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined) | object storage + per-app metadata | RWX | last resort only (§6) | everything else |
 
@@ -144,11 +146,11 @@ live with the provider whose loss it insures — OCI tenancy termination is
 an enumerated risk (nodes.md §3.1), so cluster backups stay on B2
 regardless of where the cloud node lands. The **JuiceFS chunk bucket**
 (§6) is different: it backs a *replica* whose other full copy is the
-homelab NAS, so provider-loss is survivable — if the cloud node is OCI,
-putting its chunks on same-region OCI Object Storage buys zero-egress +
-LAN-class latency on cache misses for ~$2.6/mo at 110 GB (minus 10 GB
-free); on any other provider, B2 serves it fine (free ops, 3×-stored
-egress covers read traffic with a warm local cache). Buckets, keys, and
+homelab NAS, so provider-loss is survivable — with the cloud site on
+OCI (nodes.md §3.1), its chunks live on same-region OCI Object Storage:
+zero egress + LAN-class latency on cache misses, ~$2.6/mo at 110 GB
+(minus 10 GB free). (On the Vultr fallback the bucket reverts to B2 —
+free ops, 3×-stored egress covers read traffic with a warm cache.) Buckets, keys, and
 lifecycle rules are Pulumi-managed like everything else.
 
 ## 5. Backup architecture (the actual HA mechanism)
@@ -190,7 +192,7 @@ JuiceFS is not banned; it is rationed. A workload may use it only if all of:
 **Decision (2026-08-21, census revised 2026-08-22)**: the census is
 **one** — the VPS-side syncthing replica (+ its dav share), which
 qualifies under all three clauses (below). Everything else: immich media
-on NAS, hath cache on the cloud node's local disk, qbittorrent on the
+on NAS, hath cache on a cloud block volume, qbittorrent on the
 home side, backups to object storage directly. **The CSI driver is still
 not installed** — the one qualifying workload mounts in-pod (sidecar),
 which is also what keeps its blast radius per-app.
@@ -212,9 +214,9 @@ because ~110 GB doesn't fit a small instance disk:
 
 -   **Preferred: per-app JuiceFS with node-local metadata** — its own
     filesystem on an object bucket chosen by the §4 placement rule
-    (same-region OCI Object Storage if the cloud node is OCI, else B2),
+    (same-region OCI Object Storage; B2 on the Vultr fallback — §4),
     metadata in **SQLite (or a
-    single-instance Redis) on the cloud node's local disk**, mounted
+    single-instance Redis) on its cloud node's block volume**, mounted
     in-pod (sidecar), automatic metadata backup to the bucket. This kills
     root cause (a) *by construction* (no metadata hop ever crosses the
     WAN), and root cause (b) is answered by **honest sizing, not hope**:

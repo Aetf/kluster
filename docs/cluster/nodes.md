@@ -6,35 +6,41 @@ internet-facing worker, how the Homelab VM is sized, and what "high
 availability" means for a two-site, budget-capped cluster. Price-driven;
 baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 
-> **Status**: Reviewed interactively 2026-08-21; **provider decision
-> reopened 2026-08-22** — the 2026-08-21 "tentatively Hetzner CPX21 ~$14"
-> call was based on pre-hike pricing; Hetzner's 2026-06-15 US price
-> adjustment (~3×: CPX21 Ashburn $13.99 → $37.49) removes its advantage
-> entirely. §3 is rewritten with post-hike numbers plus two newly verified
-> options (GCP mixed network tiers, Oracle Always Free). All prices are
-> as-of August 2026, USD, and must be re-verified in the provider
-> calculators before commit. Nothing here is implemented yet.
+> **Status**: as decided 2026-08-22 — **cloud site = OCI, 3× A1.Flex
+> (1 OCPU / 8 GB) combined control-plane + ingress nodes** (§3.1–3.2);
+> homelab VM is a pure worker (§4); Vultr is the scripted fallback. All
+> prices are as-of August 2026, USD, verified against official price
+> pages/APIs, and must be re-verified in the provider calculators before
+> commit. Nothing here is implemented yet. (Decision history: AWS →
+> GCP (2026-04) → tentatively Hetzner (2026-08-21, voided by its
+> 2026-06-15 US price hike) → OCI.)
 
-## 1. What the cloud node actually does
+## 1. What the cloud pool actually does
 
-Per architecture.md the cloud node is a **worker only**: the `internet-gw`
-Envoy, the shared-VIP raw TCP/UDP services, KubeSpan endpoint, hath, and
-whatever else is pinned to the internet pool. The control plane stays in
-the Homelab. This means the cloud node needs:
+Per architecture.md §1.1 the cloud site is **three combined
+CP+ingress+worker nodes**: the etcd/apiserver quorum, the `internet-gw`
+Envoy replicas, the shared-VIP raw TCP/UDP services behind the NLB,
+KubeSpan endpoints, hath (pinned to one node), and the internet-pool
+workloads. This means the cloud pool needs:
 
--   Modest CPU/RAM: Envoy + Cilium + a handful of pods. 4 GB RAM is the
-    comfortable floor (2 GB is possible but leaves no headroom for Cilium +
-    Envoy + kubelet + workload bursts); 2 vCPU.
--   A **stable** public IPv4 **and** IPv6 address (dual-stack requirement);
-    the primary IPs double as the `internet` LB pool VIP
-    (architecture.md §3.2). Support for a reserved/floating additional IP
-    is the named fallback if the pool-contains-node-IP shape misbehaves.
--   Ability to boot **Talos Linux** — this is a hard filter: the provider
-    must support custom images/ISOs. This excludes AWS Lightsail (blueprint
-    images only) and most "managed VPS" products.
--   Disk: 40–60 GB. Talos itself is tiny; the rest is image cache +
-    local-path volumes for internet-pool workloads (see
-    [storage.md](storage.md)).
+-   **Per node**: ~2–2.5 GB for etcd+apiserver+controllers, ~1.5 GB
+    platform floor (Talos/kubelet/Cilium/Envoy), leaving ~4 GB of an
+    8 GB node for workloads. One dedicated Ampere core per node covers
+    steady-state CP load at this cluster size (the whole legacy VPS node
+    idles at ~0.4 cores); workload CPU limits keep bursts away from etcd
+    (architecture.md §6.5 for why this budget, honestly kept, avoids the
+    legacy CP-starvation failure).
+-   **Stable public dual-stack IPs** per node (primary IPs double as the
+    `internet` pool VIPs) plus the NLB as the DNS-stable front
+    (architecture.md §3.2).
+-   Ability to boot **Talos Linux** — a hard filter: the provider must
+    support custom images/ISOs (excludes AWS Lightsail and most managed
+    VPS products).
+-   **Disk**: ~50 GB boot per node; hath's cache as a block volume on its
+    pinned node. 3 × boot + hath ≈ the 200 GB free block allowance —
+    slight paid overflow is cents (§3.2). etcd lives on the boot volume:
+    **verify fsync latency <10 ms at bootstrap** (OCI Balanced block
+    volumes are typically ~1–2 ms; this is a check, not an assumption).
 
 ## 2. The deciding factor is egress, not compute
 
@@ -143,7 +149,7 @@ or resync becomes a billing decision. A bundled multi-TB pool (Vultr,
 Oracle) makes cross-site traffic architecturally free, so the design
 never has to think about it.
 
-### 3.1 Decision (2026-08-22: reopened, recommendation pending user review)
+### 3.1 Decision (2026-08-22): OCI selected, Vultr as scripted fallback
 
 Post-hike landscape at measured traffic (220 GB public + ~150–250 GB
 KubeSpan TX steady state, with multi-hundred-GB spike days):
@@ -193,18 +199,18 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
         everything in the current workload set; hath is Java, syncthing
         Go — both multi-arch).
 
-**Recommendation (revised 2026-08-22): OCI A1.Flex under PAYG as the
-cloud worker, with Vultr 4 GB as the scripted fallback.** The deciding
-observations: (a) the §4.4 analysis shows cloud-node size is dictated by
-the fixed platform floor, which a free 12–24 GB shape simply deletes as
-a concern — even the conservative 12 GB triples the paid alternative,
-with room left to *relieve* homelab RAM pressure by placing more
-workloads cloud-side; (b) this cluster's Tier-0 posture (nodes.md
-§5: everything declarative, drilled rebuild, backups off-site) is
-precisely the design that makes provider risk survivable — the Vultr
-fallback is a stack config flip plus a DNS diff, exercised as a drill
-like every other restore path. Final call is the user's at the
-end-of-design total-cost pass.
+**Decided: OCI A1.Flex under PAYG, as the 3-node combined pool of §1.**
+The deciding observations: (a) the §4.4 analysis shows cloud-node cost
+is dictated by the fixed platform floor, which free 8 GB shapes simply
+delete as a concern; (b) A1 billing's fungibility turns the free/cheap
+allowance into *three* nodes — buying CP HA and ingress HA that no paid
+single-instance alternative offers at any similar price (§3.2); (c)
+this cluster's Tier-0 posture (§5: everything declarative, drilled
+rebuild, backups off-provider) is precisely the design that makes OCI's
+platform risk survivable — the Vultr fallback (vhp 4 GB, $24, single
+node, ingress-only + homelab CP per architecture.md §6.5's superseded
+layout) is a stack config flip plus a DNS diff, exercised as a drill
+like every other restore path.
 
 ### 3.2 OCI deep dive: commercial model, service landscape, gotchas
 
@@ -264,48 +270,35 @@ hedge against the A1 re-creation capacity hunt at worst-case ~$47/mo
 for 4/24; not recommended (the Vultr fallback is cheaper insurance),
 but it exists if OCI ever becomes load-bearing.
 
-**The $15/mo budget (accepted posture: "we always pay something").**
-A1 billing is *fungible*: OCPU-hours and GB-hours accrue per tenancy
-across all A1 instances, free tier subtracted from the totals — so
-shapes are freely splittable across nodes. At 744 h/mo the marginal
-prices are **$7.44 per always-on OCPU** and **$1.116 per always-on GB**.
-What ~$15/mo over the free pool buys:
+**The node-shape math (accepted posture: "we always pay something",
+budget ~$20/mo).** A1 billing is *fungible*: OCPU-hours and GB-hours
+accrue per tenancy across all A1 instances, free tier subtracted from
+the totals — shapes are freely splittable across nodes. At 744 h/mo the
+marginal prices are **$7.44 per always-on OCPU** and **$1.116 per
+always-on GB**. The as-designed shape:
 
-| Free pool assumed | +$15/mo gets (examples, totals) |
-| --- | --- |
-| 1,500/9,000 (conservative: 2 OCPU/12 GB) | **3 OCPU/18 GB** ($14.14) · 4 OCPU/12 GB ($14.88) · 2 OCPU/25 GB ($14.51) |
-| 3,000/18,000 (current billing: 4 OCPU/24 GB) | 5 OCPU/30 GB · 6 OCPU/24 GB · 4 OCPU/37 GB — all ≈$14–15 |
+| Shape | Total | Cost under 3,000/18,000 free (current billing) | Under 1,500/9,000 (conservative) |
+| --- | --- | --- | --- |
+| **3 × (1 OCPU / 8 GB)** — as designed | 3 OCPU / 24 GB | **$0** | **$20.83/mo** |
+| bump one node +1 OCPU (if hath's node runs hot) | 4 / 24 | $0 | $28.27/mo |
 
-Note the estimator still prices 4 OCPU/24 GB at $0 because the price
-API's free tiers are still 3,000/18,000 (data stamped 2026-08-14) while
-the docs already say 1,500/9,000 — docs-first rollout of the halving.
-Plan on the conservative row; enjoy the current row while it lasts.
+(The estimator still prices 4 OCPU/24 GB at $0 because the price API's
+free tiers are still 3,000/18,000 — data stamped 2026-08-14 — while the
+docs already say 1,500/9,000: a docs-first rollout of the halving. The
+design is budgeted against the conservative column.)
 
-**Design consequence — a two-node cloud pool (recommended).** Since
-billing doesn't care how the OCPUs are split, split them:
-**node A 2 OCPU/12 GB (primary: hath pinned, JuiceFS sidecar, Envoy) +
-node B 1 OCPU/6 GB (second ingress: Envoy, syncthing/dav, overflow)**
-= 3 OCPU/18 GB total → **$0 today, ~$14.14/mo if the halving reaches
-PAYG** — exactly the budget. This buys, for free-to-$15:
+What the three-way split buys over one big node — each a standing
+benefit, so the ~2× platform-floor overhead (3 × ~1.5 GiB instead of 1)
+and two more Talos nodes to patch pass the §4.4 standing-rent test:
 
--   **Public-ingress HA (Tier 2, previously deferred)**: §5's "costs one
-    more instance + IPv4" objection dissolves — on OCI both are $0. Two
-    nodes behind the **free NLB** (single stable public IP, L3/4
-    pass-through so client IPs survive, health-checked) or plain
-    multi-A/AAAA DNS; hath bypasses the NLB on node A's primary IP
-    (same-IP in/out unaffected).
--   **Maintenance without public downtime**: drain/upgrade one cloud
-    node while the other serves — previously impossible cloud-side.
+-   **Control-plane HA** (etcd quorum, architecture.md §1.1) and
+    **public-ingress HA** (all nodes behind the free NLB) in one move.
+-   **Maintenance without downtime of anything** — drain/upgrade one
+    node while two serve; quorum holds at 2/3.
 -   **A continuous capacity hold**: the practical mitigation for the A1
-    re-creation hunt is *never needing to create both at once*; losing
-    one node leaves ingress up while the replacement hunts.
-
-Cost honesty (per §4.4's own rule): the second node pays ~1.5–2 GiB
-platform floor out of 6 GB, and one more Talos node to keep patched.
-The rent it pays is ingress HA + drain freedom + capacity hold —
-standing benefits, so it passes the standing-rent test. Final shape
-(1×4/24 vs 2/12+1/6) is a bootstrap-time choice; the architecture
-supports both (architecture.md §3.2).
+    re-creation hunt is never needing to create more than one node at
+    once; losing one leaves quorum and ingress up while the replacement
+    hunts for capacity.
 
 **Gotchas registry**: new-tenancy service limits are low and free-tier
 limit increases are often refused (PAYG requests go through); Always
@@ -356,26 +349,25 @@ a migration-blocking item to verify early, not late.
 
 ### 4.2 VM sizing
 
--   **CP/worker VM**: **12–16 vCPU / 20 GiB RAM**, disk on local NVMe.
-    RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1 (qemu/host
-    overhead) ≈ 21 GiB. Today's ~16 GiB in-cluster usage already includes
-    ~5 GiB of infra tax that the economy program (§4.4) shrinks to a
-    projected ~4–4.5 GiB *including* what the new design adds — so
-    ~20 GiB carries the workload set plus qbittorrent with modest slack.
-    **A RAM upgrade is the designated relief valve**, cheaper than any
-    architectural workaround (board verified 2026-08-22: ROG Maximus
+-   **Worker VM** (pure worker — the control plane lives cloud-side,
+    architecture.md §1.1): **12–16 vCPU / 20 GiB RAM**, disk on local
+    NVMe. RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1
+    (qemu/host overhead) ≈ 21 GiB. Today's ~16 GiB in-cluster usage
+    already includes ~5 GiB of infra tax that the economy program (§4.4)
+    shrinks — and with etcd/apiserver moved off this VM its share drops
+    further (kubelet+containerd+Cilium ≈ 1.5 GiB) — so ~20 GiB carries
+    the workload set plus qbittorrent with comfortable slack. **A RAM
+    upgrade remains the relief valve** (board verified: ROG Maximus
     Z690 Hero, DDR5, 4×DIMM up to 128 GB).
 -   **Disk**: target 100+ GB qcow2/raw on NVMe, but only ~85 GB is free
     while both clusters coexist. The migration plan must interleave
-    reclamation (legacy images, local-path PVCs, prometheus's 30 GB) with
-    VM growth — start at ~60 GB, grow after cutover. etcd wants <10 ms
-    fsync — keep its disk on NVMe, never on ZFS-over-JBOD, network, or
-    USB storage.
--   **Optional second worker VM** (2–4 vCPU / 8 GB): unchanged from the
-    2026-08-21 decision — **not in the initial build**; it is the only
-    path to same-site Longhorn `replica=2` and drain-without-evict, and
-    RAM is why it waits for the RAM upgrade. The design must not assume
-    it exists.
+    reclamation (legacy images, local-path PVCs, prometheus's 30 GB)
+    with VM growth — start at ~60 GB, grow after cutover. (No etcd on
+    this VM; its disk constraint is ordinary workload I/O.)
+-   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
+    initial build**; it is the only path to same-site storage replicas
+    and homelab drain-without-evict, and RAM is why it waits for the RAM
+    upgrade. The design must not assume it exists.
 
 ### 4.3 One big VM, not several small ones
 
@@ -394,7 +386,7 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 
 | Infra component | Measured | Fate in the new cluster |
 | --- | --- | --- |
-| k3s server + containerd (host procs) | ~1.7 GiB | Talos CP static pods ≈ same; no lever, accepted |
+| k3s server + containerd (host procs) | ~1.7 GiB | CP moved cloud-side; the homelab VM keeps only kubelet+containerd (~0.5 GiB). The CP cost re-appears as ~2–2.5 GiB × 3 on the cloud nodes — paid out of free OCI RAM, not out of the 32 GB host |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB |
 | Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | CSI/redis/dashboard gone by design; one per-app sidecar mount remains, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process (storage.md §6) |
 | Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
@@ -410,51 +402,51 @@ component that idles waiting for rare events (mobility layers,
 dashboards nobody opens) is bought as a procedure (restore, redeploy)
 instead of a daemon.
 
-Cloud-node corollary — and the real point of this section: **the cloud
-node's size is set by the fixed platform floor, not by workloads**.
-Talos base + kubelet + Cilium agent + Envoy is ~1.5–2 GiB before the
-first app pod; hath (~0.3) + syncthing/dav (~0.3) + the JuiceFS sidecar
-at its honest 0.5–1 GiB request then leave a 4 GB instance workable but
-snug, and make 2 GB marginal *regardless* of how few apps run there.
-Meanwhile the homelab side, though tighter on paper, is the flexible
-one: workloads can be trimmed, ARC squeezed, and RAM added (§4.2) —
-memory pressure there is real but manageable. Consequence: shrinking
-the cloud instance below 4 GB buys little and risks the platform floor;
-conversely a large-RAM free shape (OCI A1, §3.1) dissolves the tension
-entirely.
+Cloud-node corollary — and the real point of this section: **cloud-node
+size is set by the fixed floors, not by workloads**. Platform floor
+(Talos + kubelet + Cilium + Envoy) is ~1.5 GiB; the CP slice
+(etcd+apiserver+controllers) another ~2–2.5 GiB — before the first app
+pod. This is what made 2–4 GB paid instances structurally cramped and
+what the 8 GB A1 nodes absorb for free: each still keeps ~4 GiB for
+hath (~0.3), syncthing/dav (~0.3), the JuiceFS sidecar at its honest
+0.5–1 GiB request, and Envoy. Meanwhile the homelab side, though
+tighter on paper, is the flexible one: workloads can be trimmed, ARC
+squeezed, and RAM added (§4.2) — memory pressure there is real but
+manageable.
 
 ## 5. High availability, honestly
 
-The requirement is "high availability"; architecture.md §6.2 already rejected
-a WAN-stretched etcd, and that rejection stands — nothing at this budget
-makes cross-site Raft good. What HA means here, in tiers:
+What HA means here, in tiers — the 3-node cloud pool delivers Tiers 2–3
+by construction; Tier 0 remains the foundation everything else sits on:
 
--   **Tier 0 — declarative rebuild + backups (adopted)**: the cluster *is*
-    the Pulumi program plus Talos machine configs. HA against permanent loss
-    comes from: hourly etcd snapshots shipped to object storage (Talos
-    `etcd snapshot` or the built-in snapshotter), VolSync volume backups
-    and CNPG barman to the same bucket (storage.md §5), and a periodically *drilled*
-    restore (same discipline as the legacy CNPG restore drill). Target:
-    RPO ≤ 1 h, RTO ~1–2 h hands-on. This explicitly includes a
-    **control-plane cold-standby drill**: re-bootstrapping a temporary CP
-    from the latest etcd snapshot onto a substitute node (e.g., the cloud
-    worker) in ~30–60 min, covering the extended-home-outage case without
-    paying for a cloud control plane (architecture.md §6.5).
--   **Tier 1 — workload HA (adopted where it matters)**: apps that support
-    replication run multi-replica across the two pools (CNPG multi-instance,
-    stateless apps ×2). A control-plane outage does not stop running
-    workloads — kubelet static pods and Cilium keep forwarding; what stops
-    is scheduling and API access.
--   **Tier 2 — public-ingress HA (un-deferred on OCI, 2026-08-22)**:
-    originally deferred because it "costs one more instance + IPv4" —
-    on OCI both are $0 and the free NLB provides the single stable
-    front IP. The recommended two-node cloud pool (§3.2, node A 2/12 +
-    node B 1/6) delivers this tier within the $15/mo posture. On the
-    Vultr fallback this tier re-defers (a second paid instance).
--   **Tier 3 — control-plane HA (rejected again)**: 3 CP VMs on the single
-    Homelab host protect only against guest-OS crashes while tripling etcd's
-    RAM/IO footprint on one physical SPOF; 3 CP nodes across sites is §6.2.
-    Neither pays for itself.
+-   **Tier 0 — declarative rebuild + backups (the foundation)**: the
+    cluster *is* the Pulumi program plus Talos machine configs. Survival
+    of permanent loss comes from: hourly etcd snapshots shipped to B2
+    (off-provider by the storage.md §4 placement rule), VolSync volume
+    backups and CNPG barman to the same bucket (storage.md §5), and
+    periodically *drilled* restores. Target: RPO ≤ 1 h, RTO ~1–2 h
+    hands-on. The **cold-standby drill** covers total-cloud-loss
+    (tenancy termination included): bootstrap a temporary single-node CP
+    on the homelab host (libvirt) from the latest etcd snapshot in
+    ~30–60 min, then rebuild the cloud pool at leisure.
+-   **Tier 1 — workload HA**: apps that support replication run
+    multi-replica across the pools (CNPG multi-instance, stateless ×2).
+    Even under full CP loss, running workloads keep serving — kubelet
+    and the Cilium datapath don't need the API to keep forwarding.
+-   **Tier 2 — public-ingress HA (delivered by design)**: the NLB
+    health-checks the three nodes; Envoy runs on all of them
+    (architecture.md §3.2–3.3). Only hath rides a single node by
+    protocol necessity.
+-   **Tier 3 — control-plane HA (delivered by design)**: etcd quorum
+    across the three cloud nodes, same region, same AD-or-better
+    placement (spread across fault domains). Degradation ladder: lose
+    1 node → quorum holds, replace at leisure (the capacity hold, §3.2);
+    lose 2 → etcd disaster recovery from the surviving member
+    (re-bootstrap single-member, scale back to 3 — minutes-to-an-hour of
+    API downtime, no data loss); lose all 3 → Tier 0 cold standby.
+    On the Vultr fallback this tier degrades to the superseded
+    homelab-CP layout (architecture.md §6.5) with the drill direction
+    flipped back.
 
 ## 6. Alternatives Considered
 
