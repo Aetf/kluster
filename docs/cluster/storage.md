@@ -158,27 +158,48 @@ JuiceFS is not banned; it is rationed. A workload may use it only if all of:
     blast radius; no shared mega-filesystem like the legacy cluster), with
     automatic metadata backup to the object bucket enabled.
 
-**Decision (2026-08-21, census re-verified 2026-08-22)**: the census is
-zero — immich media is on NAS, hath cache on the cloud node's local disk,
-qbittorrent on the home side, backups go to object storage directly.
-**The CSI driver is not installed.** This policy stays on file for the day
-a workload genuinely qualifies.
+**Decision (2026-08-21, census revised 2026-08-22)**: the census is
+**one** — the VPS-side syncthing replica (+ its dav share), which
+qualifies under all three clauses (below). Everything else: immich media
+on NAS, hath cache on the cloud node's local disk, qbittorrent on the
+home side, backups to object storage directly. **The CSI driver is still
+not installed** — the one qualifying workload mounts in-pod (sidecar),
+which is also what keeps its blast radius per-app.
 
-The last two *actual* JuiceFS users in the legacy cluster are the VPS-side
-syncthing (5 Ti PVC, **~110 GB really used**) and the dav/webdav share
-over the same data — running without visible trouble today, but note both
-mount pods sit on the *same node as the Redis metadata server*, which is
-exactly why they dodge root cause (a). Disposition in the new cluster:
-**both move to the homelab pool onto NAS storage** — the always-on sync
-replica does not need to live in the cloud; what it needs is a public
-endpoint, and architecture.md §3.1 provides that (`internet`-pool
-LoadBalancer on the shared VIP, `externalTrafficPolicy: Cluster`,
-backends on the homelab node; syncthing cares about neither source-IP
-preservation nor same-IP egress). The dav HTTP share rides `internet-gw`
-the same way. Alternatives rejected: keeping them cloud-side on a block
-volume (~110 GB+growth ≈ $11+/mo at typical $0.10/GB, for data that
-already lives on the NAS via syncthing-nas) or keeping the JuiceFS pair
-(would be the sole reason to install the CSI driver).
+The last two *actual* JuiceFS users in the legacy cluster are the
+VPS-side syncthing (5 Ti PVC, **~110 GB really used**) and the dav/webdav
+share over the same data — running without visible trouble today, but
+note both mount pods sit on the *same node as the Redis metadata server*,
+which is exactly why they dodge root cause (a).
+
+**Disposition (2026-08-22): the cloud-side replica stays cloud-side.**
+Its role is (1) an always-reachable public sync anchor for roaming
+clients and (2) an **independent second-site copy** of the data — the
+homelab already has the full `syncthing-nas` replica, so pulling the VPS
+instance home would collapse both copies into one site *and* route every
+roaming client's sync through VIP→KubeSpan→homelab, manufacturing
+cross-site traffic for no gain. What changes is only the backing store,
+because ~110 GB doesn't fit a small instance disk:
+
+-   **Preferred: per-app JuiceFS with node-local metadata** — its own
+    filesystem on the B2 bucket, metadata in **SQLite (or a
+    single-instance Redis) on the cloud node's local disk**, mounted
+    in-pod (sidecar), automatic metadata backup to the bucket. This kills
+    root cause (a) *by construction* (no metadata hop ever crosses the
+    WAN), gives the mount dedicated per-app resources per root cause (b),
+    and satisfies every clause of the quarantine policy above — the
+    census becomes exactly **one**, and the CSI driver stays uninstalled.
+-   **Alternative: s3ql** — an honest fit here since its single-mounter
+    limitation is precisely the deployment shape (one syncthing writer).
+    Kept as the named fallback rather than preferred: same FUSE-in-pod
+    mechanics but a much smaller community/maintenance base than JuiceFS,
+    for no capability we need.
+-   **Rejected**: a provider block volume (~$11+/mo at $0.10/GB for data
+    whose durability already comes from replication + B2); moving the
+    replica to the homelab pool behind the internet VIP (see above — one
+    site, more cross-site traffic).
+
+The dav share serves the same dataset and follows the same mount.
 
 ## 7. Alternatives Considered
 

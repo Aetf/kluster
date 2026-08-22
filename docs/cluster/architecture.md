@@ -46,9 +46,9 @@ graph TD
  end  
   
  subgraph "Cloud Site (provider TBD, nodes.md §3)"  
- Cloud_Worker[Cloud Worker Node <br> primary IPs + routed VIP]  
+ Cloud_Worker[Cloud Worker Node <br> primary IPs = internet VIP]  
  Envoy1(internet-gw Envoy <br> LB Service on VIP: 80/443)  
- RawTCP(LB Services on shared VIP <br> syncthing etc; hath on hostPort)  
+ RawTCP(LB Services on shared VIP <br> syncthing, hath, ...)  
  Cloud_Worker --- Envoy1  
  Cloud_Worker --- RawTCP  
  end  
@@ -132,7 +132,7 @@ reach the VIP differs:
 
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
-| `internet` | The cloud node's routed **additional** public IPv4 + IPv6 (provider "floating"/"reserved" IP, §3.2) | The provider already routes the IP to the node; no announcement needed |
+| `internet` | The cloud node's **primary** public IPv4 + IPv6 (§3.2) | The provider already routes the IP to the node; no announcement needed |
 | `lan` | Dedicated dual-stack subnet, e.g. `192.168.70.0/24` + a ULA `/64` — deliberately *not* inside the LAN's `192.168.80.0/24` | BGP-announced to the UDM SE (§3.4) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
@@ -155,26 +155,42 @@ Mechanics shared by both pools:
     Services normally take one IP each (the pool is plentiful).
 -   **Backends may live on any node.** With `externalTrafficPolicy: Cluster`
     the receiving node SNATs and forwards over KubeSpan to a remote backend
-    — a public port can front a homelab pod (syncthing!). Cost: the backend
+    — a public port can front a homelab pod. Cost: the backend
     sees the ingress node's IP, not the client's. Use
     `externalTrafficPolicy: Local` (client IP preserved, no extra hop) only
     when the backends are pinned to the VIP-owning node. DSR is not usable
     across the WG/NAT path — stick with SNAT.
 
-### 3.2 The internet VIP: routed additional IP, plus the hath exception
+### 3.2 The internet VIP: the node's primary IPs
 
-The `internet` pool must contain a **routed additional IP** (v4 + v6), not
-the node's primary interface IP: LB IPAM does not guard against colliding
-with node addresses, and reusing the primary IP as a VIP conflicts with
-NodePort/host traffic semantics. Every candidate provider offers this
-(floating/reserved/static IPs); it also decouples the public address from
-the instance lifecycle — the DNS-visible IP survives a node rebuild.
+The `internet` pool contains the cloud node's **primary** public IPs
+(v4 + v6). This costs nothing extra (a reserved/floating additional IP is
+~$3/mo on most providers) and — decisively — makes node egress SNAT and
+the ingress VIP the *same address*, so hath's same-IP-in/out requirement
+is satisfied by an ordinary LoadBalancer Service with its pod pinned to
+the cloud node; no hostPort, no exception, no OS-level SNAT games.
 
-**Exception — hath**: hath requires inbound and *outbound* on the same
-public IP, but node egress is SNAT'd from the primary IP, not the VIP.
-Rather than maintain OS-level SNAT-to-VIP rules, hath uses hostPort on the
-cloud node and lives on the **primary** IP (its DNS-free protocol doesn't
-care that this IP differs from the VIP). It is the sole hostPort user.
+Datapath-wise this is identical to the retired `externalIPs`-on-primary-IP
+design (§6.6): KPR treats externalIP and LB-VIP frontends as the same
+class, claiming only the declared service ports and leaving host traffic
+(KubeSpan 51820, Talos apid) untouched. Two caveats, accepted knowingly:
+
+-   Cilium doesn't officially bless a pool containing a node's own IP (LB
+    IPAM only validates pool-vs-pool overlap) — **verify during bootstrap**,
+    with a provider reserved IP as the trivial fallback (+$3/mo).
+-   The public address is coupled to the instance lifecycle: a node
+    rebuild changes it. Acceptable because all DNS is Pulumi-managed
+    (§5.1) — the change is one previewed diff, and hath tolerates IP
+    changes (it re-registers).
+
+**Escape hatch — client-IP-sensitive non-HTTP on the homelab pool**: if a
+raw TCP/UDP service ever both needs real client IPs *and* must run
+homelab-side (too big for the cloud node), the cloud VIP can't serve it
+(`Cluster` policy SNATs, `Local` needs local backends, DSR can't cross
+WG/NAT). Expose it via the **home uplink** instead: UDM port-forward to
+its `lan` VIP — DNAT preserves the source address end-to-end. Costs:
+home-IP DNS (dynamic) and home upload bandwidth. No current workload
+needs this; it exists so the constraint never forces a redesign.
 
 ### 3.3 HTTP/S: two Gateways, shared routes
 
@@ -193,8 +209,12 @@ IPs without X-Forwarded-For games.
 1.  **Dedicated subnet**: the `lan` pool (`192.168.70.0/24` + ULA `/64`)
     sits outside any existing VLAN subnet, so there is no ARP/ND ambiguity
     and no L2 announcement machinery — it is a purely routed subnet whose
-    next hop is learned via BGP. The ULA range follows the same
-    `::1`-style host-address discipline as §1.3.
+    next hop (the Talos VM) is learned via BGP. It is deliberately **not a
+    VLAN/network object on the UDM**: the UDM never hosts this subnet at
+    L2 (no interface in it, no DHCP); creating it as a VLAN would make the
+    UDM believe the subnet is directly connected and fight the BGP /32s.
+    Firewall policy references it via address groups instead. The ULA
+    range follows the same `::1`-style host-address discipline as §1.3.
 2.  **BGP session**: CiliumBGPPeeringPolicy peers with the UDM SE (FRR,
     AS 65000) over both address families, advertising Service VIPs as
     /32 + /128 (§5.2 automates the UDM side).
@@ -216,16 +236,18 @@ IPs without X-Forwarded-For games.
     metered-egress cloud path.
 -   **qbittorrent's IPv6** (the reason it never joined the legacy cluster):
     outbound v6 works via Cilium's IPv6 masquerade to the homelab VM's GUA
-    (SLAAC on the LAN bridge); inbound v6 peers need a UDM pinhole to the
-    VM's GUA plus the service port. The home GUA prefix is dynamic, so the
-    pinhole is prefix-relative — this is UDM config (§5.2 territory), and
-    "outbound-only v6" is an acceptable first stage (peers are mostly
+    (SLAAC on the LAN bridge); inbound v6 peers need a UDM firewall
+    pinhole to the VM's GUA plus the service port — an ordinary UniFi
+    firewall rule (pulumiverse/unifi provider or UI; prefix-relative
+    because the home GUA prefix is dynamic), *not* gw-config territory.
+    "Outbound-only v6" is an acceptable first stage (peers are mostly
     reachable outbound; inbound v4 continues via the existing port
     forward).
 -   **Stable-IP workloads (hath)**: hath requires its inbound port and
     outbound connections on the same stable public IP. Preferred placement:
-    **run hath on the cloud node itself** via hostPort on the primary IP
-    (§3.2; cache on local disk; in/out are naturally the same IP; no
+    **run hath on the cloud node itself** as a LoadBalancer Service on the
+    primary-IP VIP (§3.2; cache on local disk; in/out are naturally the
+    same IP since egress SNAT uses the same primary IP; no
     steering machinery at all). Fallback if its storage outgrows the cloud
     disk: keep hath in the homelab and steer its egress through a **Cilium
     Egress Gateway** policy via the cloud node (SNAT to the cloud IP over
@@ -246,7 +268,7 @@ Deploying an app now answers exactly two questions — *which pool(s)* and
 | Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
 | Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service (shared VIP) |
 | LAN raw TCP/UDP | `lan` | LoadBalancer Service |
-| hath | — | hostPort on cloud node primary IP (§3.2) |
+| hath | `internet` | LoadBalancer Service, pod pinned to the cloud node (same-IP in/out, §3.2) |
 
 Placement (which node runs the pods) is orthogonal — set by scheduling
 constraints, with §3.5's egress rules deciding it for bulk-egress and
@@ -284,11 +306,11 @@ The entire stack is deployed via Pulumi using multiple providers:
     VM** into the physical layer (import, then declare) — HAOS stays a
     host-level libvirt domain, deliberately outside the cluster (§6.8).
 2.  **Cloud provider (per nodes.md §3)**: Provisions the cloud instance
-    (Talos via custom image/ISO), primary IPs, the routed additional VIP
-    (v4+v6) for the `internet` pool, and firewall rules.
-    -   Required Firewall Rules: 80, 443 on the VIP (Ingress), 51820 UDP
-        (WireGuard/KubeSpan), the shared-VIP raw TCP/UDP service ports
-        (§3.6), and hath's hostPort on the primary IP.
+    (Talos via custom image/ISO), its primary IPs (v4+v6, doubling as the
+    `internet` pool VIP, §3.2), and firewall rules.
+    -   Required Firewall Rules: 80, 443 (Ingress), 51820 UDP
+        (WireGuard/KubeSpan), and the shared-VIP raw TCP/UDP service
+        ports (§3.6) — all on the primary IPs.
 3.  **UniFi (pulumiverse/unifi)**: Configures port forwarding on the DMSE to
     allow the cloud node (and CI) to reach the Homelab Control Plane.
     -   Required Ports: 6443 (Kube API), 50000 (Talos API). Both are
@@ -325,11 +347,15 @@ drives gw-config**:
     apply hook for FRR proves fragile, fall back to writing the file and
     surfacing a "reload needed" diff — still one source of truth, one less
     manual upload.
--   **Scope discipline**: only cluster-driven config (FRR, the qbittorrent
-    v6 pinhole §3.5, ZT-to-pool route) moves into Pulumi; the rest of
-    gw-config (caddy, nspawn containers, AdGuard) stays in its own repo —
-    the provider consumes gw-config's mechanism, it does not absorb the
-    repo.
+-   **Scope**: the provider manages the cluster-driven config (FRR/BGP,
+    the ZT-to-pool route) **and the gw's nspawn estate** — unit files,
+    wants-symlinks, and rootfs image pushes for the containers living on
+    the UDM (AdGuard alice/bob, caddy), whose images already come from
+    `~/homelab-containers`. That turns the "deploy.sh + manual restart"
+    loop into previewed Pulumi diffs. Firewall-rule needs (e.g. the
+    qbittorrent v6 pinhole, §3.5) go through the regular unifi provider,
+    not this one. Secrets/backup pulls stay in the gw-config repo's own
+    tooling for now.
 
 ## 6. Alternatives Considered
 
@@ -419,9 +445,8 @@ settled in the 2026-08-21 detailed-design review.
     LB VIPs as the same frontend class), but the LB model gives one
     uniform mechanism on both sides, `status.loadBalancer` population
     (which Gateway API and DNS tooling read), pool-based allocation
-    instead of hand-maintained IP lists, and a VIP decoupled from the
-    instance lifecycle. hostPort survives only for hath (§3.2);
-    `externalIPs` and hostNetwork gateways are not used.
+    instead of hand-maintained IP lists. Neither hostPort, `externalIPs`,
+    nor hostNetwork gateways are used.
 
 ### 6.7 Gateway API TCPRoute/UDPRoute for raw TCP/UDP
 

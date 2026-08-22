@@ -17,19 +17,18 @@ baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 
 ## 1. What the cloud node actually does
 
-Per architecture.md the cloud node is a **worker only**: Cilium Gateway
-API (Envoy, hostNetwork 80/443), raw TCP/UDP service ports, KubeSpan
-endpoint, hath, and whatever else is pinned to the internet pool. The control plane stays in the Homelab. This
-means the cloud node needs:
+Per architecture.md the cloud node is a **worker only**: the `internet-gw`
+Envoy, the shared-VIP raw TCP/UDP services, KubeSpan endpoint, hath, and
+whatever else is pinned to the internet pool. The control plane stays in
+the Homelab. This means the cloud node needs:
 
 -   Modest CPU/RAM: Envoy + Cilium + a handful of pods. 4 GB RAM is the
     comfortable floor (2 GB is possible but leaves no headroom for Cilium +
     Envoy + kubelet + workload bursts); 2 vCPU.
--   A **stable** public IPv4 **and** IPv6 address (dual-stack requirement),
-    plus support for a **routed additional IP** (floating/reserved/static)
-    used as the `internet` LB pool VIP (architecture.md §3.2) — ideally
-    reservable independently of the instance so the DNS-visible address
-    survives a rebuild.
+-   A **stable** public IPv4 **and** IPv6 address (dual-stack requirement);
+    the primary IPs double as the `internet` LB pool VIP
+    (architecture.md §3.2). Support for a reserved/floating additional IP
+    is the named fallback if the pool-contains-node-IP shape misbehaves.
 -   Ability to boot **Talos Linux** — this is a hard filter: the provider
     must support custom images/ISOs. This excludes AWS Lightsail (blueprint
     images only) and most "managed VPS" products.
@@ -80,7 +79,7 @@ The legacy VPS NIC moved 1276 GB TX/30d, but decomposed:
 
 | Component | GB/30d | Fate in the new cluster |
 | --- | --- | --- |
-| ZeroTier tunnel encap (to homelab) | ~780 | becomes KubeSpan; free inside a bundled-TB plan (Vultr/Oracle), billed on GCP/AWS |
+| ZeroTier tunnel encap (to homelab) | ~780 → **~150–250 steady** | becomes KubeSpan; free inside a bundled-TB plan (Vultr/Oracle), billed on GCP/AWS. Re-measured 2026-08-22 at daily granularity: quiet days are TX 2.5–10 GB / RX 5–14 GB; the 780 was migration one-offs (08-19 alone: 592 GB, the dav initial copy; 08-12: 90 GB; 08-21: 50 GB). Steady-state cross-site ≈ 150–250 GB/mo per direction — and the new design removes the shared-JuiceFS churn component (syncthing cross-site deltas remain, but they're document-sized). Re-measure over a quiet month before any hyperscaler commitment. |
 | immich copytest + JuiceFS mount pods | ~500+ | one-off August migration traffic + JuiceFS churn; gone by design |
 | traefik (real public HTTP serving) | **~96 TX / ~98 RX** | cloud node Envoy |
 | hath (recent pod rate ~3.6 GB/day) | **~50–110 TX** | cloud node (stable IP) |
@@ -111,29 +110,33 @@ months).
 | Public IPv4 | $3.65 | $3.65 | $0.60 | included | $0 |
 | Fixed subtotal | **$24.06** | **$23.65** | **~$38.09** | **~$24** | **$0** |
 | @ 220 GB egress (steady state, §2.1) | $24.06 + $0.12 × v6-share ≈ **$24–36** | ~$34.45 | $38.09 | $24 | $0 (10 TB incl.) |
-| KubeSpan inter-node traffic (~0.8 TB/mo) | metered (v4 Standard, inside 200 GB? **no** — counts against it) | metered $0.09/GB ⇒ +$60! | included | included (2–3 TB pool) | included |
+| KubeSpan inter-node TX (~150–250 GB/mo steady, 600 GB/day spikes) | metered on v4 Standard — competes with public traffic for the 200 GB allowance | metered $0.09/GB ⇒ +$15–25 steady, spikes billed | included | included (2–3 TB pool) | included |
 | Talos support | image upload | AMI upload | no ISO — rescue-mode dd / packer snapshot | **native custom ISO** | custom image (.oci qcow2), official guide |
 | Dual-stack, stable IPs | static v4 (Standard) + v6 (Premium) reservable | EIP + stable v6 | primary IPs detachable, v6 /64 free | reserved IPs (v4 + v6) | reserved v4; v6 on dual-stack VCN |
-| Routed additional IP (VIP) | static IP + alias/forwarding rules | EIP re-assignable | floating v4 $3.50 / v6 $1.50 | reserved IP | reserved public IP |
+| Additional IP (VIP fallback) | static IP + alias/forwarding rules | EIP re-assignable | floating v4 $3.50 / v6 $1.50 | reserved IP | reserved public IP |
 | Risk notes | v6-share billing unpredictable; CUD lock-in | KubeSpan metering kills it | 2 hikes in 18 mo; US traffic cut to 1–2 TB | legacy incumbent; pricing stable through 2024–2026 | **platform risk**: capacity hunts, 2026-06 free-tier halving (2→12 GB now; PAYG keeps 4/24), reports of account purges; PAYG conversion mitigates |
 
-The KubeSpan row is decisive against the hyperscalers: architecture.md's
-KubeSpan mesh moved ~780 GB/30d between sites in the legacy measurement
-(ZeroTier equivalent). On AWS that alone is ~$60/mo; on GCP it eats the
-Standard-tier free allowance and then bills. Only providers with a bundled
-multi-TB pool (Vultr, Hetzner-EU-style, Oracle) absorb it. Mitigation on a
-metered provider would mean re-architecting how much cross-site traffic
-the cluster generates — a tax on every future design decision.
+The KubeSpan row matters more for its *variance* than its magnitude:
+steady-state cross-site TX is ~150–250 GB/mo (re-measured 2026-08-22,
+§2.1), which on AWS adds ~$15–25/mo and on GCP eats most of the
+Standard-tier free allowance — but single migration/repair days have hit
+600 GB, and on a metered provider every future data move, restore drill,
+or resync becomes a billing decision. A bundled multi-TB pool (Vultr,
+Oracle) makes cross-site traffic architecturally free, so the design
+never has to think about it.
 
 ### 3.1 Decision (2026-08-22: reopened, recommendation pending user review)
 
-Post-hike landscape at measured traffic (220 GB public + ~0.8 TB KubeSpan):
+Post-hike landscape at measured traffic (220 GB public + ~150–250 GB
+KubeSpan TX steady state, with multi-hundred-GB spike days):
 
 -   **Hetzner CPX21 US $38/mo**: no longer competitive; also no native
     ISO and a worrying pricing trend. Dropped.
--   **AWS**: ~$34 + ~$60 KubeSpan metering. Dropped.
--   **GCP mixed-tier**: $24–36 but KubeSpan + v6 metering makes the bill
-    both higher and unpredictable. Dropped as primary.
+-   **AWS**: ~$34 + ~$15–25 KubeSpan metering + billed spikes ≈ $50+.
+    Dropped.
+-   **GCP mixed-tier**: base $24, but public v4 + KubeSpan together
+    overflow the 200 GB Standard allowance and v6 share bills at Premium
+    — realistically $35–45 and unpredictable. Dropped as primary.
 -   **Vultr 4 GB (~$24/mo)**: bundled 2–3 TB covers public + KubeSpan
     traffic with headroom; native ISO Talos install; mature
     pulumi/terraform provider; and it is the *legacy incumbent* — the
@@ -168,9 +171,9 @@ JBOD — this host *is* the NAS.
 
 | What | Why it stays | RAM budget |
 | --- | --- | --- |
-| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ARC ≥4 GiB (currently squeezed to ~2) |
+| ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (currently squeezed to ~2) |
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + WiFi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
-| AdGuard alice+bob, adguardhome-sync (podman) | LAN DNS must survive cluster outages | ~0.3 GiB |
+| adguardhome-sync (podman); AdGuard alice/bob themselves run as nspawn containers **on the UDM**, not here | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0.1 GiB |
 | Pulumi state-backend Postgres (podman) | cannot live inside the cluster it manages | ~0.2 GiB |
 | zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
 
@@ -195,8 +198,9 @@ a migration-blocking item to verify early, not late.
     RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1 (qemu/host
     overhead) ≈ 21 GiB. That covers today's ~16 GiB workload set plus
     Longhorn's 2–4 GiB (storage.md §3) with little slack — **a RAM
-    upgrade (board takes 128 GB DDR5) is the designated relief valve**,
-    cheaper than any architectural workaround.
+    upgrade is the designated relief valve**, cheaper than any
+    architectural workaround (board verified 2026-08-22: ROG Maximus
+    Z690 Hero, DDR5, 4×DIMM up to 128 GB).
 -   **Disk**: target 100+ GB qcow2/raw on NVMe, but only ~85 GB is free
     while both clusters coexist. The migration plan must interleave
     reclamation (legacy images, local-path PVCs, prometheus's 30 GB) with
