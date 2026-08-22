@@ -125,20 +125,31 @@ priced for ~100 GB–1 TB, and cheap *restore* traffic — restore drills are
 part of the design, so egress-free matters more than the last cent on
 storage.
 
-| Provider | Storage/TB/mo | Egress | Notes |
-| --- | --- | --- | --- |
-| Backblaze B2 | ~$6 | free up to 3x stored/mo, then $0.01/GB | S3 API; proven with barman in legacy cluster tooling |
-| Cloudflare R2 | $15 | $0 always | zero-egress; class A/B op fees instead |
-| Wasabi | $6.99 (1 TB min) | $0 (fair use) | 90-day min storage duration — hostile to churny backups |
-| GCS Standard | ~$20–26 | $0.12/GB out; free into GCE same region | only attractive if an app on the GCP node reads it heavily |
-| AWS S3 | ~$23 | $0.09/GB | legacy incumbent (hath cache history); no reason for new data |
+| Provider | Storage/TB/mo | Egress | API ops | Notes (verified 2026-08-22, official pages) |
+| --- | --- | --- | --- | --- |
+| Backblaze B2 | $6.95 (was $6; 2026-05-01) | free up to 3× avg stored/mo, then $0.01/GB | **all classes free** (since 2026-05-01) | S3 API; no minimum duration; proven with barman in legacy tooling |
+| OCI Object Storage | $25.50 (Standard); PAYG free: 10 GB Std + 10 IA + 10 Archive | counts in the tenancy's 10 TB/mo free pool; **$0 in-region to the OCI node** | $0.0034/10k, first 50k/mo free | only interesting co-located with an OCI cloud node; IA 31-day / Archive 90-day min retention |
+| Cloudflare R2 | $15 (Std) / $10 (IA) | $0 always | A $4.50/M, B $0.36/M (1M/10M free) | IA tier is a trap for churny data (min duration + retrieval fee + 2× ops) |
+| Wasabi | $7.99+ (1 TB minimum billed) | $0 (fair use: egress ≤ stored) | free (fair use) | 90-day min storage duration — structurally hostile to churny backups at our size |
+| AWS S3 | $23 | 100 GB/mo free then $0.09/GB | PUT $5/M, GET $0.4/M | anchor only; a single 300 GB restore ≈ $27 of egress |
 
-**Decision (2026-08-21)**: **Backblaze B2** as the single backup/object
-bucket provider (cheapest storage, effectively free restores at our ratios,
-S3 API works with every consumer above). R2 is the named alternate if B2's
-egress fair-use ever bites. GCS only for data the GCP node itself serves
-hot. Buckets, keys, and lifecycle rules are Pulumi-managed like everything
-else.
+**Decision (2026-08-21, re-affirmed with verified numbers 2026-08-22)**:
+**Backblaze B2 as the backup bucket**, now with a stronger case than when
+chosen: since 2026-05-01 *every* API class is free, which is exactly the
+dimension restic-style churn and JuiceFS chunk traffic stress. R2 Standard
+is the named alternate if B2's 3×-stored egress allowance ever bites.
+
+**Placement rule added (2026-08-22)**: the **backup** bucket must not
+live with the provider whose loss it insures — OCI tenancy termination is
+an enumerated risk (nodes.md §3.1), so cluster backups stay on B2
+regardless of where the cloud node lands. The **JuiceFS chunk bucket**
+(§6) is different: it backs a *replica* whose other full copy is the
+homelab NAS, so provider-loss is survivable — if the cloud node is OCI,
+putting its chunks on same-region OCI Object Storage buys zero-egress +
+LAN-class latency on cache misses for ~$2.6/mo at 110 GB (minus 10 GB
+free); on any other provider, B2 serves it fine (free ops, 3×-stored
+egress covers read traffic with a warm local cache). Buckets, keys, and
+lifecycle rules are Pulumi-managed like everything else.
 
 ## 5. Backup architecture (the actual HA mechanism)
 
@@ -200,7 +211,9 @@ cross-site traffic for no gain. What changes is only the backing store,
 because ~110 GB doesn't fit a small instance disk:
 
 -   **Preferred: per-app JuiceFS with node-local metadata** — its own
-    filesystem on the B2 bucket, metadata in **SQLite (or a
+    filesystem on an object bucket chosen by the §4 placement rule
+    (same-region OCI Object Storage if the cloud node is OCI, else B2),
+    metadata in **SQLite (or a
     single-instance Redis) on the cloud node's local disk**, mounted
     in-pod (sidecar), automatic metadata backup to the bucket. This kills
     root cause (a) *by construction* (no metadata hop ever crosses the

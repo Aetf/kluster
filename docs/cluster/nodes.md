@@ -46,32 +46,50 @@ seeding). Hyperscaler pricing breaks that assumption:
 | Provider path                  | Included/free egress | Overage        |
 | ------------------------------ | -------------------- | -------------- |
 | GCP Premium tier               | 1 GiB/mo             | $0.12/GB       |
-| GCP Standard tier              | 200 GB/mo/region     | $0.085/GB      |
-| AWS EC2                        | 100 GB/mo            | $0.09/GB       |
-| Hetzner Cloud (US)             | 1–2 TB/mo (plan)     | ~$1–2/TB       |
-| Oracle Cloud                   | 10 TB/mo             | $0.0085/GB     |
-| Vultr (legacy baseline)        | 2–4 TB/mo (plan)     | $0.01/GB       |
+| GCP Standard tier              | 200 GiB/mo (per billing account, ALL regions combined) | $0.085/GiB |
+| AWS EC2                        | 100 GB/mo (all services/regions combined) | $0.09/GB |
+| Hetzner Cloud (US)             | 1–3 TB/mo (CPX11/21/31) | $1/TB      |
+| Oracle Cloud                   | 10 TB/mo (per tenancy) | $0.0085/GB   |
+| Vultr (legacy baseline)        | 2–5 TB/plan, pooled account-wide, +2 TB free/account | $0.01/GB |
 
-Provider-specific facts (verified 2026-08-22):
+Provider-specific facts (verified 2026-08-22 against official price
+pages/APIs; the deep-verification pass re-confirmed every number below
+from primary sources — Hetzner's price-adjustment doc, Vultr's live
+`api.vultr.com/v2/plans`, GCP's served pricing HTML, AWS's awsstatic
+pricing feeds, Oracle's cetools price-list API):
 
 1.  **GCP mixed network tiers are real.** Network tier is set **per access
     config**, not per VM: `--network-tier=STANDARD` for the IPv4 access
     config coexists with IPv6, whose tier "must be PREMIUM (currently only
     one value is supported)". So a dual-stack VM can put all its IPv4
-    egress on Standard tier (200 GB/mo free per region, $0.085/GB after)
-    while only the traffic that actually leaves over IPv6 bills at Premium
-    ($0.12/GB, ~no free tier). Since hath (~50–110 GB/mo) is v4-only and
+    egress on Standard tier (**200 GiB/mo free per billing account across
+    all regions — not per region**; $0.085/GiB after) while only the
+    traffic that actually leaves over IPv6 bills at Premium ($0.12/GiB,
+    ~no free tier). Since hath (~50–110 GB/mo) is v4-only and
     happy-eyeballs pulls an unpredictable share of HTTP onto v6, the GCP
     bill becomes ~$24 fixed + $0.12 × (v6 share of ~100 GB HTTP) ≈
     **$24–36/mo**. Both static v4 (Standard) and static v6 (Premium) are
-    reservable; external IPv6 is free, in-use IPv4 is $3.65/mo.
+    reservable; external IPv6 is free, in-use IPv4 is $3.65/mo. (Prices
+    are us-central1; us-east4 runs ~10% higher, unverified.)
 2.  **AWS Lightsail is disqualified** despite its bundled 1–3 TB transfer:
     it cannot boot custom images, so no Talos.
 3.  **Hetzner US ≠ Hetzner EU.** The famous pricing is EU-only. US
     (Ashburn) has only the CPX/CCX lines, traffic was cut to 1–3 TB in
-    Dec 2024, and the 2026-06-15 adjustment tripled US CPX prices
-    (CPX11 $6.99→$20.49, CPX21 $13.99→$37.49). Two hikes in 18 months is
-    also a trend signal.
+    Dec 2024, and 2026 brought **two** hikes (2026-04-01, then
+    2026-06-15: CPX11 $6.99→$20.49, CPX21 $13.99→$37.49, CPX31
+    $24.99→$73.49 — confirmed on Hetzner's own price-adjustment doc,
+    ~4× vs early 2026 combined). Existing servers keep old pricing but
+    **any rescale re-prices to the new list**.
+4.  **Vultr's 4 GB tier is three product lines**: Regular `vc2-2c-4gb`
+    $20 (80 GB SSD, 3 TB), High Frequency $24 (128 GB NVMe, 3 TB),
+    High Performance `vhp` $24 (100 GB NVMe, **5 TB**). Transfer is
+    pooled account-wide with an extra 2 TB/mo free per account; overage
+    $0.01/GB. Reserved IPs are **$3/mo flat, attached or not** (the old
+    "free while attached" rule is gone from current docs). Custom ISO
+    upload free (≤10 GB, 2/account); snapshots $0.05/GB-mo. Compute
+    pricing unchanged since the Jan 2023 restructure. One real demerit:
+    the **Pulumi provider is a community bridge** (ediri/pulumiverse,
+    lagging) — only the Terraform provider is Vultr-official.
 
 ### 2.1 Measured traffic (legacy cluster Prometheus, 30d to 2026-08-21)
 
@@ -105,11 +123,11 @@ months).
 | | GCP e2-medium (mixed tier) | AWS t4g.medium | Hetzner CPX21 (US) | Vultr 4 GB | Oracle A1.Flex (free) |
 | --- | --- | --- | --- | --- | --- |
 | Specs | 2 shared vCPU / 4 GB | 2 vCPU ARM / 4 GB | 3 vCPU / 4 GB | 2 vCPU / 4 GB | ARM, 2 OCPU / 12 GB (4 / 24 under PAYG, eroding) |
-| Instance (1y commit) | $15.41 | ~$16 | $37.49 (no commit) | ~$24 (no commit) | $0 |
-| Boot disk 50 GB | $5.00 (pd-balanced) | $4.00 (gp3) | included (80 GB) | included | included (200 GB total free) |
-| Public IPv4 | $3.65 | $3.65 | $0.60 | included | $0 |
-| Fixed subtotal | **$24.06** | **$23.65** | **~$38.09** | **~$24** | **$0** |
-| @ 220 GB egress (steady state, §2.1) | $24.06 + $0.12 × v6-share ≈ **$24–36** | ~$34.45 | $38.09 | $24 | $0 (10 TB incl.) |
+| Instance (1y commit) | $15.41 (3y: $11.01) | $15.40 (1y RI no-upfront) | $37.49 (no commit) | $20 vc2 / $24 vhp-5TB (no commit) | $0 |
+| Boot disk 50 GB | $5.00 (pd-balanced $0.10/GiB) | $4.00 (gp3 $0.08/GB) | included (80 GB) | included (80–100 GB) | free (within 200 GB boot+block allowance, home region) |
+| Public IPv4 | $3.65 ($0.005/hr) | $3.65 ($0.005/hr, idle same) | $0.60 | included | $0 (reserved & idle also $0; 50/region limit) |
+| Fixed subtotal | **$24.06** | **$23.05** | **~$38.09** | **$20–24** | **$0** |
+| @ 220 GB egress (steady state, §2.1) | $24.06 + $0.12 × v6-share ≈ **$24–36** | ~$33.85 | $38.09 | $20–24 | $0 (10 TB incl.) |
 | KubeSpan inter-node TX (~150–250 GB/mo steady, 600 GB/day spikes) | metered on v4 Standard — competes with public traffic for the 200 GB allowance | metered $0.09/GB ⇒ +$15–25 steady, spikes billed | included | included (2–3 TB pool) | included |
 | Talos support | image upload | AMI upload | no ISO — rescue-mode dd / packer snapshot | **native custom ISO** | custom image (.oci qcow2), official guide |
 | Dual-stack, stable IPs | static v4 (Standard) + v6 (Premium) reservable | EIP + stable v6 | primary IPs detachable, v6 /64 free | reserved IPs (v4 + v6) | reserved v4; v6 on dual-stack VCN |
@@ -187,6 +205,73 @@ precisely the design that makes provider risk survivable — the Vultr
 fallback is a stack config flip plus a DNS diff, exercised as a drill
 like every other restore path. Final call is the user's at the
 end-of-design total-cost pass.
+
+### 3.2 OCI deep dive: commercial model, service landscape, gotchas
+
+Verified 2026-08-22 against Oracle's price-list API (cetools, the cost
+estimator's backend, data stamped 2026-08-14), the billing guide, the
+July 2026 Pillar SLA document, and the Always Free docs. Uniform list
+pricing across all commercial regions (no US exception found).
+
+**Commercial model — PAYG is the only sensible one at this scale.** The
+alternatives are commit models: Annual Universal Credits (12-month
+prepaid pool, unused credits forfeited, discount schedule not public)
+and Monthly Flex (subject to Oracle approval). The old startup-credit
+program no longer exists on the official page. PAYG specifics:
+
+-   Billed monthly in arrears; $100 one-time card authorization at
+    upgrade; the $300/30-day trial credit survives conversion.
+-   **Support is included** in service fees on PAYG (no 3–10%-of-spend
+    surcharge like other clouds); Always-Free-only tenancies get no
+    ticket support.
+-   **Paid usage carries financially-backed SLAs** (compute single
+    instance: 99.9% monthly uptime → 100% credit below it; Object
+    Storage 99.9%); Always Free resources explicitly carry **no SLA**.
+    One more concrete thing the $0-but-PAYG posture buys.
+-   **There is no hard spending cap.** Budgets are alerts only,
+    evaluated every ~24 h. The real guardrails are resource-side:
+    **compartment quotas + service limits** pinning creatable shapes to
+    the free envelope, plus budget alerts. Accept this consciously —
+    "billed, not killed" means the bill is the failure mode.
+
+**Free-envelope facts that matter to this architecture** (beyond the A1
+shape itself):
+
+-   Public IPv4: $0, including reserved *and idle* (50/region limit).
+    IPv6: **/56 GUA per VCN**, $0. VCN/IGW/NAT/service gateway/S2S VPN:
+    all $0. In-region transfer (node ↔ Object Storage): $0.
+-   Block storage: **200 GB total (boot + block, home region)** free +
+    5 volume backups — covers the Talos boot disk *and* hath's 50 Gi
+    cache at $0. Beyond: $0.0255/GB-mo (+$0.017 at Balanced VPU).
+-   **Bastion service: free** — an out-of-band SSH path to the node
+    when the cluster/KubeSpan is down. Vault software keys + secrets:
+    free. NLB ×1 + 10 Mbps flexible LB ×1: free (unused by the Cilium
+    design, but there).
+-   **OCIR** (container registry): billed as Object Storage (first
+    10 GB free) — a natural same-region home for homelab-containers
+    images consumed by the cloud node.
+-   Monitoring/Notifications free tiers are huge (500M datapoints/mo,
+    1M HTTPS deliveries) — good for an **out-of-band alert channel**
+    (MQL, not PromQL; no substitute for VictoriaMetrics).
+-   Email Delivery: 3,000 mails/mo free via port 587 (approved-sender
+    setup required); **outbound port 25 is tenancy-blocked by default**.
+
+**Paid rates around the free envelope** (for headroom math): A1
+$0.01/OCPU-h + $0.0015/GB-h; preemptible capacity is a flat −50%;
+E4 $0.025/OCPU-h. Egress beyond 10 TB: $0.0085/GB (NA). **Compute
+capacity reservations exist** (unused capacity bills at 85%) — a priced
+hedge against the A1 re-creation capacity hunt at worst-case ~$47/mo
+for 4/24; not recommended (the Vultr fallback is cheaper insurance),
+but it exists if OCI ever becomes load-bearing.
+
+**Gotchas registry**: new-tenancy service limits are low and free-tier
+limit increases are often refused (PAYG requests go through); Always
+Free resources are mostly home-region-locked and the home region is
+immutable at signup; the A1 free allowance is measured in OCPU-hours
+(1,500 or 3,000/mo — see the eroding-allowance note above), so a
+deleted-and-recreated instance burns the same pool; watch the
+31/90-day minimum-retention rules if Object Storage IA/Archive tiers
+ever get used.
 
 ## 4. Homelab node(s)
 
