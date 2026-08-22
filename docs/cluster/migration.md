@@ -2,6 +2,36 @@
 
 Objective: Migrate applications and data from the legacy cluster (`~/projects/kluster-code`) to the new cluster, minimizing downtime for critical services like `hath` and ensuring data integrity.
 
+> **Status**: still the early generic draft; per-app details predate the
+> 2026-08-21/22 design decisions (there is no JuiceFS in the new cluster —
+> storage.md; per-app targets follow storage.md §2's decision rules). The
+> sections below marked 2026-08-22 are current; the rest needs a rewrite
+> once the declarative layer docs exist.
+
+## 0. Sequencing constraints (2026-08-22)
+
+-   **Host NVMe is nearly full** (~85 GB free) while both the legacy k3s
+    and the new Talos VM coexist on the homelab host. The Talos VM starts
+    at ~60 GB and grows only as legacy data is reclaimed (k3s images,
+    local-path PVCs, prometheus's 30 GB) — plan per-app migration to
+    interleave "migrate app → delete legacy PVC → grow VM disk" instead of
+    big-bang. (nodes.md §4.2.)
+-   **GPU passthrough is a migration blocker to verify first**: immich and
+    jellyfin need `gpu.intel.com/i915` in the new VM (UHD 770 VFIO
+    passthrough, nodes.md §4.1). Prove transcode inside a Talos VM before
+    scheduling their migration windows.
+
+## 0.1 Host-native onboarding (new scope, 2026-08-22)
+
+Beyond legacy-cluster apps, three host-native services join the cluster
+(nodes.md §4.1): **qbittorrent-nox** (unblocked by the dual-stack v6 design,
+architecture.md §3.5 — migrate its `/var/lib/qBittorrent` profile and
+verify seedwatch's category paths survive the move), **seedwatch**, and
+**thread-dashboard** (both currently podman quadlets; seedwatch moves
+together with qbittorrent since it drives its API and reads NAS hardlink
+counts). DNS (AdGuard), the state-backend Postgres, and HAOS explicitly do
+NOT onboard — they stay host-side by design.
+
 ## 1. General Migration Strategy
 
 The migration will follow a stop-copy-start approach for each application to ensure data consistency:

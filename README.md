@@ -32,23 +32,31 @@ coroutine that never resolves hangs instead of failing).
 
 ## Docs
 
-- [docs/architecture.md](docs/architecture.md) — the canonical cluster
-  architecture (GCP + Homelab, Talos, KubeSpan, Cilium), including
-  alternatives considered.
-- [docs/pulumi.md](docs/pulumi.md) — the Pulumi Python framework: `Component`,
+Organized by topic: `docs/cluster/` (what we're building and why),
+`docs/framework/` (the Pulumi Python framework itself), `docs/declarative/`
+(how each layer is declared in the program — see its README for planned
+docs: physical, dns, cluster-infra, workloads).
+
+- [docs/cluster/architecture.md](docs/cluster/architecture.md) — the canonical cluster
+  architecture (cloud + Homelab, Talos, KubeSpan, Cilium; two-pool
+  LoadBalancer ingress model), including alternatives considered.
+- [docs/cluster/nodes.md](docs/cluster/nodes.md) — node & provider selection: measured
+  egress economics, cloud worker pricing (reopened 2026-08-22 after the
+  Hetzner US price hike; Vultr recommended), homelab host inventory & VM
+  sizing, HA tiers.
+- [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path, Longhorn,
+  NAS, object storage), backup architecture, JuiceFS root causes &
+  containment policy.
+- [docs/cluster/migration.md](docs/cluster/migration.md) — workload/data migration plan from
+  the legacy cluster.
+- [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
   `async_output`/`resolve`, `pulumi.run`, stack layering proposal. Start
   here; §1.4 has cookbook examples.
-- [docs/rfc-001-native-async-inputs.md](docs/rfc-001-native-async-inputs.md) —
+- [docs/framework/rfc-001-native-async-inputs.md](docs/framework/rfc-001-native-async-inputs.md) —
   design rationale and mechanics of the native async inputs framework (Rev 3).
-- [docs/testing.md](docs/testing.md) — unit testing Pulumi code with mocks.
-- [docs/migration.md](docs/migration.md) — workload/data migration plan from
-  the legacy cluster.
-- [docs/nodes.md](docs/nodes.md) — node & provider selection: measured
-  egress economics, cloud worker pricing (Hetzner tentative vs GCP/AWS),
-  homelab VM sizing, HA tiers. Reviewed 2026-08-21.
-- [docs/storage.md](docs/storage.md) — storage classes (local-path, Longhorn,
-  NAS, object storage), backup architecture, JuiceFS containment policy.
-  Reviewed 2026-08-21.
+- [docs/framework/testing.md](docs/framework/testing.md) — unit testing Pulumi code with mocks.
+- [docs/declarative/README.md](docs/declarative/README.md) — index of the layer-by-layer
+  declarative designs (to be written).
 
 ## Status & open decisions
 
@@ -64,26 +72,28 @@ Open items to settle before / during detailed design, roughly in order:
    from scratch before the first real `pulumi up`.
 2. **CI**: none yet. Port kluster-code's PR → preview → merge-deploys pipeline
    early, before workloads accumulate.
-3. **Stack layering**: docs/pulumi.md §3 proposes infra-homelab / infra-cloud /
+3. **Stack layering**: docs/framework/pulumi.md §3 proposes infra-homelab / infra-cloud /
    k8s-base / applications; the repo is currently a single stack. Decide
    before building the infra layer.
-4. **GCP implementation**: `src/kluster/physical/aws.py` implements the
-   abandoned AWS plan (talos 1.8.3 hardcoded, AMI lookup unused) and is
-   reference-only; replace with the GCP + libvirt + UniFi providers per
-   architecture.md §5.
+4. **Physical-layer implementation**: `src/kluster/physical/aws.py`
+   implements the abandoned AWS plan (talos 1.8.3 hardcoded, AMI lookup
+   unused) and is reference-only; replace with the chosen cloud provider
+   + libvirt + UniFi/gw-config providers per architecture.md §5.
 5. **Legacy k3s residue**: `kx.py` (SealedSecret, chart pins from old config)
    and `base_cluster/nodes.py` (k3s `svccontroller` labels) predate the
    Talos/Cilium design; rewrite alongside the new base cluster. Regenerate
    `packages/crds` for the new chart set (Cilium, Gateway API, ...) when it
    firms up.
-6. **Cloud provider — tentatively Hetzner CPX21 Ashburn** (docs/nodes.md
-   §3.1, architecture.md §6.3): decided 2026-08-21 on measured egress
-   (steady-state ~150–220 GB/mo; GCP ~$42–50 vs Hetzner ~$14). Pending: a
-   final total-cost pass at the end of detailed design confirms it.
+6. **Cloud provider — reopened 2026-08-22** (docs/cluster/nodes.md §3.1,
+   architecture.md §6.3): the 2026-08-21 Hetzner pick was voided by
+   Hetzner's 2026-06-15 US price hike (CPX21 $14 → $38). Current
+   recommendation: **Vultr 4 GB (~$24, bundled TBs cover public +
+   KubeSpan traffic, native Talos ISO)**, optional Oracle A1 free node as
+   a later experiment. Awaiting user's final call.
 7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
    port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
    (architecture.md §5.1).
-8. **Storage residue** (docs/storage.md): B2 bucket decided; JuiceFS CSI
+8. **Storage residue** (docs/cluster/storage.md): B2 bucket decided; JuiceFS CSI
    not installed; second homelab worker VM deferred (Longhorn starts all
    replica=1 + backups). Remaining check: Longhorn ≥1.12 (dual-stack
    support) must be GA by bootstrap time.

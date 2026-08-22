@@ -9,7 +9,9 @@ resort, object storage used directly where an app supports it.
 > **Status**: Reviewed interactively 2026-08-21; decided: B2 as the backup
 > bucket (§4), JuiceFS CSI **not installed** (§6), second homelab VM
 > deferred so all Longhorn volumes start at replica=1 (§3), hath cache
-> lives on the cloud node's local disk (nodes.md §2.1). Companion to
+> lives on the cloud node's local disk (nodes.md §2.1). 2026-08-22:
+> JuiceFS root causes documented (§1), Longhorn resource budget added
+> (§3), VPS syncthing/dav disposition decided (§6). Companion to
 > [nodes.md](nodes.md); topology and pools per
 > [architecture.md](architecture.md). Not implemented.
 
@@ -27,8 +29,16 @@ resort, object storage used directly where an app supports it.
     (~tens of ms) goes into every write of any cross-site replica. Replicas
     stay within a site; cross-site movement is asynchronous (backup/restore
     or an explicit, temporary rebuild during a planned migration window).
-4.  **JuiceFS earned demotion empirically** (instability in the legacy
-    cluster). Where it survives, it is quarantined per-app.
+4.  **JuiceFS earned demotion empirically.** The legacy instability has
+    two identified root causes, and both are architectural, not tuning:
+    (a) the metadata server is a single Redis on one node — every client
+    on the *other* node pays WAN RTT per metadata operation, and any WAN
+    latency/jitter directly wedges filesystems; (b) mount pods are
+    resource-hungry, and the shared-mount-pod experiment (multiple
+    volumes, one mount pod) was still unstable — possibly under-resourced,
+    but "give the FUSE daemon more RAM until POSIX-over-S3 stops falling
+    over" is not a foundation. Where JuiceFS survives, it is quarantined
+    per-app (§6) with same-site metadata.
 
 ## 2. Storage classes
 
@@ -75,6 +85,17 @@ Per-workload decision rules, in order:
     site: temporarily raise replica count / let rebuild land on target;
     cross-site: backup to S3, restore into the other pool) → scale up. No
     claimRef surgery.
+-   **Resource budget** (the JuiceFS lesson applied in advance — VM and
+    cloud-instance sizing must include the storage layer, nodes.md §4.2):
+    Longhorn's official floor is 4 vCPU/4 GB per node; the
+    instance-manager's *default* CPU request is 12% of node allocatable
+    (tunable per node); replicas hold a read index of ~256 MB RAM per TB
+    of volume. Budget **2–4 GiB on the homelab VM** (10–20 volumes) and
+    **0.5–1 GiB on the 4 GB cloud node**, where Longhorn is kept to a few
+    small volumes with a lowered instance-manager reservation — bulk data
+    on the cloud side belongs to hath's local-path cache, not Longhorn.
+    (v1.11 shipped an instance-manager memory leak, #12668 — one more
+    reason the ≥1.12 pin above is a floor, not a suggestion.)
 -   **Backup target**: the backup bucket (§5) configured cluster-wide;
     recurring snapshots + backups for every Longhorn volume by default.
 -   **v2 engine**: not adopted — its IPv6/dual-stack support lags v1 and the
@@ -137,10 +158,27 @@ JuiceFS is not banned; it is rationed. A workload may use it only if all of:
     blast radius; no shared mega-filesystem like the legacy cluster), with
     automatic metadata backup to the object bucket enabled.
 
-**Decision (2026-08-21)**: the census is zero — immich media is on NAS,
-hath cache on the cloud node's local disk, qbittorrent on the home side,
-backups go to object storage directly. **The CSI driver is not installed.**
-This policy stays on file for the day a workload genuinely qualifies.
+**Decision (2026-08-21, census re-verified 2026-08-22)**: the census is
+zero — immich media is on NAS, hath cache on the cloud node's local disk,
+qbittorrent on the home side, backups go to object storage directly.
+**The CSI driver is not installed.** This policy stays on file for the day
+a workload genuinely qualifies.
+
+The last two *actual* JuiceFS users in the legacy cluster are the VPS-side
+syncthing (5 Ti PVC, **~110 GB really used**) and the dav/webdav share
+over the same data — running without visible trouble today, but note both
+mount pods sit on the *same node as the Redis metadata server*, which is
+exactly why they dodge root cause (a). Disposition in the new cluster:
+**both move to the homelab pool onto NAS storage** — the always-on sync
+replica does not need to live in the cloud; what it needs is a public
+endpoint, and architecture.md §3.1 provides that (`internet`-pool
+LoadBalancer on the shared VIP, `externalTrafficPolicy: Cluster`,
+backends on the homelab node; syncthing cares about neither source-IP
+preservation nor same-IP egress). The dav HTTP share rides `internet-gw`
+the same way. Alternatives rejected: keeping them cloud-side on a block
+volume (~110 GB+growth ≈ $11+/mo at typical $0.10/GB, for data that
+already lives on the NAS via syncthing-nas) or keeping the JuiceFS pair
+(would be the sole reason to install the CSI driver).
 
 ## 7. Alternatives Considered
 
