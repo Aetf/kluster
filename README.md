@@ -43,6 +43,12 @@ coroutine that never resolves hangs instead of failing).
 - [docs/testing.md](docs/testing.md) — unit testing Pulumi code with mocks.
 - [docs/migration.md](docs/migration.md) — workload/data migration plan from
   the legacy cluster.
+- [docs/nodes.md](docs/nodes.md) — node & provider selection: measured
+  egress economics, cloud worker pricing (Hetzner tentative vs GCP/AWS),
+  homelab VM sizing, HA tiers. Reviewed 2026-08-21.
+- [docs/storage.md](docs/storage.md) — storage classes (local-path, Longhorn,
+  NAS, object storage), backup architecture, JuiceFS containment policy.
+  Reviewed 2026-08-21.
 
 ## Status & open decisions
 
@@ -70,3 +76,14 @@ Open items to settle before / during detailed design, roughly in order:
    Talos/Cilium design; rewrite alongside the new base cluster. Regenerate
    `packages/crds` for the new chart set (Cilium, Gateway API, ...) when it
    firms up.
+6. **Cloud provider — tentatively Hetzner CPX21 Ashburn** (docs/nodes.md
+   §3.1, architecture.md §6.3): decided 2026-08-21 on measured egress
+   (steady-state ~150–220 GB/mo; GCP ~$42–50 vs Hetzner ~$14). Pending: a
+   final total-cost pass at the end of detailed design confirms it.
+7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
+   port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
+   (architecture.md §5.1).
+8. **Storage residue** (docs/storage.md): B2 bucket decided; JuiceFS CSI
+   not installed; second homelab worker VM deferred (Longhorn starts all
+   replica=1 + backups). Remaining check: Longhorn ≥1.12 (dual-stack
+   support) must be GA by bootstrap time.
