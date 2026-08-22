@@ -104,7 +104,7 @@ months).
 
 | | GCP e2-medium (mixed tier) | AWS t4g.medium | Hetzner CPX21 (US) | Vultr 4 GB | Oracle A1.Flex (free) |
 | --- | --- | --- | --- | --- | --- |
-| Specs | 2 shared vCPU / 4 GB | 2 vCPU ARM / 4 GB | 3 vCPU / 4 GB | 2 vCPU / 4 GB | ARM, up to 4 OCPU / 24 GB |
+| Specs | 2 shared vCPU / 4 GB | 2 vCPU ARM / 4 GB | 3 vCPU / 4 GB | 2 vCPU / 4 GB | ARM, 2 OCPU / 12 GB (4 / 24 under PAYG, eroding) |
 | Instance (1y commit) | $15.41 | ~$16 | $37.49 (no commit) | ~$24 (no commit) | $0 |
 | Boot disk 50 GB | $5.00 (pd-balanced) | $4.00 (gp3) | included (80 GB) | included | included (200 GB total free) |
 | Public IPv4 | $3.65 | $3.65 | $0.60 | included | $0 |
@@ -114,7 +114,7 @@ months).
 | Talos support | image upload | AMI upload | no ISO — rescue-mode dd / packer snapshot | **native custom ISO** | custom image (.oci qcow2), official guide |
 | Dual-stack, stable IPs | static v4 (Standard) + v6 (Premium) reservable | EIP + stable v6 | primary IPs detachable, v6 /64 free | reserved IPs (v4 + v6) | reserved v4; v6 on dual-stack VCN |
 | Additional IP (VIP fallback) | static IP + alias/forwarding rules | EIP re-assignable | floating v4 $3.50 / v6 $1.50 | reserved IP | reserved public IP |
-| Risk notes | v6-share billing unpredictable; CUD lock-in | KubeSpan metering kills it | 2 hikes in 18 mo; US traffic cut to 1–2 TB | legacy incumbent; pricing stable through 2024–2026 | **platform risk**: capacity hunts, 2026-06 free-tier halving (2→12 GB now; PAYG keeps 4/24), reports of account purges; PAYG conversion mitigates |
+| Risk notes | v6-share billing unpredictable; CUD lock-in | KubeSpan metering kills it | 2 hikes in 18 mo; US traffic cut to 1–2 TB | legacy incumbent; pricing stable through 2024–2026 | **platform risk**: capacity hunts, 2026 free-tier halving (Always-Free → 2 OCPU/12 GB, enforced 2026-08-18; PAYG holds 4/24 for now), reports of account purges; PAYG conversion mitigates |
 
 The KubeSpan row matters more for its *variance* than its magnitude:
 steady-state cross-site TX is ~150–250 GB/mo (re-measured 2026-08-22,
@@ -142,14 +142,23 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
     pulumi/terraform provider; and it is the *legacy incumbent* — the
     original "$30 baseline to beat" is beaten by simply right-sizing the
     plan on the same provider, with zero provider-migration risk.
--   **Oracle A1.Flex under PAYG (free, up to 4 OCPU / 24 GB, 10 TB)**:
-    the risk profile changes materially once the tenancy is converted to
-    Pay-As-You-Go with a card on file, *while still paying $0* for
-    Always-Free-shaped usage:
+-   **Oracle A1.Flex under PAYG (free, 10 TB egress)**: the risk profile
+    changes materially once the tenancy is converted to Pay-As-You-Go
+    with a card on file (one-time $100 verification hold, refunded),
+    *while still paying $0* for Always-Free-shaped usage:
+    -   **Design against 2 OCPU / 12 GB, treat 4 / 24 as an eroding
+        bonus.** The 2026 halving cut Always-Free tenancies to
+        2 OCPU / 12 GB (enforced by termination from 2026-08-18); PAYG
+        tenancies still hold 4 OCPU / 24 GB *as of August 2026*, but
+        contemporary coverage expects PAYG to converge to the same
+        limits eventually — the architecture must stay valid at 12 GB
+        (it does: platform floor ~2 GiB + cloud workloads + sidecar fit
+        with room to spare, §4.4). Mechanically the allowance is
+        1,500 OCPU-hours + 9,000 GB-hours/month across A1 VMs; PAYG is
+        billed (not killed) beyond it.
     -   PAYG tenancies are **exempt from the idle-reclaim policy** (the
         documented 7-day/95th-percentile-CPU rule targets Always Free
-        accounts), and the June 2026 free-tier halving applied to
-        Always-Free tenancies — PAYG kept the 4 OCPU / 24 GB allowance.
+        accounts).
     -   The reported no-warning account purges cluster heavily on
         free-only tenancies; a paying account has normal customer
         standing.
@@ -169,9 +178,10 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
 **Recommendation (revised 2026-08-22): OCI A1.Flex under PAYG as the
 cloud worker, with Vultr 4 GB as the scripted fallback.** The deciding
 observations: (a) the §4.4 analysis shows cloud-node size is dictated by
-the fixed platform floor, which a free 24 GB shape simply deletes as a
-concern — with room left to *relieve* homelab RAM pressure by placing
-more workloads cloud-side; (b) this cluster's Tier-0 posture (nodes.md
+the fixed platform floor, which a free 12–24 GB shape simply deletes as
+a concern — even the conservative 12 GB triples the paid alternative,
+with room left to *relieve* homelab RAM pressure by placing more
+workloads cloud-side; (b) this cluster's Tier-0 posture (nodes.md
 §5: everything declarative, drilled rebuild, backups off-site) is
 precisely the design that makes provider risk survivable — the Vultr
 fallback is a stack config flip plus a DNS diff, exercised as a drill
