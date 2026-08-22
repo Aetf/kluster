@@ -142,17 +142,41 @@ KubeSpan TX steady state, with multi-hundred-GB spike days):
     pulumi/terraform provider; and it is the *legacy incumbent* — the
     original "$30 baseline to beat" is beaten by simply right-sizing the
     plan on the same provider, with zero provider-migration risk.
--   **Oracle A1.Flex (free, 4 OCPU/24 GB, 10 TB)**: spec-dominant and $0,
-    but Oracle unilaterally halved the free tier in June 2026 and
-    reclaims/purges idle free tenancies; acceptable only with PAYG
-    conversion, and never as the sole public ingress.
+-   **Oracle A1.Flex under PAYG (free, up to 4 OCPU / 24 GB, 10 TB)**:
+    the risk profile changes materially once the tenancy is converted to
+    Pay-As-You-Go with a card on file, *while still paying $0* for
+    Always-Free-shaped usage:
+    -   PAYG tenancies are **exempt from the idle-reclaim policy** (the
+        documented 7-day/95th-percentile-CPU rule targets Always Free
+        accounts), and the June 2026 free-tier halving applied to
+        Always-Free tenancies — PAYG kept the 4 OCPU / 24 GB allowance.
+    -   The reported no-warning account purges cluster heavily on
+        free-only tenancies; a paying account has normal customer
+        standing.
+    -   The failure mode inverts: on a limits change, a PAYG tenancy gets
+        **billed instead of killed** — a survivable surprise, bounded by
+        billing alerts, versus a terminated node.
+    -   PAYG also opens *paid headroom on the same node*: extra A1 OCPUs/
+        RAM and block storage beyond the free 200 GB are metered cheaply
+        if ever needed.
+    -   Residual risks that don't go away: A1 **capacity hunts apply at
+        (re)creation time** (a running instance is safe; replacing it in
+        a full region may take days), Oracle's demonstrated appetite for
+        unilateral term changes, and ARM-only (fine for Talos and
+        everything in the current workload set; hath is Java, syncthing
+        Go — both multi-arch).
 
-**Recommendation: Vultr 4 GB as the cloud worker** (boring, cheap enough,
-known-good). Optional second step once the cluster is stable: add an
-Oracle A1 node as a *free experiment* — extra egress capacity, a
-cold-standby CP substrate (nodes.md §5 Tier 0), or public-ingress Tier 2 —
-designed so its disappearance is a non-event. Final call is the user's,
-at the end-of-design total-cost pass.
+**Recommendation (revised 2026-08-22): OCI A1.Flex under PAYG as the
+cloud worker, with Vultr 4 GB as the scripted fallback.** The deciding
+observations: (a) the §4.4 analysis shows cloud-node size is dictated by
+the fixed platform floor, which a free 24 GB shape simply deletes as a
+concern — with room left to *relieve* homelab RAM pressure by placing
+more workloads cloud-side; (b) this cluster's Tier-0 posture (nodes.md
+§5: everything declarative, drilled rebuild, backups off-site) is
+precisely the design that makes provider risk survivable — the Vultr
+fallback is a stack config flip plus a DNS diff, exercised as a drill
+like every other restore path. Final call is the user's at the
+end-of-design total-cost pass.
 
 ## 4. Homelab node(s)
 
@@ -234,8 +258,8 @@ answered with `kubectl top` on the legacy cluster (2026-08-22), of
 | --- | --- | --- |
 | k3s server + containerd (host procs) | ~1.7 GiB | Talos CP static pods ≈ same; no lever, accepted |
 | Monitoring (prometheus 948 Mi, grafana 428 Mi, exporters/operator/alertmanager ~200 Mi) | ~1.6 GiB | **switch to VictoriaMetrics** (vmsingle + vmagent + vmalert): PromQL-compatible, typically ~1/5 the RAM at this scale; grafana stays. Target ≤0.7 GiB |
-| Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | gone by design; one per-app sidecar mount ~0.2 GiB (storage.md §6) |
-| Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept minus sealed-secrets (secrets flow from Pulumi state directly) and the JuiceFS dashboard |
+| Shared-JuiceFS stack (CSI ×5, redis, 4 mount pods) | ~1.0 GiB | CSI/redis/dashboard gone by design; one per-app sidecar mount remains, **budgeted honestly at 0.5–1 GiB requests** — root cause (b) of the legacy instability was starving exactly this process (storage.md §6) |
+| Everything else in kube-system (coredns, metrics-server, cert-manager, sealed-secrets, nfd, local-path, reloader) | ~0.45 GiB | kept as-is — **sealed-secrets stays** (the secret-management model is unchanged from kluster-code); only the JuiceFS dashboard is dropped |
 | CNPG operator + traefik | ~0.3 GiB | CNPG stays; traefik → the two Envoy gateways (similar) |
 | **Total** | **~5 GiB (~30%)** | **projected ~4–4.5 GiB** |
 
@@ -248,11 +272,18 @@ component that idles waiting for rare events (mobility layers,
 dashboards nobody opens) is bought as a procedure (restore, redeploy)
 instead of a daemon.
 
-Cloud-node corollary: without Longhorn, the 4 GB instance carries
-Cilium + Envoy + kubelet (~1.5 GiB) + hath + syncthing/dav (+ sidecar)
-comfortably; a 2 GB instance (~$12 on Vultr) becomes a *plausible*
-economy fallback, though 4 GB stays the recommendation for page-cache
-headroom on hath's cache.
+Cloud-node corollary — and the real point of this section: **the cloud
+node's size is set by the fixed platform floor, not by workloads**.
+Talos base + kubelet + Cilium agent + Envoy is ~1.5–2 GiB before the
+first app pod; hath (~0.3) + syncthing/dav (~0.3) + the JuiceFS sidecar
+at its honest 0.5–1 GiB request then leave a 4 GB instance workable but
+snug, and make 2 GB marginal *regardless* of how few apps run there.
+Meanwhile the homelab side, though tighter on paper, is the flexible
+one: workloads can be trimmed, ARC squeezed, and RAM added (§4.2) —
+memory pressure there is real but manageable. Consequence: shrinking
+the cloud instance below 4 GB buys little and risks the platform floor;
+conversely a large-RAM free shape (OCI A1, §3.1) dissolves the tension
+entirely.
 
 ## 5. High availability, honestly
 

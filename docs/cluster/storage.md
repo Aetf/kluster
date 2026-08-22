@@ -204,9 +204,13 @@ because ~110 GB doesn't fit a small instance disk:
     single-instance Redis) on the cloud node's local disk**, mounted
     in-pod (sidecar), automatic metadata backup to the bucket. This kills
     root cause (a) *by construction* (no metadata hop ever crosses the
-    WAN), gives the mount dedicated per-app resources per root cause (b),
-    and satisfies every clause of the quarantine policy above — the
-    census becomes exactly **one**, and the CSI driver stays uninstalled.
+    WAN), and root cause (b) is answered by **honest sizing, not hope**:
+    the sidecar gets real requests/limits of **0.5–1 GiB** (legacy mount
+    pods idle at ~130 Mi but that idle figure is exactly what starved
+    them under load) — this number is in the cloud node's RAM budget
+    (nodes.md §4.4), not discovered in an incident. Satisfies every
+    clause of the quarantine policy above — the census becomes exactly
+    **one**, and the CSI driver stays uninstalled.
 -   **Alternative: s3ql** — an honest fit here since its single-mounter
     limitation is precisely the deployment shape (one syncthing writer).
     Kept as the named fallback rather than preferred: same FUSE-in-pod

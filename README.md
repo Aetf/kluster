@@ -87,9 +87,10 @@ Open items to settle before / during detailed design, roughly in order:
 6. **Cloud provider — reopened 2026-08-22** (docs/cluster/nodes.md §3.1,
    architecture.md §6.3): the 2026-08-21 Hetzner pick was voided by
    Hetzner's 2026-06-15 US price hike (CPX21 $14 → $38). Current
-   recommendation: **Vultr 4 GB (~$24, bundled TBs cover public +
-   KubeSpan traffic, native Talos ISO)**, optional Oracle A1 free node as
-   a later experiment. Awaiting user's final call.
+   recommendation: **OCI A1.Flex under PAYG ($0, 4 OCPU / 24 GB, 10 TB;
+   PAYG exempts idle-reclaim and kept the full free allowance), with
+   Vultr 4 GB (~$24) as the scripted fallback**. Awaiting user's final
+   call.
 7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
    port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
    (architecture.md §5.1).
