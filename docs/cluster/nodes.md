@@ -36,8 +36,8 @@ workloads. This means the cloud pool needs:
 -   Ability to boot **Talos Linux** — a hard filter: the provider must
     support custom images/ISOs (excludes AWS Lightsail and most managed
     VPS products).
--   **Disk**: ~50 GB boot per node; hath's cache as a block volume on its
-    pinned node. 3 × boot + hath ≈ the 200 GB free block allowance —
+-   **Disk**: ~50 GB boot per node; hath's cache as a block volume on
+    its gateway node. 3 × boot + hath ≈ the 200 GB free block allowance —
     slight paid overflow is cents (§3.2). etcd lives on the boot volume:
     **verify fsync latency <10 ms at bootstrap** (OCI Balanced block
     volumes are typically ~1–2 ms; this is a check, not an assumption).
@@ -435,8 +435,9 @@ by construction; Tier 0 remains the foundation everything else sits on:
     and the Cilium datapath don't need the API to keep forwarding.
 -   **Tier 2 — public-ingress HA (delivered by design)**: the NLB
     health-checks the three nodes; Envoy runs on all of them
-    (architecture.md §3.2–3.3). Only hath rides a single node by
-    protocol necessity.
+    (architecture.md §3.2–3.3). Only hath is single-instance by
+    protocol necessity (its dedicated VIP survives node loss; only the
+    cache volume ties it to a node at a time).
 -   **Tier 3 — control-plane HA (delivered by design)**: etcd quorum
     across the three cloud nodes, same region, same AD-or-better
     placement (spread across fault domains). Degradation ladder: lose

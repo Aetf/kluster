@@ -92,7 +92,9 @@ Open items to settle before / during detailed design, roughly in order:
    fallback. Control plane moves cloud-side (architecture.md §6.5 for
    the reversal rationale). Remaining bootstrap verifications: LB-IPAM
    pool containing node primary IPs; NLB dual-stack + source-preservation
-   semantics; etcd fsync on OCI block volumes; A1 capacity at creation.
+   semantics; etcd fsync on OCI block volumes; A1 capacity at creation;
+   Egress Gateway under the chosen routing mode + reserved-IP↔secondary-
+   private-IP NAT (the hath dedicated-VIP pattern, architecture.md §3.2).
 7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
    port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
    (architecture.md §5.1).

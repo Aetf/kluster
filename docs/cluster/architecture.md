@@ -55,7 +55,7 @@ graph TD
  subgraph "Cloud Site (OCI Ashburn, one VCN)"  
  NLB(OCI Network Load Balancer <br> free; stable public v4+v6 <br> DNS anchor; source-IP preserving)  
  CP1[cloud-1 CP+ingress <br> 1 OCPU / 8 GB]  
- CP2[cloud-2 CP+ingress <br> 1 OCPU / 8 GB <br> hath pinned here]  
+ CP2[cloud-2 CP+ingress <br> 1 OCPU / 8 GB <br> hath + its dedicated VIP]  
  CP3[cloud-3 CP+ingress <br> 1 OCPU / 8 GB]  
  NLB --> CP1  
  NLB --> CP2  
@@ -75,7 +75,7 @@ subgraph "Homelab Physical Server"
   
  %% Routing Flow  
  User -- "A/AAAA → NLB IP" --> NLB  
- User -- "hath: cloud-2 primary IP" --> CP2  
+ User -- "hath: dedicated reserved IP" --> CP2  
  DMSE -- "FRR BGP Peering (v4+v6)" --> Homelab_VM  
  DMSE --- ZT_Net  
    
@@ -196,11 +196,24 @@ Caveats accepted knowingly, each with a cheap fallback:
     multi-A/AAAA DNS straight at the three node primary IPs (loses
     health-checked failover, keeps everything else).
 
-**hath bypasses the NLB.** hath needs inbound and outbound on the same
-IP; node egress SNATs from the node's own primary IP, so hath is an
-ordinary LoadBalancer Service requesting *only its pinned node's*
-primary IP. Its protocol is DNS-free and tolerates IP change on the rare
-rebuild of that node (it re-registers).
+**Dedicated VIPs for same-IP workloads (hath).** Some protocols require
+inbound and *outbound* on one stable IP — no NLB can satisfy that
+(nothing can source traffic from the NLB's address). For these the
+`internet` pool carries a second address class: an OCI **reserved
+public IP** ($0, region-scoped, instance-independent) 1:1-NAT'd by OCI
+to a **secondary private IP** on some node's VNIC. Inbound: the
+workload's LoadBalancer Service requests that private IP from the pool
+— an ordinary Service. Outbound: a `CiliumEgressGatewayPolicy` with
+`egressIP` = the same private IP sources the workload's egress through
+it, which OCI NATs back to the reserved IP. In/out match, and the IP
+survives node replacement — re-homing is one Pulumi diff (reassign the
+reserved IP, move the policy), no re-registration, and the pattern is
+placement-agnostic (the pod may even run homelab-side; egress just
+crosses KubeSpan to the gateway node). hath is the only current user;
+its practical node-stickiness comes from its RWO cache volume, not
+from networking. Bootstrap verification: Egress Gateway under the
+chosen routing mode (tunnel-mode EGW needs Cilium ≥1.16) and the
+reserved-IP↔secondary-private-IP NAT semantics.
 
 **The management plane rides the same NLB**: listeners for 6443
 (kube-apiserver) and 50000 (Talos apid) across the three CP nodes give
@@ -274,18 +287,16 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
     "Outbound-only v6" is an acceptable first stage (peers are mostly
     reachable outbound; inbound v4 continues via the existing port
     forward).
--   **Stable-IP workloads (hath)**: hath requires its inbound port and
-    outbound connections on the same stable public IP. Placement: pinned
-    to one cloud node, LoadBalancer Service on that node's primary IP
-    only, NLB bypassed (§3.2); cache on the node's block volume; in/out
-    are naturally the same IP since egress SNAT uses the same primary
-    IP — no steering machinery at all. Fallback if its storage outgrows
-    the free block allowance: keep hath in the homelab and steer its
-    egress through a **Cilium Egress Gateway** policy via its cloud node
-    (SNAT over KubeSpan) — this replaces the legacy hand-rolled
-    WireGuard-gateway-pod + initContainer-route hack entirely. Egress
-    Gateway is v4-mature; v6 exists from Cilium 1.18 — irrelevant for
-    hath (v4-only).
+-   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
+    (§3.2) — reserved public IP in, Egress Gateway `egressIP` out, same
+    address both ways, independent of any node's lifecycle. The pattern
+    is placement-agnostic: hath normally runs on the VIP's gateway node
+    (cache locality, zero extra hops), but if its storage ever outgrows
+    the free block allowance it moves to the homelab with the *same*
+    Service and policy — egress simply crosses KubeSpan to the gateway
+    node. This one mechanism replaces both the legacy hand-rolled
+    WireGuard-gateway-pod hack and the earlier pinned-primary-IP
+    special case. Egress Gateway is v4-mature (hath is v4-only).
 
 ### 3.6 Workload Routing Decision Matrix
 
@@ -299,11 +310,11 @@ Deploying an app now answers exactly two questions — *which pool(s)* and
 | Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
 | Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service + NLB listener |
 | LAN raw TCP/UDP | `lan` | LoadBalancer Service |
-| hath | `internet` | LoadBalancer Service on its pinned node's primary IP, NLB bypassed (§3.2) |
+| Same-IP-in/out (hath) | `internet` | LoadBalancer Service on a dedicated VIP + EgressGatewayPolicy (§3.2) |
 
-Placement (which node runs the pods) is orthogonal — set by scheduling
-constraints, with §3.5's egress rules deciding it for bulk-egress and
-stable-IP workloads.
+Placement (which node runs the pods) is orthogonal for every row — set
+by scheduling constraints, with §3.5's egress rules deciding it for
+bulk-egress workloads and storage locality deciding it for hath.
 
 ## 4. Security & Observability
 
