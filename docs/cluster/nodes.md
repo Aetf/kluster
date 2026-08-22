@@ -264,6 +264,49 @@ hedge against the A1 re-creation capacity hunt at worst-case ~$47/mo
 for 4/24; not recommended (the Vultr fallback is cheaper insurance),
 but it exists if OCI ever becomes load-bearing.
 
+**The $15/mo budget (accepted posture: "we always pay something").**
+A1 billing is *fungible*: OCPU-hours and GB-hours accrue per tenancy
+across all A1 instances, free tier subtracted from the totals — so
+shapes are freely splittable across nodes. At 744 h/mo the marginal
+prices are **$7.44 per always-on OCPU** and **$1.116 per always-on GB**.
+What ~$15/mo over the free pool buys:
+
+| Free pool assumed | +$15/mo gets (examples, totals) |
+| --- | --- |
+| 1,500/9,000 (conservative: 2 OCPU/12 GB) | **3 OCPU/18 GB** ($14.14) · 4 OCPU/12 GB ($14.88) · 2 OCPU/25 GB ($14.51) |
+| 3,000/18,000 (current billing: 4 OCPU/24 GB) | 5 OCPU/30 GB · 6 OCPU/24 GB · 4 OCPU/37 GB — all ≈$14–15 |
+
+Note the estimator still prices 4 OCPU/24 GB at $0 because the price
+API's free tiers are still 3,000/18,000 (data stamped 2026-08-14) while
+the docs already say 1,500/9,000 — docs-first rollout of the halving.
+Plan on the conservative row; enjoy the current row while it lasts.
+
+**Design consequence — a two-node cloud pool (recommended).** Since
+billing doesn't care how the OCPUs are split, split them:
+**node A 2 OCPU/12 GB (primary: hath pinned, JuiceFS sidecar, Envoy) +
+node B 1 OCPU/6 GB (second ingress: Envoy, syncthing/dav, overflow)**
+= 3 OCPU/18 GB total → **$0 today, ~$14.14/mo if the halving reaches
+PAYG** — exactly the budget. This buys, for free-to-$15:
+
+-   **Public-ingress HA (Tier 2, previously deferred)**: §5's "costs one
+    more instance + IPv4" objection dissolves — on OCI both are $0. Two
+    nodes behind the **free NLB** (single stable public IP, L3/4
+    pass-through so client IPs survive, health-checked) or plain
+    multi-A/AAAA DNS; hath bypasses the NLB on node A's primary IP
+    (same-IP in/out unaffected).
+-   **Maintenance without public downtime**: drain/upgrade one cloud
+    node while the other serves — previously impossible cloud-side.
+-   **A continuous capacity hold**: the practical mitigation for the A1
+    re-creation hunt is *never needing to create both at once*; losing
+    one node leaves ingress up while the replacement hunts.
+
+Cost honesty (per §4.4's own rule): the second node pays ~1.5–2 GiB
+platform floor out of 6 GB, and one more Talos node to keep patched.
+The rent it pays is ingress HA + drain freedom + capacity hold —
+standing benefits, so it passes the standing-rent test. Final shape
+(1×4/24 vs 2/12+1/6) is a bootstrap-time choice; the architecture
+supports both (architecture.md §3.2).
+
 **Gotchas registry**: new-tenancy service limits are low and free-tier
 limit increases are often refused (PAYG requests go through); Always
 Free resources are mostly home-region-locked and the home region is
@@ -402,10 +445,12 @@ makes cross-site Raft good. What HA means here, in tiers:
     stateless apps ×2). A control-plane outage does not stop running
     workloads — kubelet static pods and Cilium keep forwarding; what stops
     is scheduling and API access.
--   **Tier 2 — public-ingress HA (deferred option)**: DNS points at one
-    cloud node; that node is a SPOF for public HTTP. If that ever matters,
-    add a second small cloud instance in another zone + health-checked DNS.
-    Costs one more instance + IPv4. Not in the initial build.
+-   **Tier 2 — public-ingress HA (un-deferred on OCI, 2026-08-22)**:
+    originally deferred because it "costs one more instance + IPv4" —
+    on OCI both are $0 and the free NLB provides the single stable
+    front IP. The recommended two-node cloud pool (§3.2, node A 2/12 +
+    node B 1/6) delivers this tier within the $15/mo posture. On the
+    Vultr fallback this tier re-defers (a second paid instance).
 -   **Tier 3 — control-plane HA (rejected again)**: 3 CP VMs on the single
     Homelab host protect only against guest-OS crashes while tripling etcd's
     RAM/IO footprint on one physical SPOF; 3 CP nodes across sites is §6.2.

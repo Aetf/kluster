@@ -183,6 +183,15 @@ class, claiming only the declared service ports and leaving host traffic
     (§5.1) — the change is one previewed diff, and hath tolerates IP
     changes (it re-registers).
 
+**Two-node cloud pool variant** (nodes.md §3.2, recommended on OCI):
+the `internet` pool then contains both cloud nodes' primary IPs; a free
+OCI Network Load Balancer (L3/4 pass-through, client IPs preserved,
+health checks) provides the single DNS-stable front IP for HTTP and
+shared-VIP TCP/UDP across both nodes, while hath stays pinned to node
+A's primary IP directly (same-IP in/out bypasses the NLB). On a
+single-node provider (Vultr fallback) the design degrades gracefully to
+the one-node description above.
+
 **Escape hatch — client-IP-sensitive non-HTTP on the homelab pool**: if a
 raw TCP/UDP service ever both needs real client IPs *and* must run
 homelab-side (too big for the cloud node), the cloud VIP can't serve it
