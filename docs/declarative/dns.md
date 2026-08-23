@@ -24,18 +24,25 @@ stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
 `dns` for zone IDs and `dns` references `physical` for anchor IPs.
 
 The `dns` stack owns: zone resources, the estate records above, the
-**anchors** (§2), and the reusable per-zone mail component (the current
-SPF is a single include and DMARC a static TXT — plain records, no need
-to re-create dnscontrol's builders).
+**anchors** (§2), and a reusable per-zone mail component
+(MX/SPF/DKIM/DMARC). Verified 2026-08-22: no ready-made Pulumi
+SPF/DMARC tooling exists — the ecosystem offers only raw record
+resources and officially recommends wrapping your own component — and
+none is needed: the current SPF is a single include (no flattening) and
+DMARC a static TXT. One implementation gotcha on record: quote TXT
+values so SPF strings don't get split on spaces.
 
 ## 2. Naming hierarchy (formalizing the existing conventions)
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live
     convention (`archvps.hosts`). **IP literals exist only here**, with
     low TTLs. New estate: `kluster.hosts` → the NLB (A/AAAA, from
-    physical outputs), `vip1.hosts` → the dedicated VIP (operator
-    convenience; hath itself needs no DNS), `abacus.hosts` unchanged;
-    `archvps.hosts` retires with the legacy VPS.
+    physical outputs) and `vip1.hosts` → the dedicated VIP (operator
+    convenience; hath itself needs no DNS). Retired at absorption:
+    `archvps.hosts` (with the legacy VPS) and `abacus.hosts` (machine
+    no longer exists — its dependents in the current file, the Abacus
+    ZT entry and the jupyter/mc records, are dead weight to drop during
+    the import census).
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged (private IPs
     in public DNS, deliberate and existing practice).
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
@@ -73,16 +80,43 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     rewrite because it never writes it by hand. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
 
-## 4. The one-line helpers
+## 4. LAN DNS: three name planes
+
+LAN-side naming is absorbed into the same design, split by what each
+plane names:
+
+1.  **Device plane — `home.arpa` (main VLAN) and `iot.home.arpa` (IoT
+    VLAN)**: device hostnames, DHCP-derived and served by the UDM's
+    resolver as today. Inherently dynamic — not Pulumi-managed; any
+    *static* host entries that prove necessary go through the unifi
+    provider.
+2.  **Service plane — public-zone names, resolved via AdGuard**:
+    every LAN-reachable service uses its *public* hostname
+    (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN/ZT clients to the
+    `lan` VIP. **LAN-only services are rewrite-only**: the helper emits
+    the AdGuard rewrite and the `lan-gw` route but *no* Cloudflare
+    record — public resolvers see NXDOMAIN, while cert-manager DNS-01
+    still issues real certificates for the name (challenge records
+    don't require the name itself to be published).
+3.  **`lan.ucw.phd` retires.** Its two historical roles are both
+    superseded: split-horizon duplicates collapse into the rewrites on
+    the public names, and LAN-only names become rewrite-only names in
+    the public zones (with proper TLS, which `lan.` names never had
+    cleanly). The zone's entries are dropped one-by-one as each app
+    migrates, like the archvps repointing.
+
+## 5. The one-line helpers
 
 `public_route(host=…, zones=…, proxied=…)` on the app component base
 emits the coherent set: HTTPRoute (to `internet-gw`, `lan-gw`, or both
 per the §3.6 matrix), the CNAMEs across the zone set, and — for
-both-gateway apps — the AdGuard rewrites. `public_port(…)` is the raw
-TCP/UDP analog, additionally emitting the NLB listener and its security
-rule (physical.md §1's derived-not-enumerated principle).
+both-gateway apps — the AdGuard rewrites. `lan_route(host=…)` is the
+LAN-only variant (rewrite + `lan-gw` route, no public record, §4).
+`public_port(…)` is the raw TCP/UDP analog, additionally emitting the
+NLB listener and its security rule (physical.md §1's
+derived-not-enumerated principle).
 
-## 5. Migration shape
+## 6. Migration shape
 
 Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app migrates, then its component declares

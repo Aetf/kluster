@@ -129,12 +129,16 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 
 ## 4. UDM (gw-config dynamic provider + pulumiverse/unifi)
 
-Per architecture.md §5.2: the gw-config provider (SSH, `/data`,
-idempotent diff/apply, post-apply hooks) manages FRR/BGP (neighbor =
-the worker VM's IP from the libvirt resource) and the nspawn estate
-(units + digest-pinned rootfs from homelab-containers CI); the regular
-unifi provider manages firewall rules (lan-pool subnet policy, the
-qbittorrent v6 pinhole). No port forwards exist.
+Per architecture.md §5.2 (full push-direction absorption): the
+gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
+hooks) manages the device's entire desired state — FRR/BGP (neighbor =
+the worker VM's IP from the libvirt resource), the nspawn estate
+(units + digest-pinned rootfs from homelab-containers CI), on_boot.d,
+caddy, AdGuard static configs, secrets. The gw-config repo retires;
+periodic backup *pulls* move to a yadm timer on the homelab host. The
+regular unifi provider manages firewall rules (lan-pool subnet policy,
+the qbittorrent v6 pinhole) and any static LAN host entries
+(dns.md §4). No port forwards exist.
 
 ## 5. B2 (bridged provider)
 

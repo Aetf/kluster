@@ -394,15 +394,21 @@ drives gw-config**:
     apply hook for FRR proves fragile, fall back to writing the file and
     surfacing a "reload needed" diff — still one source of truth, one less
     manual upload.
--   **Scope**: the provider manages the cluster-driven config (FRR/BGP,
-    the ZT-to-pool route) **and the gw's nspawn estate** — unit files,
-    wants-symlinks, and rootfs image pushes for the containers living on
-    the UDM (AdGuard alice/bob, caddy), whose images already come from
-    `~/homelab-containers`. That turns the "deploy.sh + manual restart"
-    loop into previewed Pulumi diffs. Firewall-rule needs (e.g. the
-    qbittorrent v6 pinhole, §3.5) go through the regular unifi provider,
-    not this one. Secrets/backup pulls stay in the gw-config repo's own
-    tooling for now.
+-   **Scope — full absorption of the push direction (2026-08-22)**:
+    the provider manages *all* desired-state files on the device —
+    FRR/BGP, the nspawn estate (unit files, wants-symlinks, rootfs
+    image pushes for AdGuard alice/bob and caddy, images from
+    `~/homelab-containers`), the on_boot.d recovery scripts (pushed
+    files that execute autonomously at firmware updates — Pulumi need
+    not be present at boot), caddy config, AdGuard static configs, and
+    device-side secrets (from Pulumi config secrets). **The gw-config
+    repo retires** with a pointer commit (the old-tracker rule) — one
+    source of truth per device. The only survivor outside Pulumi is the
+    *pull* direction (periodic UniFi-autobackup and config-snapshot
+    retrieval): that is a scheduled job, not desired state, and moves
+    to a yadm-managed timer on the homelab host. Firewall-rule needs
+    (e.g. the qbittorrent v6 pinhole, §3.5) go through the regular
+    unifi provider, not this one.
 -   **Images: Pulumi pins and deploys, CI builds.** Image *building* stays
     in homelab-containers' CI (renovate keeps bases fresh; builds are
     slow, cache-dependent, and don't belong inside `pulumi up` —
