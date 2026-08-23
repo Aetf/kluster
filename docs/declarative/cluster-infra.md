@@ -66,7 +66,7 @@ empty cluster:
     its routing ported from the legacy config (Home Assistant push),
     stays in the stack (~70 Mi, earns its rent as the alerting spine).
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
-    flips vfio on the homelab worker (physical.md §3), present from
+    flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0 so the cutover needs no k8s-base change.
 8.  **The small standing set the legacy cluster already proved**
     (nodes.md §4.4 counted them as "kept as-is" but this list never

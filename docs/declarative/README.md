@@ -12,7 +12,10 @@ Documents (created as each area reaches detailed design):
 -   **[physical.md](physical.md)** (written) — the `physical` stack:
     OCI resources + Talos day-1 via pulumiverse-talos (day-2 stays
     talosctl), libvirt worker VM + adopted HAOS, gw-config/unifi on the
-    UDM, B2, bootstrap order + verification checklist.
+    UDM, B2, bootstrap order + verification checklist. The physical
+    *systems* it declares are designed in
+    [../physical/](../physical/) (state-backend appliance, homelab
+    host & VM) — this doc stays about how they're declared.
 -   **[dns.md](dns.md)** (written) — the fourth stack: zones + estate
     records + anchors in `dns`, per-app CNAMEs in `apps` (zone sets
     replace the alias-domain copy-paste), split-horizon via direct

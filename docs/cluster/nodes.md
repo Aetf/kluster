@@ -313,7 +313,8 @@ ever get used.
 ## 4. Homelab node(s)
 
 The Homelab side runs on the existing physical server under libvirt
-(pulumi-libvirt, macvlan/bridge to LAN per architecture.md §5). Sizing is
+(pulumi-libvirt; the VM's concrete disk/network/GPU shape is
+physical/homelab-host.md). Sizing is
 derived from a host inventory, not guessed.
 
 ### 4.1 Host inventory (measured 2026-08-22, Aetf-Arch-Homelab)
@@ -348,7 +349,7 @@ thread-dashboard. distccd is retired or containerized opportunistically.
 UHD 770 into the Talos VM (host is headless) + Intel device plugin in
 the guest; fallback is CPU transcode at reduced quality-of-life. The
 capability is verified early on a scratch VM; the actual bind is a
-scheduled migration cutover (physical.md §3, migration.md Wave C).
+scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
 
 ### 4.2 VM sizing
 
@@ -363,7 +364,7 @@ scheduled migration cutover (physical.md §3, migration.md Wave C).
     upgrade remains the relief valve** (board verified: ROG Maximus
     Z690 Hero, DDR5, 4×DIMM up to 128 GB).
 -   **Disk**: target 100+ GB on NVMe (concrete shape — raw sparse file
-    on a nodatacow subvolume, virtio-blk — physical.md §3), but only ~85 GB is free
+    on a nodatacow subvolume, virtio-blk — physical/homelab-host.md §1), but only ~85 GB is free
     while both clusters coexist. The migration plan must interleave
     reclamation (legacy images, local-path PVCs, prometheus's 30 GB)
     with VM growth — start at ~60 GB, grow after cutover. (No etcd on

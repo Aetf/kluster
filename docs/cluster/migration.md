@@ -42,7 +42,7 @@ owns sequencing, data movement, and teardown.
     permanent), the state-backend micro + Postgres + pg_dump timer
     (ci.md §1), Talos OCI image via Image Factory, the homelab
     host-prep aconfmgr change-set (bridge, subvolume/storage pool,
-    libvirt SSH identity, NFS exports — physical.md §3). ZeroTier
+    libvirt SSH identity, NFS exports — physical/homelab-host.md §4). ZeroTier
     Central config is Pulumi-managed (architecture.md §5.3); the
     legacy `10.42.0.0/24`-via-VPS managed route is deleted in Wave F.
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
@@ -85,7 +85,7 @@ the VPS empties progressively):
     NAS share once), the haos.ucw LAN-device backend (workloads.md §4),
     thread-dashboard (quadlet → cluster).
 -   **Wave C — homelab heavy + the GPU window**: the vfio-pci cutover
-    (drain → bind → hostdev → reboot, physical.md §3) runs at the head
+    (drain → bind → hostdev → reboot, physical/homelab-host.md §3) runs at the head
     of this wave, then immich (CNPG via the drilled barman restore; NAS
     media PVs re-point in place; ML/thumbnail caches re-derive) and
     jellyfin+shoko (NAS re-point + config PVC copy). syncthing-nas

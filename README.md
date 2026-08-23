@@ -62,6 +62,10 @@ docs: physical, dns, cluster-infra, workloads).
   state-backend appliance (FCOS on the OCI micro): config management,
   Postgres lifecycle, PKI, NSG posture, backup, monitoring, and the
   operational playbooks.
+- [docs/physical/homelab-host.md](docs/physical/homelab-host.md) — the
+  homelab host & worker VM system design: disk shape (nodatacow raw +
+  virtio-blk), the second host bridge, two-phase GPU passthrough, the
+  host-prep change-set.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
   `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
   layering (§3). Start here; §1.4 has cookbook examples.
@@ -145,7 +149,7 @@ first-session implementation tasks, roughly in order:
    (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
    verification checklist (physical.md §6) — every item verified before
    any app migrates. Includes the homelab host-prep aconfmgr change-set
-   and the ZeroTier Central manual items (physical.md §3/§6).
+   and the ZeroTier Central manual items (physical/homelab-host.md §4, declarative/physical.md §6).
 5. **CI workflows** per framework/ci.md §3, plus the ported+upgraded
    **`images.yml`** (multi-arch via native arm64 runners, CNPG images
    wired in — ci.md §4); **`packages/crds` regen** for the new chart

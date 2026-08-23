@@ -233,10 +233,10 @@ libvirt SSH. *Lives in* architecture.md §5.3, ci.md §2.
 
 ### L6 — libvirt SSH identity is root-equivalent
 
-physical.md §3's "libvirt group, no root" is effectively root — domain
+physical/homelab-host.md §4's "libvirt group, no root" is effectively root — domain
 XML can map any host device/disk. Not a design change; the identity is
 guarded at the UDM-key tier, stated so it isn't treated as an
-unprivileged account. *Lives in* physical.md §3.
+unprivileged account. *Lives in* physical/homelab-host.md §4.
 
 ### L7 — haos.ucw ingress change needs HA `trusted_proxies`
 
@@ -250,7 +250,7 @@ workloads.md §4.
 
 The libvirt nocloud seed carries the worker's machine secrets. Root-only
 permissions, excluded from every host snapshot/backup scope (same
-subvolume discipline as the VM image). *Lives in* physical.md §3.
+subvolume discipline as the VM image). *Lives in* declarative/physical.md §3.
 
 ### L9 — KubeSpan discovery is an external dependency
 
