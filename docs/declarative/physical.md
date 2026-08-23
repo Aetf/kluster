@@ -156,9 +156,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     tap — but the existing `kvmbr0` enslaves the **IoT VLAN**
     (192.168.90.0/24), which is where HAOS belongs with its devices
     and where the worker VM does not. The worker joins the host's
-    untagged **server VLAN** (192.168.80.0/24 — the host, NAS serving,
-    and the UDM BGP session all live there), which today has **no
-    bridge**: `enp7s0` carries the host address directly. So the host
+    untagged network — the **default LAN, br0 on the UDM**
+    (192.168.80.0/24; the host, NAS serving, and the UDM BGP session
+    all live there) — which today has **no bridge** on the host:
+    `enp7s0` carries the host address directly. So the host
     network config (aconfmgr-managed systemd-networkd) gains a second
     bridge (say `kvmbr1`) enslaving `enp7s0`, with the host's
     address/DHCP moving onto the bridge — one brief connectivity blip,
@@ -207,9 +208,13 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     tuning pass until `preview` is clean, and verify the import early
     (a botched diff must never propose replacing this domain; its
     resource is `protect=True` like every data-bearing resource).
-    Fallback if import proves unworkable: HAOS simply stays outside
-    Pulumi as a virsh-defined domain — adoption is a nicety, not a
-    dependency.
+    **Adoption is mandatory** (decided 2026-08-23) — HAOS does not stay
+    outside Pulumi. If import proves unworkable, the fallback is a
+    **definition-layer takeover in a short scheduled window**: shut
+    HAOS down, let Pulumi define the domain fresh pointing at the
+    *existing* disk volumes and passthrough devices (the qcow2 and USB
+    controller are the identity; the domain XML is just metadata),
+    boot. Data is never migrated or recreated either way.
 
 ## 4. UDM (gw-config dynamic provider + pulumiverse/unifi)
 
@@ -217,8 +222,13 @@ Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
 hooks) manages the device's entire desired state — FRR/BGP (neighbor =
 the worker VM's IP from the libvirt resource), the nspawn estate
-(units + digest-pinned rootfs from homelab-containers CI), on_boot.d,
-caddy, AdGuard static configs, secrets. The gw-config repo retires;
+(units + digest-pinned rootfs from homelab-containers CI — including
+the **ZeroTier member container**, host-networking + `/dev/net/tun` +
+`/data`-persisted identity, architecture.md §5.3), on_boot.d,
+caddy, AdGuard static configs, secrets. ZT Central's network config
+(managed routes via the UDM member, member authorizations) is managed
+from the `physical` stack via the bridged `zerotier/zerotier`
+provider (architecture.md §5.3). The gw-config repo retires;
 periodic backup *pulls* move to a yadm timer on the homelab host. The
 regular unifi provider manages firewall rules (lan-pool subnet policy,
 the qbittorrent v6 pinhole) and any static LAN host entries
@@ -237,12 +247,11 @@ configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
 NLB and gw-config/FRR settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG, the state-backend micro
-(ci.md §1), the homelab host-prep change-set (§3), and two ZeroTier
-Central items (not Pulumi-managed): the CI ephemeral-member
-pre-authorization and the **managed route for the `lan` pool subnet**
-via the UDM's ZT member — without it roaming ZT clients never reach
-the `lan` VIPs (architecture.md §3.4 covers only the UDM side of that
-path).
+(ci.md §1), and the homelab host-prep change-set (§3). ZeroTier
+Central config (managed routes via the UDM member, CI member pre-auth)
+is Pulumi-managed via the bridged zerotier provider (architecture.md
+§5.3); only if that bridge proves unusable do those two settings fall
+back to hand-kept manual preconditions.
 
 Bootstrap-time verifications (carried from README #6 + this doc): LB
 IPAM pool containing node primary IPs; NLB dual-stack listeners +

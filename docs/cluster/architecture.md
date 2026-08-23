@@ -260,10 +260,21 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
 2.  **BGP session**: CiliumBGPPeeringPolicy peers with the UDM SE (FRR,
     AS 65000) over both address families, advertising Service VIPs as
     /32 + /128 (§5.2 automates the UDM side).
-3.  **Router config**: the UDM must (a) route the ZeroTier subnet to the
-    pool, and (b) have firewall rules for the new subnet — BGP-learned
-    routes bypass VLAN isolation defaults, so inter-VLAN policy must name
-    `192.168.70.0/24` explicitly.
+3.  **Firewall semantics of the routed pool** (ground truth read off the
+    UDM's iptables, 2026-08-23): UniFi's zone firewall classifies
+    forwarded traffic by **destination ipset**, not interface pairs —
+    all three VLANs (br0/br2/br5) sit in the LAN zone and LAN→LAN is an
+    unconditional predefined ACCEPT (no inter-VLAN isolation is
+    configured today). `192.168.70.0/24` is *not* a network object, so
+    it appears in no zone ipset: LAN-sourced traffic to the pool falls
+    through to the **LAN→WAN policy chain** (currently also ACCEPT).
+    Consequences: (a) no allow rules are needed today; (b) the pool
+    inherits WAN-zone side effects — if IPS/content filtering/geoip
+    ever applies to LAN→WAN, it silently applies to cluster VIP
+    traffic (**bootstrap verification: confirm no NAT/IPS interference
+    on the LAN→pool path**); (c) any future tightening of zone policy
+    must name `192.168.70.0/24` via an address group, since no network
+    object will ever exist for it.
 4.  **Split-horizon DNS**: AdGuard (alice/bob) rewrites public hostnames to
     `lan` VIPs so LAN/ZT clients reach apps (immich!) directly, never via
     the cloud path — preserving the legacy cluster's hard-earned rule that
@@ -361,20 +372,21 @@ The entire stack is deployed via Pulumi using multiple providers:
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.
 3.  **UniFi (pulumiverse/unifi)**: firewall rules and the one surviving
-    port-forward — the `lan` pool subnet policy (§3.4), the qbittorrent
-    v6 pinhole (§3.5), the **inter-VLAN allows for cluster→IoT-VLAN
-    consumers** (each declared beside its app, the co-location
-    principle: the haos.ucw backend reaching HAOS, alertmanager's Home
-    Assistant push, thread-dashboard reaching the OTBRs — BGP/routed
-    traffic bypasses VLAN-isolation defaults only for the pool subnet;
-    pod-SNAT'd traffic from the worker VM's VLAN to the IoT VLAN needs
-    ordinary inter-VLAN policy), and **qbittorrent's pre-existing v4
+    port-forward — the `lan` pool address-group policy (§3.4), the
+    qbittorrent v6 pinhole (§3.5), and **qbittorrent's pre-existing v4
     peer-port forward** (workloads.md §4 — an app-traffic inheritance,
-    now declared instead of hand-kept). **No management inbound exists
-    at the home network**: the control plane lives cloud-side, the
-    homelab worker dials out (KubeSpan), and management traffic
-    terminates at the NLB. Personal devices continue to reach LAN
-    services over ZeroTier.
+    now declared instead of hand-kept). Cross-VLAN flows the cluster
+    depends on (the haos.ucw backend reaching HAOS on the IoT VLAN,
+    alertmanager's Home Assistant push, thread-dashboard reaching the
+    OTBRs) need **no rules today** — §3.4's measured fact is that
+    LAN→LAN is an unconditional ACCEPT — but they are **dependencies
+    on record**: each app component documents its cross-VLAN flow, so
+    if inter-VLAN isolation is ever introduced, the allows to declare
+    are already enumerated in the code rather than rediscovered by
+    outage. **No management inbound exists at the home network**: the
+    control plane lives cloud-side, the homelab worker dials out
+    (KubeSpan), and management traffic terminates at the NLB. Personal
+    devices reach LAN services over ZeroTier (§5.3).
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move
     into Pulumi — zones/estate/anchors in the `dns` stack, per-app
     records beside their apps (declarative/dns.md). The standalone
@@ -430,6 +442,60 @@ drives gw-config**:
     workloads); bumping the pin is the previewed, reviewable deploy
     event. Same discipline as the mise commit-pin pattern already used
     for homelab-ops tooling.
+
+### 5.3 ZeroTier terminates on the UDM (decided 2026-08-23)
+
+**The UDM runs the ZeroTier daemon as a standing member and is the home
+side's ZT router.** Today's shape — the homelab host as the only home
+member, and a single ZT managed route (`10.42.0.0/24` via the legacy
+VPS, for the old cluster's pod subnet) — means ZT clients have *no*
+route to the home LANs at all, and every design that adds one through
+the host would put a single non-gateway machine on the management data
+path. Moving the daemon to the UDM puts ZT termination where routing
+already lives:
+
+-   **Routes become trivial**: ZT Central managed routes for the three
+    VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.80.0/24`,
+    `192.168.90.0/24`, `192.168.70.0/24` + its ULA /64) all via the
+    UDM's ZT address. The UDM reaches the pool through its own
+    BGP-learned route (§3.4) — one hop, no host in the path. The
+    legacy `10.42.0.0/24`-via-VPS route retires with the VPS.
+-   **Management-path independence**: CI's per-run ZT join (ci.md §2)
+    and roaming personal devices reach the UDM (SSH, AdGuard APIs) and
+    everything behind it even when the homelab host is down — matching
+    the CP-in-the-cloud principle that no single home machine gates the
+    management plane. The host keeps plain ZT membership (direct
+    address, useful as a fallback path) but loses any router role.
+-   **Deployment shape**: a fourth member of the existing nspawn estate
+    (alpine rootfs from homelab-containers CI, unit + config via the
+    gw-config provider, on_boot.d recovery like the others), but with
+    **host networking** (`VirtualEthernet=no`) — the `zt*` interface
+    must land in the main netns for the UDM to route through it — plus
+    `/dev/net/tun` device access (present on the UDM, verified
+    2026-08-23) and identity persisted under `/data`. Fallback if
+    host-networking nspawn misbehaves: the unifios-utilities pattern
+    (apt install re-run from on_boot.d — package reinstall on firmware
+    update is already proven working on this device).
+-   **Firewall fact on record**: the UBIOS zone firewall classifies by
+    known interfaces/ipsets; `zt*` interfaces match neither, so
+    ZT-forwarded traffic rides the FORWARD chain's default ACCEPT —
+    unpoliced, accepted knowingly (ZT membership is the auth boundary).
+-   **ZT Central config joins Pulumi**: network managed routes and
+    member authorizations (including the CI ephemeral-member pre-auth)
+    via the official `zerotier/zerotier` Terraform provider through
+    Pulumi's any-Terraform-provider bridge, in the `physical` stack —
+    implementation-time verification: bridge quality of that provider;
+    fallback is the two hand-kept Central settings documented as manual
+    preconditions (physical.md §6).
+
+Alternative considered — **BGP-advertising the ZT subnet from the
+homelab host** (host stays ZT router, FRR/bird on the host peers with
+the UDM): solves only the return-route half that a single static route
+already covers, keeps the host on the data path for every ZT client,
+and adds a second BGP peer for a subnet that never changes. Rejected;
+likewise plain status quo (host router + static route) — functionally
+adequate but it couples the remote-management path to one non-gateway
+machine, exactly what the rest of the design just removed.
 
 ## 6. Alternatives Considered
 
