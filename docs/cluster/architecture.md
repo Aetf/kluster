@@ -421,11 +421,44 @@ producer paths exist by necessity, not preference:
 
 The shared convention is what makes the two paths one channel: a push
 reads identically regardless of origin, and always names its
-playbook. **Known limitation, on record**: the channel terminates on
-the home network — a home outage silences it exactly when a
-homelab-down alert would fire. The out-of-band candidate (OCI
-Notifications' free tier, nodes.md §3.2) remains a recorded option,
-deliberately not wired until the single-channel gap actually bites.
+playbook.
+
+**Two delivery tiers + the GitHub-issue leg (2026-08-24).** The
+payload convention carries a tier, and the tier decides delivery:
+
+-   **`notify`** (informational, self-resolving): HA push only.
+-   **`actionable`** (has a playbook, needs a human): HA push **and
+    a GitHub issue in this repo** — deduplicated by alert identity
+    (one open issue per firing alert; body = summary + playbook
+    link), closed by the human as the playbook completes. The issue
+    is the durable form of the alert: it survives a missed push,
+    tracks that the response actually happened, and — because GitHub
+    natively e-mails issue notifications — **it is also the e-mail
+    fallback, with no SMTP credential anywhere**. If the HA webhook
+    itself fails, the producer escalates the alert to an issue
+    regardless of tier: that is the fallback semantic.
+
+Producer mechanics, chosen to add **zero standing components**:
+
+-   **CI side**: a shared workflow step — try the HA webhook; open
+    the deduplicated issue for `actionable` (or on webhook failure)
+    with the built-in `GITHUB_TOKEN`. No new credentials.
+-   **Cluster side**: alertmanager's second receiver posts a
+    `repository_dispatch` to this repo; a small workflow receives it
+    and does the same dedup + issue creation. GitHub Actions *is*
+    the bridge — no in-cluster issue-bot to run. Cost: one
+    fine-grained PAT (this repo, contents:write) as a SealedSecret —
+    an expiring credential with a rotation-register entry (GitHub
+    e-mails ahead of expiry). A GitHub App was considered and
+    rejected as ceremony for one endpoint.
+
+This narrows the old single-channel limitation: any producer that
+can reach GitHub now delivers even when the home network (and HA
+with it) is down — the failure domain of the *interactive* push no
+longer silences the *durable* leg. Residual: a producer that can
+reach neither GitHub nor HA is silent; the out-of-band candidate
+(OCI Notifications' free tier, nodes.md §3.2) stays recorded,
+deliberately unwired until that residual actually bites.
 
 ## 5. Infrastructure as Code (Pulumi Implementation)
 

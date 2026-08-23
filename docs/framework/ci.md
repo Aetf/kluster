@@ -136,8 +136,9 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
     backend's server-cert expiry probe (≥30 days remaining;
     physical/state-backend.md §6, playbooks §7),
     failing into the **out-of-cluster half of the unified alert
-    channel** (direct HA webhook, same payload convention as
-    alertmanager — architecture.md §4.3), like deploy failures — the out-of-cluster mirror of
+    channel** (a shared workflow step: HA webhook + deduplicated
+    GitHub issue for actionable tier or on webhook failure —
+    architecture.md §4.3), like deploy failures — the out-of-cluster mirror of
     the in-cluster backup-freshness alert family
     (cluster-infra.md §3).
 

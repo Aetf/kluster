@@ -68,7 +68,9 @@ empty cluster:
     spine). This is the **in-cluster half of the unified alert
     channel** (architecture.md §4.3): same HA endpoint and payload
     convention as the CI-side producers, every alert carrying its
-    playbook reference.
+    playbook reference; a second receiver posts `actionable`-tier
+    alerts as a `repository_dispatch` to the repo (the GitHub-issue
+    leg — PAT as a SealedSecret, §1.1).
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0 so the cutover needs no k8s-base change.
