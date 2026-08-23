@@ -20,8 +20,9 @@ declarative/physical.md §4.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.
--   **ZeroTier router**: the home side's ZT terminator (§2), replacing
-    the homelab host's router role.
+-   **ZeroTier router**: the home side's ZT terminator (§2) — a
+    net-new role; today ZT and the home LANs are not connected at
+    all (no member routes anything).
 
 ## 2. ZeroTier network design
 
@@ -131,6 +132,35 @@ roster discipline in §2.1 exists: an undeclared member would default to
 doesn't authorize never joins), so the default is unreachable in
 practice.
 
+**Personal traffic and local discovery are untouched.** ZT is also
+the personal devices' network segment, so the rules must not break
+LAN-style behavior between them — and they don't: every rule above
+matches only `ci`-tagged endpoints; all other traffic falls through
+to the final `accept`. Multicast discovery (mDNS to `224.0.0.251` /
+`ff02::fb`, SSDP) and IPv4 broadcast ride ethertype ipv4/ipv6, pass
+the base filter, and reach the final accept like any unicast. What
+discovery *does* depend on, declared rather than assumed:
+
+-   **Network multicast settings** are explicit fields on the
+    `zerotier_network` resource: broadcast enabled, and
+    `multicast_limit` ≥ the roster size (the default 32 is ample
+    today; the constraint is recorded so roster growth cannot
+    silently break discovery).
+-   **The CI member stays IPv4-only**: its `drop` pair would eat its
+    own ICMPv6 neighbor discovery if it ever received a v6
+    assignment — a constraint on the roster entry, not a rule
+    change.
+-   The #2200 first-packet transient (above) applies to any member
+    pair until tags are exchanged, multicast included; mDNS/SSDP
+    re-announce periodically, so discovery self-heals.
+
+**Boundary fact**: discovery across the ZT↔LAN boundary does not
+work and never did — link-local multicast does not cross a routed
+hop, and the new managed routes carry unicast only. A ZT device
+discovers other ZT members, not LAN devices. If that is ever wanted,
+the shape is an mDNS reflector on the UDM spanning `zt*` and the
+VLANs — deliberately not designed in.
+
 These Central rules are the **only policing layer** for ZT-forwarded
 traffic — the UBIOS firewall does not classify `zt*` interfaces and
 forwards them on default ACCEPT (architecture.md §5.3).
@@ -150,6 +180,10 @@ Run against a scratch ZT network with the same rules and a throwaway
 4.  First-packet behavior after a fresh join (the #2200 transient):
     connection succeeds on retry within normal client timeouts.
 5.  Personal members are unaffected: full reachability, ARP/ND intact.
+6.  Local discovery between two personal members over ZT (an mDNS
+    query/response round trip) works with the rules applied —
+    exercises the multicast settings and the final-accept fallthrough
+    together.
 
 ### 2.5 Rollout order
 
