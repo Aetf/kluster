@@ -14,16 +14,18 @@ Documents (created as each area reaches detailed design):
     talosctl), libvirt worker VM + adopted HAOS, gw-config/unifi on the
     UDM, DNS anchors, buckets, bootstrap order + verification
     checklist.
--   **dns.md** — all public DNS in Pulumi (absorbing the DNSControl
-    repo): zone + NLB anchor records in `physical`, per-app records
-    declared next to each app in `apps` (decided 2026-08-22 — no
-    dedicated DNS layer), split-horizon rewrites toward AdGuard.
+-   **[dns.md](dns.md)** (written) — records beside their resources:
+    zone + anchors in `physical`, per-app CNAMEs in `apps`,
+    split-horizon AdGuard rewrites via a small dynamic provider,
+    one-line helpers; DNSControl repo absorbed and retired.
 -   **[cluster-infra.md](cluster-infra.md)** (written) — the `k8s-base`
     stack: closed component list (Gateway API CRDs → Cilium →
-    cert-manager → sealed-secrets → CNPG/VolSync → VictoriaMetrics →
-    NFD/GPU plugin), the full Cilium configuration (pools, BGP,
+    sealed-secrets → cert-manager → CNPG/VolSync → VictoriaMetrics →
+    NFD/GPU plugin), secrets placement rules, the full Cilium
+    configuration (pools, BGP,
     gateways, EGW), and what the stack deliberately does not do.
--   **workloads.md** — the per-app pattern: how an app declares its
-    pool/route (cluster/architecture.md §3.6), storage class
-    (cluster/storage.md §2), placement, secrets, and backups in one
-    component.
+-   **[workloads.md](workloads.md)** (written) — the per-app component
+    contract (workload/storage/backup/exposure/DNS/secrets/placement/
+    policy/monitoring in one place), the shaped patterns (dedicated-VIP,
+    split-horizon, bulk-egress, JuiceFS-quarantined, CNPG), and the
+    porting rule from kluster-code.
