@@ -160,9 +160,17 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     bridge (say `kvmbr1`) enslaving `enp7s0`, with the host's
     address/DHCP moving onto the bridge — one brief connectivity blip,
     done in the same aconfmgr change-set that installs the libvirt
-    resources. A real bridge, **not macvtap**: macvtap's host↔guest
-    blind spot would sever exactly the traffic that matters here (NFS
-    from the NAS role into the cluster, the FRR next-hop).
+    resources. A real bridge, **not macvtap**: macvtap trades away
+    host↔guest connectivity for zero host-network reconfiguration
+    (frames from the host's own IP on the parent NIC can't hairpin
+    back to a macvtap VM through an ordinary switch), and host↔VM is
+    load-bearing here — NFS from the NAS role into the cluster,
+    talosctl/management sessions from the host. Off-host traffic (the
+    UDM's FRR session, LAN clients) would be fine either way; it is
+    specifically the host side that macvtap severs. HAOS itself runs
+    tap-on-bridge today (verified 2026-08-23: `vnet0` is a tap slaved
+    to `kvmbr0`), so "copy the HAOS mechanism" and "real bridge" are
+    the same statement.
     Addressing: **static IPv4 in the Talos machine config** (the UDM's
     FRR neighbor address must not depend on a DHCP lease) + SLAAC
     GUA/ULA for v6 (architecture.md §3.5's qbittorrent path expects
