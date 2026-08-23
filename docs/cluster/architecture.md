@@ -394,6 +394,17 @@ By enabling Hubble within Cilium, the eBPF datapath and Envoy proxies provide
 deep observability into HTTP paths, gRPC codes, and DNS queries without
 requiring application modification.
 
+### 4.3 Alert discipline: every alert ships with a playbook
+
+Rule (2026-08-24): **an automation alert whose response procedure is
+not written down is not shipped.** Alerts exist to be acted on at a
+bad moment by whoever is on the other end of the push notification;
+"figure it out then" is the failure mode this rule forbids. The
+playbook lives with the design that owns the alert
+(physical/state-backend.md §7 is the pattern); the vmalert rule
+families get their playbook index in the day-2 operations doc when it
+lands. Adding an alert and adding its playbook is one change.
+
 ## 5. Infrastructure as Code (Pulumi Implementation)
 
 The entire stack is deployed via Pulumi using multiple providers:

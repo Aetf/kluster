@@ -33,6 +33,8 @@ coroutine that never resolves hangs instead of failing).
 ## Docs
 
 Organized by topic: `docs/cluster/` (what we're building and why),
+`docs/physical/` (physical-layer system designs — the machines and
+appliances themselves, as opposed to how they're declared),
 `docs/framework/` (the Pulumi Python framework itself), `docs/declarative/`
 (how each layer is declared in the program — see its README for planned
 docs: physical, dns, cluster-infra, workloads).
@@ -56,6 +58,10 @@ docs: physical, dns, cluster-infra, workloads).
   standing rules (per-app stop-copy-start + DNS repoint, tracker
   retirement, NVMe interleave), the Phase-0 verification gate, waves
   A–E, data-movement techniques, decommission checklist.
+- [docs/physical/state-backend.md](docs/physical/state-backend.md) — the
+  state-backend appliance (FCOS on the OCI micro): config management,
+  Postgres lifecycle, PKI, NSG posture, backup, monitoring, and the
+  operational playbooks.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
   `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
   layering (§3). Start here; §1.4 has cookbook examples.

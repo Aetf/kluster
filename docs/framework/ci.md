@@ -20,102 +20,42 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     home connectivity at all.
 -   **Bootstrap dependency, not Pulumi-managed**: like its predecessor,
     the backend must exist before Pulumi can act, so it is provisioned by
-    the ported `deploy/state-backend/` (adapted to the OS below) — the
-    micro instance itself is the one hand-created OCI resource,
-    documented here.
--   **OS (decided 2026-08-23): an immutable, auto-updating container
-    OS, fully provisioned at create time** — the micro is a
-    zero-maintenance appliance, not a hand-patched pet, and the box is
-    a standing brute-force target (below) that must never run stale.
-    Preferred: **Fedora CoreOS** — Butane→Ignition as instance
-    `user_data`; Postgres and the pg_dump timer as podman **quadlet**
-    units (the idiom already proven on the homelab host); automatic OS
-    updates with reboots accepted (a brief 5432 blip; CI retries).
-    Any change re-provisions from the config — the instance carries no
-    state that pg_dump + `pulumi refresh` can't rebuild.
-    OCI support verified (2026-08-24, official FCOS docs): OCI is a
-    supported platform (`coreos-installer download -p oraclecloud`,
-    x86_64 and aarch64); the qcow2 imports as a custom image
-    (PARAVIRTUALIZED launch mode) and Ignition is delivered as
-    instance `user_data` — FCOS reads it in place of cloud-init.
-    Named fallback (unneeded, kept for the record): openSUSE MicroOS
-    or Ubuntu Minimal via cloud-init + unattended-upgrades.
+    the ported `deploy/state-backend/` — the micro instance itself is
+    the one hand-created OCI resource, designed in
+    physical/state-backend.md.
+-   **The box itself is a designed appliance, not a pet** — Fedora
+    CoreOS provisioned entirely at create time from
+    `deploy/state-backend/`, re-provision as the only apply path,
+    auto-updating OS and Postgres, externally monitored, every alert
+    backed by a playbook. The full design — OS & config management,
+    Postgres lifecycle, PKI, NSG posture, backup, monitoring,
+    playbooks — is
+    **[physical/state-backend.md](../physical/state-backend.md)**;
+    the rest of this section keeps only what CI itself needs to know.
 -   **OCI Container Instances rejected** as the runtime (checked
     2026-08-23): persistent storage is not supported (15 GB ephemeral
     only — disqualifying for Postgres), and A1-shaped container
     instances bill from the same tenancy A1 pool the three cluster
     nodes already budget to its conservative limit (nodes.md §3.2),
     while the E2.1.Micro is separately Always Free.
--   **Exposure**: public 5432 with TLS + scram-sha-256 (GitHub runners
-    have no stable IPs to allowlist). **Client-certificate
-    verification is mandatory**, not optional (`pg_hba` `cert` /
-    `verify-full`) — the state contains `machine_secrets` behind one
-    passphrase, so password-only auth on the open internet is not an
-    acceptable outer wall. State secrets remain passphrase-encrypted
-    regardless (`PULUMI_CONFIG_PASSPHRASE` in CI secrets / local mise
-    env).
--   **PKI (decided 2026-08-24): a tiny offline CA.** One
-    single-purpose private CA (~10-year validity), generated offline;
-    the CA key never touches the micro, CI, or Pulumi state — it
-    lives at the never-in-automation tier with the B2 master
-    credential (storage.md §4). Under it, exactly three certificates:
-    -   **Server cert, 2–3 years, SAN = the micro's reserved public
-        IP.** Clients connect by literal IP with
-        `sslmode=verify-full` (libpq matches IP SANs), which keeps
-        the state-backend hot path free of any DNS dependency — the
-        backend stays reachable when Cloudflare or the `dns` stack is
-        itself the thing being repaired. Delivered next to the
-        Postgres quadlet in the provisioning config; renewal =
-        re-issue offline + re-provision (the drilled rebuild path
-        below, not a bespoke procedure).
-    -   **Two client certs — `ci` and `operator`** (local runs); keys
-        held as CI Environment secrets / local mise env respectively.
-    -   **No CRL/OCSP.** At three certificates, revocation
-        infrastructure is standing rent for nothing: the compromise
-        response is "regenerate the CA, reissue all three,
-        re-provision" — an hour of the same drilled path.
-    -   **Expiry is monitored, not remembered**: the §3 scheduled
-        workflow asserts ≥30 days remaining on the server cert (an
-        `openssl s_client` probe needs no credentials), failing into
-        the HA push channel.
--   **The NSG is a coarse pre-filter, not the wall** (the client cert
-    is the wall): 5432 narrowed to a **snapshot** of the published
-    GitHub Actions ranges (`api.github.com/meta`) plus the home
-    uplink's current /32 for local runs. **No automatic refresh** —
-    the ranges drift, and when a shift breaks CI the symptom is a
-    connection timeout (not an auth failure); the fix is a hand edit
-    of the snapshot, here. A scheduled workflow auto-editing security
-    rules was considered and rejected: a standing OCI
-    write-credential to save a rare two-line edit fails the
-    standing-rent test.
+-   **Exposure, as CI sees it**: public 5432, TLS + scram +
+    **mandatory client certificates** (`verify-full` by literal IP —
+    no DNS in the hot path). CI holds the `ci` client cert as an
+    Environment secret; local runs hold `operator` in the mise env.
+    The NSG allowlist is a coarse pre-filter (GitHub ranges snapshot
+    + home /32) — when it drifts, the symptom is a connection
+    *timeout* and the response is the state-backend NSG playbook.
+    State secrets remain passphrase-encrypted regardless
+    (`PULUMI_CONFIG_PASSPHRASE` in CI secrets / local mise env).
 -   **Tenancy co-fate, mitigated**: the backend now shares fate with the
     OCI tenancy (a named risk). Mitigation is the same posture as etcd:
     a **scheduled `pg_dump` to B2** (a timer on the micro),
     **age-encrypted before upload** — the dump holds every stack's
     ciphertext and salt, and B2 is where credentials concentrate —
     restore drilled
-    with the rest of nodes.md §5 Tier 0. The age identity is held at
-    the same never-in-automation tier as the CA key. RPO ≤ 24 h on
-    state is fine — state is re-derivable from reality
-    (`pulumi refresh`/import) at worst.
--   **Postgres lifecycle rides the image pin.** The quadlet pins the
-    major line (`postgres:NN`); `podman auto-update` applies
-    minor/patch images — the same posture as the OS's automatic
-    updates, and safe for the same reason (nothing on the box outlives
-    pg_dump + re-provision). Major upgrades take the rebuild path —
-    final pg_dump → bump the pin → re-provision → restore — because at
-    tens of MB of state, owning pg_upgrade machinery buys nothing.
-    The provisioning config (Butane) lives in `deploy/state-backend/`
-    in this repo, so renovate opens the pin-bump PR like any other;
-    applying one is the documented manual re-provision, not a CI
-    deploy (the box sits beneath Pulumi, by construction).
--   **The rebuild is drilled, not assumed.** Quarterly, with the
-    storage.md §5 family: provision a fresh instance from the Butane
-    config, restore the latest age-encrypted pg_dump, run
-    `pulumi preview` against it and require a clean read. One drill
-    exercises three real paths — disaster recovery, the major-version
-    upgrade, and certificate rotation — since all are the same
-    re-provision.
+    with the rest of nodes.md §5 Tier 0 (the state-backend rebuild
+    playbook). RPO ≤ 24 h on state is fine — state is re-derivable
+    from reality (`pulumi refresh`/import) at worst.
 -   The legacy homelab Postgres backend keeps serving kluster-code
     untouched until that cluster retires.
 
@@ -193,7 +133,8 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
     **freshness check for backups vmalert can't see**: object-age
     assertions on the B2 `etcd/` and state-backend `pg_dump` prefixes
     (the micro's cron is otherwise unmonitored), plus the state
-    backend's server-cert expiry probe (§1 — ≥30 days remaining),
+    backend's server-cert expiry probe (≥30 days remaining;
+    physical/state-backend.md §6, playbooks §7),
     failing into the same
     HA push channel as deploy failures — the out-of-cluster mirror of
     the in-cluster backup-freshness alert family
