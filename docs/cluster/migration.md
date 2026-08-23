@@ -16,15 +16,15 @@ Objective: Migrate applications and data from the legacy cluster (`~/projects/kl
     local-path PVCs, prometheus's 30 GB) — plan per-app migration to
     interleave "migrate app → delete legacy PVC → grow VM disk" instead of
     big-bang. (nodes.md §4.2.)
--   **GPU passthrough is a migration blocker to verify first — and its
-    *activation* is a scheduled cutover**: immich and jellyfin need
-    `gpu.intel.com/i915` in the new VM (UHD 770 VFIO passthrough,
-    nodes.md §4.1). Verify the capability early on a scratch VM, but
-    binding vfio-pci on the host is one-way for the running system —
-    the host loses i915 and the *legacy* cluster's transcode workloads
-    degrade to CPU that instant. So the bind happens in a planned
-    window, sequenced with (or just before) the immich/jellyfin
-    migration itself, not at bootstrap.
+-   **GPU passthrough is two-phase** (physical.md §3): the worker VM
+    bootstraps *without* the hostdev — the cluster comes up while the
+    host's i915 keeps serving legacy transcode — but its Talos image
+    carries the i915 firmware extension from day 0. The cutover
+    (drain → bind vfio-pci on the host → add the PCI hostdev to the
+    domain → reboot → uncordon) is a short, device-only window
+    sequenced with the immich/jellyfin migration; verify the
+    passthrough capability early on a scratch VM so the window holds
+    no surprises.
 -   **Every absorbed resource updates its old tracker.** Resources
     migrating under Pulumi are currently tracked elsewhere — gw-config
     (FRR, nspawn units/rootfs), yadm/aconfmgr (qbittorrent unit,

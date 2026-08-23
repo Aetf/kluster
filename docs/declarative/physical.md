@@ -114,12 +114,16 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 -   **Worker VM**: 12–16 vCPU / 20 GiB (nodes.md §4.2), bridged to the
     LAN, disk on NVMe (starts ~60 GB, grows as migration reclaims
     space). Talos via the `nocloud` image variant, machine config on a
-    cloud-init seed ISO. UHD 770 VFIO passthrough + guest device
-    plugin: the *capability* is verified early on a scratch VM, but the
-    actual vfio-pci bind is a **migration event, not a bootstrap
-    event** — binding kills the host's i915 and with it the legacy
-    cluster's transcode workloads, so it needs a planned window
-    (migration.md §0).
+    cloud-init seed ISO. **GPU is two-phase**: the VM bootstraps with
+    no hostdev (host i915 keeps serving the legacy cluster), but its
+    Talos schematic carries the i915 firmware extension from day 0
+    (harmless without a GPU) so the later cutover touches no OS image.
+    The cutover itself — drain → host binds vfio-pci → domain gains the
+    PCI hostdev → reboot → device plugin sees the GPU — is a migration
+    window sequenced with the immich/jellyfin move (migration.md §0).
+    Implementation note: pulumi-libvirt's hostdev support is thin; the
+    provider's XSLT escape hatch may be needed for the PCI device XML
+    (the HAOS domain proves the libvirt side works).
 -   **HAOS**: the existing domain is `pulumi import`-ed and then
     declared — no rebuild, no cluster coupling (architecture.md §6.8).
 
