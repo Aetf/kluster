@@ -72,7 +72,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | via cloud endpoints — talosctl proxies to `--nodes <homelab>` through apid over KubeSpan (**bootstrap verification item**) |
-| libvirt + gw-config (UDM SSH), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (ephemeral member, pre-authorized) — no standing runner, no home inbound ports |
+| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (ephemeral member, pre-authorized) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |
 
 Only the `physical` jobs — and `apps` runs that change split-horizon

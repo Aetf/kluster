@@ -130,8 +130,11 @@ per-app number:
     (never via the cloud path) is thereby structural.
 -   **Bulk-egress (qbittorrent + seedwatch)**: pinned to the homelab
     pool; outbound v6 via the cluster masquerade, inbound v4 via the
-    existing UDM forward, inbound v6 pinhole declared as a unifi
-    firewall rule *in this component* (co-location again); seedwatch in
+    UDM peer-port forward, inbound v6 via a pinhole — both declared
+    in the **`physical` stack** with the rest of the UniFi resources
+    (the co-location exception, architecture.md §5.1: gateway rules
+    follow the gateway's credential tier; this component documents
+    the flows and points there); seedwatch in
     the same namespace, talking to the qbittorrent Service and the NAS
     hardlink paths. The Web UI **keeps its public entrance** (decided
     2026-08-23): split-horizon exposure — Cloudflare-proxied public

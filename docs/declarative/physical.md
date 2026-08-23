@@ -233,7 +233,7 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     controller are the identity; the domain XML is just metadata),
     boot. Data is never migrated or recreated either way.
 
-## 4. UDM (gw-config dynamic provider + pulumiverse/unifi)
+## 4. UDM (gw-config dynamic provider + bridged filipowm/unifi)
 
 Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
@@ -248,10 +248,23 @@ caddy, AdGuard static configs, secrets. ZT Central's network config
 (managed routes via the UDM member, member authorizations) is managed
 from the `physical` stack via the bridged `zerotier/zerotier`
 provider (architecture.md §5.3). The gw-config repo retires;
-periodic backup *pulls* move to a yadm timer on the homelab host. The
-regular unifi provider manages firewall rules (lan-pool subnet policy,
-the qbittorrent v6 pinhole) and any static LAN host entries
-(dns.md §4). No port forwards exist.
+periodic backup *pulls* move to a yadm timer on the homelab host.
+
+The **unifi provider (filipowm/unifi via the Terraform bridge,
+architecture.md §5.1)** manages the controller-side resources, **all
+in this stack** — the co-location exception on record: gateway
+resources follow the gateway's credential tier, so the `apps` CI
+environment never holds a controller credential; app components keep
+a pointer (workloads.md §4). The census: the IoT→lan-pool zone
+policy with its address groups (architecture.md §3.4 — the v4 CIDR
+group and the ULA group are separate objects, UniFi address groups
+being single-family), the qbittorrent v6 pinhole and its v4
+peer-port forward (**the only port forward**; no management inbound
+exists), and any static LAN host entries (dns.md §4). Auth: a
+dedicated local admin with an **API key** — never the SSH
+credential — and failure retries are throttled: the UniFi global
+login rate-limit is not per-IP and has locked out real users before
+(the HA-integration incident).
 
 ## 5. B2 (bridged provider)
 
@@ -278,7 +291,14 @@ source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
 underlay; talosctl reaching the homelab node via cloud endpoints (apid
-proxy); VFIO iGPU passthrough capability on a scratch VM.
+proxy); VFIO iGPU passthrough capability on a scratch VM; the bridged
+filipowm/unifi provider round-tripping a scratch
+`firewall_zone_policy` (create → clean diff → delete) against the
+UDM's current Network release — the resource is experimental and
+targets UniFi OS ≥9, and a failure here flips the rules to the
+gw-config `UnifiFirewallPolicy` fallback (architecture.md §5.1) —
+plus the legacy port-forward endpoint still accepting writes on a
+zone-firewall controller.
 
 Security verifications (from the 2026-08-23 audit,
 cluster/security-audit.md): a pod's request to `169.254.169.254` is

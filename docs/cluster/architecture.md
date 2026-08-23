@@ -305,12 +305,14 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
 -   **qbittorrent's IPv6** (the reason it never joined the legacy cluster):
     outbound v6 works via Cilium's IPv6 masquerade to the homelab VM's GUA
     (SLAAC on the LAN bridge); inbound v6 peers need a UDM firewall
-    pinhole to the VM's GUA plus the service port — an ordinary UniFi
-    firewall rule (pulumiverse/unifi provider or UI; prefix-relative
-    because the home GUA prefix is dynamic), *not* gw-config territory.
-    "Outbound-only v6" is an acceptable first stage (peers are mostly
-    reachable outbound; inbound v4 continues via the existing port
-    forward).
+    pinhole to the VM's GUA plus the service port — a zone policy
+    declared in `physical` via the unifi provider (§5.1), *not*
+    gw-config territory. Constraint on record: the zone-policy API
+    matches literal IPs only — there is no prefix-relative v6 rule —
+    so the pinhole embeds the current GUA and must be re-declared
+    when the (dynamic) home prefix rotates. "Outbound-only v6" is
+    the accepted first stage (peers are mostly reachable outbound;
+    inbound v4 continues via the existing port forward).
 -   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
     (§3.2) — reserved public IP in, Egress Gateway `egressIP` out, same
     address both ways, independent of any node's lifecycle. The pattern
@@ -414,11 +416,34 @@ The entire stack is deployed via Pulumi using multiple providers:
         (declarative/physical.md §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.
-3.  **UniFi (pulumiverse/unifi)**: firewall rules and the one surviving
-    port-forward — the `lan` pool address-group policy (§3.4), the
-    qbittorrent v6 pinhole (§3.5), and **qbittorrent's pre-existing v4
-    peer-port forward** (workloads.md §4 — an app-traffic inheritance,
-    now declared instead of hand-kept). Cross-VLAN flows the cluster
+3.  **UniFi (filipowm/unifi, bridged; decided 2026-08-23)**: firewall
+    rules and the one surviving port-forward — the `lan` pool
+    address-group policy (§3.4), the qbittorrent v6 pinhole (§3.5),
+    and **qbittorrent's pre-existing v4 peer-port forward**
+    (workloads.md §4 — an app-traffic inheritance, now declared
+    instead of hand-kept). Provider selection: the UDM runs the
+    **zone-based firewall** (measured, §3.4), whose v2 API the
+    pulumiverse/unifi provider cannot drive — it bridges the stalled
+    paultyng/ubiquiti-community lineage, whose `firewall_rule` targets
+    the retired legacy endpoint (upstream issue #169, still open).
+    **filipowm/terraform-provider-unifi** is the maintained fork that
+    has shipped `firewall_zone_policy` (+ zone / group / policy-order
+    resources, API-key auth) since v1.0.0 (2025-03; v1.1.0 2026-07,
+    active), consumed through the same any-Terraform-provider bridge
+    as zerotier (§5.3). The resource is marked experimental and
+    targets UniFi OS ≥9 — verified against the UDM's current Network
+    release at bootstrap (physical.md §6); fallback if it or the
+    bridge misbehaves: a `UnifiFirewallPolicy` resource on the
+    gw-config dynamic provider (§5.2) driving the v2 API directly
+    (the AdGuard-rewrite technique). Younger rewrites
+    (alexklibisz/terrifi, BadgerOps/unifi) were passed over as
+    pre-1.0 single-maintainer projects for a load-bearing gateway.
+    **All UniFi resources live in the `physical` stack** — a
+    deliberate exception to app co-location: gateway resources follow
+    the gateway's credential tier, so the `apps` CI environment never
+    holds a controller credential (security-audit H3); app components
+    document their flows and keep a pointer (workloads.md §4).
+    Cross-VLAN flows the cluster
     depends on (the haos.ucw backend reaching HAOS on the IoT VLAN,
     alertmanager's Home Assistant push, thread-dashboard reaching the
     OTBRs) need **no rules today** — §3.4's measured fact is that
@@ -474,8 +499,10 @@ drives gw-config**:
     *pull* direction (periodic UniFi-autobackup and config-snapshot
     retrieval): that is a scheduled job, not desired state, and moves
     to a yadm-managed timer on the homelab host. Firewall-rule needs
-    (e.g. the qbittorrent v6 pinhole, §3.5) go through the regular
-    unifi provider, not this one.
+    (e.g. the qbittorrent v6 pinhole, §3.5) go through the bridged
+    unifi provider (§5.1), not this one — unless zone-policy support
+    there fails verification, in which case this provider grows the
+    `UnifiFirewallPolicy` fallback resource (§5.1).
 -   **Images: Pulumi pins and deploys, CI builds.** Image *building* stays
     in homelab-containers' CI (renovate keeps bases fresh; builds are
     slow, cache-dependent, and don't belong inside `pulumi up` —
