@@ -435,27 +435,67 @@ payload convention carries a tier, and the tier decides delivery:
     is the durable form of the alert: it survives a missed push,
     tracks that the response actually happened, and — because GitHub
     natively e-mails issue notifications — **it is also the e-mail
-    fallback, with no SMTP credential anywhere**. If the HA webhook
-    itself fails, the producer escalates the alert to an issue
-    regardless of tier: that is the fallback semantic.
+    fallback, with no SMTP credential anywhere**. HA-webhook failure
+    escalates to an issue, by a mechanism that differs per producer
+    (below): CI escalates inline; the cluster side raises a
+    meta-alert.
 
-Producer mechanics, chosen to add **zero standing components**:
+**All issue-making logic lives in the alerts repo (2026-08-24).**
+Producers never create issues themselves; `kluster-alerts` owns every
+workflow that turns alerts into issues, with two intake paths matched
+to the two producers' shapes:
 
--   **CI side**: a shared workflow step — try the HA webhook; open
-    the deduplicated issue for `actionable` (or on webhook failure)
-    with the shared PAT below (the built-in `GITHUB_TOKEN` cannot
-    reach the alerts repo — the price of hosting issues off this
-    repo).
--   **Cluster side**: alertmanager's second receiver posts a
-    `repository_dispatch` to the alerts repo; a small workflow there
-    receives it and does the same dedup + issue creation. GitHub
-    Actions *is* the bridge — no in-cluster issue-bot to run.
--   **One credential for both legs**: a single fine-grained PAT
-    scoped to the alerts repo only (contents:write for dispatch,
-    issues:write) — distributed twice (SealedSecret in-cluster, CI
-    environment secret), one rotation-register entry (GitHub
-    e-mails ahead of expiry). A GitHub App was considered and
-    rejected as ceremony for one endpoint.
+-   **CI (event-shaped): push.** A shared producer step in this
+    repo's workflows — POST the HA webhook; for `actionable` (or on
+    webhook failure, any tier) POST a `repository_dispatch` with the
+    convention payload to the alerts repo, using the dispatch PAT
+    (below). The built-in `GITHUB_TOKEN` is untouched for everything
+    else — every workflow keeps it for its own-repo operations; it
+    simply cannot cross repos.
+-   **Cluster (state-shaped): pulled, not pushed.** Correction on
+    record: the first cut had alertmanager POSTing
+    `repository_dispatch` directly — infeasible, alertmanager's
+    webhook body is a fixed schema that cannot take GitHub's
+    `{event_type, client_payload}` shape. Rather than an in-cluster
+    adapter daemon (standing rent), the alerts repo **polls**: a
+    scheduled workflow reads alertmanager's API (a read-only
+    bearer-token route through the internet gateway) and syncs
+    issues for firing `actionable` alerts. The cluster therefore
+    holds **no GitHub credential at all**, and polling buys dead-man
+    semantics for free: N consecutive unreachable polls opens a
+    "monitoring unreachable" issue — the old "a dead cluster is
+    silent" residual becomes a signal.
+-   **Dedup and creation happen exactly once**, in the alerts repo's
+    workflows, with that repo's own `GITHUB_TOKEN` — no PAT ever
+    writes an issue.
+-   **Cluster-side HA-webhook failure is a meta-alert**: an alert
+    rule on alertmanager's notification-failure metric (actionable,
+    with its own playbook) — the channel breaking is itself an
+    alert, delivered over the leg that still works.
+
+Costs and facts on record:
+
+-   **The dispatch PAT** (this repo's CI → alerts repo):
+    fine-grained, alerts repo only, contents:write — the minimum
+    that permits dispatch; GitHub offers no dispatch-only scope, so
+    the same token could push commits to the alerts repo. Accepted:
+    that repo holds only alert plumbing and a read-only monitoring
+    token, and a leak never touches this repo. Register row in
+    credentials.md.
+-   **The poller burns private-repo Actions minutes** (billed
+    per-minute, min 1/run: hourly ≈ 720 min/mo against the
+    account-wide 2000-min free pool). Cadence is a tuning knob — the
+    push leg is instant, the issue leg tolerates the poll interval.
+    If minutes or latency ever bite, the recorded alternative is an
+    in-cluster adapter (m-lab's alertmanager-github-receiver) with a
+    PAT as a SealedSecret.
+-   **Verification items**: confirm GitHub's inactivity auto-disable
+    of scheduled workflows (documented for public repos) does not
+    hit the private alerts repo; the alertmanager read route is a
+    new public read-only surface (bearer token at the gateway, its
+    own register row).
+-   A GitHub App was considered and rejected as ceremony for one
+    endpoint.
 
 **Issues live in a dedicated private alerts repo (2026-08-24).**
 This repo going public is the end goal, so alert issues must never
