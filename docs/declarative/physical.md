@@ -26,15 +26,18 @@ API (that's `k8s-base`/`apps`).
 
 Stack outputs (the machine facts other stacks may reference,
 pulumi.md §3.1): `kubeconfig`, `talosconfig`, per-node public/private
-IPs, the NLB IP, the hath dedicated-VIP addresses (reserved public +
+IPs, the NLB IP, the dedicated-VIP addresses (reserved public +
 secondary private), and bucket names/endpoints.
 
 ## 1. OCI (pulumi-oci)
 
 -   **VCN**: dual-stack (IPv4 + the assigned /56 GUA), one public
-    subnet, internet gateway. Security lists/NSGs per
-    architecture.md §5.1: 80/443 + raw service ports, 51820/udp,
-    6443/50000, intra-VCN open.
+    subnet, internet gateway. Security rules are **derived, not
+    enumerated**: the platform baseline (KubeSpan, Talos/kube
+    management, intra-VCN) is declared here, while per-service ingress
+    rules are emitted beside the services that need them (same
+    co-location principle as DNS) — a hand-kept port list in a design
+    doc would only ever be stale.
 -   **Image**: no official Talos OCI image — an `image_factory_schematic`
     (talos provider) pins the schematic (platform `oracle`, arm64, no
     extensions initially), and a custom-image import brings the
@@ -44,13 +47,19 @@ secondary private), and bucket names/endpoints.
     fault domains, boot volume ~50 GB. Machine config is delivered as
     base64 `user_data` in instance metadata (the Talos `oracle` platform
     reads the OCI metadata service) — day-0 needs no network apply.
--   **hath's node** additionally gets: a block volume (cache), a
-    **secondary private IP** on its VNIC, and the **reserved public IP**
-    assigned to it (the dedicated-VIP pattern, architecture.md §3.2).
--   **NLB**: one Network Load Balancer, listeners for 80/443, raw
-    service ports, 6443, 50000; backend set = the three nodes;
-    source/destination preservation per the §3.2 semantics
-    (verification item).
+-   **One augmented node**: exactly one of the three additionally gets
+    a block volume, a **secondary private IP** on its VNIC, and the
+    **reserved public IP** assigned to it (the dedicated-VIP pattern,
+    architecture.md §3.2). Nothing about the node is hath-specific —
+    it is simply the node with extra storage and networking; hath (or
+    any future dedicated-VIP workload) lands on it via scheduling
+    constraints declared with the workload.
+-   **NLB**: one Network Load Balancer with source-IP preservation
+    (verification item) and a backend set of the three nodes, declared
+    here; **listeners are not a fixed list** — the management listeners
+    (6443/50000) live here, while service listeners are declared beside
+    the services that need them, exactly like security rules and DNS
+    records.
 -   **Buckets**: the JuiceFS chunk bucket on OCI Object Storage
     (storage.md §4/§6) + customer keys.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
@@ -77,7 +86,7 @@ machine_secrets
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
     cert SANs including the NLB IP; kubelet system-reserved so eviction
     actually works (the legacy CP-starvation lesson, architecture.md
-    §6.5); the hath node's secondary private IP on its interface.
+    §6.5); the augmented node's secondary private IP on its interface.
 -   **Reboot-requiring config changes**: `apply_mode:
     staged_if_needing_reboot`, and CI applies node-serially so the
     quorum never reboots together.
@@ -91,8 +100,11 @@ machine_secrets
     Postgres backend (ci.md §1).
 
 **Day-2 is talosctl, deliberately.** OS upgrades (`talosctl upgrade`),
-`upgrade-k8s`, and etcd snapshots are imperative operations run as mise
-tasks/runbooks — not wrapped in fake-declarative command resources. The
+`upgrade-k8s`, and etcd snapshots are imperative operations — not
+wrapped in fake-declarative command resources. mise only *provides* the
+tools; the procedures themselves are `just` recipes or, where real
+logic is involved, Python console scripts in this repo (the
+`update_crds` pattern). The
 official provider's v0.12 `talos_machine`/`talos_cluster` resources add
 real drift detection and upgrade orchestration; **tracking item**: adopt
 them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
@@ -102,8 +114,12 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 -   **Worker VM**: 12–16 vCPU / 20 GiB (nodes.md §4.2), bridged to the
     LAN, disk on NVMe (starts ~60 GB, grows as migration reclaims
     space). Talos via the `nocloud` image variant, machine config on a
-    cloud-init seed ISO. UHD 770 VFIO passthrough + guest device plugin
-    (early-verify item, nodes.md §4.1).
+    cloud-init seed ISO. UHD 770 VFIO passthrough + guest device
+    plugin: the *capability* is verified early on a scratch VM, but the
+    actual vfio-pci bind is a **migration event, not a bootstrap
+    event** — binding kills the host's i915 and with it the legacy
+    cluster's transcode workloads, so it needs a planned window
+    (migration.md §0).
 -   **HAOS**: the existing domain is `pulumi import`-ed and then
     declared — no rebuild, no cluster coupling (architecture.md §6.8).
 
@@ -120,8 +136,11 @@ qbittorrent v6 pinhole). No port forwards exist.
 
 The zone resources plus the **anchor records only**: NLB A/AAAA under
 the service hostname roots. Per-app records are declared beside their
-apps (declarative/dns.md pattern). B2: the backup bucket, keys, and
-lifecycle rules (storage.md §4-5).
+apps (declarative/dns.md pattern); as code health allows, the framework
+grows small helpers so an app component declares its DNS need in one
+line (e.g. a `public_route(host=...)` that emits the HTTPRoute and the
+record together). B2: the backup bucket, keys, and lifecycle rules
+(storage.md §4-5).
 
 ## 6. Bootstrap order & verification checklist
 

@@ -351,9 +351,11 @@ The entire stack is deployed via Pulumi using multiple providers:
     v6), the three A1 instances (Talos via custom image import), their
     primary IPs, the NLB (listeners + backend sets, §3.2), block
     volumes, and security lists.
-    -   Security-list ingress: 80/443 + raw service ports (NLB and node
-        IPs), 51820 UDP (KubeSpan), 6443/50000 (mTLS management via
-        NLB), intra-VCN open.
+    -   Security rules and NLB listeners are derived from declarations,
+        not hand-listed: the platform baseline (KubeSpan, management,
+        intra-VCN) lives in the physical stack; per-service ports are
+        emitted beside the services that use them
+        (declarative/physical.md §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.
 3.  **UniFi (pulumiverse/unifi)**: firewall rules only — the `lan` pool
