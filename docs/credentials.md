@@ -66,7 +66,7 @@ doc.
 | ZeroTier Central API token | The one network | Pulumi config secret + CI env | `physical` | Yearly |
 | ZT CI member identity | Confined by flow rules (gateway.md §2.3) | CI env (generated in-state) | CI per-run join | With flow-rule changes or yearly |
 | GitHub dispatch PAT | `kluster-alerts` contents:write (excess: can push there — accepted, architecture.md §4.3) | CI env | Alert producer step | GitHub expiry + reminder e-mail |
-| HA webhook URL/ID | One notify endpoint | SealedSecret + CI env | alertmanager, producer step | On exposure; low value alone |
+| HA webhook URL/ID | One notify endpoint | SealedSecret (alertmanager) · alerts-repo Actions secret | alertmanager; alerts-repo dispatch handler | On exposure; low value alone |
 | Alertmanager read token | Read-only alert list at the gateway route | alerts-repo Actions secret | Issue-sync poller | Yearly |
 | State-backend client certs (`ci`, `operator`) | postgres:// mTLS | CI env · operator machine | Pulumi state access | 2–3 y; ci.md §3 expiry probe |
 | Pulumi state passphrase | Decrypts state secrets | CI env (all stacks) | every `pulumi` run | Rotate on compromise; offline escrow (§2) |

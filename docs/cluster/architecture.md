@@ -405,6 +405,11 @@ playbook lives with the design that owns the alert
 families get their playbook index in the day-2 operations doc when it
 lands. Adding an alert and adding its playbook is one change.
 
+**Terminology, fixed (2026-08-24)**: **"CI" means the kluster repo's
+GitHub Actions** — the deployment pipeline. Workflows in any other
+repo are always named with their repo ("the alerts repo's dispatch
+handler"), never called CI.
+
 **One channel, two producers (2026-08-24).** Every alert — cluster
 or physical layer — terminates at the **same Home Assistant notify
 endpoint** (the phone push) with the **same payload convention**:
@@ -413,13 +418,16 @@ producer paths exist by necessity, not preference:
 
 -   **In-cluster**: vmalert → alertmanager → HA push
     (cluster-infra.md §1's alerting spine, routing ported from
-    legacy).
--   **Out-of-cluster**: CI workflows (deploy failures, the ci.md §3
-    scheduled checks) call the HA webhook directly — these alerts
-    exist precisely to fire when the cluster can't, so they must not
-    route through it.
+    legacy). Direct by design: an alert about the home network must
+    not detour through a third party, and must not wait on anything
+    slower than a webhook POST.
+-   **Out-of-cluster**: CI alerts (deploy failures, the ci.md §3
+    scheduled checks) must not route through the cluster — they
+    exist precisely to fire when it can't. They deliver via the
+    alerts repo (below): CI already runs on GitHub, so the detour
+    adds no failure domain.
 
-The shared convention is what makes the two paths one channel: a push
+The shared convention is what makes the paths one channel: a push
 reads identically regardless of origin, and always names its
 playbook.
 
@@ -436,42 +444,52 @@ payload convention carries a tier, and the tier decides delivery:
     tracks that the response actually happened, and — because GitHub
     natively e-mails issue notifications — **it is also the e-mail
     fallback, with no SMTP credential anywhere**. HA-webhook failure
-    escalates to an issue, by a mechanism that differs per producer
-    (below): CI escalates inline; the cluster side raises a
-    meta-alert.
+    escalates to an issue, by a mechanism that differs per origin
+    (below): the alerts repo's dispatch handler escalates CI-origin
+    alerts in place; the cluster side raises a meta-alert.
 
-**All issue-making logic lives in the alerts repo (2026-08-24).**
-Producers never create issues themselves; `kluster-alerts` owns every
-workflow that turns alerts into issues, with two intake paths matched
-to the two producers' shapes:
+**All delivery logic lives in the alerts repo (2026-08-24).**
+`kluster-alerts` is the notification hub: tier semantics, HA payload
+formatting, dedup, and issue creation exist only in its workflows.
+What remains outside it is producer plumbing, not logic — one
+dispatch call in CI, one receiver line in alertmanager. Two intake
+paths, matched to the producers' shapes:
 
--   **CI (event-shaped): push.** A shared producer step in this
-    repo's workflows — POST the HA webhook; for `actionable` (or on
-    webhook failure, any tier) POST a `repository_dispatch` with the
+-   **CI (event-shaped): one dispatch, nothing else.** The shared
+    producer step in CI POSTs a `repository_dispatch` with the
     convention payload to the alerts repo, using the dispatch PAT
-    (below). The built-in `GITHUB_TOKEN` is untouched for everything
-    else — every workflow keeps it for its own-repo operations; it
-    simply cannot cross repos.
--   **Cluster (state-shaped): pulled, not pushed.** Correction on
-    record: the first cut had alertmanager POSTing
-    `repository_dispatch` directly — infeasible, alertmanager's
-    webhook body is a fixed schema that cannot take GitHub's
-    `{event_type, client_payload}` shape. Rather than an in-cluster
-    adapter daemon (standing rent), the alerts repo **polls**: a
-    scheduled workflow reads alertmanager's API (a read-only
-    bearer-token route through the internet gateway) and syncs
-    issues for firing `actionable` alerts. The cluster therefore
-    holds **no GitHub credential at all**, and polling buys dead-man
-    semantics for free: N consecutive unreachable polls opens a
-    "monitoring unreachable" issue — the old "a dead cluster is
-    silent" residual becomes a signal.
--   **Dedup and creation happen exactly once**, in the alerts repo's
-    workflows, with that repo's own `GITHUB_TOKEN` — no PAT ever
-    writes an issue.
+    (below) — CI neither calls HA nor touches issues. The alerts
+    repo's **dispatch handler** workflow then does the delivery: HA
+    push per tier, issue for `actionable`, and — being already in
+    the issue-making place — escalates any tier to an issue when
+    the HA webhook fails. Accepted cost: CI-origin pushes gain
+    Actions-startup latency (seconds to minutes; deploy failures
+    and scheduled checks are not pages). The HA webhook credential
+    leaves CI entirely. (`GITHUB_TOKEN` clarity: every workflow run
+    in every repo gets one, scoped to its own repo — CI keeps its
+    own for checkout/automerge; the alerts repo's workflows use
+    *theirs* to open issues; the PAT exists only because a token
+    cannot cross repos.)
+-   **Cluster (state-shaped): pushes stay direct, issues are
+    pulled.** Alertmanager *cannot* trigger the alerts repo — its
+    webhook body is a fixed schema that can neither take GitHub's
+    `{event_type, client_payload}` shape nor push a commit, and
+    GitHub exposes no arbitrary-body trigger (the first cut's
+    direct-dispatch receiver was infeasible; correction on record).
+    So: **alertmanager → HA stays a native receiver** (instant, no
+    third party in the home-alert path — the § above), and the
+    issue leg is pulled: the alerts repo's **poller** workflow
+    reads alertmanager's API on a schedule (read-only bearer-token
+    route through the internet gateway) and syncs issues for firing
+    `actionable` alerts. The cluster holds **no GitHub credential
+    at all**, and polling buys dead-man semantics for free: N
+    consecutive unreachable polls opens a "monitoring unreachable"
+    issue — the old "a dead cluster is silent" residual becomes a
+    signal.
 -   **Cluster-side HA-webhook failure is a meta-alert**: an alert
     rule on alertmanager's notification-failure metric (actionable,
     with its own playbook) — the channel breaking is itself an
-    alert, delivered over the leg that still works.
+    alert, surfacing through the poller's leg, which still works.
 
 Costs and facts on record:
 
