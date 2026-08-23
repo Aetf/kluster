@@ -121,6 +121,10 @@ derived-not-enumerated principle).
 Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app migrates, then its component declares
 the same names against `kluster.hosts` (and the DNSControl entry is
-deleted). Estate records import wholesale into the `dns` stack early;
-the DNSControl repo retires with a pointer commit (the old-tracker
-rule, migration.md §0).
+deleted). Estate records import wholesale into the `dns` stack early —
+note the handful of **estate records that themselves reference the VPS**
+(the apex/`www` A records of unlimited-code.works, unlimitedcodeworks.xyz
+and jiahui.love): they repoint to `kluster.hosts` when their serving
+apps move, and none may still reference `archvps.hosts` when the VPS
+retires (migration.md Wave F checks this). The DNSControl repo retires
+with a pointer commit (the old-tracker rule, migration.md §0).

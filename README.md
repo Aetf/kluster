@@ -112,3 +112,36 @@ Open items to settle before / during detailed design, roughly in order:
    Longhorn deferred out of the initial build — local-path + VolSync is
    the default, adoption criteria on file (§3.2); second homelab worker
    VM deferred.
+
+## Implementation kickoff (design phase closed 2026-08-22)
+
+The design set is complete and internally consistent; these are the
+first-session implementation tasks, roughly in order:
+
+1. **`conventions.py` initial values** — the constants every doc
+   references but deliberately left to implementation: pool labels,
+   gateway/storage-class/anchor names, DNS zone sets, backup retention
+   classes, and the concrete `lan` ULA /64.
+2. **Tenancy + backend bootstrap** — OCI PAYG signup (home region is
+   permanent), the state-backend micro + ported `deploy/state-backend`
+   + pg_dump timer (framework/ci.md §1), then regenerate stack
+   configs/passphrase (open item 1) and create the four stacks.
+3. **Repo plumbing** — renovate config (the CI design assumes
+   renovate-class PRs), GitHub rulesets (rebase-merge, up-to-date
+   requirement — mind the kluster-code lessons), noop-automerge
+   permissions, CI secrets inventory (passphrase, backend URL, provider
+   tokens per cluster-infra.md §1.1, ZT ephemeral-member credential).
+4. **Physical stack implementation** per declarative/physical.md
+   (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
+   verification checklist (physical.md §6) — every item verified before
+   any app migrates.
+5. **CI workflows** per framework/ci.md §3; **`packages/crds` regen**
+   for the new chart set; small runbooks as they come up (sealing-key
+   export/restore, orphan audit recipe, talosctl day-2 recipes).
+6. Then follow **migration.md** Phase 0 → Waves A–F.
+
+Deliberately *not* pre-decided (settle on first contact, in this
+order of appearance): exact Talos/Cilium/chart version pins (renovate
+takes over after the first pin), AdGuard static-config templating shape
+inside the gw-config estate, alertmanager routing details beyond
+"ported from legacy".

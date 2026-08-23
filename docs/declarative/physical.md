@@ -87,7 +87,9 @@ machine_secrets
     on; KubePrism; dual-stack pod/service CIDRs **IPv4 first**
     (architecture.md §1.3); CP scheduling enabled
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
-    cert SANs including the NLB IP; kubelet system-reserved so eviction
+    cert SANs including the NLB IP; **etcd encryption at rest**
+    (secretbox — the §6.5 residual-risk mitigation for cluster secrets
+    in a $0-trust tenancy); kubelet system-reserved so eviction
     actually works (the legacy CP-starvation lesson, architecture.md
     §6.5); the augmented node's secondary private IP on its interface.
 -   **Reboot-requiring config changes**: `apply_mode:
