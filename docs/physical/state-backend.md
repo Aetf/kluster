@@ -37,10 +37,20 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     exists (operator key in Ignition) for **diagnosis only**. The
     no-drift rule is what makes "the repo describes the box" true;
     the quarterly drill (§7.4) is what keeps that claim tested.
--   **OS updates: Zincati defaults** — immediate finalize + reboot as
-    stable-stream rollouts arrive. A reboot is a brief 5432 blip,
-    accepted: Postgres shutdown is systemd-ordered, nothing corrupts,
-    and the clients retry. No update-window machinery.
+-   **OS updates: Zincati `periodic` strategy** — reboots confined to
+    a weekly maintenance window (exact window chosen at
+    implementation), not finalized the moment a rollout arrives:
+    the blip is the same either way, but a *scheduled* blip is never
+    mistaken for an incident and never coincides with someone
+    mid-operation. A reboot is a brief 5432 outage, accepted:
+    Postgres shutdown is systemd-ordered, nothing corrupts, and the
+    clients retry.
+-   **Every hand operation is a script.** The box is outside Pulumi,
+    but not outside version control: `deploy/state-backend/` carries
+    the executable form of every operation this document names —
+    provision/re-provision, NSG sync, restore, key rotation. The
+    playbooks (§7) *invoke* these scripts; a procedure that exists
+    only as prose in a playbook is a bug.
 -   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
     the B2 upload credential (§5) are in `user_data`. On this box
     that's fine where it wasn't for cluster nodes (audit H1): no
@@ -122,30 +132,34 @@ standing-rent test.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** Rotation is a designed path, not an emergency
     improvisation:
-    -   Each dump is encrypted to the **current recipient** — a
-        public key, committed in the Butane file, so **git history is
-        the generation record**: which key encrypted which object
-        follows from commit dates vs. object dates.
+    -   **Every dump is encrypted to the two newest generations** —
+        age is natively multi-recipient, and both public keys sit in
+        the Butane file. This makes per-object key attribution
+        unnecessary (deploys are intentionally manual, so git dates
+        prove nothing about which key an object carries): any object
+        in retention decrypts with the current *or* previous key,
+        and 30 days after a rotation the current key alone covers
+        the entire retention window.
     -   **Rotate at least yearly** (and on compromise or custody
-        change): generate the next identity offline, swap the
-        recipient in Butane, re-provision — playbook §7.5. The path
-        stays warm because it is the same re-provision as everything
-        else.
-    -   **Old backups stay decryptable**: a retired private key is
-        kept in the offline register until every object encrypted to
-        it has aged out of retention — i.e. it becomes destroyable
-        **30 days after its last dump** (rotation date + retention
-        window). The register records each generation with its
-        rotate date and its earliest-destroy date; only then is a key
-        deleted, and deleting it is what actually ends the old
-        generation's exposure. With yearly rotation and 30-day
-        retention, at most two generations are ever live.
-    -   **Compromise variant**: rotate immediately *and* take a
-        fresh dump under the new key; old-generation objects are
-        deleted early rather than aged out (their hidden versions
-        persist ≤30 days by the anti-ransomware floor — accepted:
-        the dump's payload is still passphrase-encrypted underneath,
-        so a leaked age key alone reads nothing).
+        change): generate generation N+1 offline, swap the Butane
+        recipients `[N, N−1] → [N+1, N]`, re-provision — playbook
+        §7.5, via the rotation script (§1). The path stays warm
+        because it is the same re-provision as everything else.
+    -   **Old keys get a definite end of life**: generation N−1
+        becomes destroyable **30 days after the rotation to N+1** —
+        every object it can uniquely decrypt has aged out, and
+        everything newer also carries key N. The offline register
+        records each generation with its rotate date and
+        earliest-destroy date; destroying the key on that date is
+        what actually ends the old generation's exposure. At most
+        two private keys are ever live.
+    -   **Compromise variant**: drop the compromised key from the
+        recipients entirely (don't keep dual-encrypting to it),
+        take a fresh dump, delete the old objects early (their
+        hidden versions persist ≤30 days by the anti-ransomware
+        floor — accepted: the dump's payload is still
+        passphrase-encrypted underneath, so a leaked age key alone
+        reads nothing).
 -   **The age identity is deliberately independent of the CA.**
     Deriving one from the other was considered (age can encrypt to
     ssh-ed25519 recipients, so one shared ed25519 key was possible)
@@ -176,70 +190,30 @@ Everything observable lives **outside** the box:
 
 ## 7. Playbooks
 
-Per the alert discipline (architecture.md §4.2): an automation alert
-without a written response is not shipped. The four for this box:
+Per the alert discipline (architecture.md §4.3), each alert above maps
+to a playbook. **This section is the design-level census** — title,
+trigger, and outline only, enough to show what must exist; the
+executable playbooks (the §1 scripts plus their runbooks in
+`deploy/state-backend/`) are written with the implementation.
 
-### 7.1 Certificate rotation / CA reissue
-
-Trigger: the expiry alert (<30 days), or key compromise.
-
-1.  On the offline CA medium: issue a new server cert (SAN = the
-    reserved public IP, 2–3 years). **Compromise only**: regenerate
-    the CA first, then reissue all three certs.
-2.  Update the server cert + key in the Butane file (the key via the
-    provision-time secret mechanism, not committed); re-provision
-    (§1).
-3.  **Compromise only**: distribute the new `ci` client cert to the
-    CI Environment secrets and `operator` to the local mise env.
-4.  Verify: `psql "sslmode=verify-full …"` as operator; re-run the
-    last failed CI job if any; the expiry probe is green on the next
-    scheduled run.
-
-### 7.2 NSG range refresh
-
-Trigger: CI or local `pulumi` operations failing with **connection
-timeouts** (auth errors mean something else — see §7.1).
-
-1.  `curl https://api.github.com/meta | jq .actions` for the current
-    ranges; `curl ifconfig.me` from the home network for the /32.
-2.  Update the NSG rules (console or `oci network nsg rules update`);
-    the intended rule list lives in `deploy/state-backend/` — update
-    it in the same change.
-3.  Verify: re-run the failed job / operation.
-
-### 7.3 Postgres major upgrade
-
-Trigger: renovate opens a major pin-bump PR against the Butane file.
-
-1.  Take a manual `pg_dump` (or verify the latest nightly B2 object
-    is fresh — same age-encrypted artifact either way).
-2.  Merge the PR; re-provision. The fresh data directory is initdb'd
-    by the new major.
-3.  Restore the dump over the operator connection.
-4.  Verify: `pulumi preview` on any stack reads clean.
-
-### 7.4 Rebuild / DR drill (quarterly)
-
-The §7.3 procedure minus the pin bump, sourced from the latest
-**age-encrypted B2 object** — which exercises, in one pass: the B2
-download path, the offline age identity, provision-from-Butane, the
-restore, and cert delivery. Success = clean `pulumi preview`. One
-drill covers disaster recovery, the major-upgrade path, and
-certificate rotation, because all three are the same re-provision.
-
-### 7.5 age identity rotation
-
-Trigger: the yearly cadence (§5), key compromise, or custody change.
-
-1.  Offline: generate the next generation's identity; record it in
-    the offline register with its rotate date and earliest-destroy
-    date (= rotate date + 30-day retention).
-2.  Swap the recipient public key in the Butane file (an ordinary
-    committed change — this is the generation record); re-provision.
-3.  Verify: the next nightly object decrypts with the **new** key;
-    the *previous* nightly still decrypts with the old one.
-4.  **Compromise only**: trigger an immediate dump under the new
-    key, then delete the old generation's objects early (§5).
-5.  On or after the earliest-destroy date (all old-generation
-    objects aged out — confirm the prefix listing), destroy the
-    retired private key and mark it destroyed in the register.
+-   **§7.1 Certificate rotation / CA reissue.** Trigger: expiry alert
+    (<30 days) or key compromise. Outline: issue offline (compromise:
+    regenerate CA, reissue all three certs, redistribute client
+    certs) → update Butane → re-provision → `verify-full` check.
+-   **§7.2 NSG range refresh.** Trigger: connection *timeouts* from
+    CI/local (auth errors are §7.1's domain). Outline: NSG-sync
+    script against current `api.github.com/meta` + home /32 → re-run
+    the failed job.
+-   **§7.3 Postgres major upgrade.** Trigger: renovate major pin PR.
+    Outline: fresh dump → merge → re-provision (new major initdb's) →
+    restore → clean `pulumi preview`.
+-   **§7.4 Rebuild / DR drill (quarterly).** §7.3 minus the pin bump,
+    sourced from the latest age-encrypted B2 object — one pass
+    exercises B2 download, the offline age identity,
+    provision-from-Butane, restore, and cert delivery.
+-   **§7.5 age identity rotation.** Trigger: yearly cadence, key
+    compromise, custody change. Outline: generate N+1 offline +
+    register entry (rotate / earliest-destroy dates) → swap Butane
+    recipients `[N, N−1] → [N+1, N]` → re-provision → verify both
+    decrypt paths → destroy N−1 on its date (compromise: drop the
+    key from recipients now, fresh dump, early-delete old objects).
