@@ -125,7 +125,11 @@ per-app number:
     existing UDM forward, inbound v6 pinhole declared as a unifi
     firewall rule *in this component* (co-location again); seedwatch in
     the same namespace, talking to the qbittorrent Service and the NAS
-    hardlink paths.
+    hardlink paths. The Web UI **keeps its public entrance** (decided
+    2026-08-23): split-horizon exposure — Cloudflare-proxied public
+    hostname behind Authelia forward-auth on `internet-gw`, plus the
+    LAN rewrite to `lan-gw` — continuing the legacy `bt.` entry rather
+    than going rewrite-only.
 -   **JuiceFS-quarantined app (VPS-successor syncthing + dav)**:
     in-pod juicefs mount (sidecar, no CSI) with 0.5–1 GiB requests,
     SQLite metadata on the cloud node's volume, its own OCI bucket
@@ -134,23 +138,53 @@ per-app number:
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, monthly restore drill inherited from the
     legacy discipline (storage.md §5).
--   **Static-site app (blog: the apex/www of three zones), image-free
-    and blog-driven**: replaces the legacy chain entirely (hexo → rsync
-    over SSH → a hostPath webroot served by bitnami nginx — hostPath,
-    inbound SSH, and the bitnami line all have no place in the new
-    design), decided 2026-08-22 over a content-baked image (content is
-    data, not an artifact — no image rebuild per post). The blog repo
-    *drives* publishing: its CI pushes the generated `public/` to a
-    **built branch** (hexo's git deployer, the repo's original
-    GitHub-Pages shape); the cluster side is a stock static server +
-    a **git-sync sidecar** pulling that branch into an emptyDir.
-    Properties: **zero cross-system credentials** (the cluster pulls;
-    blog CI holds nothing of the cluster's), push-to-live in ~a sync
-    interval, rollback = git revert on the built branch, no PVC (truly
-    stateless → 2 replicas across cloud nodes, ingress HA for the
-    blog). Retired with the migration: the rsync deployer + SSH
-    pinhole, the hostPath webroot, kluster-code's nginx component, and
-    the blog repo's rsync `deploy:` config (old-tracker rule).
+-   **Static-site template (one component, two content sources)**: a
+    single `StaticSite` component — stock static server, multi-vhost
+    (one instance serves several hostnames), `public_route` per zone —
+    parameterized by where the content comes from:
+    -   **Git source** (blog: the apex/www of three zones): the blog
+        repo *drives* publishing — its CI pushes the generated
+        `public/` to a **built branch** (hexo's git deployer, the
+        repo's original GitHub-Pages shape); the cluster side adds a
+        **git-sync sidecar** pulling that branch into an emptyDir.
+        Decided 2026-08-22 over a content-baked image (content is
+        data, not an artifact — no image rebuild per post). Properties:
+        **zero cross-system credentials** (the cluster pulls; blog CI
+        holds nothing of the cluster's), push-to-live in ~a sync
+        interval, rollback = git revert on the built branch, no PVC
+        (truly stateless → 2 replicas across cloud nodes, ingress HA
+        for the blog). A private repo would work too (git-sync + a
+        read-only deploy-key SealedSecret) — noted, not currently used.
+    -   **NAS source** (the "doors" instance: `door-jiahui` on the
+        jiahui.love apex, `door-shiyu`, `door` — three vhosts, one
+        instance): frozen low-traffic assets whose content must not
+        live in a public repo (decided 2026-08-23). They are fixed
+        assets, and fixed assets live on the NAS (§2): a read-only
+        NAS-backed volume, pod pinned to the homelab pool, ingress
+        still via `internet-gw` (cloud → KubeSpan → homelab). Editing
+        = dropping files on the existing NAS share — no deploy chain
+        at all, which beats both a public repo and an inconvenient
+        image/hostPath arrangement.
+
+    The **matrix `.well-known` delegation** rides the blog instance:
+    `/.well-known/matrix/{server,client}` become two static files in
+    the blog source repo (hexo passthrough into the built branch —
+    their content is public by definition), with the CORS header added
+    by an HTTPRoute `ResponseHeaderModifier` on the apex route — no
+    server-config magic (the legacy shape was two nginx
+    `extraConfig` fixed-responses).
+
+    Retired with the migration: the rsync deployer + SSH pinhole, the
+    hostPath webroots (blog *and* doors), kluster-code's nginx
+    component, and the blog repo's rsync `deploy:` config (old-tracker
+    rule).
+-   **LAN-device backend (haos.ucw → HAOS)**: the public entrance to a
+    device that is deliberately *not* in the cluster
+    (architecture.md §6.8). Shape: a selectorless Service + manually
+    declared EndpointSlice pointing at the HAOS LAN IP, fronted by an
+    `internet-gw` HTTPRoute; traffic flows cloud ingress → KubeSpan →
+    homelab node → LAN. This replaces the legacy VPS proxy entry and
+    is the reusable pattern for any future LAN-device backend.
 
 ## 5. Porting from kluster-code
 
@@ -159,3 +193,11 @@ contract — same images, same SealedSecrets (after the sealing-key
 restore, cluster-infra.md §1), new exposure/storage declarations. The
 migration order and data movement are migration.md's concern; the shape
 each app lands in is this document's.
+
+Two quiet straight-ports, on record so they aren't forgotten: **exim**
+(the MTA relay behind immich/splitpro outbound mail — a plain small
+app, ClusterIP SMTP; it smarthosts via smtp.gmail.com:587, so port-25
+egress reachability constrains nothing and placement is free) and
+**stdiscosrv** (syncthing's discovery server — raw TCP via
+`public_port`; it terminates its own TLS on 8443, no gateway
+involvement).

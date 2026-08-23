@@ -332,6 +332,7 @@ JBOD — this host *is* the NAS.
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
 | zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
+| dmarc-check timer (claude-driven DMARC triage) | uses the host's claude credentials (an in-cluster CronJob would need the API key sealed); revisit after cluster stabilization — a different approach may supersede it | ~0 |
 
 **Moves into the cluster**: everything currently in legacy k3s on this
 host (requests 12.5 GiB, actual ~16 GiB including k3s overhead:
@@ -361,7 +362,8 @@ scheduled migration cutover (physical.md §3, migration.md Wave C).
     the workload set plus qbittorrent with comfortable slack. **A RAM
     upgrade remains the relief valve** (board verified: ROG Maximus
     Z690 Hero, DDR5, 4×DIMM up to 128 GB).
--   **Disk**: target 100+ GB qcow2/raw on NVMe, but only ~85 GB is free
+-   **Disk**: target 100+ GB on NVMe (concrete shape — raw sparse file
+    on a nodatacow subvolume, virtio-blk — physical.md §3), but only ~85 GB is free
     while both clusters coexist. The migration plan must interleave
     reclamation (legacy images, local-path PVCs, prometheus's 30 GB)
     with VM growth — start at ~60 GB, grow after cutover. (No etcd on

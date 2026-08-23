@@ -119,7 +119,55 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 -   **Worker VM**: 12–16 vCPU / 20 GiB (nodes.md §4.2), bridged to the
     LAN, disk on NVMe (starts ~60 GB, grows as migration reclaims
     space). Talos via the `nocloud` image variant, machine config on a
-    cloud-init seed ISO. **GPU is two-phase**: the VM bootstraps with
+    cloud-init seed ISO.
+-   **VM disk: a raw sparse file on the root btrfs, nodatacow, over
+    virtio-blk** (decided 2026-08-23). The NVMe is a single btrfs
+    partition (no LVM, no spare partitions), so a file it is — the
+    shape makes that rational:
+    -   **Dedicated subvolume with `chattr +C`** (nodatacow, set on the
+        directory before image creation). VM images are the canonical
+        CoW-on-CoW pathology — the guest's random small writes
+        fragment a checksummed CoW file without bound. nodatacow
+        trades btrfs checksums/compression for sane write behavior;
+        integrity of the data that matters is owned by the *cluster's*
+        backup regime, not the host fs. The subvolume boundary also
+        keeps the image out of any host snapshot/send scope.
+    -   **Raw, not qcow2**: with CoW disabled, qcow2's allocation layer
+        buys nothing but indirection. Growth (60 → 100+ GB interleaved
+        with reclamation, migration.md §0.4) is `truncate` on the file
+        + `virsh blockresize`; Talos grows its EPHEMERAL partition
+        into the new space on its own.
+    -   **virtio-blk with `discard=unmap`, `cache=none`**: in-guest
+        TRIM punches holes back out of the sparse file, so NVMe space
+        actually returns to the host when the guest deletes data —
+        load-bearing for the interleaved migration. `cache=none`
+        avoids double-caching guest I/O through the host page cache.
+    -   **What btrfs still contributes**: an offline `cp --reflink` of
+        the image is a free instant copy before risky day-2 surgery
+        (Talos upgrades are already A/B; this is belt-and-suspenders).
+        Offline only — reflinking a running nodatacow image yields an
+        inconsistent copy.
+-   **VM network: a second host bridge, HAOS-pattern but not the HAOS
+    bridge** (decided 2026-08-23). The *mechanism* is copied from the
+    HAOS domain exactly — a systemd-networkd Linux bridge + virtio NIC
+    tap — but the existing `kvmbr0` enslaves the **IoT VLAN**
+    (192.168.90.0/24), which is where HAOS belongs with its devices
+    and where the worker VM does not. The worker joins the host's
+    untagged **server VLAN** (192.168.80.0/24 — the host, NAS serving,
+    and the UDM BGP session all live there), which today has **no
+    bridge**: `enp7s0` carries the host address directly. So the host
+    network config (aconfmgr-managed systemd-networkd) gains a second
+    bridge (say `kvmbr1`) enslaving `enp7s0`, with the host's
+    address/DHCP moving onto the bridge — one brief connectivity blip,
+    done in the same aconfmgr change-set that installs the libvirt
+    resources. A real bridge, **not macvtap**: macvtap's host↔guest
+    blind spot would sever exactly the traffic that matters here (NFS
+    from the NAS role into the cluster, the FRR next-hop).
+    Addressing: **static IPv4 in the Talos machine config** (the UDM's
+    FRR neighbor address must not depend on a DHCP lease) + SLAAC
+    GUA/ULA for v6 (architecture.md §3.5's qbittorrent path expects
+    the VM's SLAAC GUA).
+-   **GPU is two-phase**: the VM bootstraps with
     no hostdev (host i915 keeps serving the legacy cluster), but its
     Talos schematic carries the i915 firmware extension from day 0
     (harmless without a GPU) so the later cutover touches no OS image.

@@ -64,13 +64,19 @@ the VPS empties progressively):
     the rsync `deploy:` config and the SSH pinhole retire with it) →
     splitpro (small CNPG — **prerequisite: the multi-arch pgcron image
     from the ported images.yml**, ci.md §4) → matrix
-    (continuwuity, rsync its local-path state) → cloud syncthing/dav
-    successor (**no data copy**: fresh per-app JuiceFS bucket, the
-    replica reseeds itself from syncthing-nas over the syncthing
-    protocol).
+    (continuwuity, rsync its local-path state; its `.well-known`
+    delegation rides the blog instance, workloads.md §4, so it is
+    already serving by this point) → cloud syncthing/dav successor
+    (**no data copy**: fresh per-app JuiceFS bucket, the replica
+    reseeds itself from syncthing-nas over the syncthing protocol)
+    with **stdiscosrv** alongside it (raw TCP `public_port`,
+    workloads.md §5).
 -   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —
     no TSDB migration; legacy prometheus kept read-only until its
-    retention ages out), golinks, emailproxy, spoolman, dmarc-check,
+    retention ages out), golinks, emailproxy, spoolman, exim
+    (workloads.md §5), the doors static sites (NAS-sourced,
+    workloads.md §4 — their content moves from the VPS hostPath onto a
+    NAS share once), the haos.ucw LAN-device backend (workloads.md §4),
     thread-dashboard (quadlet → cluster).
 -   **Wave C — homelab heavy + the GPU window**: the vfio-pci cutover
     (drain → bind → hostdev → reboot, physical.md §3) runs at the head
@@ -94,7 +100,21 @@ the VPS empties progressively):
 
 Explicitly **not** migrating: AdGuard alice/bob (stay on the UDM, now
 Pulumi-managed), HAOS (adopted in place), the NAS role, the legacy
-state backend (serves kluster-code until F).
+state backend (serves kluster-code until F), and **dmarc-check** (stays
+a host timer using the host's claude credentials, nodes.md §4.1 —
+in-cluster adoption deferred until the cluster is stable, and a
+different approach may supersede it).
+
+**Retired outright, never lands in the new cluster** (decided
+2026-08-23): the dormant legacy apps — **mc** (Minecraft; its world/map
+PVC holds real data: tidy it and archive to the NAS as fixed assets
+*before* the PV is deleted in the census below), **ukulele**, the old
+**bt** stack (superseded by the host qbittorrent, which *does*
+migrate — Wave D), and the **genshin** daily cronjob. Their config
+flags, dead DNS records (the jupyter/mc leftovers, dns.md §2 — the
+`game`/`games` names stay, they are doors), and images drop during the
+import census; resurrection, if ever wanted, is
+git history.
 
 ## 3. Data movement, by storage kind
 
