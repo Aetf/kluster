@@ -428,7 +428,8 @@ payload convention carries a tier, and the tier decides delivery:
 
 -   **`notify`** (informational, self-resolving): HA push only.
 -   **`actionable`** (has a playbook, needs a human): HA push **and
-    a GitHub issue in this repo** — deduplicated by alert identity
+    a GitHub issue in the private alerts repo** (below) —
+    deduplicated by alert identity
     (one open issue per firing alert; body = summary + playbook
     link), closed by the human as the playbook completes. The issue
     is the durable form of the alert: it survives a missed push,
@@ -442,40 +443,52 @@ Producer mechanics, chosen to add **zero standing components**:
 
 -   **CI side**: a shared workflow step — try the HA webhook; open
     the deduplicated issue for `actionable` (or on webhook failure)
-    with the built-in `GITHUB_TOKEN`. No new credentials.
+    with the shared PAT below (the built-in `GITHUB_TOKEN` cannot
+    reach the alerts repo — the price of hosting issues off this
+    repo).
 -   **Cluster side**: alertmanager's second receiver posts a
-    `repository_dispatch` to this repo; a small workflow receives it
-    and does the same dedup + issue creation. GitHub Actions *is*
-    the bridge — no in-cluster issue-bot to run. Cost: one
-    fine-grained PAT (this repo, contents:write) as a SealedSecret —
-    an expiring credential with a rotation-register entry (GitHub
+    `repository_dispatch` to the alerts repo; a small workflow there
+    receives it and does the same dedup + issue creation. GitHub
+    Actions *is* the bridge — no in-cluster issue-bot to run.
+-   **One credential for both legs**: a single fine-grained PAT
+    scoped to the alerts repo only (contents:write for dispatch,
+    issues:write) — distributed twice (SealedSecret in-cluster, CI
+    environment secret), one rotation-register entry (GitHub
     e-mails ahead of expiry). A GitHub App was considered and
     rejected as ceremony for one endpoint.
 
-**Issue content is public-safe by construction (2026-08-24).** An
-issue's text escapes the repo's access control the moment it is
-created — GitHub e-mails it out, and repo visibility can change —
-so safety comes from a content rule, not from where the issue
-lives:
+**Issues live in a dedicated private alerts repo (2026-08-24).**
+This repo going public is the end goal, so alert issues must never
+live here — hosting them in-repo would have made a certain future
+migration look like a conditional. A separate always-private repo
+(`kluster-alerts`) holds the dispatch-receiving workflow and the
+issues; it also keeps alert noise out of this repo's issue tracker,
+which the public repo needs for real issues. Consequences on record:
 
--   The dedup workflow builds title and body from a **whitelist
-    template over the payload-convention fields only**: alert
-    identity, tier, the one-line summary, and the playbook
-    *reference* (a repo path, never inlined content). Anything else
-    arriving in the dispatch payload — raw alertmanager label sets,
-    annotations, URLs — is dropped, not forwarded. Summaries are
-    static strings authored in the alert rule and reviewed in-repo;
-    dynamic values (node names, addresses, endpoints) never enter
-    the issue.
--   **Visibility fact + tripwire**: this repo is private today
-    (2026-08-24), so issues are additionally non-public. The design
-    does not lean on that staying true — the content rule above is
-    the guarantee — but **publishing this repo has a precondition on
-    record**: first re-audit the issue leg, and if any doubt
-    remains, move it to a dedicated private alerts repo (dispatch
-    target, dedup workflow, and issues relocate; the CI leg then
-    trades its free `GITHUB_TOKEN` for the shared fine-grained PAT,
-    rescoped to that repo with issues:write).
+-   **Content rule is secret hygiene, not a field whitelist.**
+    Because the issue is private (and its e-mail goes only to the
+    operator), dynamic label values — node names, instances, firing
+    values — *do* go into the issue, keeping it self-contained: the
+    3 a.m. reader learns which machine without a round-trip to the
+    monitoring stack over ZT. The hard line is only that credentials,
+    tokens, and secret-bearing URLs never enter alert labels or the
+    issue built from them. Summaries remain static strings authored
+    with the alert rule.
+-   **Alternatives considered, so they are not re-litigated**: a
+    self-hosted tracker lives inside the failure domain the channel
+    must survive — disqualified outright; OCI Notifications is push
+    without ticket semantics (stays the unwired out-of-band
+    candidate); a second forge (GitLab) duplicates GitHub's
+    semantics for one more account and credential; alerting SaaS
+    (PagerDuty-class free tiers) fits the incident model but buys a
+    new trust party, credential, and app for semantics GitHub
+    already provides. GitHub stays the host because it is already
+    the management anchor — CI, the dispatch bridge, and the
+    "reaches GitHub" availability assumption itself.
+-   **Publication residual, unrelated to issues**: once this repo is
+    public, CI logs (pulumi preview output) become a public surface;
+    that re-audit belongs to the publication decision, tracked here
+    so the issue-leg fix isn't mistaken for the whole story.
 
 This narrows the old single-channel limitation: any producer that
 can reach GitHub now delivers even when the home network (and HA
