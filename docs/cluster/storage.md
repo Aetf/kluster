@@ -206,9 +206,10 @@ Per nodes.md §5, durability = declarative rebuild + backups, drilled:
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill).
-4.  **NAS data**: stays under the NAS's own backup regime — out of cluster
-    scope, but migration of hath/media onto NAS PVs must not silently drop
-    it from that regime.
+4.  **NAS data**: stays under the NAS's own backup regime — out of
+    cluster scope, but media moving onto NAS PVs must not silently drop
+    out of that regime. (hath's cache is deliberately outside *every*
+    backup regime — §3.3.)
 5.  **Drills are part of the design**: a restore that hasn't run this
     quarter is assumed broken.
 
@@ -302,4 +303,4 @@ The dav share serves the same dataset and follows the same mount.
     unchanged verdicts — SeaweedFS's cloud modes lose either caching or
     encryption; S3QL is single-mounter; s3backer is a block device with the
     same mobility problems as local-path. None beat "object storage direct
-    where possible, Longhorn otherwise".
+    where possible, local-path + VolSync otherwise".

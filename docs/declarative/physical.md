@@ -152,8 +152,9 @@ declarative/dns.md.)
 ## 6. Bootstrap order & verification checklist
 
 Order within the first `pulumi up`: OCI network → instances (user_data
-configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; NLB,
-gw-config/FRR, and DNS anchors can settle in parallel once IPs exist.
+configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
+NLB and gw-config/FRR settle in parallel once IPs exist, and the `dns`
+stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG, the state-backend micro
 (ci.md §1), and the ZT route for the operator's first run.
 
@@ -161,6 +162,6 @@ Bootstrap-time verifications (carried from README #6 + this doc): LB
 IPAM pool containing node primary IPs; NLB dual-stack listeners +
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; Egress Gateway under the chosen routing mode +
-reserved-IP↔secondary-private-IP NAT; talosctl reaching the homelab
-node via cloud endpoints (apid proxy); VFIO iGPU passthrough into the
-worker VM.
+reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
+underlay; talosctl reaching the homelab node via cloud endpoints (apid
+proxy); VFIO iGPU passthrough capability on a scratch VM.

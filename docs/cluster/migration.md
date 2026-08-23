@@ -60,10 +60,7 @@ the VPS empties progressively):
 
 -   **Wave A — cloud pool**: authelia (SSO gates everything else) →
     stateless public HTTP (blog/www, static sites) → splitpro (small
-    CNPG) → matrix (continuwuity, rsync its local-path state) →
-    **hath** (few-hours downtime cap: pre-provision the protected cache
-    volume, rsync the 50 Gi cache warm, final delta + client-state copy
-    in the window, dedicated VIP live, re-register) → cloud
+    CNPG) → matrix (continuwuity, rsync its local-path state) → cloud
     syncthing/dav successor (**no data copy**: fresh per-app JuiceFS
     bucket, the replica reseeds itself from syncthing-nas over the
     syncthing protocol).
@@ -81,11 +78,19 @@ the VPS empties progressively):
     (`/var/lib/qBittorrent` profile copy; verify seedwatch category
     paths and hardlink counts survive; outbound-v6 via masquerade
     first, inbound pinhole later) + seedwatch together.
--   **Wave E — decommission** (§4).
+-   **Wave E — hath, deliberately last of the apps**: hath is the
+    highest-stakes workload (global-archive data, IP re-registration,
+    strict downtime cap), so it moves only after the cluster has run
+    everything else stably — the dedicated-VIP path, EGW, and the
+    cloud pool all long proven by then. Execution: pre-provision the
+    protected cache volume, rsync the 50 Gi cache warm ahead of time,
+    then a short window for the final delta + client-state copy,
+    dedicated VIP live, re-register.
+-   **Wave F — decommission** (§4).
 
 Explicitly **not** migrating: AdGuard alice/bob (stay on the UDM, now
 Pulumi-managed), HAOS (adopted in place), the NAS role, the legacy
-state backend (serves kluster-code until E).
+state backend (serves kluster-code until F).
 
 ## 3. Data movement, by storage kind
 
@@ -103,11 +108,12 @@ app, its retained-PV directories are identified and either mapped to
 the migration or deleted — the one-time cleanup of the `Retain`-era
 orphans, finishing with the disk-reclaim that feeds rule 0.4.
 
-## 4. Wave E — decommission checklist
+## 4. Wave F — decommission checklist
 
-1.  Legacy VPS: after Wave A verifies (hath stable on its new IP for a
-    comfortable soak), tear down remaining k3s residue and **cancel the
-    Vultr instance** (the $30/mo baseline ends). `archvps.hosts` and
+1.  Legacy VPS: after Wave E verifies (hath stable on its new IP for a
+    comfortable soak — the VPS necessarily outlives every other
+    migration for exactly this reason), tear down remaining k3s residue
+    and **cancel the Vultr instance** (the $30/mo baseline ends). `archvps.hosts` and
     remaining DNSControl entries deleted; DNSControl repo archived with
     a pointer commit.
 2.  Homelab host: k3s uninstalled after Waves C/D; freed NVMe grows the

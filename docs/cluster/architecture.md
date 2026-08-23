@@ -1,7 +1,7 @@
 # Next-Generation Hybrid Kubernetes Cluster Architecture
 
-Objective: Deploy a high-performance hybrid Kubernetes cluster spanning a
-cloud VPS and a Homelab LAN. Ensure low stack complexity, minimal vendor
+Objective: Deploy a high-performance hybrid Kubernetes cluster spanning an
+OCI cloud site and a Homelab LAN. Ensure low stack complexity, minimal vendor
 lock-in, and declarative management using Pulumi.
 
 > **Status**: This is the canonical architecture document, describing the
@@ -153,9 +153,10 @@ Mechanics shared by both pools:
 -   **Pool selection** via a Service label matched by the pool's
     `serviceSelector`. A Service that must be on both sides is simply two
     Services (or one per side attached to the same pods).
--   **IP sharing**: all `internet` Services share the single public VIP via
-    the `lbipam.cilium.io/sharing-key` annotation (differing ports); `lan`
-    Services normally take one IP each (the pool is plentiful).
+-   **IP sharing**: `internet` Services all request the same three
+    primary IPs (`lbipam.cilium.io/ips` + a `sharing-key`, ports
+    disambiguate — §3.2); `lan` Services normally take one IP each (the
+    pool is plentiful).
 -   **Backends may live on any node.** With `externalTrafficPolicy: Cluster`
     the receiving node SNATs and forwards over KubeSpan to a remote backend
     — a public port can front a homelab pod. Cost: the backend
@@ -343,7 +344,7 @@ The entire stack is deployed via Pulumi using multiple providers:
 ### 5.1 Infrastructure Provisioning
 
 1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab
-    physical server (passing through NIC/macvlan). Outputs the dynamically
+    physical server (bridged to the LAN). Outputs the dynamically
     assigned local IP. The same provider also adopts the **existing HAOS
     VM** into the physical layer (import, then declare) — HAOS stays a
     host-level libvirt domain, deliberately outside the cluster (§6.8).
@@ -364,19 +365,20 @@ The entire stack is deployed via Pulumi using multiple providers:
     plane lives cloud-side, the homelab worker dials out (KubeSpan), and
     management traffic terminates at the NLB. Personal devices continue
     to reach LAN services over ZeroTier.
-4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move into
-    Pulumi. The standalone DNSControl repo
-    ([Aetf/dns](https://github.com/Aetf/dns), `dnsconfig.js`) is absorbed
-    and retired — one declarative world, previewable diffs. (in-cluster
-    external-dns rejected, §6.4.)
+4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move
+    into Pulumi — zones/estate/anchors in the `dns` stack, per-app
+    records beside their apps (declarative/dns.md). The standalone
+    DNSControl repo ([Aetf/dns](https://github.com/Aetf/dns)) is
+    absorbed and retired — one declarative world, previewable diffs.
+    (in-cluster external-dns rejected, §6.4.)
 5.  **Backblaze B2 (bridged provider)**: the backup bucket + keys +
     lifecycle rules (see [storage.md](storage.md) §4).
 
 ### 5.2 UDM Configuration: a `gw-config` dynamic provider
 
-The unifi provider has no BGP API, but the UDM is already under declarative
-management: `~/.config/gw-config` is the source of truth for all UDM
-customization, pushed idempotently over SSH (`deploy.sh`, `/data` +
+The unifi provider has no BGP API, but the UDM already has a proven
+declarative mechanism: `~/.config/gw-config` (the retiring repo) pushed
+desired-state files idempotently over SSH (`deploy.sh`, `/data` +
 `on_boot.d` persistence model). Rather than the earlier "generate an FRR
 .conf, upload by hand" plan, Pulumi grows a small **dynamic provider that
 drives gw-config**:

@@ -115,9 +115,10 @@ The legacy VPS NIC moved 1276 GB TX/30d, but decomposed:
     the Homelab pool and egress directly via the home uplink**, never
     through a metered cloud path.
 -   **hath is the only workload requiring a stable public IP** (inbound port
-    and outbound on the same IP). It runs on the cloud node; its ~50–110
-    GB/mo fits trivially inside any bundled-TB allowance, and its 50 Gi
-    cache fits an 80 GB instance disk.
+    and outbound on the same IP; the dedicated-VIP pattern,
+    architecture.md §3.2). Its ~50–110 GB/mo fits trivially inside the
+    10 TB allowance, and its 50 Gi cache rides a block volume inside the
+    free 200 GB.
 
 ## 3. Provider comparison (cloud worker, dual-stack, Talos)
 
@@ -329,7 +330,7 @@ JBOD — this host *is* the NAS.
 | ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (currently squeezed to ~2) |
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + WiFi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
-| Pulumi state-backend Postgres (podman) | cannot live inside the cluster it manages | ~0.2 GiB |
+| The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
 | zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
 
 **Moves into the cluster**: everything currently in legacy k3s on this
@@ -344,8 +345,9 @@ thread-dashboard. distccd is retired or containerized opportunistically.
 **GPU**: legacy workloads hold 3× `gpu.intel.com/i915` allocations
 (immich ML/transcode, jellyfin). Plan of record: VFIO-passthrough the
 UHD 770 into the Talos VM (host is headless) + Intel device plugin in
-the guest; fallback is CPU transcode at reduced quality-of-life. This is
-a migration-blocking item to verify early, not late.
+the guest; fallback is CPU transcode at reduced quality-of-life. The
+capability is verified early on a scratch VM; the actual bind is a
+scheduled migration cutover (physical.md §3, migration.md Wave C).
 
 ### 4.2 VM sizing
 
