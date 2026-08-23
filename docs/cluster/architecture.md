@@ -26,8 +26,9 @@ lock-in, and declarative management using Pulumi.
 -   **Homelab site**: one large Talos **worker** VM on the physical server
     (libvirt) for internal, NAS-coupled, GPU, and bulk-egress workloads.
     The home site holds the data gravity; the cloud site holds the
-    control plane and the public face. **No inbound ports are required at
-    the home network** (§5.1).
+    control plane and the public face. **No management inbound ports are
+    required at the home network** (§5.1; the sole app-level survivor is
+    qbittorrent's peer-port forward).
 -   **OS**: Talos Linux (immutable, API-driven) on every node; the entire
     machine config is Pulumi-rendered.
 -   **Transport / Underlay**: Talos KubeSpan (WireGuard mesh) for encrypted
@@ -359,12 +360,21 @@ The entire stack is deployed via Pulumi using multiple providers:
         (declarative/physical.md §1).
     -   Guardrails (nodes.md §3.2): compartment quotas pinning creatable
         shapes to the free envelope + budget alerts.
-3.  **UniFi (pulumiverse/unifi)**: firewall rules only — the `lan` pool
-    subnet policy (§3.4) and the qbittorrent v6 pinhole (§3.5).
-    **No inbound port-forwards exist at the home network**: the control
-    plane lives cloud-side, the homelab worker dials out (KubeSpan), and
-    management traffic terminates at the NLB. Personal devices continue
-    to reach LAN services over ZeroTier.
+3.  **UniFi (pulumiverse/unifi)**: firewall rules and the one surviving
+    port-forward — the `lan` pool subnet policy (§3.4), the qbittorrent
+    v6 pinhole (§3.5), the **inter-VLAN allows for cluster→IoT-VLAN
+    consumers** (each declared beside its app, the co-location
+    principle: the haos.ucw backend reaching HAOS, alertmanager's Home
+    Assistant push, thread-dashboard reaching the OTBRs — BGP/routed
+    traffic bypasses VLAN-isolation defaults only for the pool subnet;
+    pod-SNAT'd traffic from the worker VM's VLAN to the IoT VLAN needs
+    ordinary inter-VLAN policy), and **qbittorrent's pre-existing v4
+    peer-port forward** (workloads.md §4 — an app-traffic inheritance,
+    now declared instead of hand-kept). **No management inbound exists
+    at the home network**: the control plane lives cloud-side, the
+    homelab worker dials out (KubeSpan), and management traffic
+    terminates at the NLB. Personal devices continue to reach LAN
+    services over ZeroTier.
 4.  **Cloudflare (pulumi-cloudflare)**: **all** public DNS records move
     into Pulumi — zones/estate/anchors in the `dns` stack, per-app
     records beside their apps (declarative/dns.md). The standalone

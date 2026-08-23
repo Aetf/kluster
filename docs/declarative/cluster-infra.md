@@ -66,6 +66,15 @@ empty cluster:
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical.md §3), present from
     day 0 so the cutover needs no k8s-base change.
+8.  **The small standing set the legacy cluster already proved**
+    (nodes.md §4.4 counted them as "kept as-is" but this list never
+    named them — explicit now so the closed list is honest):
+    **local-path-provisioner** (Talos ships no default StorageClass;
+    its backing directory is a machine-config mount, physical.md §2),
+    **metrics-server**, **reloader**. Monitoring internals
+    (kube-state-metrics, the node-exporter DaemonSet) count as part of
+    the VictoriaMetrics entry. None has an ordering constraint beyond
+    Cilium.
 
 `packages/crds` is regenerated (`uv run update_crds`) against exactly
 this chart set; the legacy chart list retires with kluster-code.
@@ -120,6 +129,18 @@ All decided behavior from architecture.md §3, expressed as config:
     instances themselves belong to the workloads that need them
     (`apps`). Bootstrap verification: EGW under the chosen routing
     mode.
+-   **Route-level auth (the Authelia gate)**: the Gateway API
+    **ExternalAuth HTTPRoute filter** (GEP-1494; **Cilium ≥1.20 — this
+    sets the Cilium version floor**, above the ≥1.16 EGW-tunnel floor)
+    pointing at Authelia's Envoy `ext_authz` endpoint. This is how
+    apps without native auth (qbittorrent Web UI, golinks, spoolman,
+    thread-dashboard, …) get SSO-gated — the legacy traefik
+    forward-auth middleware's successor; the route helper exposes it
+    as an `auth=True` parameter. Bootstrap verification: confirm the
+    filter **fails closed** when Authelia is unreachable (fail-open
+    was reported against early builds, cilium#47178). Apps with
+    native OIDC (immich, grafana, matrix, splitpro) are unaffected by
+    this mechanism's availability.
 -   **Hubble**: enabled with relay + UI off by default (metrics into
     VictoriaMetrics; the UI is a port-forward away when needed — no
     standing dashboard, per the standing-rent rule).

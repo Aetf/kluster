@@ -91,7 +91,10 @@ machine_secrets
     (secretbox — the §6.5 residual-risk mitigation for cluster secrets
     in a $0-trust tenancy); kubelet system-reserved so eviction
     actually works (the legacy CP-starvation lesson, architecture.md
-    §6.5); the augmented node's secondary private IP on its interface.
+    §6.5); the augmented node's secondary private IP on its interface;
+    the **local-path backing mount** (`/var/mnt/storage`, storage.md
+    §2 — the StorageClass's provisioner is k8s-base's, but the disk
+    path under it is machine config).
 -   **Reboot-requiring config changes**: `apply_mode:
     staged_if_needing_reboot`, and CI applies node-serially so the
     quorum never reboots together.
@@ -185,8 +188,28 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     Implementation note: pulumi-libvirt's hostdev support is thin; the
     provider's XSLT escape hatch may be needed for the PCI device XML
     (the HAOS domain proves the libvirt side works).
+-   **Host preparation is one aconfmgr change-set**, a prerequisite
+    the Pulumi program assumes rather than manages (the host is not a
+    Pulumi target; the same boundary as the NAS role). Its contents,
+    so nothing is discovered mid-bootstrap: the second bridge with the
+    host address moved onto it (above); the nodatacow subvolume + a
+    libvirt storage pool pointing at it; an SSH identity for the
+    libvirt provider (`qemu+ssh://` over the CI ZeroTier join —
+    a user in the `libvirt` group, no root); the NAS NFS exports
+    extended to the worker VM's static IP. The vfio-pci host binding
+    is deliberately *not* here — it lands in the Wave C cutover
+    (migration.md).
 -   **HAOS**: the existing domain is `pulumi import`-ed and then
     declared — no rebuild, no cluster coupling (architecture.md §6.8).
+    Mechanics on record: the libvirt provider imports domains **by
+    UUID** (recent provider versions), and imported state is known to
+    be incomplete for some attributes — expect an `ignore_changes`
+    tuning pass until `preview` is clean, and verify the import early
+    (a botched diff must never propose replacing this domain; its
+    resource is `protect=True` like every data-bearing resource).
+    Fallback if import proves unworkable: HAOS simply stays outside
+    Pulumi as a virsh-defined domain — adoption is a nicety, not a
+    dependency.
 
 ## 4. UDM (gw-config dynamic provider + pulumiverse/unifi)
 
@@ -214,7 +237,12 @@ configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
 NLB and gw-config/FRR settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG, the state-backend micro
-(ci.md §1), and the ZT route for the operator's first run.
+(ci.md §1), the homelab host-prep change-set (§3), and two ZeroTier
+Central items (not Pulumi-managed): the CI ephemeral-member
+pre-authorization and the **managed route for the `lan` pool subnet**
+via the UDM's ZT member — without it roaming ZT clients never reach
+the `lan` VIPs (architecture.md §3.4 covers only the UDM side of that
+path).
 
 Bootstrap-time verifications (carried from README #6 + this doc): LB
 IPAM pool containing node primary IPs; NLB dual-stack listeners +

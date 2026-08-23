@@ -134,7 +134,8 @@ first-session implementation tasks, roughly in order:
 4. **Physical stack implementation** per declarative/physical.md
    (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
    verification checklist (physical.md §6) — every item verified before
-   any app migrates.
+   any app migrates. Includes the homelab host-prep aconfmgr change-set
+   and the ZeroTier Central manual items (physical.md §3/§6).
 5. **CI workflows** per framework/ci.md §3, plus the ported+upgraded
    **`images.yml`** (multi-arch via native arm64 runners, CNPG images
    wired in — ci.md §4); **`packages/crds` regen** for the new chart
@@ -144,6 +145,8 @@ first-session implementation tasks, roughly in order:
 
 Deliberately *not* pre-decided (settle on first contact, in this
 order of appearance): exact Talos/Cilium/chart version pins (renovate
-takes over after the first pin), AdGuard static-config templating shape
-inside the gw-config estate, alertmanager routing details beyond
-"ported from legacy".
+takes over after the first pin; known floors: **Cilium ≥1.20** for the
+ExternalAuth route filter, ≥1.16 for tunnel-mode EGW, Longhorn ≥1.12
+if ever adopted), AdGuard static-config templating shape inside the
+gw-config estate, alertmanager routing details beyond "ported from
+legacy".

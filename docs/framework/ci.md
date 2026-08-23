@@ -84,6 +84,19 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
 -   Ported unchanged from kluster-code: rebase-merge (not squash —
     committer identity), zero-diff **noop-automerge** for renovate-class
     PRs, Home Assistant push notification on deploy failure.
+-   **One scheduled workflow owns the outside-cluster backups**
+    (decided 2026-08-23 — storage.md §5 names the backups but not
+    their owner): the hourly **etcd snapshot** runs here (`talosctl
+    etcd snapshot` against the NLB endpoint → upload to B2), because
+    CI already holds the talosconfig and B2 credentials and a
+    scheduled job pays no standing rent — no in-cluster CronJob, no
+    talosconfig copied into the cluster. The same workflow does the
+    **freshness check for backups vmalert can't see**: object-age
+    assertions on the B2 `etcd/` and state-backend `pg_dump` prefixes
+    (the micro's cron is otherwise unmonitored), failing into the same
+    HA push channel as deploy failures — the out-of-cluster mirror of
+    the in-cluster backup-freshness alert family
+    (cluster-infra.md §3).
 
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 

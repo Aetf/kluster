@@ -38,7 +38,11 @@ owns sequencing, data movement, and teardown.
 
 1.  Manual preconditions: OCI tenancy on PAYG (home region choice is
     permanent), the state-backend micro + Postgres + pg_dump timer
-    (ci.md §1), Talos OCI image via Image Factory.
+    (ci.md §1), Talos OCI image via Image Factory, the homelab
+    host-prep aconfmgr change-set (bridge, subvolume/storage pool,
+    libvirt SSH identity, NFS exports — physical.md §3), and the
+    ZeroTier Central items (CI member pre-auth + the `lan` pool
+    managed route — physical.md §6).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
     (60 GB), NLB, UDM FRR/estate, B2. `dns` up: zones + estate records
     imported wholesale (records still pointing at `archvps.hosts`; the
