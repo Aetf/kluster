@@ -70,10 +70,12 @@ be preserved (see the worked example).
 Worked examples: immich = CNPG (db) + NAS (originals) + local-path
 no-backup (thumbnails/ML cache); qbittorrent = NAS (payloads) +
 local-path+VolSync (its config/state); syncthing-nas = NAS (data) +
-local-path+VolSync (index/db); hath = **preserved** cache (its own
-protected block volume + `BULKY`-class backup — the "cache" is a slice
-of the globally distributed H@H archive, not scratch) + VolSync'd
-client state.
+local-path+VolSync (index/db); hath = **preserved but not backed**
+cache (its own protected block volume, moved-never-recreated — the
+"cache" is a slice of the globally distributed H@H archive, not
+scratch, yet like NAS volumes its safety net is outside the cluster
+backup regime: the H@H network's own replication) + VolSync'd client
+state.
 
 ## 3. Backups: centrally classed, locally declared
 

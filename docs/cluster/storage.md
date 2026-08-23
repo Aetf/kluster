@@ -139,9 +139,11 @@ Three related lessons, folded into policy:
     layer: `protect=True`.** Data-bearing and identity-bearing
     resources are Pulumi-protected so destroys/replaces fail loudly:
     the hath cache volume (a slice of the globally distributed H@H
-    archive — **not** re-derivable scratch), all buckets, CNPG
-    `Cluster`s, precious PVCs, `machine_secrets`, DNS zones, and the
-    reserved public IP. Deleting a protected resource is a two-step,
+    archive — **not** re-derivable scratch, though also not
+    VolSync-backed: like NAS volumes it sits outside the cluster backup
+    regime, its redundancy being the H@H network itself), all buckets,
+    CNPG `Cluster`s, precious PVCs, `machine_secrets`, DNS zones, and
+    the reserved public IP. Deleting a protected resource is a two-step,
     reviewed act: an unprotect diff, then the delete — the IaC
     equivalent of removing a safety catch, visible in preview both
     times. (Where a real resource must outlive its Pulumi entry,

@@ -48,8 +48,10 @@ docs: physical, dns, cluster-infra, workloads).
 - [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path +
   VolSync, NAS, object storage; Longhorn deferred), backup architecture,
   JuiceFS root causes & containment policy.
-- [docs/cluster/migration.md](docs/cluster/migration.md) — workload/data migration plan from
-  the legacy cluster.
+- [docs/cluster/migration.md](docs/cluster/migration.md) — the migration plan:
+  standing rules (per-app stop-copy-start + DNS repoint, tracker
+  retirement, NVMe interleave), the Phase-0 verification gate, waves
+  A–E, data-movement techniques, decommission checklist.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
   `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
   layering (§3). Start here; §1.4 has cookbook examples.

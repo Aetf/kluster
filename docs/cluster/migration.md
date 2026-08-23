@@ -1,88 +1,123 @@
-# Migration Plan - Legacy to Next Gen Cluster
+# Migration Plan: Legacy (kluster-code) → Next Gen
 
-Objective: Migrate applications and data from the legacy cluster (`~/projects/kluster-code`) to the new cluster, minimizing downtime for critical services like `hath` and ensuring data integrity.
+How the workloads and data move from the k3s legacy cluster to the new
+one, in dependency-ordered waves, ending with the legacy estate
+decommissioned. Target shapes per app are
+[declarative/workloads.md](../declarative/workloads.md); this document
+owns sequencing, data movement, and teardown.
 
-> **Status**: still the early generic draft; per-app details predate the
-> 2026-08-21/22 design decisions (there is no JuiceFS in the new cluster —
-> storage.md; per-app targets follow storage.md §2's decision rules). The
-> sections below marked 2026-08-22 are current; the rest needs a rewrite
-> once the declarative layer docs exist.
+> **Status**: rewritten 2026-08-22 against the finished design set,
+> superseding the early generic draft. Each wave item gets a short
+> execution checklist at migration time — this document stays at the
+> plan level.
 
-## 0. Sequencing constraints (2026-08-22)
+## 0. Standing rules (apply to every step)
 
--   **Host NVMe is nearly full** (~85 GB free) while both the legacy k3s
-    and the new Talos VM coexist on the homelab host. The Talos VM starts
-    at ~60 GB and grows only as legacy data is reclaimed (k3s images,
-    local-path PVCs, prometheus's 30 GB) — plan per-app migration to
-    interleave "migrate app → delete legacy PVC → grow VM disk" instead of
-    big-bang. (nodes.md §4.2.)
--   **GPU passthrough is two-phase** (physical.md §3): the worker VM
-    bootstraps *without* the hostdev — the cluster comes up while the
-    host's i915 keeps serving legacy transcode — but its Talos image
-    carries the i915 firmware extension from day 0. The cutover
-    (drain → bind vfio-pci on the host → add the PCI hostdev to the
-    domain → reboot → uncordon) is a short, device-only window
-    sequenced with the immich/jellyfin migration; verify the
-    passthrough capability early on a scratch VM so the window holds
-    no surprises.
--   **Every absorbed resource updates its old tracker.** Resources
-    migrating under Pulumi are currently tracked elsewhere — gw-config
-    (FRR, nspawn units/rootfs), yadm/aconfmgr (qbittorrent unit,
-    seedwatch/thread-dashboard quadlets, state-backend compose), the
-    DNSControl repo. Each migration step ends with a corresponding
-    removal/pointer commit in the old tracker, so no resource is ever
-    tracked twice or by nothing.
+1.  **Stop-copy-start per app**: scale down legacy → move data → deploy
+    new → verify → cut DNS. Legacy stays intact and re-startable until
+    verification passes; rollback is always "scale the legacy app back
+    up".
+2.  **DNS cutover is per-app and trivial by design**
+    (declarative/dns.md §6): the app's records repoint from
+    `archvps.hosts` to `kluster.hosts` (or become rewrite-only) the
+    moment it verifies. No big-bang DNS day.
+3.  **Every absorbed resource updates its old tracker**: gw-config
+    (FRR, nspawn, on_boot.d, caddy — the whole repo retires),
+    yadm/aconfmgr (qbittorrent unit, quadlets, state-backend compose,
+    adguardhome-sync), DNSControl. Each step ends with a
+    removal/pointer commit — nothing tracked twice or by nothing.
+4.  **NVMe space is interleaved** (nodes.md §4.2): ~85 GB free while
+    both clusters coexist; the Talos worker VM starts at ~60 GB and
+    grows only as legacy PVCs/images are reclaimed. Homelab waves
+    alternate "migrate → delete legacy data → grow VM disk".
+5.  **Sealing key first**: the legacy sealed-secrets key is restored
+    into the new cluster before any SealedSecret manifest is ported
+    (cluster-infra.md §1).
 
-## 0.1 Host-native onboarding (new scope, 2026-08-22)
+## 1. Phase 0 — foundations (before any app moves)
 
-Beyond legacy-cluster apps, three host-native services join the cluster
-(nodes.md §4.1): **qbittorrent-nox** (unblocked by the dual-stack v6 design,
-architecture.md §3.5 — migrate its `/var/lib/qBittorrent` profile and
-verify seedwatch's category paths survive the move), **seedwatch**, and
-**thread-dashboard** (both currently podman quadlets; seedwatch moves
-together with qbittorrent since it drives its API and reads NAS hardlink
-counts). DNS (AdGuard), the state-backend Postgres, and HAOS explicitly do
-NOT onboard — they stay host-side by design.
+1.  Manual preconditions: OCI tenancy on PAYG (home region choice is
+    permanent), the state-backend micro + Postgres + pg_dump timer
+    (ci.md §1), Talos OCI image via Image Factory.
+2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
+    (60 GB), NLB, UDM FRR/estate, B2. `dns` up: zones + estate records
+    imported wholesale (records still pointing at `archvps.hosts`; the
+    import census also drops dead weight — `abacus.hosts`, its ZT
+    entry, jupyter/mc records).
+3.  **Verification gate** — the consolidated checklist
+    (physical.md §6): LB-IPAM pool with node IPs; NLB dual-stack +
+    source preservation; etcd fsync on block volumes; Egress Gateway
+    under the routing mode + reserved-IP NAT; talosctl→homelab via
+    cloud endpoints; Cilium MTU over KubeSpan; VFIO capability on a
+    scratch VM. **No app migrates until this gate passes** — every
+    item is cheaper to fix on an empty cluster.
+4.  `k8s-base` up; sealing key restored; backup-freshness alerts live.
 
-## 1. General Migration Strategy
+## 2. Waves
 
-The migration will follow a stop-copy-start approach for each application to ensure data consistency:
-1.  **Scale down** the application in the legacy cluster to stop writes.
-2.  **Migrate the data** (PVCs, S3 objects).
-3.  **Deploy** the application in the new cluster pointing to the new storage.
-4.  **Verify** and update DNS/Ingress.
+Ordered by dependency and risk; cloud first (no NVMe contention, and
+the VPS empties progressively):
 
-## 2. Data Migration Details
+-   **Wave A — cloud pool**: authelia (SSO gates everything else) →
+    stateless public HTTP (blog/www, static sites) → splitpro (small
+    CNPG) → matrix (continuwuity, rsync its local-path state) →
+    **hath** (few-hours downtime cap: pre-provision the protected cache
+    volume, rsync the 50 Gi cache warm, final delta + client-state copy
+    in the window, dedicated VIP live, re-register) → cloud
+    syncthing/dav successor (**no data copy**: fresh per-app JuiceFS
+    bucket, the replica reseeds itself from syncthing-nas over the
+    syncthing protocol).
+-   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —
+    no TSDB migration; legacy prometheus kept read-only until its
+    retention ages out), golinks, emailproxy, spoolman, dmarc-check,
+    thread-dashboard (quadlet → cluster).
+-   **Wave C — homelab heavy + the GPU window**: the vfio-pci cutover
+    (drain → bind → hostdev → reboot, physical.md §3) runs at the head
+    of this wave, then immich (CNPG via the drilled barman restore; NAS
+    media PVs re-point in place; ML/thumbnail caches re-derive) and
+    jellyfin+shoko (NAS re-point + config PVC copy). syncthing-nas
+    re-points its NAS PV.
+-   **Wave D — host-native onboarding**: qbittorrent-nox
+    (`/var/lib/qBittorrent` profile copy; verify seedwatch category
+    paths and hardlink counts survive; outbound-v6 via masquerade
+    first, inbound pinhole later) + seedwatch together.
+-   **Wave E — decommission** (§4).
 
-### 2.1 Local Storage PVCs
-Some legacy applications use local path storage (e.g., early `hath` implementation).
--   **Strategy**: Copy data from the old node's local path to the new storage system (likely a different storage class or JuiceFS in the new cluster).
--   **Tools**: `rsync`, `tar` over SSH, or a backup/restore tool like Velero.
+Explicitly **not** migrating: AdGuard alice/bob (stay on the UDM, now
+Pulumi-managed), HAOS (adopted in place), the NAS role, the legacy
+state backend (serves kluster-code until E).
 
-### 2.2 JuiceFS / Object Storage (S3)
-If the user decides to move the S3 bucket to a different region (as noted in legacy README), this will be the largest data migration task.
--   **Strategy**: Stop all services using JuiceFS to ensure consistency. Copy objects from the source S3 bucket to the target S3 bucket in the new region.
--   **Tools**: `aws s3 sync` or GCP equivalent if moving to Google Cloud Storage.
--   **Downtime**: This operation will cause significant downtime for all services depending on JuiceFS, proportional to the volume of data.
+## 3. Data movement, by storage kind
 
-## 3. Application-Specific Migration Plans
+| Kind | Technique |
+| --- | --- |
+| CNPG databases | barman restore into the new cluster — the drilled path, not dump/restore reinvention |
+| Legacy local-path PVCs | one-off rsync/tar over SSH into the target PVC (VolSync takes over *after* landing) |
+| NAS-backed data | **no movement** — PVs re-point at the same datasets; the NAS backup regime is untouched |
+| Legacy shared-JuiceFS data (VPS syncthing/dav) | **no copy** — the new replica reseeds via the syncthing protocol from syncthing-nas |
+| hath cache | rsync warm + short final delta inside its downtime window (preserved, not backed — workloads.md §2) |
+| Monitoring TSDB | not migrated; retention overlap instead |
 
-### 3.1 HatH (Hentai@Home)
--   **Priority**: High. Downtime must be limited to a few hours.
--   **Storage**: Legacy code shows usage of Local Storage PVC (50Gi). If it has been moved to JuiceFS, refer to the JuiceFS migration strategy.
--   **Migration Steps**:
-    1.  Identify current storage location (Local PVC host path or JuiceFS).
-    2.  Prepare deployment in the new cluster (using the new Pulumi framework).
-    3.  Stop `hath` in the legacy cluster.
-    4.  Copy the 50Gi data to the new storage location. This should take less than an hour on a gigabit link.
-    5.  Start `hath` in the new cluster.
-    6.  Verify connection and operation.
+**Retained-PV census** (storage.md §3.3): while touching each legacy
+app, its retained-PV directories are identified and either mapped to
+the migration or deleted — the one-time cleanup of the `Retain`-era
+orphans, finishing with the disk-reclaim that feeds rule 0.4.
 
-### 3.2 Other Services
-Other services (Authelia, Nextcloud, Syncthing, etc.) will follow the general migration strategy. Data stored in database (PostgreSQL/MariaDB) will need to be dumped and restored or migrated using replication if supported.
+## 4. Wave E — decommission checklist
 
-## 4. Rollback Plan
-In case of failure during migration:
-1.  Abandon the migration of the specific application.
-2.  Scale up the deployment in the legacy cluster to resume service.
-3.  Investigate and resolve the issue before attempting again.
+1.  Legacy VPS: after Wave A verifies (hath stable on its new IP for a
+    comfortable soak), tear down remaining k3s residue and **cancel the
+    Vultr instance** (the $30/mo baseline ends). `archvps.hosts` and
+    remaining DNSControl entries deleted; DNSControl repo archived with
+    a pointer commit.
+2.  Homelab host: k3s uninstalled after Waves C/D; freed NVMe grows the
+    worker VM to its 100+ GB target; JuiceFS redis/mount residue gone
+    with k3s; `lan.ucw.phd` entries emptied (dns.md §4).
+3.  Trackers: gw-config repo retired (provider owns the device);
+    adguardhome-sync unit removed; qbittorrent/quadlet units removed
+    from yadm/aconfmgr; the legacy state backend's Postgres stops last,
+    once kluster-code needs no further `pulumi` operations.
+4.  Success criteria: every app serving from the new cluster with green
+    backup-freshness alerts; orphan audit reports zero; legacy spend
+    $0; the only homelab standing services are the ones nodes.md §4.1
+    lists as staying.
