@@ -48,17 +48,26 @@ backed up, and inherited is §2.1.
 ### 2.1 The offline kit: storage, backup, succession
 
 -   **Form**: one **kit** in a sealed tamper-evident envelope — a
-    USB stick carrying a **KeePassXC database** (the operator's
-    existing tool: a copy of the live KDBX, which holds a group
-    mirroring §2's rows with key files as attachments), plus
-    **paper** carrying the KDBX master password, the few bootstrap
-    secrets, and the README. The principle stands — a kit only the
+    USB stick carrying a **dedicated KeePassXC database** (the
+    operator's existing tool) plus **paper** carrying that KDBX's
+    master password, the few bootstrap secrets, and the README.
+    The dedicated database is not a copy of anything: it is the
+    **canonical form of "the operator's offline store"** — §2's
+    rows live in it and only in it (key files as attachments), and
+    deliberately *not* in the daily-driver personal KDBX. Two
+    reasons: an envelope compromise then exposes only infra keys,
+    every one of which has a designed rotate-on-compromise path —
+    not the personal estate, which has none — keeping the kit
+    locations' security requirements modest enough that an off-site
+    copy actually happens; and the repo's succession design stays
+    scoped to the system (the README notes that the personal estate
+    is arranged separately). The principle stands — a kit only the
     operator can decrypt fails succession by construction — and the
-    paper is what satisfies it: the master password in the envelope
-    makes the database openable by whoever holds the kit.
-    Confidentiality still comes from physical custody of the
-    envelope; the KDBX layer adds one real property on top — a USB
-    stick lost or copied *on its own* discloses nothing.
+    paper satisfies it: the master password in the envelope opens
+    the database for whoever holds the kit. Confidentiality still
+    comes from physical custody; the KDBX layer adds one real
+    property on top — a USB stick lost or copied *on its own*
+    discloses nothing.
 -   **Copies: two.** One at home, one off-site (locations are an
     implementation-time blank — a register note, not repo content).
     Losing the home to fire must not lose the recovery root
@@ -71,12 +80,13 @@ backed up, and inherited is §2.1.
     actually use. The account-root rows (MFA recovery codes) are
     what bootstrap everything else: GitHub gets the repos, the
     registrar gets the domains.
--   **Refresh discipline**: rotations land in the live KeePassXC
-    database as part of the rotation playbook, so re-issuing the kit
-    is **re-copying the KDBX to both USB sticks** (plus re-printing
-    the paper only when the master password or a paper-held secret
-    changed) — the daily-driver database is the single place secrets
-    are maintained; the kit is a snapshot of it. The **yearly offline day
+-   **Refresh discipline**: a rotation playbook's "update the
+    offline store" step writes the dedicated KDBX — the single
+    canonical location — and re-issuing the kit is **re-copying it
+    to both USB sticks** (paper reprints only when the master
+    password or a paper-held secret changed). The database's write
+    events *are* the rotation events, so kit freshness rides the
+    rotation playbooks with no separate upkeep. The **yearly offline day
     (operations.md §4) opens one kit and verifies it against §2's
     table** — a stale kit is a failed drill, same as any other.
 -   **Succession**: the successor (an implementation-time blank)
