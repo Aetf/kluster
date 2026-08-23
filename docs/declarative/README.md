@@ -7,13 +7,13 @@ and why) and [framework/](../framework/) (the Python machinery it's
 written with). Layering follows the proposal in
 [framework/pulumi.md](../framework/pulumi.md) §3.
 
-Planned documents (created as each area reaches detailed design):
+Documents (created as each area reaches detailed design):
 
--   **physical.md** — the physical layer: cloud instance + IPs/firewall,
-    libvirt VMs on the homelab host (the Talos VM *and* the adopted HAOS
-    domain, cluster/architecture.md §5.1/§6.8), Talos machine configs,
-    and the `gw-config` dynamic provider driving the UDM (FRR/BGP,
-    firewall pinholes — cluster/architecture.md §5.2).
+-   **[physical.md](physical.md)** (written) — the `physical` stack:
+    OCI resources + Talos day-1 via pulumiverse-talos (day-2 stays
+    talosctl), libvirt worker VM + adopted HAOS, gw-config/unifi on the
+    UDM, DNS anchors, buckets, bootstrap order + verification
+    checklist.
 -   **dns.md** — all public DNS in Pulumi (absorbing the DNSControl
     repo): zone + NLB anchor records in `physical`, per-app records
     declared next to each app in `apps` (decided 2026-08-22 — no
