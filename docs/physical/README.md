@@ -16,9 +16,11 @@ cluster design changed?** If yes, it's a requirement and belongs in
 `cluster/`; if it would only change because the machine changed, it
 belongs here.
 
-Cross-layer inventory: the [credential register](../credentials.md)
-tracks every credential (offline and automation tiers) regardless of
-which layer owns it.
+Cross-layer companions at the docs root: the
+[credential register](../credentials.md) (every credential, offline
+and automation tiers) and [operations.md](../operations.md) (day-2:
+update ownership, upgrade/replacement runbooks, the drill program,
+the playbook index).
 
 Documents:
 

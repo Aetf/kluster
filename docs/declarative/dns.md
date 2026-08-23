@@ -44,7 +44,10 @@ values so SPF strings don't get split on spaces.
     `archvps.hosts` (with the legacy VPS) and `abacus.hosts` (machine
     no longer exists — its dependents in the current file, the Abacus
     ZT entry and the jupyter/mc records, are dead weight to drop during
-    the import census).
+    the import census). The state-backend micro deliberately gets **no
+    anchor**: clients pin its IP (`verify-full`, SAN = IP literal) so
+    the state backend's hot path never depends on this stack
+    (physical/state-backend.md §3).
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing
     practice); its contents mirror the ZT member roster

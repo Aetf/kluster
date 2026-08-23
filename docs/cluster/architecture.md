@@ -407,9 +407,9 @@ not written down is not shipped.** Alerts exist to be acted on at a
 bad moment by whoever is on the other end of the push notification;
 "figure it out then" is the failure mode this rule forbids. The
 playbook lives with the design that owns the alert
-(physical/state-backend.md §7 is the pattern); the vmalert rule
-families get their playbook index in the day-2 operations doc when it
-lands. Adding an alert and adding its playbook is one change.
+(physical/state-backend.md §7 is the pattern); the playbook index
+lives in [operations.md](../operations.md) §5. Adding an alert and
+adding its playbook is one change.
 
 **Terminology, fixed (2026-08-24)**: **"CI" means the kluster repo's
 GitHub Actions** — the deployment pipeline. Workflows in any other
