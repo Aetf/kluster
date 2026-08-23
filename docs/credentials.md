@@ -69,6 +69,7 @@ doc.
 | HA webhook URL/ID | One notify endpoint | SealedSecret (alertmanager) · alerts-repo Actions secret | alertmanager; alerts-repo dispatch handler | On exposure; low value alone |
 | Alertmanager read token | Read-only alert list at the gateway route | alerts-repo Actions secret | Issue-sync poller | Yearly |
 | State-backend client certs (`ci`, `operator`) | postgres:// mTLS | CI env · operator machine | Pulumi state access | 2–3 y; ci.md §3 expiry probe |
+| age drill key | Decrypt pg_dumps for the automated rebuild drill only (no new exposure: CI's client cert already reads the live DB) | CI env | Drill workflow (operations.md §4) | Yearly, independent of the offline generations |
 | Pulumi state passphrase | Decrypts state secrets | CI env (all stacks) | every `pulumi` run | Rotate on compromise; offline escrow (§2) |
 | Talos machine secrets + talosconfig | Cluster PKI roots | Pulumi state (physical) · CI env (talosconfig for etcd snapshots) | Talos ops, ci.md §3 | Cluster lifetime; regenerate = rebuild |
 | kubeconfig | cluster-admin | physical output → CI env | `k8s-base`, `apps` | With cluster CA |

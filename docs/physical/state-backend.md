@@ -132,14 +132,20 @@ standing-rent test.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** Rotation is a designed path, not an emergency
     improvisation:
-    -   **Every dump is encrypted to the two newest generations** —
-        age is natively multi-recipient, and both public keys sit in
-        the Butane file. This makes per-object key attribution
+    -   **Every dump is encrypted to the two newest generations plus
+        the CI-held drill key** — age is natively multi-recipient,
+        and all three public keys sit in the Butane file. The
+        generational pair makes per-object key attribution
         unnecessary (deploys are intentionally manual, so git dates
         prove nothing about which key an object carries): any object
         in retention decrypts with the current *or* previous key,
         and 30 days after a rotation the current key alone covers
-        the entire retention window.
+        the entire retention window. The **drill key**
+        (operations.md §4, credentials.md) exists so the rebuild
+        drill runs unattended; it adds no exposure — CI's client
+        cert already reads the live database — while the offline
+        generations keep the survive-loss-of-CI role. It rotates on
+        its own cadence, independent of the generations.
     -   **Rotate at least yearly** (and on compromise or custody
         change): generate generation N+1 offline, swap the Butane
         recipients `[N, N−1] → [N+1, N]`, re-provision — playbook
@@ -209,10 +215,14 @@ executable playbooks (the §1 scripts plus their runbooks in
 -   **§7.3 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: fresh dump → merge → re-provision (new major initdb's) →
     restore → clean `pulumi preview`.
--   **§7.4 Rebuild / DR drill (quarterly).** §7.3 minus the pin bump,
-    sourced from the latest age-encrypted B2 object — one pass
-    exercises B2 download, the offline age identity,
-    provision-from-Butane, restore, and cert delivery.
+-   **§7.4 Rebuild / DR drill (quarterly, automated in CI).** §7.3
+    minus the pin bump: provision a scratch micro from Butane,
+    restore the latest age-encrypted B2 object via the **drill key**,
+    verify, destroy — unattended, alert on failure (operations.md
+    §4). One pass exercises B2 download, decryption,
+    provision-from-Butane, restore, and cert delivery. The *offline*
+    age identity is proven separately by the yearly rotation (§7.5),
+    which inherently decrypts with it.
 -   **§7.5 age identity rotation.** Trigger: yearly cadence, key
     compromise, custody change. Outline: generate N+1 offline +
     register entry (rotate / earliest-destroy dates) → swap Butane

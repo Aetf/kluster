@@ -21,13 +21,12 @@ says so.
 | Talos version (machine-config pin + Image Factory schematic) | renovate (GitHub-releases datasource) | `just` task wrapping `talosctl upgrade`, serial, staged (physical.md §5) | Reviewed; §2.1 runbook |
 | Kubernetes version | same PR family (Talos-coupled) | `talosctl upgrade-k8s` | Reviewed; after the Talos bump it belongs to |
 | Cilium chart | renovate | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth) |
-| k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) | renovate | CI chain | Reviewed; patch bumps with zero-object preview diffs may automerge (noop rule) |
-| CNPG operand images (self-built) | renovate (base + PG minor) | CI chain | Minor reviewed; **major never automerged**, gated on the self-built image line (workloads.md §4) |
-| Self-built app images (emailproxy, golinks) | renovate | CI chain via digest pin | Reviewed |
+| k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) | renovate | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval |
+| **Cluster images, infra and app alike** (CNPG operands, self-built, third-party app images) | renovate | CI chain (merge = deploy) | **Minor automerge** (patch stream folded into minor — the legacy `patch: enabled: false` precedent); **major behind dashboard approval + review**; CNPG operand major additionally gated on the self-built image line (workloads.md §4). The safety valve is the deploy-failure alert, not a per-bump eyeball — this deliberately reverses legacy's "applications get eyeballed" stance |
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate in homelab-containers; digest-pin PR here | gw-config provider push | Reviewed |
 | State-backend pins (FCOS stream handled by Zincati; `postgres:NN` in Butane) | Zincati (periodic window) / renovate on `deploy/state-backend/` | auto / manual re-provision | state-backend.md §4 |
-| Pulumi SDK + providers, Python deps, Actions versions | renovate | CI chain / repo tooling | Reviewed; provider bumps judged by preview diff |
+| Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
 | UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the estate self-heals via on_boot.d, ZT recovery runbook gateway.md §3 |
 
 ## 2. Upgrade runbooks (census)
@@ -70,25 +69,34 @@ says so.
 ## 4. Drill program
 
 Principle (standing): **an undrilled recovery path is assumed
-broken.** The machinery triggers; the operator executes.
+broken.** Corollary for a one-operator system: **a drill that needs
+the operator is a drill that will eventually be skipped** — so the
+default form is a scheduled automation that alerts only on failure,
+and the human appears exactly where an offline secret or physical
+action is irreducible.
 
-**Trigger mechanism**: a quarterly scheduled workflow in CI raises an
-`actionable` alert through the unified channel (architecture.md §4.3)
-— so the drill lands as an HA push *and* a kluster-alerts issue whose
-body is the quarter's checklist with playbook links. The issue stays
-open until every item is checked; closing it is the completion
-record. No human has to remember the calendar — forgetting requires
-ignoring an open issue.
+**The enabler for the biggest drill**: pg_dumps gain a third age
+recipient — a **CI-held drill key** (credentials.md). This adds no
+exposure: CI already holds a client cert that reads the live
+database, so a CI-decryptable dump discloses nothing CI cannot
+already read; the offline generations keep their actual role,
+surviving the loss of GitHub/CI itself. With it, the state-backend
+rebuild drill runs unattended end to end.
 
 | Drill | Cadence | Form |
 | --- | --- | --- |
-| CNPG restore (immich pattern, ported from legacy) | Monthly | Fully automated, alerts only on failure |
-| State-backend rebuild (covers DR + PG major + cert delivery, state-backend.md §7.4) | Quarterly | Scripted, human-run (offline age key) |
-| etcd cold-standby bootstrap (nodes.md §5; alternate directions) | Quarterly | Scripted, human-run |
-| VolSync spot-restore (one PVC, rotating pick) | Quarterly | Scripted, human-run |
-| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Scripted check, human review |
-| Credential-register audit (credentials.md §4) | Quarterly | Checklist, human-run |
-| age key rotation (state-backend.md §7.5) | Yearly | Scripted, human-run (offline) |
+| CNPG restore (immich pattern, ported from legacy) | Monthly | Automated, alert on failure |
+| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.4) | Quarterly | Automated in CI, alert on failure |
+| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated in CI, alert on failure |
+| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
+| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
+| Credential expiry + destroy-date tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when a date approaches/passes |
+| **Offline day**: age key rotation (proves offline custody, state-backend.md §7.5) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+
+Every automated drill is covered by a **freshness alert** (the
+backup-freshness family, cluster-infra.md §3): a drill that silently
+stops running is indistinguishable from a failing one. The only
+calendar ritual left is the yearly offline-day issue.
 
 ## 5. Playbook index
 
