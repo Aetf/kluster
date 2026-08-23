@@ -135,8 +135,9 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
     (the micro's cron is otherwise unmonitored), plus the state
     backend's server-cert expiry probe (≥30 days remaining;
     physical/state-backend.md §6, playbooks §7),
-    failing into the same
-    HA push channel as deploy failures — the out-of-cluster mirror of
+    failing into the **out-of-cluster half of the unified alert
+    channel** (direct HA webhook, same payload convention as
+    alertmanager — architecture.md §4.3), like deploy failures — the out-of-cluster mirror of
     the in-cluster backup-freshness alert family
     (cluster-infra.md §3).
 

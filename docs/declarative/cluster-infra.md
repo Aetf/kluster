@@ -64,7 +64,11 @@ empty cluster:
     dashboards port over. **Alert delivery**: vmalert needs an
     Alertmanager-compatible sink — one small alertmanager instance,
     its routing ported from the legacy config (Home Assistant push),
-    stays in the stack (~70 Mi, earns its rent as the alerting spine).
+    stays in the stack (~70 Mi, earns its rent as the alerting
+    spine). This is the **in-cluster half of the unified alert
+    channel** (architecture.md §4.3): same HA endpoint and payload
+    convention as the CI-side producers, every alert carrying its
+    playbook reference.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0 so the cutover needs no k8s-base change.

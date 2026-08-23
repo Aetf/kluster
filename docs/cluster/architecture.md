@@ -394,7 +394,7 @@ By enabling Hubble within Cilium, the eBPF datapath and Envoy proxies provide
 deep observability into HTTP paths, gRPC codes, and DNS queries without
 requiring application modification.
 
-### 4.3 Alert discipline: every alert ships with a playbook
+### 4.3 Alert discipline & delivery
 
 Rule (2026-08-24): **an automation alert whose response procedure is
 not written down is not shipped.** Alerts exist to be acted on at a
@@ -404,6 +404,28 @@ playbook lives with the design that owns the alert
 (physical/state-backend.md §7 is the pattern); the vmalert rule
 families get their playbook index in the day-2 operations doc when it
 lands. Adding an alert and adding its playbook is one change.
+
+**One channel, two producers (2026-08-24).** Every alert — cluster
+or physical layer — terminates at the **same Home Assistant notify
+endpoint** (the phone push) with the **same payload convention**:
+source system, severity, one-line summary, playbook reference. Two
+producer paths exist by necessity, not preference:
+
+-   **In-cluster**: vmalert → alertmanager → HA push
+    (cluster-infra.md §1's alerting spine, routing ported from
+    legacy).
+-   **Out-of-cluster**: CI workflows (deploy failures, the ci.md §3
+    scheduled checks) call the HA webhook directly — these alerts
+    exist precisely to fire when the cluster can't, so they must not
+    route through it.
+
+The shared convention is what makes the two paths one channel: a push
+reads identically regardless of origin, and always names its
+playbook. **Known limitation, on record**: the channel terminates on
+the home network — a home outage silences it exactly when a
+homelab-down alert would fire. The out-of-band candidate (OCI
+Notifications' free tier, nodes.md §3.2) remains a recorded option,
+deliberately not wired until the single-channel gap actually bites.
 
 ## 5. Infrastructure as Code (Pulumi Implementation)
 

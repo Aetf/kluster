@@ -97,7 +97,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **Expiry is monitored, not remembered**: the scheduled workflow
     (ci.md §3) asserts ≥30 days remaining on the server cert via an
     `openssl s_client` probe (no credentials needed), failing into the
-    HA push channel. Response: playbook §7.1.
+    unified alert channel (architecture.md §4.3). Response: playbook §7.1.
 
 ## 4. Network exposure
 
@@ -178,7 +178,7 @@ Everything observable lives **outside** the box:
     thing that needs it, which is the only thing that cares.
 -   The scheduled workflow (ci.md §3) asserts pg_dump freshness
     (object-age on B2) and server-cert expiry (≥30 days), alerting
-    into the HA push channel. Each alert maps to a playbook: stale
+    into the unified alert channel (architecture.md §4.3). Each alert maps to a playbook: stale
     dump → §7.4's restore path doubles as the diagnosis start; cert
     expiry → §7.1; connection timeouts → §7.2.
 -   **Deliberately unmonitored, with rationale**: Zincati/update
