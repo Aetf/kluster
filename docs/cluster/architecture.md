@@ -558,10 +558,18 @@ already lives:
     access (necessary because ZT-forwarded traffic rides the UDM's
     default ACCEPT, above: Central rules are the only policing layer).
     All via the official `zerotier/zerotier` Terraform provider through
-    Pulumi's any-Terraform-provider bridge, in the `physical` stack —
-    implementation-time verification: bridge quality of that provider;
-    fallback is the two hand-kept Central settings documented as manual
-    preconditions (physical.md §6).
+    Pulumi's any-Terraform-provider bridge, in the `physical` stack.
+    Resource coverage verified (2026-08-24, v1.6.0 docs; repo active
+    2026-07): `zerotier_network` carries managed `route` blocks and
+    `flow_rules` (the Central rules language as a string);
+    `zerotier_member` carries `authorized`, static `ip_assignments`,
+    `tags`, and `capabilities`; `zerotier_identity` generates member
+    keypairs in-state — so the CI member's identity can itself be
+    declared, its private key flowing into the CI environment secret.
+    Implementation-time verification remains the **bridge quality**
+    (provider existence ≠ clean Pulumi bridging); fallback is the two
+    hand-kept Central settings documented as manual preconditions
+    (physical.md §6).
 
 Alternative considered — **BGP-advertising the ZT subnet from the
 homelab host** (host stays ZT router, FRR/bird on the host peers with

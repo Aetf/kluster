@@ -33,9 +33,13 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     updates with reboots accepted (a brief 5432 blip; CI retries).
     Any change re-provisions from the config — the instance carries no
     state that pg_dump + `pulumi refresh` can't rebuild.
-    Implementation-time verification: Ignition's OCI platform support;
-    fallback is openSUSE MicroOS or Ubuntu Minimal via cloud-init (the
-    Oracle datasource is standard) + unattended-upgrades.
+    OCI support verified (2026-08-24, official FCOS docs): OCI is a
+    supported platform (`coreos-installer download -p oraclecloud`,
+    x86_64 and aarch64); the qcow2 imports as a custom image
+    (PARAVIRTUALIZED launch mode) and Ignition is delivered as
+    instance `user_data` — FCOS reads it in place of cloud-init.
+    Named fallback (unneeded, kept for the record): openSUSE MicroOS
+    or Ubuntu Minimal via cloud-init + unattended-upgrades.
 -   **OCI Container Instances rejected** as the runtime (checked
     2026-08-23): persistent storage is not supported (15 GB ephemeral
     only — disqualifying for Postgres), and A1-shaped container
