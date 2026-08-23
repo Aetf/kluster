@@ -41,9 +41,40 @@ facts about them.
 
 ## 2. Offline tier (never-in-automation)
 
-Held only in the operator's offline store; automation never sees
-them. Compromise response and destroy discipline live with the owning
-doc.
+Automation never sees these. Compromise response and destroy
+discipline live with the owning doc; how they are physically held,
+backed up, and inherited is §2.1.
+
+### 2.1 The offline kit: storage, backup, succession
+
+-   **Form**: one **kit** — paper for the short secrets (passphrase,
+    recovery codes) plus a USB stick for key files, together in a
+    sealed tamper-evident envelope, **in the clear**. Deliberate:
+    a kit only the operator can decrypt fails succession by
+    construction; its confidentiality comes from physical custody,
+    not from a passphrase that dies with its owner.
+-   **Copies: two.** One at home, one off-site (locations are an
+    implementation-time blank — a register note, not repo content).
+    Losing the home to fire must not lose the recovery root
+    (the same reasoning that keeps backups off the OCI tenancy).
+-   **Contents = §2's rows plus a printed README**: the recovery
+    entry points (this repo's URL, this document, the
+    reverse-cold-standby runbook, the account list) written for a
+    **technical reader who has never seen this system** — the README
+    is what turns a bag of keys into something a successor can
+    actually use. The account-root rows (MFA recovery codes) are
+    what bootstrap everything else: GitHub gets the repos, the
+    registrar gets the domains.
+-   **Refresh discipline**: every rotation playbook ends with
+    "re-issue the kit" — the rotation scripts print the changed
+    items; both envelopes get the update. The **yearly offline day
+    (operations.md §4) opens one kit and verifies it against §2's
+    table** — a stale kit is a failed drill, same as any other.
+-   **Succession**: the successor (an implementation-time blank)
+    knows the kit locations and that this README exists — that is
+    the entire protocol; no shared passphrases, no ceremony. The
+    offline-day check includes re-reading the README with fresh
+    eyes: instructions rot faster than keys.
 
 | Credential | Purpose | Rotation / destroy |
 | --- | --- | --- |

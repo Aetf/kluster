@@ -91,7 +91,7 @@ rebuild drill runs unattended end to end.
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
 | Credential expiry + destroy-date tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when a date approaches/passes |
-| **Offline day**: age key rotation (proves offline custody, state-backend.md §7.5) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+| **Offline day**: age key rotation (proves offline custody, state-backend.md §7.5) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 Every automated drill is covered by a **freshness alert** (the
 backup-freshness family, cluster-infra.md §3): a drill that silently
