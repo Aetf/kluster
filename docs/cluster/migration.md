@@ -59,11 +59,14 @@ Ordered by dependency and risk; cloud first (no NVMe contention, and
 the VPS empties progressively):
 
 -   **Wave A — cloud pool**: authelia (SSO gates everything else) →
-    stateless public HTTP (blog/www, static sites) → splitpro (small
-    CNPG) → matrix (continuwuity, rsync its local-path state) → cloud
-    syncthing/dav successor (**no data copy**: fresh per-app JuiceFS
-    bucket, the replica reseeds itself from syncthing-nas over the
-    syncthing protocol).
+    **blog/static sites** (prerequisite: the content-baked image chain
+    in homelab-containers replaces the rsync→hostPath deployer,
+    workloads.md §4 — the blog repo's `deploy:` config and the SSH
+    pinhole retire with it) → splitpro (small CNPG) → matrix
+    (continuwuity, rsync its local-path state) → cloud syncthing/dav
+    successor (**no data copy**: fresh per-app JuiceFS bucket, the
+    replica reseeds itself from syncthing-nas over the syncthing
+    protocol).
 -   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —
     no TSDB migration; legacy prometheus kept read-only until its
     retention ages out), golinks, emailproxy, spoolman, dmarc-check,

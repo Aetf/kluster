@@ -134,6 +134,24 @@ per-app number:
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, monthly restore drill inherited from the
     legacy discipline (storage.md §5).
+-   **Static-site app (blog: the apex/www of three zones)**: content is
+    **baked into the image**, replacing the legacy chain entirely
+    (hexo → rsync over SSH → a hostPath webroot served by bitnami
+    nginx — hostPath, inbound SSH, and the bitnami line all have no
+    place in the new design). Build: homelab-containers gains a `blog`
+    image — builder stage runs `hexo generate` against the blog source
+    at a specific SHA, final stage is an alpine static server + the
+    baked site; the blog repo's CI fires a `repository_dispatch` to
+    homelab-containers on green builds. Deploy: the apps component pins
+    the image by digest; renovate opens the bump PR (single-image
+    preview diff) with automerge for this image (content-only), and
+    up-apps publishes. No PVC at all → 2 replicas across the cloud
+    nodes (the blog gets ingress HA), rollback = pin revert. If
+    publish latency ever annoys, an optional accelerator is a direct
+    dispatch that opens the bump PR immediately — not in the initial
+    build. Retired with the migration: the rsync deployer + SSH
+    pinhole, the hostPath webroot, kluster-code's nginx component, and
+    the blog repo's `deploy:` config (old-tracker rule).
 
 ## 5. Porting from kluster-code
 
