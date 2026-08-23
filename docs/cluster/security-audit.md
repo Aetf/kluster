@@ -143,7 +143,8 @@ tightening. Recorded cross-VLAN dependencies all originate cluster→IoT,
 so none is affected.
 
 **Lives in.** architecture.md §3.4, declared via the unifi provider
-(physical.md §4).
+(physical.md §4); full firewall target state in
+physical/gateway.md §4.
 
 ### M3 — No node-local firewall beneath the derived OCI rules
 

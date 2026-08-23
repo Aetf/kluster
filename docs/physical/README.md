@@ -32,4 +32,5 @@ Documents:
     bridge, two-phase GPU passthrough, the host-prep change-set.
 -   **[gateway.md](gateway.md)** — the UDM as a system: the ZeroTier
     network design (roster, routes, CI-confining flow rules, cutover
-    order), recovery playbooks, firewall target state (pending).
+    order), recovery playbooks, and the firewall target state
+    (rules census + the two-phase IoT→LAN tightening).

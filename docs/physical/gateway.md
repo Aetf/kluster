@@ -235,5 +235,85 @@ executable form ships with the implementation.
 
 ## 4. Firewall target state
 
-*(Pending — Gap 4: the zone-matrix target state, including whether
-IoT→LAN tightens to default-drop as a deferred two-phase decision.)*
+The as-designed panorama of the UDM firewall. The individual rules
+were decided in their owning docs (architecture.md §3.4/§3.5, audit
+M2, workloads.md §4); this section is the one place that holds the
+complete set and the zone-matrix target state.
+
+### 4.1 Ground truth (measured 2026-08-23)
+
+-   The UBIOS zone firewall classifies forwarded traffic by
+    **destination ipset**, not interface pairs.
+-   All three VLANs — br0 (server LAN `192.168.80.0/24`, homelab
+    host + worker VM), br2 (IoT `192.168.90.0/24`, HAOS lives here),
+    br5 (containers `10.0.5.0/24`) — sit in the **LAN zone**, and
+    LAN→LAN is an unconditional predefined ACCEPT: **zero inter-VLAN
+    isolation today**. This is a recorded dependency-in-force, not an
+    endorsement (§4.3 is the plan to change it).
+-   The `lan` pool `192.168.70.0/24` (+ ULA /64) is deliberately
+    never a network object (it would fight the BGP /32s,
+    architecture.md §3.4), so it sits in no zone ipset: pool-bound
+    traffic falls through to the **LAN→WAN chain** (ACCEPT today)
+    and inherits any WAN-side machinery. Bootstrap verification: no
+    NAT/IPS/content-filter interference on the LAN→pool path. Any
+    rule naming the pool must use address groups — forever.
+-   `zt*` interfaces match no zone; ZT-forwarded traffic rides
+    FORWARD's default ACCEPT — the Central flow rules (§2.3) are its
+    only policing layer.
+
+### 4.2 Declared-rules census
+
+The complete set — every controller-side rule the design calls for,
+all declared in the `physical` stack via the bridged filipowm/unifi
+provider (auth discipline: dedicated local admin + API key,
+throttled retries — declarative/physical.md §4):
+
+1.  **IoT → `lan` pool drop** (audit M2; ships with the cluster):
+    one zone policy over two single-family address groups (the v4
+    CIDR and the ULA /64 — UniFi address groups can't mix
+    families). Rationale: the `lan` gateway fronts admin UIs and
+    IoT is the least-trusted population; recorded cross-VLAN
+    dependencies all originate cluster→IoT, so none is affected.
+2.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA +
+    service port. Constraint on record: the zone-policy API matches
+    literal IPs only (no prefix-relative objects), so the rule
+    embeds the current GUA and is **re-declared when the dynamic
+    home prefix rotates**; a stale rule degrades to the accepted
+    outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
+    urgent.
+3.  **qbittorrent v4 peer-port forward** — **the only port forward
+    on the device**. No management inbound exists: cluster and
+    Talos management ride the NLB, home-side management rides ZT.
+
+Nothing else. A controller rule not on this census is drift.
+
+### 4.3 Zone-matrix target state — two phases
+
+**Phase 1 (ships with the cluster rollout)**: exactly the census
+above. LAN→LAN stays open; the zero-isolation fact remains a
+dependency-in-force.
+
+**Phase 2 (deferred, adoption-triggered — the Longhorn treatment)**:
+tighten **IoT→LAN to default drop + enumerated allows**.
+
+-   **Trigger**: migration complete and stable (Wave F done, legacy
+    retired) *and* the IoT dependency census verified over an
+    observation window — both, not either.
+-   **Adoption-day facts to gather**: enumerate IoT-VLAN-originated
+    flows into br0/br5/pool from a UDM traffic-flow observation
+    window plus the recorded dependency list. Special attention to
+    **HAOS — the IoT VLAN's most capable resident**: every
+    integration's outbound target (LAN services, UDM APIs, cluster
+    VIPs) becomes an allow-list candidate the moment the default
+    flips.
+-   **Shape when adopted**: an IoT→LAN default-drop zone policy plus
+    enumerated address-group/port allows — previewed Pulumi changes
+    over the already-existing declaration channel; adoption is a
+    diff, not a project.
+-   **Why deferred**: the dependency census is unverified, and a
+    wrong drop bricks home automation mid-migration; nothing in the
+    rollout depends on it — phase 1 already covers M2's actual
+    exposure (IoT reaching the cluster's admin UIs).
+-   **Untouched by design**: the LAN→IoT direction stays open (home
+    automation reaches its devices); phase 2 constrains only what
+    IoT may initiate.

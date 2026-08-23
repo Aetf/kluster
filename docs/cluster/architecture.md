@@ -285,7 +285,10 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
     are the LAN's least-trusted population; without the rule they
     reach every VIP via the unconditional ACCEPTs above. Declared via
     the unifi provider (§5.1); the recorded cross-VLAN dependencies
-    all originate cluster→IoT, so none is affected.
+    all originate cluster→IoT, so none is affected. The complete
+    firewall target state — full rules census and the deferred
+    IoT→LAN tightening — is
+    [physical/gateway.md](../physical/gateway.md) §4.
 4.  **Split-horizon DNS**: AdGuard (alice/bob) rewrites public hostnames to
     `lan` VIPs so LAN/ZT clients reach apps (immich!) directly, never via
     the cloud path — preserving the legacy cluster's hard-earned rule that
