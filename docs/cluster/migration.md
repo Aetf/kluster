@@ -59,10 +59,11 @@ Ordered by dependency and risk; cloud first (no NVMe contention, and
 the VPS empties progressively):
 
 -   **Wave A — cloud pool**: authelia (SSO gates everything else) →
-    **blog/static sites** (prerequisite: the content-baked image chain
-    in homelab-containers replaces the rsync→hostPath deployer,
-    workloads.md §4 — the blog repo's `deploy:` config and the SSH
-    pinhole retire with it) → splitpro (small CNPG) → matrix
+    **blog/static sites** (prerequisite: blog CI publishes the built
+    branch; cluster side is static server + git-sync, workloads.md §4 —
+    the rsync `deploy:` config and the SSH pinhole retire with it) →
+    splitpro (small CNPG — **prerequisite: the multi-arch pgcron image
+    from the ported images.yml**, ci.md §4) → matrix
     (continuwuity, rsync its local-path state) → cloud syncthing/dav
     successor (**no data copy**: fresh per-app JuiceFS bucket, the
     replica reseeds itself from syncthing-nas over the syncthing

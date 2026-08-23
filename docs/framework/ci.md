@@ -84,3 +84,31 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
 -   Ported unchanged from kluster-code: rebase-merge (not squash —
     committer identity), zero-diff **noop-automerge** for renovate-class
     PRs, Home Assistant push notification on deploy failure.
+
+## 4. Self-built images (decided 2026-08-22: they live in this repo)
+
+The cluster-consumed custom images — the CNPG operands (pg_cron,
+vchord/pgvecto-rs), emailproxy, golinks — stay **in the kluster repo**
+(`docker/` + an `images.yml` workflow ported from kluster-code), not in
+homelab-containers: ownership follows the consumer (the same
+co-location principle as DNS records and firewall rules), and the
+proven single-repo loop is kept intact — a `.conf` version file per
+image, renovate's comment-driven regex managers bumping it,
+noop-automerge merging on green, the workflow publishing the ghcr tag,
+and renovate then opening the *deploy* PR against the image pin for
+human eyes. homelab-containers keeps its host/UDM scope (nspawn
+rootfs).
+
+Upgrades over the legacy workflow, both mandatory now:
+
+-   **Multi-arch is required** — the cloud pool is arm64 (splitpro's
+    CNPG operand runs there). Builds use GitHub's free native arm64
+    runners (public repos) + a manifest-stitch job; no qemu, which also
+    keeps the Rust-heavy vchord build viable.
+-   **The CNPG images join the CI** — the legacy manual `just docker-*`
+    flow retires; heavy builds are exactly what should not depend on a
+    workstation. kluster-code's `docker/` retires with the migration
+    (old-tracker rule).
+
+The blog is deliberately **not** an image (workloads.md §4: built
+branch + git-sync).

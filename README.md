@@ -135,9 +135,11 @@ first-session implementation tasks, roughly in order:
    (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
    verification checklist (physical.md §6) — every item verified before
    any app migrates.
-5. **CI workflows** per framework/ci.md §3; **`packages/crds` regen**
-   for the new chart set; small runbooks as they come up (sealing-key
-   export/restore, orphan audit recipe, talosctl day-2 recipes).
+5. **CI workflows** per framework/ci.md §3, plus the ported+upgraded
+   **`images.yml`** (multi-arch via native arm64 runners, CNPG images
+   wired in — ci.md §4); **`packages/crds` regen** for the new chart
+   set; small runbooks as they come up (sealing-key export/restore,
+   orphan audit recipe, talosctl day-2 recipes).
 6. Then follow **migration.md** Phase 0 → Waves A–F.
 
 Deliberately *not* pre-decided (settle on first contact, in this
