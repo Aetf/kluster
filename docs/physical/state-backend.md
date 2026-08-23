@@ -152,7 +152,9 @@ standing-rent test.
         records each generation with its rotate date and
         earliest-destroy date; destroying the key on that date is
         what actually ends the old generation's exposure. At most
-        two private keys are ever live.
+        two private keys are ever live. (The offline register is §2
+        of the [credential register](../credentials.md), which
+        inventories every credential in the system.)
     -   **Compromise variant**: drop the compromised key from the
         recipients entirely (don't keep dual-encrypting to it),
         take a fresh dump, delete the old objects early (their

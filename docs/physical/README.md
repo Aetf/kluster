@@ -16,6 +16,10 @@ cluster design changed?** If yes, it's a requirement and belongs in
 `cluster/`; if it would only change because the machine changed, it
 belongs here.
 
+Cross-layer inventory: the [credential register](../credentials.md)
+tracks every credential (offline and automation tiers) regardless of
+which layer owns it.
+
 Documents:
 
 -   **[state-backend.md](state-backend.md)** — the Pulumi
