@@ -13,9 +13,16 @@ everything cluster-scoped that speaks the k8s API, consumed by `apps`.
 
 -   Inputs (StackReference to `physical`): kubeconfig, node
     primary/private IPs, the augmented node's secondary private IP, the
-    NLB IP. Everything else apps need from this stack (gateway names,
-    pool labels, storage-class names) is shared as code in
-    `conventions.py`, not as outputs.
+    NLB IP.
+-   **Names: explicit for shared singletons, outputs for the dynamic.**
+    Cross-stack-referenced singletons (StorageClasses, Gateways, pools,
+    shared Secret names) get explicit `metadata.name`s with autonaming
+    disabled — they are well-known singletons where autonaming only
+    hurts (the legacy autonamed-PVC lesson) — and those fixed names live
+    in `conventions.py`. Where autonaming is deliberately kept, the
+    generated name is a machine fact and flows as a stack output. The
+    point of minimizing outputs is CI: every cross-stack output widens
+    the "stale downstream preview" window (ci.md §3).
 -   **The component list is closed.** Every entry below pays standing
     rent (nodes.md §4.4); additions require the same justification in
     writing. Notably absent, on purpose: Longhorn (storage.md §3.2),
@@ -36,13 +43,16 @@ empty cluster:
     configured `cni: none`; nodes sit NotReady between physical
     bootstrap and this step, which is fine — CI runs the stacks
     back-to-back, and nothing else can schedule anyway).
-3.  **cert-manager** — ACME with Cloudflare DNS-01 (token is a stack
-    secret); every later component may reference issuers.
-4.  **sealed-secrets controller** — the secret-management model is
-    unchanged from kluster-code. Migration note: the legacy sealing key
-    is restored into the new cluster *before* any legacy SealedSecret
-    manifests are ported, or everything gets re-sealed
-    (migration.md).
+3.  **sealed-secrets controller** — fully self-contained (generates its
+    own key pair), so it comes right after the CNI and every later
+    component's credentials can be SealedSecrets (§1.1). Migration
+    note: the legacy sealing key is restored into the new cluster
+    *before* any legacy SealedSecret manifests are ported, or
+    everything gets re-sealed (migration.md).
+4.  **cert-manager** — ACME with Cloudflare DNS-01; the solver
+    credential is a SealedSecret per §1.1 (a *separate*,
+    minimally-scoped token from the one the pulumi-cloudflare provider
+    uses); every later component may reference issuers.
 5.  **CNPG operator**, **VolSync** — independent of each other; both
     before any app declares a database or a backup schedule.
 6.  **Monitoring**: VictoriaMetrics (vmsingle + vmagent + vmalert) +
@@ -57,6 +67,25 @@ empty cluster:
 `packages/crds` is regenerated (`uv run update_crds`) against exactly
 this chart set; the legacy chart list retires with kluster-code.
 
+### 1.1 Secrets placement rules
+
+Two channels, chosen by who consumes the secret:
+
+-   **Consumed in-cluster as a k8s Secret → SealedSecret, first
+    choice** — the kluster-code model carries over unchanged (including
+    the `template.data` pattern: plaintext config stays reviewable in
+    git, only the sensitive fields are sealed). Examples: cert-manager's
+    DNS-01 token, app credentials, VolSync restic passwords, CNPG user
+    secrets.
+-   **Consumed by a Pulumi provider itself → Pulumi config secret**
+    (passphrase-encrypted in state) — the only cases where SealedSecret
+    is impossible, because the consumer is not the cluster (or the
+    cluster doesn't exist yet): OCI credentials, the pulumi-cloudflare
+    provider token, B2 management keys, the UDM SSH key, ZT tokens for
+    CI.
+-   Where one external service serves both roles (Cloudflare), issue
+    **two separately-scoped tokens** — one per channel.
+
 ## 2. Cilium: the load-bearing component
 
 All decided behavior from architecture.md §3, expressed as config:
@@ -64,8 +93,10 @@ All decided behavior from architecture.md §3, expressed as config:
 -   **Datapath**: kube-proxy replacement on; `k8sServiceHost:
     localhost`, `k8sServicePort: 7445` (KubePrism — mandatory, there is
     no kube-proxy to fall back on); dual-stack with IPv4 primary;
-    IPv6 masquerade on (qbittorrent's egress path, §3.5); MTU sized for
-    the KubeSpan underlay (WireGuard overhead — verify, don't assume).
+    IPv6 masquerade on — pod v6 addresses are internal/unroutable, so
+    outbound v6 is SNAT'd to the node's GUA; this *is* qbittorrent's
+    outbound-v6 mechanism (architecture.md §3.5); MTU sized for the
+    KubeSpan underlay (WireGuard overhead — verify, don't assume).
 -   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
     three node primary IPs + the augmented node's secondary private IP,
     all from physical outputs) and `lan` (`192.168.70.0/24` + the ULA

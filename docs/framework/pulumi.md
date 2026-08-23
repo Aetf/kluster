@@ -217,9 +217,12 @@ Boundary rules:
     machinery.
 -   **Conventions are code, not stack outputs.** Gateway names, pool
     labels, storage-class names live in a shared `conventions.py` —
-    single-repo constants need no StackReference. StackReferences carry
-    only *machine facts* from `physical`: kubeconfig, node IPs, NLB IP,
-    bucket names.
+    made possible by giving cross-stack-referenced singletons explicit
+    names (autonaming disabled; see cluster-infra.md §0). Resources
+    that deliberately keep autonaming expose their generated names as
+    stack outputs — dynamic names are machine facts. StackReferences
+    otherwise carry only physical's machine facts: kubeconfig, node
+    IPs, NLB IP, bucket names.
 -   **Namespaces belong to apps**: each app component creates its own
     namespace (legacy habit preserved); `k8s-base` owns only shared,
     cluster-scoped infrastructure.
