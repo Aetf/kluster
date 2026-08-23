@@ -123,6 +123,38 @@ items in Pulumi, not a runbook); default `numberOfReplicas: 1` +
 `dataLocality: best-effort`; cross-site replica=2 stays prohibited
 (principle 3); v2 engine not adopted (dual-stack lags v1).
 
+### 3.3 Volume lifecycle: reclaim, orphans, protection
+
+Three related lessons, folded into policy:
+
+-   **Reclaim policy: `Delete` by default, with VolSync as the undo.**
+    The legacy cluster used `Retain` widely, which left orphaned PV
+    directories of uncertain provenance that nobody dares delete —
+    exactly the archaeology this design forbids. In the new cluster a
+    deleted working-state PVC cleans its directory; the backup (and its
+    retention class) is the safety net. NAS/NodePV volumes are
+    inherently safe either way: the PV points at a dataset, deletion
+    never touches data.
+-   **Deliberate preservation happens at the IaC layer, not the reclaim
+    layer: `protect=True`.** Data-bearing and identity-bearing
+    resources are Pulumi-protected so destroys/replaces fail loudly:
+    the hath cache volume (a slice of the globally distributed H@H
+    archive — **not** re-derivable scratch), all buckets, CNPG
+    `Cluster`s, precious PVCs, `machine_secrets`, DNS zones, and the
+    reserved public IP. Deleting a protected resource is a two-step,
+    reviewed act: an unprotect diff, then the delete — the IaC
+    equivalent of removing a safety catch, visible in preview both
+    times. (Where a real resource must outlive its Pulumi entry,
+    `retainOnDelete` is the tool — used case-by-case, never as a
+    default, because it manufactures exactly the unaccounted-resource
+    problem `Retain` had.)
+-   **Orphan audit is a standing procedure.** A `just` recipe compares
+    on-disk PV directories against live PVs (per node) and reports
+    unaccounted entries; run with the quarterly restore drills, target
+    zero. The legacy cluster's accumulated retained-PV folders get a
+    one-time census during migration — each mapped to an app or
+    deleted (migration.md).
+
 ## 4. Object storage provider
 
 Needs: S3-compatible API (restic/VolSync, CNPG barman, and Longhorn if

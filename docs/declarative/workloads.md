@@ -36,11 +36,13 @@ The storage.md §2 classes are the *menu*; this is how a workload
 chooses. Ask, in order:
 
 **Axis 1 — does it need to persist?** State that is re-derivable
-(caches, transcode scratch, thumbnail stores, ML model downloads, hath's
-cache in the protocol sense) gets **plain local-path (or emptyDir) with
-no backup** — but the exemption is explicit: the component declares
-`backup=None` with a one-line reason, so "unbacked" is always a decision
-on record, never an omission.
+(caches, transcode scratch, thumbnail stores, ML model downloads) gets
+**plain local-path (or emptyDir) with no backup** — but the exemption is
+explicit: the component declares `backup=None` with a one-line reason,
+so "unbacked" is always a decision on record, never an omission.
+Beware the false "cache": **hath's cache is not re-derivable** — it is
+this client's slice of the globally distributed H@H archive, and must
+be preserved (see the worked example).
 
 **Axis 2 — what performance does it actually need?**
 
@@ -68,8 +70,10 @@ on record, never an omission.
 Worked examples: immich = CNPG (db) + NAS (originals) + local-path
 no-backup (thumbnails/ML cache); qbittorrent = NAS (payloads) +
 local-path+VolSync (its config/state); syncthing-nas = NAS (data) +
-local-path+VolSync (index/db); hath = block-volume local-path
-no-backup (cache is protocol-re-derivable) + VolSync'd client state.
+local-path+VolSync (index/db); hath = **preserved** cache (its own
+protected block volume + `BULKY`-class backup — the "cache" is a slice
+of the globally distributed H@H archive, not scratch) + VolSync'd
+client state.
 
 ## 3. Backups: centrally classed, locally declared
 
@@ -108,7 +112,8 @@ per-app number:
     dedicated VIP + a `CiliumEgressGatewayPolicy` with `egressIP` = the
     secondary private IP + node affinity to the augmented node (cache
     volume locality) + strict CPU limits. All four pieces in the one
-    component (architecture.md §3.2).
+    component (architecture.md §3.2). The cache volume is
+    `protect=True` and moved-never-recreated (storage.md §3.3).
 -   **Split-horizon app (immich)**: one set of pods, two exposures
     (`public_route` to both gateways) — the helper emits both routes,
     the public CNAME, and the LAN rewrite. The immich LAN-direct rule

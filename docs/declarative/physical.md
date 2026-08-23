@@ -62,6 +62,9 @@ secondary private), and bucket names/endpoints.
     records.
 -   **Buckets**: the JuiceFS chunk bucket on OCI Object Storage
     (storage.md §4/§6) + customer keys.
+-   **Protection**: data- and identity-bearing resources here — block
+    volumes (hath's cache above all), buckets, the reserved public IP,
+    `machine_secrets` — carry `protect=True` per storage.md §3.3.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
     free envelope, plus a budget with alert rules (nodes.md §3.2).
 
