@@ -15,8 +15,9 @@ Planned documents (created as each area reaches detailed design):
     and the `gw-config` dynamic provider driving the UDM (FRR/BGP,
     firewall pinholes — cluster/architecture.md §5.2).
 -   **dns.md** — all public DNS in Pulumi (absorbing the DNSControl
-    repo), split-horizon rewrites toward AdGuard, and how records derive
-    from Service/Gateway resources instead of being hand-listed.
+    repo): zone + NLB anchor records in `physical`, per-app records
+    declared next to each app in `apps` (decided 2026-08-22 — no
+    dedicated DNS layer), split-horizon rewrites toward AdGuard.
 -   **cluster-infra.md** — in-cluster foundations: Cilium (LB pools, BGP
     peering, Gateway API), VolSync, cert-manager, CNPG operator,
     monitoring (VictoriaMetrics + grafana) — their install order and the

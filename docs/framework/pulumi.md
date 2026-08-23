@@ -193,61 +193,49 @@ The framework is implemented in the library `src/putils` (stable; verified by
 
 ## 3. Layering & Stack Structure
 
-To balance DRY principles and stack isolation, we propose a layered stack
-structure. This allows changing one layer without necessarily affecting others.
+> **Status**: decided 2026-08-22 (interactive review). Three stacks in one
+> project, one environment. The earlier 4-layer proposal
+> (infra-homelab / infra-cloud / k8s-base / applications) is superseded:
+> splitting the physical layer by site bought nothing (same change
+> cadence, mutual references), while the apps/base split earned its keep
+> — see the frequency argument below.
 
-> **Status**: proposal only — the repo is currently a single stack. To be
-> decided before building the infra layer (see README "Status & open
-> decisions").
+### 3.1 The three stacks
 
-### Proposed Layers
+| Stack | Contents | Change cadence |
+| --- | --- | --- |
+| `physical` | OCI: VCN, 3× A1 nodes, NLB, reserved IPs, security lists, block volumes; libvirt: Talos worker VM + adopted HAOS domain; gw-config provider (FRR/BGP, nspawn estate); UniFi firewall rules; Talos machine configs + bootstrap (kubeconfig is an output); B2 buckets + keys; DNS zone + NLB anchor records | low (~monthly: Talos upgrades, firewall tweaks) |
+| `k8s-base` | Everything cluster-scoped speaking the k8s API: Cilium (LB pools, BGP peering, Gateway API, gateways), VolSync, cert-manager, CNPG operator, sealed-secrets controller, VictoriaMetrics + grafana | medium (renovate chart bumps) |
+| `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
 
-1.  **`infra-homelab`**:
+Boundary rules:
 
-    -   Manages Homelab specific infrastructure.
-    -   Resources: Libvirt VM (Talos CP), UniFi port forwarding.
-    -   Outputs: Homelab VM IP, Control Plane URN.
+-   **The only hard boundary is "exists before the k8s API does"** —
+    that is `physical` vs the rest. The base/apps split is a blast-radius
+    and preview-hygiene boundary: a Cilium upgrade can never ride along
+    inside an app deploy, and app previews don't load the operator
+    machinery.
+-   **Conventions are code, not stack outputs.** Gateway names, pool
+    labels, storage-class names live in a shared `conventions.py` —
+    single-repo constants need no StackReference. StackReferences carry
+    only *machine facts* from `physical`: kubeconfig, node IPs, NLB IP,
+    bucket names.
+-   **Namespaces belong to apps**: each app component creates its own
+    namespace (legacy habit preserved); `k8s-base` owns only shared,
+    cluster-scoped infrastructure.
+-   **Cross-stack resource dependency (apps need base's CRDs/operators)
+    is not expressible in Pulumi** — deploy order is CI's job
+    ([ci.md](ci.md)).
 
-2.  **`infra-cloud`**:
+### 3.2 Cross-Stack Output Reuse
 
-    -   Manages Cloud specific infrastructure.
-    -   Resources: GCP Compute Engine instance (Talos Worker), Firewall rules.
-    -   Outputs: GCP Worker IP.
-
-3.  **`k8s-base`**:
-
-    -   Manages the base Kubernetes installation and core networking.
-    -   Prerequisites: `infra-homelab` and `infra-cloud` stacks must be
-        deployed.
-    -   Resources: Talos machine configurations, Cilium CNI, Cilium Gateway API,
-        BGP peering policies.
-    -   Dependencies: Uses stack references to get IPs and URNs from physical
-        layers.
-
-4.  **`applications`**:
-
-    -   Manages services running inside the cluster.
-    -   Resources: Helm charts, deployments, services for apps like `hath`,
-        `authelia`, `jellyfin`, etc.
-    -   Dependencies: Uses stack reference to `k8s-base` for cluster connection
-        details if needed, or directly uses the generated kubeconfig.
-
-### 3.1 Cross-Stack Output Reuse
-
-To reuse outputs from one stack in another without hardcoding, we use Pulumi's
-`StackReference`. This ensures we don't rely on hardcoded information and
-maintains clean separation.
-
-**Example**:
+`StackReference` for the physical machine facts only:
 
 ```python
 import pulumi
 
-# Read outputs from the infra-homelab stack
-homelab_stack = pulumi.StackReference("myorg/infra-homelab/dev")
-vm_ip = homelab_stack.get_output("vm_ip")
-
-# Use vm_ip in this stack to configure resources
+physical = pulumi.StackReference("organization/kluster/physical")
+kubeconfig = physical.get_output("kubeconfig")
 ```
 
 ## 4. CRD Types Handling

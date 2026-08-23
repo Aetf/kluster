@@ -51,8 +51,11 @@ docs: physical, dns, cluster-infra, workloads).
 - [docs/cluster/migration.md](docs/cluster/migration.md) — workload/data migration plan from
   the legacy cluster.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
-  `async_output`/`resolve`, `pulumi.run`, stack layering proposal. Start
-  here; §1.4 has cookbook examples.
+  `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
+  layering (§3). Start here; §1.4 has cookbook examples.
+- [docs/framework/ci.md](docs/framework/ci.md) — state backend (Postgres on an
+  OCI micro) and the CI pipeline (per-layer previews/ups, connectivity
+  matrix, noop-automerge).
 - [docs/framework/rfc-001-native-async-inputs.md](docs/framework/rfc-001-native-async-inputs.md) —
   design rationale and mechanics of the native async inputs framework (Rev 3).
 - [docs/framework/testing.md](docs/framework/testing.md) — unit testing Pulumi code with mocks.
@@ -66,16 +69,20 @@ putils RFC-001 Rev 3, `pulumi.run` entrypoint, pulumi 3.257, ruff clean.
 
 Open items to settle before / during detailed design, roughly in order:
 
-1. **State backend & secrets**: `Pulumi.dev.yaml` is a stale copy from
-   kluster-code (`kluster-code:*` config keys are inert here, salt inherited);
-   no stack exists in the local file backend. Decide backend (reuse
-   kluster-code's Postgres DIY backend?) and regenerate stack config + secrets
-   from scratch before the first real `pulumi up`.
-2. **CI**: none yet. Port kluster-code's PR → preview → merge-deploys pipeline
-   early, before workloads accumulate.
-3. **Stack layering**: docs/framework/pulumi.md §3 proposes infra-homelab / infra-cloud /
-   k8s-base / applications; the repo is currently a single stack. Decide
-   before building the infra layer.
+1. **State backend — decided 2026-08-22** (docs/framework/ci.md §1):
+   `postgres://` DIY backend on an OCI E2.1.Micro (public TLS + scram,
+   scheduled pg_dump→B2). To do: stand up the micro + port
+   deploy/state-backend, then regenerate stack config + secrets from
+   scratch (`Pulumi.dev.yaml` is a stale kluster-code copy) before the
+   first real `pulumi up`.
+2. **CI — designed 2026-08-22** (docs/framework/ci.md §2–3): PR = parallel
+   per-layer previews + noop-automerge; merge = chained per-layer ups
+   (no separate post-merge preview); ZT join only in physical jobs. To
+   do: implement workflows, port noop-automerge + HA failure push.
+3. **Stack layering — decided 2026-08-22** (docs/framework/pulumi.md §3):
+   three stacks `physical` / `k8s-base` / `apps`; conventions shared as
+   code, StackReference carries machine facts only. To do: split the
+   entrypoint accordingly.
 4. **Physical-layer implementation**: `src/kluster/physical/aws.py`
    implements the abandoned AWS plan (talos 1.8.3 hardcoded, AMI lookup
    unused) and is reference-only; replace with the chosen cloud provider
