@@ -123,6 +123,11 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
     credentials**, so who can trigger one is a security boundary, not
     a convenience setting. noop-automerge stays scoped to renovate
     lockfile/pin PRs; repo secret scanning + push protection on.
+    A dedicated **`drill` Environment** carries the unattended
+    drills' credentials (drill-compartment OCI user, dump-read B2
+    key, drill age key) with **no reviewer gate — the scope is the
+    gate** (credentials.md §4); Environment secrets are populated by
+    the `deploy/credentials/` distribution scripts, not by hand.
 -   **One scheduled workflow owns the outside-cluster backups**
     (decided 2026-08-23 — storage.md §5 names the backups but not
     their owner): the hourly **etcd snapshot** runs here (`talosctl

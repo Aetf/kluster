@@ -144,7 +144,9 @@ first-session implementation tasks, roughly in order:
    renovate-class PRs), GitHub rulesets (rebase-merge, up-to-date
    requirement — mind the kluster-code lessons), noop-automerge
    permissions, CI secrets inventory (passphrase, backend URL, provider
-   tokens per cluster-infra.md §1.1, ZT ephemeral-member credential).
+   tokens per cluster-infra.md §1.1, ZT ephemeral-member credential) —
+   populated via the `deploy/credentials/` slot-map scripts
+   (credentials.md §4), not by hand.
 4. **Physical stack implementation** per declarative/physical.md
    (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
    verification checklist (physical.md §6) — every item verified before

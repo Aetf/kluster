@@ -69,7 +69,8 @@ doc.
 | HA webhook URL/ID | One notify endpoint | SealedSecret (alertmanager) · alerts-repo Actions secret | alertmanager; alerts-repo dispatch handler | On exposure; low value alone |
 | Alertmanager read token | Read-only alert list at the gateway route | alerts-repo Actions secret | Issue-sync poller | Yearly |
 | State-backend client certs (`ci`, `operator`) | postgres:// mTLS | CI env · operator machine | Pulumi state access | 2–3 y; ci.md §3 expiry probe |
-| age drill key | Decrypt pg_dumps for the automated rebuild drill only (no new exposure: CI's client cert already reads the live DB) | CI env | Drill workflow (operations.md §4) | Yearly, independent of the offline generations |
+| age drill key | Decrypt the **latest** pg_dump for the automated rebuild drill only (no new exposure: CI's client cert already reads the live DB) | `drill` Environment secret — **one slot**: its contract is latest-dump-only, so rotation forces a fresh dump then destroys the old key, no N−1 bookkeeping (state-backend.md §5) | Drill workflow (operations.md §4) | Yearly, independent of the offline generations |
+| Drill-environment credentials (OCI drill-compartment user, B2 dump-prefix read-only key) | Create/destroy in the drill compartment; read dumps — nothing else | `drill` Environment secrets | Drill workflows | Yearly |
 | Pulumi state passphrase | Decrypts state secrets | CI env (all stacks) | every `pulumi` run | Rotate on compromise; offline escrow (§2) |
 | Talos machine secrets + talosconfig | Cluster PKI roots | Pulumi state (physical) · CI env (talosconfig for etcd snapshots) | Talos ops, ci.md §3 | Cluster lifetime; regenerate = rebuild |
 | kubeconfig | cluster-admin | physical output → CI env | `k8s-base`, `apps` | With cluster CA |
@@ -78,16 +79,38 @@ doc.
 | AdGuard API credentials | alice/bob rewrite API | Pulumi config secret + CI env | `apps` rewrites | Yearly |
 | restic repo passwords | Per-PVC VolSync repos | SealedSecret (via `backed_pvc` helper) | VolSync | Stable; loss = repo loss, escrow with backups design |
 
-## 4. Provisioning & audit
+## 4. Provisioning & distribution (`deploy/credentials/`)
 
--   **Bootstrap order awareness**: rows above marked "Pulumi config
-    secret" exist before their stack's first `up` (minted by their
-    platform's console/CLI — the scripted procedures); SealedSecrets
-    exist only after k8s-base restores the sealing key
-    (migration.md).
--   **The quarterly drill audits the register**: every row checked
-    for expiry-vs-reminder coverage, retired keys past their
-    earliest-destroy date destroyed, orphan credentials (a platform
-    key with no row) revoked. This is the register's freshness
-    mechanism — a document nobody re-reads is how key sprawl
-    happened last time.
+The register's executable form — rule 5 made concrete:
+
+-   **A slot map, checked in.** A declarative manifest in
+    `deploy/credentials/` maps each register row to its target
+    slots: GitHub Environment secret (repo + environment + name, set
+    via `gh secret set --env`), alerts-repo Actions secret
+    (`gh secret set -R`), Pulumi config secret
+    (`pulumi config set --secret` per stack), SealedSecret
+    (kubeseal → committed manifest path). The table above is the
+    human-readable view; the slot map is the machine-readable one,
+    and the two are checked against each other (below).
+-   **One script per credential family**: mint → push to every slot
+    in the map → verify (re-read slot metadata, or fire the
+    consumer's probe). Idempotent, so **rotation playbooks call the
+    same script** — rotation is a re-run, not a second procedure.
+-   **Slot-drift probe**: a scheduled check compares the slot map
+    against reality in both directions — `gh` secret listings and
+    `pulumi config` keys. A live slot with no map entry, or a map
+    entry with no live slot, raises an `actionable` alert. This
+    (plus the expiry/destroy-date tripwires, operations.md §4)
+    replaces the calendar register-review: a document nobody
+    re-reads is how key sprawl happened last time.
+-   **The `drill` Environment**: unattended drills need cloud
+    credentials, but the `physical` Environment's required-reviewer
+    gate must not be the thing a quarterly automation waits on — so
+    drill workflows run in a dedicated Environment whose credentials
+    are scoped to what a drill may touch (the OCI **drill
+    compartment**, a dump-prefix **read-only** B2 key, the drill age
+    key) and nothing else. No reviewer gate; the scope is the gate.
+-   **Bootstrap order awareness**: "Pulumi config secret" rows exist
+    before their stack's first `up`; GitHub slots need the repos to
+    exist; SealedSecrets exist only after k8s-base restores the
+    sealing key (migration.md).

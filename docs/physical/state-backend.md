@@ -144,8 +144,12 @@ standing-rent test.
         (operations.md §4, credentials.md) exists so the rebuild
         drill runs unattended; it adds no exposure — CI's client
         cert already reads the live database — while the offline
-        generations keep the survive-loss-of-CI role. It rotates on
-        its own cadence, independent of the generations.
+        generations keep the survive-loss-of-CI role. It needs **no
+        generational pair of its own**: its contract is decrypting
+        the *latest* object only (retention coverage is the offline
+        keys' job), so its rotation script swaps the Butane
+        recipient, forces a fresh dump, verifies, and destroys the
+        old key — one slot, no N−1 bookkeeping.
     -   **Rotate at least yearly** (and on compromise or custody
         change): generate generation N+1 offline, swap the Butane
         recipients `[N, N−1] → [N+1, N]`, re-provision — playbook
