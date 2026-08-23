@@ -151,7 +151,21 @@ per-app number:
     record here rather than discovered at deploy time.
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, monthly restore drill inherited from the
-    legacy discipline (storage.md §5).
+    legacy discipline (storage.md §5). **Major-version policy
+    (2026-08-24)** — minors ride the normal renovate image-bump flow;
+    majors use CNPG's **declarative offline in-place upgrade**
+    (operator ≥1.26 — the cluster-infra.md §1 floor): bumping the
+    `imageName` major shuts the cluster down, runs
+    `pg_upgrade --check` then `--link`, and restarts. Constraints on
+    record: our operands are self-built images (ci.md §4), so the
+    new-major image carrying the *same extensions* (pg_cron, vchord)
+    must be built and published **before** the deploy PR — extension
+    availability for the new major is the real gate; and pg_upgrade
+    requires the same distro base across the bump (a Debian-release
+    change must never share a PR with a Postgres major). Major pins
+    are **never automerged**: they arrive as ordinary human-reviewed
+    deploy PRs, preceded by a verified-fresh barman backup — the
+    drilled restore is the rollback.
 -   **Static-site template (one component, two content sources)**: a
     single `StaticSite` component — stock static server, multi-vhost
     (one instance serves several hostnames), `public_route` per zone —

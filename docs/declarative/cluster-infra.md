@@ -53,8 +53,10 @@ empty cluster:
     credential is a SealedSecret per §1.1 (a *separate*,
     minimally-scoped token from the one the pulumi-cloudflare provider
     uses); every later component may reference issuers.
-5.  **CNPG operator**, **VolSync** — independent of each other; both
-    before any app declares a database or a backup schedule.
+5.  **CNPG operator** (≥1.26 — the floor for declarative offline
+    in-place major upgrades, workloads.md §4), **VolSync** —
+    independent of each other; both before any app declares a
+    database or a backup schedule.
 6.  **Monitoring**: VictoriaMetrics (vmsingle + vmagent + vmalert) +
     grafana, PromQL-compatible replacement for the legacy
     prometheus-operator stack at ~1/5 the RAM (nodes.md §4.4); scrape
