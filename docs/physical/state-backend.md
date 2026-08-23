@@ -107,21 +107,53 @@ standing-rent test.
 -   A systemd timer (quadlet) runs `pg_dump -Fc`, **age-encrypts**
     the dump — it holds every stack's ciphertext *and* salt — and
     uploads to B2 under the state-backend prefix with a
-    **prefix-scoped, write-capable key** (storage.md §4 key
-    discipline). Retention follows the STANDARD-class vocabulary
-    (workloads.md §3). RPO ≤ 24 h is fine — state is re-derivable
-    from reality (`pulumi refresh`/import) at worst.
+    **prefix-scoped, write-only key**. Pruning is not the box's job:
+    RPO ≤ 24 h is fine — state is re-derivable from reality
+    (`pulumi refresh`/import) at worst.
+-   **Retention, explicit: STANDARD class — daily, kept 30 days —
+    enforced by a B2 lifecycle rule on the prefix** (Pulumi-managed
+    with the bucket, storage.md §4), not by the uploader. That keeps
+    the box's key free of delete/prune capability (the H4
+    discipline), and it is what gives retired encryption keys a
+    definite end of life (below).
 -   Freshness is asserted **from outside** by the scheduled workflow
     (object-age on the prefix, ci.md §3) — the box monitors nothing
     about itself.
+-   **The age identity rotates by generations; no key is assumed
+    immortal.** Rotation is a designed path, not an emergency
+    improvisation:
+    -   Each dump is encrypted to the **current recipient** — a
+        public key, committed in the Butane file, so **git history is
+        the generation record**: which key encrypted which object
+        follows from commit dates vs. object dates.
+    -   **Rotate at least yearly** (and on compromise or custody
+        change): generate the next identity offline, swap the
+        recipient in Butane, re-provision — playbook §7.5. The path
+        stays warm because it is the same re-provision as everything
+        else.
+    -   **Old backups stay decryptable**: a retired private key is
+        kept in the offline register until every object encrypted to
+        it has aged out of retention — i.e. it becomes destroyable
+        **30 days after its last dump** (rotation date + retention
+        window). The register records each generation with its
+        rotate date and its earliest-destroy date; only then is a key
+        deleted, and deleting it is what actually ends the old
+        generation's exposure. With yearly rotation and 30-day
+        retention, at most two generations are ever live.
+    -   **Compromise variant**: rotate immediately *and* take a
+        fresh dump under the new key; old-generation objects are
+        deleted early rather than aged out (their hidden versions
+        persist ≤30 days by the anti-ransomware floor — accepted:
+        the dump's payload is still passphrase-encrypted underneath,
+        so a leaked age key alone reads nothing).
 -   **The age identity is deliberately independent of the CA.**
     Deriving one from the other was considered (age can encrypt to
     ssh-ed25519 recipients, so one shared ed25519 key was possible)
     and rejected: coupling makes either key's compromise or rotation
-    drag the other along, the two artifacts have different lifetimes
-    (CA ~10 years; backup identity indefinite), and the saving is one
-    line in the offline register. Both live at the
-    never-in-automation tier.
+    drag the other along, and the two rotate on different triggers
+    and cadences (CA: expiry/compromise over ~years; age: yearly
+    generations). The saving would be one line in the offline
+    register. Both live at the never-in-automation tier.
 
 ## 6. Monitoring
 
@@ -194,3 +226,20 @@ download path, the offline age identity, provision-from-Butane, the
 restore, and cert delivery. Success = clean `pulumi preview`. One
 drill covers disaster recovery, the major-upgrade path, and
 certificate rotation, because all three are the same re-provision.
+
+### 7.5 age identity rotation
+
+Trigger: the yearly cadence (§5), key compromise, or custody change.
+
+1.  Offline: generate the next generation's identity; record it in
+    the offline register with its rotate date and earliest-destroy
+    date (= rotate date + 30-day retention).
+2.  Swap the recipient public key in the Butane file (an ordinary
+    committed change — this is the generation record); re-provision.
+3.  Verify: the next nightly object decrypts with the **new** key;
+    the *previous* nightly still decrypts with the old one.
+4.  **Compromise only**: trigger an immediate dump under the new
+    key, then delete the old generation's objects early (§5).
+5.  On or after the earliest-destroy date (all old-generation
+    objects aged out — confirm the prefix listing), destroy the
+    retired private key and mark it destroyed in the register.
