@@ -12,11 +12,11 @@ Documents (created as each area reaches detailed design):
 -   **[physical.md](physical.md)** (written) — the `physical` stack:
     OCI resources + Talos day-1 via pulumiverse-talos (day-2 stays
     talosctl), libvirt worker VM + adopted HAOS, gw-config/unifi on the
-    UDM, DNS anchors, buckets, bootstrap order + verification
-    checklist.
--   **[dns.md](dns.md)** (written) — records beside their resources:
-    zone + anchors in `physical`, per-app CNAMEs in `apps`,
-    split-horizon AdGuard rewrites via a small dynamic provider,
+    UDM, B2, bootstrap order + verification checklist.
+-   **[dns.md](dns.md)** (written) — the fourth stack: zones + estate
+    records + anchors in `dns`, per-app CNAMEs in `apps` (zone sets
+    replace the alias-domain copy-paste), split-horizon via direct
+    dual-write to both AdGuard instances (adguardhome-sync retires),
     one-line helpers; DNSControl repo absorbed and retired.
 -   **[cluster-infra.md](cluster-infra.md)** (written) — the `k8s-base`
     stack: closed component list (Gateway API CRDs → Cilium →

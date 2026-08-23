@@ -193,20 +193,21 @@ The framework is implemented in the library `src/putils` (stable; verified by
 
 ## 3. Layering & Stack Structure
 
-> **Status**: decided 2026-08-22 (interactive review). Three stacks in one
-> project, one environment. The earlier 4-layer proposal
-> (infra-homelab / infra-cloud / k8s-base / applications) is superseded:
-> splitting the physical layer by site bought nothing (same change
-> cadence, mutual references), while the apps/base split earned its keep
-> — see the frequency argument below.
+> **Status**: decided 2026-08-22 (interactive review; `dns` added the
+> same day). Four stacks in one project, one environment. The earlier
+> proposal (infra-homelab / infra-cloud / k8s-base / applications) is
+> superseded: splitting the physical layer by site bought nothing (same
+> change cadence, mutual references), while the apps/base split earned
+> its keep — see the frequency argument below.
 
-### 3.1 The three stacks
+### 3.1 The four stacks
 
 | Stack | Contents | Change cadence |
 | --- | --- | --- |
-| `physical` | OCI: VCN, 3× A1 nodes, NLB, reserved IPs, security lists, block volumes; libvirt: Talos worker VM + adopted HAOS domain; gw-config provider (FRR/BGP, nspawn estate); UniFi firewall rules; Talos machine configs + bootstrap (kubeconfig is an output); B2 buckets + keys; DNS zone + NLB anchor records | low (~monthly: Talos upgrades, firewall tweaks) |
+| `physical` | OCI: VCN, 3× A1 nodes, NLB, reserved IPs, security lists, block volumes; libvirt: Talos worker VM + adopted HAOS domain; gw-config provider (FRR/BGP, nspawn estate); UniFi firewall rules; Talos machine configs + bootstrap (kubeconfig is an output); B2 buckets + keys | low (~monthly: Talos upgrades, firewall tweaks) |
+| `dns` | Zones + estate records that belong to no app (mail, ZT hosts, verifications, family/alias zones) + the anchors (declarative/dns.md) | low (rare, and independent of the cluster) |
 | `k8s-base` | Everything cluster-scoped speaking the k8s API: Cilium (LB pools, BGP peering, Gateway API, gateways), VolSync, cert-manager, CNPG operator, sealed-secrets controller, VictoriaMetrics + grafana | medium (renovate chart bumps) |
-| `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
+| `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (CNAMEs to the dns stack's anchors, declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
 
 Boundary rules:
 

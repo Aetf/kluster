@@ -16,8 +16,8 @@ the *how* for the `physical` stack of
 Owns: OCI (network, nodes, NLB, IPs, volumes, buckets, guardrails),
 libvirt on the homelab host (worker VM + adopted HAOS domain), Talos
 day-1 (secrets → configs → apply → bootstrap), the gw-config and unifi
-resources on the UDM, the Cloudflare zone + anchor records, and the B2
-backup bucket.
+resources on the UDM, and the B2 backup bucket. DNS lives in the `dns`
+stack (declarative/dns.md), which consumes this stack's IP outputs.
 
 Explicitly **not** owned: the state-backend E2.1.Micro (a bootstrap
 dependency of Pulumi itself — hand-created, documented in
@@ -136,15 +136,11 @@ the worker VM's IP from the libvirt resource) and the nspawn estate
 unifi provider manages firewall rules (lan-pool subnet policy, the
 qbittorrent v6 pinhole). No port forwards exist.
 
-## 5. DNS anchors (pulumi-cloudflare) and B2
+## 5. B2 (bridged provider)
 
-The zone resources plus the **anchor records only**: NLB A/AAAA under
-the service hostname roots. Per-app records are declared beside their
-apps (declarative/dns.md pattern); as code health allows, the framework
-grows small helpers so an app component declares its DNS need in one
-line (e.g. a `public_route(host=...)` that emits the HTTPRoute and the
-record together). B2: the backup bucket, keys, and lifecycle rules
-(storage.md §4-5).
+The backup bucket, keys, and lifecycle rules (storage.md §4-5). (DNS —
+zones, estate records, anchors — moved to the `dns` stack,
+declarative/dns.md.)
 
 ## 6. Bootstrap order & verification checklist
 

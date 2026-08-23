@@ -1,6 +1,6 @@
 # CI & State Backend
 
-Objective: how the three stacks ([pulumi.md](pulumi.md) §3) are driven —
+Objective: how the four stacks ([pulumi.md](pulumi.md) §3) are driven —
 where state lives, how CI reaches everything, and the pipeline shape.
 Decided 2026-08-22 (interactive review); ports the proven kluster-code CI
 mechanics (rebase-merge, zero-diff noop-automerge, HA failure push) onto
@@ -41,21 +41,25 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 
 | Target | Needed by | Path |
 | --- | --- | --- |
-| OCI / Cloudflare / B2 APIs | all layers | public |
+| OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | via cloud endpoints — talosctl proxies to `--nodes <homelab>` through apid over KubeSpan (**bootstrap verification item**) |
-| libvirt + gw-config (UDM SSH) | `physical` only | **per-run ZeroTier join** in the `physical` jobs (ephemeral member, pre-authorized) — no standing runner, no home inbound ports |
+| libvirt + gw-config (UDM SSH), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (ephemeral member, pre-authorized) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |
 
-Only the rare `physical` jobs touch ZeroTier; the daily `apps` path is
-entirely public-endpoint.
+Only the `physical` jobs — and `apps` runs that change split-horizon
+rewrites (AdGuard lives on the UDM) — touch ZeroTier; a typical app
+image bump stays entirely public-endpoint. The AdGuard rewrite
+resources tolerate an unreachable UDM by failing only their own
+resources, not the whole up.
 
 ## 3. Pipeline shape
 
 ```
-PR:    detect-changes ─→ preview-physical ∥ preview-k8s-base ∥ preview-apps
+PR:    detect-changes ─→ preview-{physical, dns, k8s-base, apps} (parallel)
                             └─ all zero-diff → noop-automerge (ported)
 merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
+                └──needs──→ up-dns (parallel to k8s-base)
 ```
 
 -   **Merge side runs `up` only.** `pulumi up --yes` performs its own

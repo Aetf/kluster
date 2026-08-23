@@ -328,7 +328,7 @@ JBOD — this host *is* the NAS.
 | --- | --- | --- |
 | ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (currently squeezed to ~2) |
 | HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + WiFi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
-| adguardhome-sync (podman); AdGuard alice/bob themselves run as nspawn containers **on the UDM**, not here | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0.1 GiB |
+| AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | Pulumi state-backend Postgres (podman) | cannot live inside the cluster it manages | ~0.2 GiB |
 | zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
 
