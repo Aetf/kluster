@@ -42,7 +42,7 @@ in the desired state (relevant because the tag default is permissive,
 | --- | --- | --- |
 | Personal devices (phones, laptops) | `personal` | Full access — parity with sitting on the LAN. |
 | UDM | `infra` | Static managed IP (`conventions.py`); nexthop of every managed route. |
-| Homelab host | `infra` | Demoted from router to plain member; kept as the recovery side-door (§3). |
+| Homelab host | `infra` | Today's only home member — a plain member, never a router (ZT carries no home-LAN routes today); kept as the recovery side-door (§3). |
 | Legacy VPS | `infra` | Retires in Wave F together with its `10.42.0.0/24` route. |
 | CI ephemeral member | `ci` | Identity generated in-state (`zerotier_identity`), private key in the CI environment secret; confined by §2.3. |
 
@@ -151,22 +151,29 @@ Run against a scratch ZT network with the same rules and a throwaway
     connection succeeds on retry within normal client timeouts.
 5.  Personal members are unaffected: full reachability, ARP/ND intact.
 
-### 2.5 Cutover order (the bootstrap cycle)
+### 2.5 Rollout order
 
-CI reaches the UDM only over ZT, but the UDM joins ZT via a container
-that CI deploys — the cycle breaks by keeping the old router alive
-through the transition, in this strict order (migration.md Phase 0):
+There is no cycle to break: today ZT carries **no route to the home
+LANs at all** (the host is a plain member; the only managed route is
+the legacy `10.42.0.0/24` via the VPS). The LAN→UDM path exists before
+and independently of ZT, so the first deployment is a LAN-side
+operation (migration.md Phase 0):
 
-1.  **Host stays router** — existing membership and routes untouched.
-2.  **UDM container deploys** over the host-routed path (gw-config
-    provider run; the UDM member was pre-authorized in the roster).
-3.  **Routes switch atomically** — the managed-route set flips nexthop
-    to the UDM member in one Central update.
-4.  **Host demotes** to plain member (its router config retires via
-    the old-tracker rule).
+1.  **UDM container deploys via an operator-local `physical` run** —
+    Phase 0 is local-bootstrap by nature (the CI that would later do
+    this is itself being built); the gw-config push SSHes to the UDM
+    over the LAN, no ZT in the path. The UDM member is pre-authorized
+    in the roster.
+2.  **Managed routes are net-new additions** — the home-LAN and
+    lan-pool routes via the UDM member appear where none existed;
+    existing members gain reachability and lose nothing. No flip, no
+    transition window.
+3.  **CI's per-run ZT join becomes load-bearing only after §2.4
+    passes** — until the flow rules and routes are verified,
+    `physical` runs stay operator-local.
 
-Steps 2–4 are separate `physical` previews, not one big-bang up: each
-step's rollback is the previous step's state.
+Each step is its own previewed `physical` change; rollback of any
+step is removing what it added.
 
 ## 3. Failure & recovery (playbook census)
 
@@ -189,8 +196,8 @@ executable form ships with the implementation.
     UniFi autobackup (the pull-direction yadm timer), re-run the
     gw-config provider for the estate, re-authorize the *new* UDM
     member identity in the roster (identity lives in `/data`, lost with
-    the box), flip managed-route nexthop — same shape as §2.5 minus the
-    host-router step (personal members' direct paths still work).
+    the box), re-point the managed routes at it — a LAN-side operation
+    like §2.5 (personal members' direct paths still work throughout).
 
 ## 4. Firewall target state
 

@@ -45,11 +45,11 @@ owns sequencing, data movement, and teardown.
     libvirt SSH identity, NFS exports — physical/homelab-host.md §4). ZeroTier
     Central config is Pulumi-managed (architecture.md §5.3); the
     legacy `10.42.0.0/24`-via-VPS managed route is deleted in Wave F.
-    **ZT termination moves to the UDM in a strict order** (CI reaches
-    the UDM only over ZT, so the old router stays up through the
-    transition): host stays router → UDM container deploys → managed
-    routes flip nexthop atomically → host demotes
-    (physical/gateway.md §2.5).
+    **ZT's home-LAN routes are net-new** (today ZT and the LANs are
+    not connected at all): the UDM container deploys via an
+    operator-local run over the LAN, routes are added, and only after
+    the flow-rules verification does CI's per-run ZT join become
+    load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
     (60 GB), NLB, UDM FRR/estate, B2. `dns` up: zones + estate records
     imported wholesale (records still pointing at `archvps.hosts`; the

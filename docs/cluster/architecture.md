@@ -638,8 +638,9 @@ already lives:
     and roaming personal devices reach the UDM (SSH, AdGuard APIs) and
     everything behind it even when the homelab host is down — matching
     the CP-in-the-cloud principle that no single home machine gates the
-    management plane. The host keeps plain ZT membership (direct
-    address, useful as a fallback path) but loses any router role.
+    management plane. The host keeps its plain ZT membership (direct
+    address, useful as a fallback path) and never takes a router role
+    — today it has none either; the routes via the UDM are net-new.
 -   **Deployment shape**: a fourth member of the existing nspawn estate
     (alpine rootfs from homelab-containers CI, unit + config via the
     gw-config provider, on_boot.d recovery like the others), but with
