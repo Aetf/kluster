@@ -130,7 +130,11 @@ plane names:
 emits the coherent set: HTTPRoute (to `internet-gw`, `lan-gw`, or both
 per the §3.6 matrix), the CNAMEs across the zone set, and — for
 both-gateway apps — the AdGuard rewrites. `lan_route(host=…)` is the
-LAN-only variant (rewrite + `lan-gw` route, no public record, §4).
+LAN-only variant (rewrite + `lan-gw` route, no public record, §4);
+its `iot_reachable=True` parameter attaches `media-gw` instead and
+points the rewrite at the media VIP — the review-visible form of
+"IoT devices may reach this app" (cluster-infra.md §2,
+physical/gateway.md §4.2).
 `public_port(…)` is the raw TCP/UDP analog, additionally emitting the
 NLB listener and its security rule (physical.md §1's
 derived-not-enumerated principle).

@@ -93,7 +93,9 @@ the VPS empties progressively):
     (drain → bind → hostdev → reboot, physical/homelab-host.md §3) runs at the head
     of this wave, then immich (CNPG via the drilled barman restore; NAS
     media PVs re-point in place; ML/thumbnail caches re-derive) and
-    jellyfin+shoko (NAS re-point + config PVC copy). syncthing-nas
+    jellyfin+shoko (NAS re-point + config PVC copy; **verify the
+    TVs' path — IoT → media-VIP allow — before its DNS re-points**,
+    physical/gateway.md §4.2). syncthing-nas
     re-points its NAS PV.
 -   **Wave D — host-native onboarding**: qbittorrent-nox
     (`/var/lib/qBittorrent` profile copy; verify seedwatch category

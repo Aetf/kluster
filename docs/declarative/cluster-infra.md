@@ -139,11 +139,17 @@ All decided behavior from architecture.md §3, expressed as config:
     advertise arbitrary /32s — the DNS servers' addresses included —
     and MITM the whole LAN. Verified at bootstrap by advertising a
     bogus prefix (physical.md §6).
--   **Gateway API**: enabled; two `Gateway`s — `internet-gw` (Envoy
+-   **Gateway API**: enabled; three `Gateway`s — `internet-gw` (Envoy
     replicas across the cloud nodes, `externalTrafficPolicy: Local`,
     Service requesting all three primary IPs via `lbipam.cilium.io/ips`
-    + sharing-key) and `lan-gw` (pinned to the homelab worker, `lan`
-    pool). Apps attach `HTTPRoute`s (§3.6 matrix).
+    + sharing-key), `lan-gw` (pinned to the homelab worker, `lan`
+    pool), and `media-gw` (same shape as `lan-gw` on a **second,
+    dedicated `lan`-pool VIP** — a `conventions.py` literal, because
+    the UDM firewall's IoT→media allow names it,
+    physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
+    the decision "reachable from the IoT VLAN"; the helper exposes
+    it as a parameter, so the choice is visible in the app's diff.
+    Apps attach `HTTPRoute`s (§3.6 matrix).
 -   **Egress Gateway**: enabled (the dedicated-VIP pattern's outbound
     half, architecture.md §3.2); the `CiliumEgressGatewayPolicy`
     instances themselves belong to the workloads that need them

@@ -279,13 +279,15 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
     on the LAN→pool path**); (c) any future tightening of zone policy
     must name `192.168.70.0/24` via an address group, since no network
     object will ever exist for it. One tightening ships with the
-    cluster rather than waiting (decided 2026-08-23): an address-group
-    rule **dropping IoT-VLAN → pool** traffic — the `lan` gateway
-    fronts admin UIs (immich, qbittorrent, grafana) and IoT devices
-    are the LAN's least-trusted population; without the rule they
-    reach every VIP via the unconditional ACCEPTs above. Declared via
-    the unifi provider (§5.1); the recorded cross-VLAN dependencies
-    all originate cluster→IoT, so none is affected. The complete
+    cluster rather than waiting (decided 2026-08-23, amended
+    2026-08-24): **IoT-VLAN → pool default drop with one enumerated
+    allow — the `media-gw` VIP, port 443** (smart TVs/streamers
+    legitimately consume jellyfin, an IoT-originated dependency the
+    original census missed; the IoT-reachable app set is decided by
+    `media-gw` route attachment, not firewall edits). The `lan`
+    gateway's admin UIs (immich, qbittorrent, grafana) stay
+    unreachable from IoT, the LAN's least-trusted population.
+    Declared via the unifi provider (§5.1). The complete
     firewall target state — full rules census and the deferred
     IoT→LAN tightening — is
     [physical/gateway.md](../physical/gateway.md) §4.
@@ -335,7 +337,8 @@ Deploying an app now answers exactly two questions — *which pool(s)* and
 | Workload | Pool | Route kind |
 | --- | --- | --- |
 | Public HTTP/S (blog, authelia, splitpro) | `internet` | HTTPRoute → `internet-gw` (via NLB) |
-| LAN HTTP/S (jellyfin, immich fast path) | `lan` | HTTPRoute → `lan-gw` |
+| LAN HTTP/S (immich fast path) | `lan` | HTTPRoute → `lan-gw` |
+| LAN HTTP/S consumed from the IoT VLAN (jellyfin) | `lan` | HTTPRoute → `media-gw` (dedicated IoT-reachable VIP, §3.4) |
 | Split-horizon HTTP/S (immich) | both | HTTPRoute → both gateways |
 | Public raw TCP/UDP (syncthing 22000) | `internet` | LoadBalancer Service + NLB listener |
 | LAN raw TCP/UDP | `lan` | LoadBalancer Service |

@@ -137,10 +137,13 @@ through the equally-ACCEPT LAN→WAN chain. So every IoT device (cameras,
 no-name plugs — the LAN's most-compromised class) can reach the admin
 UIs behind `lan-gw` (immich, qbittorrent, grafana).
 
-**Fix.** Ship one address-group rule dropping IoT-VLAN → `192.168.70.0/24`
-(+ ULA /64) with the cluster rather than waiting for a future zone
-tightening. Recorded cross-VLAN dependencies all originate cluster→IoT,
-so none is affected.
+**Fix.** Ship IoT-VLAN → `192.168.70.0/24` (+ ULA /64) **default drop
+with one enumerated allow** (the `media-gw` VIP:443) with the cluster
+rather than waiting for a future zone tightening. *Amended
+2026-08-24*: the original "recorded cross-VLAN dependencies all
+originate cluster→IoT" claim was wrong — smart TVs/streamers →
+jellyfin is IoT-originated; the media-gw carve-out serves it without
+reopening the pool (physical/gateway.md §4.2).
 
 **Lives in.** architecture.md §3.4, declared via the unifi provider
 (physical.md §4); full firewall target state in

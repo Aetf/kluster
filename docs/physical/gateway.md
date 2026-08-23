@@ -268,12 +268,25 @@ all declared in the `physical` stack via the bridged filipowm/unifi
 provider (auth discipline: dedicated local admin + API key,
 throttled retries — declarative/physical.md §4):
 
-1.  **IoT → `lan` pool drop** (audit M2; ships with the cluster):
-    one zone policy over two single-family address groups (the v4
-    CIDR and the ULA /64 — UniFi address groups can't mix
-    families). Rationale: the `lan` gateway fronts admin UIs and
-    IoT is the least-trusted population; recorded cross-VLAN
-    dependencies all originate cluster→IoT, so none is affected.
+1.  **IoT → `lan` pool: default drop with one enumerated allow**
+    (audit M2, amended 2026-08-24; ships with the cluster). The
+    allow precedes the drop: **IoT → the media VIP, port 443** —
+    the `media-gw` Gateway's dedicated `lan`-pool address
+    (cluster-infra.md §2), which fronts the apps IoT devices
+    legitimately consume (smart TVs and streamers → jellyfin, the
+    first member). Then the drop: IoT → the rest of the pool
+    (admin UIs — immich, qbittorrent, grafana — stay unreachable
+    from the LAN's least-trusted population). Address groups are
+    single-family, so both rules come in v4-CIDR and ULA pairs.
+    **The firewall names only the stable media VIP** (a
+    `conventions.py` literal): which apps are IoT-reachable is
+    decided at the Gateway layer (`media-gw` route attachment, a
+    review-visible per-app parameter) — app membership changes
+    never touch a firewall rule. *Correction on record*: audit
+    M2's "recorded cross-VLAN dependencies all originate
+    cluster→IoT" was wrong — TV/streamer → jellyfin is an
+    IoT-originated dependency the census missed; a blanket drop
+    would have severed it at jellyfin's migration wave.
 2.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA +
     service port. Constraint on record: the zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
@@ -301,7 +314,9 @@ tighten **IoT→LAN to default drop + enumerated allows**.
     observation window — both, not either.
 -   **Adoption-day facts to gather**: enumerate IoT-VLAN-originated
     flows into br0/br5/pool from a UDM traffic-flow observation
-    window plus the recorded dependency list. Special attention to
+    window plus the recorded dependency list (media-consumption
+    flows are already carved out structurally via `media-gw` —
+    §4.2 — and carry over unchanged). Special attention to
     **HAOS — the IoT VLAN's most capable resident**: every
     integration's outbound target (LAN services, UDM APIs, cluster
     VIPs) becomes an allow-list candidate the moment the default
