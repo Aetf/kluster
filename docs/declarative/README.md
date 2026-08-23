@@ -18,10 +18,11 @@ Documents (created as each area reaches detailed design):
     repo): zone + NLB anchor records in `physical`, per-app records
     declared next to each app in `apps` (decided 2026-08-22 — no
     dedicated DNS layer), split-horizon rewrites toward AdGuard.
--   **cluster-infra.md** — in-cluster foundations: Cilium (LB pools, BGP
-    peering, Gateway API), VolSync, cert-manager, CNPG operator,
-    monitoring (VictoriaMetrics + grafana) — their install order and the
-    bootstrap-dependency rules.
+-   **[cluster-infra.md](cluster-infra.md)** (written) — the `k8s-base`
+    stack: closed component list (Gateway API CRDs → Cilium →
+    cert-manager → sealed-secrets → CNPG/VolSync → VictoriaMetrics →
+    NFD/GPU plugin), the full Cilium configuration (pools, BGP,
+    gateways, EGW), and what the stack deliberately does not do.
 -   **workloads.md** — the per-app pattern: how an app declares its
     pool/route (cluster/architecture.md §3.6), storage class
     (cluster/storage.md §2), placement, secrets, and backups in one
