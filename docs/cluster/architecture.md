@@ -635,7 +635,9 @@ already lives:
     Implementation-time verification remains the **bridge quality**
     (provider existence ≠ clean Pulumi bridging); fallback is the two
     hand-kept Central settings documented as manual preconditions
-    (physical.md §6).
+    (physical.md §6). The network-level design — roster, addressing,
+    the flow-rules draft, cutover order — is
+    [physical/gateway.md](../physical/gateway.md) §2.
 
 Alternative considered — **BGP-advertising the ZT subnet from the
 homelab host** (host stays ZT router, FRR/bird on the host peers with

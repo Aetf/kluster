@@ -26,5 +26,6 @@ Documents:
 -   **[homelab-host.md](homelab-host.md)** — the homelab host & worker
     VM: disk shape (nodatacow raw + virtio-blk), the second host
     bridge, two-phase GPU passthrough, the host-prep change-set.
--   *(planned)* **gateway.md** — the UDM as a system: the ZeroTier
-    member/router, the nspawn estate, firewall target state.
+-   **[gateway.md](gateway.md)** — the UDM as a system: the ZeroTier
+    network design (roster, routes, CI-confining flow rules, cutover
+    order), recovery playbooks, firewall target state (pending).

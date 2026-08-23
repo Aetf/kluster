@@ -45,8 +45,11 @@ values so SPF strings don't get split on spaces.
     no longer exists — its dependents in the current file, the Abacus
     ZT entry and the jupyter/mc records, are dead weight to drop during
     the import census).
--   **`*.zt.<zone>`** — the ZeroTier host block, unchanged (private IPs
-    in public DNS, deliberate and existing practice).
+-   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
+    convention (private IPs in public DNS, deliberate and existing
+    practice); its contents mirror the ZT member roster
+    (physical/gateway.md §2.1): `udm.zt` added, `abacus.zt` dropped at
+    import, the VPS record retires in Wave F.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
