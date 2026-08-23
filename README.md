@@ -82,9 +82,9 @@ Open items to settle before / during detailed design, roughly in order:
    (no separate post-merge preview); ZT join only in physical jobs. To
    do: implement workflows, port noop-automerge + HA failure push.
 3. **Stack layering — decided 2026-08-22** (docs/framework/pulumi.md §3):
-   three stacks `physical` / `k8s-base` / `apps`; conventions shared as
-   code, StackReference carries machine facts only. To do: split the
-   entrypoint accordingly.
+   four stacks `physical` / `dns` / `k8s-base` / `apps`; conventions
+   shared as code, StackReference carries machine facts only. To do:
+   split the entrypoint accordingly.
 4. **Physical-layer implementation**: `src/kluster/physical/aws.py`
    implements the abandoned AWS plan (talos 1.8.3 hardcoded, AMI lookup
    unused) and is reference-only; replace with the chosen cloud provider

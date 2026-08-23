@@ -523,8 +523,9 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
 
 -   Rejected: routing raw TCP/UDP through Envoy adds a proxy hop that buys
     nothing for hath/syncthing-class traffic, and TCPRoute/UDPRoute only
-    arrive in Cilium 1.20. Plain LoadBalancer Services on the shared VIP
-    (§3.1) do the job in-kernel with zero extra components.
+    arrive in Cilium 1.20. Plain LoadBalancer Services behind NLB
+    listeners (§3.1–3.2) do the job in-kernel with zero extra
+    components.
 
 ### 6.8 HAOS under KubeVirt
 
