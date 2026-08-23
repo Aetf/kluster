@@ -57,24 +57,28 @@ resort, object storage used directly where an app supports it.
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined) | object storage + per-app metadata | RWX | last resort only (§6) | everything else |
 
-Per-workload decision rules, in order:
+Per-workload selection is a two-axis decision — (1) does the data need
+to persist at all, (2) what performance does it need — then the data's
+character (working state vs fixed assets) picks the backing. The full
+decision framework with worked examples lives in
+[declarative/workloads.md](../declarative/workloads.md) §2; the short
+form:
 
-1.  App speaks S3 natively (backups, media originals, artifact stores) →
-    **object storage direct**.
-2.  App replicates itself (PostgreSQL via CNPG, anything clustered) →
-    **local-path**, ≥2 instances across nodes where HA matters, plus
-    barman/object backups.
-3.  Bulk media / large read-mostly data in the homelab pool → **NAS**.
-4.  Everything else stateful → **local-path + a VolSync backup schedule**
-    (§3.1).
-5.  Genuinely needs POSIX RWX across nodes and NAS can't serve it →
-    justify **JuiceFS** per §6, in writing, per app.
+1.  Re-derivable → plain **local-path/emptyDir, no backup** (exemption
+    declared explicitly).
+2.  Working state → **local-path + VolSync** (§3.1); databases →
+    **CNPG** on local-path.
+3.  Fixed assets (large, append-mostly) → **NAS** (POSIX/streaming,
+    homelab) or **object storage direct** (S3-speaking or archival).
+4.  POSIX RWX over object capacity and NAS can't serve it → justify
+    **JuiceFS** per §6, in writing, per app.
 
 ## 3. Block-layer mobility: VolSync now, Longhorn later
 
 ### 3.1 VolSync on local-path (the initial build)
 
-Every rule-4 volume (local-path, no app-level replication) gets a VolSync
+Every working-state volume (rule 2: local-path, no app-level
+replication) gets a VolSync
 `ReplicationSource` with the restic mover: scheduled backups to the
 backup bucket (§4), retention policy per app. VolSync needs no CSI
 snapshots — it mounts the PVC directly; mover pods exist only while a
@@ -161,9 +165,10 @@ Per nodes.md §5, durability = declarative rebuild + backups, drilled:
     `b2://…/etcd/`, retained ~14 days. Restore path is documented Talos
     `--recover-from-snapshot` bootstrap — drilled both in-place and onto a
     substitute node (the CP cold-standby path, nodes.md §5 Tier 0).
-2.  **Volumes**: VolSync restic backups (daily) on every rule-4 PVC
-    (§3.1), same bucket, retention ~30 days; restores double as the
-    volume-move mechanism, so the path stays exercised.
+2.  **Volumes**: VolSync restic backups on every working-state PVC
+    (§3.1), same bucket, retention by class
+    (declarative/workloads.md §3); restores double as the volume-move
+    mechanism, so the path stays exercised.
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill).
