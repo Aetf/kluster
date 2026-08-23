@@ -24,8 +24,10 @@ stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
 `dns` for zone IDs and `dns` references `physical` for anchor IPs.
 
 The `dns` stack owns: zone resources, the estate records above, the
-**anchors** (§2), and a reusable per-zone mail component
-(MX/SPF/DKIM/DMARC). Verified 2026-08-22: no ready-made Pulumi
+**anchors** (§2), a reusable per-zone mail component
+(MX/SPF/DKIM/DMARC), and — per zone — **CAA records (issuance pinned
+to Let's Encrypt) and DNSSEC enablement** (2026-08-23: the entire cert
+story is DNS-01, which makes both cheap and worth having). Verified 2026-08-22: no ready-made Pulumi
 SPF/DMARC tooling exists — the ecosystem offers only raw record
 resources and officially recommends wrapping your own component — and
 none is needed: the current SPF is a single include (no flattening) and
@@ -97,13 +99,27 @@ plane names:
     the AdGuard rewrite and the `lan-gw` route but *no* Cloudflare
     record — public resolvers see NXDOMAIN, while cert-manager DNS-01
     still issues real certificates for the name (challenge records
-    don't require the name itself to be published).
+    don't require the name itself to be published). Issuance for
+    these names is **per-zone wildcard certificates**, not per-name:
+    every issued certificate lands in public Certificate Transparency
+    logs, and per-name issuance would republish exactly the LAN-only
+    service census that rewrite-only just hid.
 3.  **`lan.ucw.phd` retires.** Its two historical roles are both
     superseded: split-horizon duplicates collapse into the rewrites on
     the public names, and LAN-only names become rewrite-only names in
     the public zones (with proper TLS, which `lan.` names never had
     cleanly). The zone's entries are dropped one-by-one as each app
     migrates, like the archvps repointing.
+4.  **Gateway-local TLS stays gateway-issued** (decided 2026-08-23).
+    The UDM caddy's vhosts (UniFi console, AdGuard UIs) follow the
+    same naming move — their `lan.ucw.phd` names become rewrite-only
+    names in the public zones — but caddy **keeps issuing its own
+    certificates** (DNS-01 with its own zone-scoped Cloudflare token,
+    a gw-config device secret, cluster-infra.md §1.1) rather than
+    consuming cert-manager's: the gateway's TLS must keep renewing
+    when the cluster is down or mid-rebuild, and pushing certs from
+    the cluster to the device would invert that survival dependency.
+    Same wildcard discipline as item 2 (CT hygiene).
 
 ## 5. The one-line helpers
 

@@ -48,6 +48,10 @@ docs: physical, dns, cluster-infra, workloads).
 - [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path +
   VolSync, NAS, object storage; Longhorn deferred), backup architecture,
   JuiceFS root causes & containment policy.
+- [docs/cluster/security-audit.md](docs/cluster/security-audit.md) — independent
+  security audit (2026-08-23): the findings register behind
+  architecture.md §4.1, each fix designed into the doc that owns the
+  mechanism.
 - [docs/cluster/migration.md](docs/cluster/migration.md) — the migration plan:
   standing rules (per-app stop-copy-start + DNS repoint, tracker
   retirement, NVMe interleave), the Phase-0 verification gate, waves

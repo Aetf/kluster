@@ -47,6 +47,11 @@ secondary private), and bucket names/endpoints.
     fault domains, boot volume ~50 GB. Machine config is delivered as
     base64 `user_data` in instance metadata (the Talos `oracle` platform
     reads the OCI metadata service) — day-0 needs no network apply.
+    **Legacy IMDS (v1) is disabled** on every instance; note OCI's v2
+    auth header is a static string, so the control that actually keeps
+    pods away from `user_data` (= the machine config, secrets included)
+    is the baseline network policy (architecture.md §4.1,
+    cluster-infra.md §2).
 -   **One augmented node**: exactly one of the three additionally gets
     a block volume, a **secondary private IP** on its VNIC, and the
     **reserved public IP** assigned to it (the dedicated-VIP pattern,
@@ -91,7 +96,13 @@ machine_secrets
     (secretbox — the §6.5 residual-risk mitigation for cluster secrets
     in a $0-trust tenancy); kubelet system-reserved so eviction
     actually works (the legacy CP-starvation lesson, architecture.md
-    §6.5); the augmented node's secondary private IP on its interface;
+    §6.5); the **Talos ingress firewall** (`NetworkRuleConfig`,
+    default-deny with the platform ports enumerated — KubeSpan, apid,
+    6443, NLB listener + health-check ports, intra-VCN) as the
+    node-local layer beneath the derived OCI rules (architecture.md
+    §4.1); kube-apiserver `anonymous-auth=false` pinned and audit
+    logging on (a public 6443 warrants both, defaults notwithstanding);
+    the augmented node's secondary private IP on its interface;
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
     path under it is machine config).
@@ -122,7 +133,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 -   **Worker VM**: 12–16 vCPU / 20 GiB (nodes.md §4.2), bridged to the
     LAN, disk on NVMe (starts ~60 GB, grows as migration reclaims
     space). Talos via the `nocloud` image variant, machine config on a
-    cloud-init seed ISO.
+    cloud-init seed ISO — the seed carries the machine secrets:
+    root-only permissions, and it lives outside every host
+    snapshot/backup scope (same subvolume discipline as the disk
+    image below).
 -   **VM disk: a raw sparse file on the root btrfs, nodatacow, over
     virtio-blk** (decided 2026-08-23). The NVMe is a single btrfs
     partition (no LVM, no spare partitions), so a file it is — the
@@ -196,7 +210,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     host address moved onto it (above); the nodatacow subvolume + a
     libvirt storage pool pointing at it; an SSH identity for the
     libvirt provider (`qemu+ssh://` over the CI ZeroTier join —
-    a user in the `libvirt` group, no root); the NAS NFS exports
+    a user in the `libvirt` group, no root; note that `libvirt`-group
+    access is root-*equivalent* in effect — domain XML can map any
+    host device or disk — so this identity is guarded at the same
+    tier as the UDM key, not as an unprivileged account); the NAS NFS exports
     extended to the worker VM's static IP. The vfio-pci host binding
     is deliberately *not* here — it lands in the Wave C cutover
     (migration.md).
@@ -220,7 +237,9 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 
 Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
-hooks) manages the device's entire desired state — FRR/BGP (neighbor =
+hooks; the UDM's **SSH host key is pinned** in provider config — the
+session crosses ZeroTier, and an accept-new first contact would hand
+a MITM root on the gateway) manages the device's entire desired state — FRR/BGP (neighbor =
 the worker VM's IP from the libvirt resource), the nspawn estate
 (units + digest-pinned rootfs from homelab-containers CI — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
@@ -260,3 +279,13 @@ A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan
 underlay; talosctl reaching the homelab node via cloud endpoints (apid
 proxy); VFIO iGPU passthrough capability on a scratch VM.
+
+Security verifications (from the 2026-08-23 audit,
+cluster/security-audit.md): a pod's request to `169.254.169.254` is
+denied by the baseline policy; the UDM rejects an out-of-policy BGP
+advertisement from the worker (bogus-prefix test, cluster-infra.md
+§2); a prefix-scoped B2 key cannot list/delete a foreign prefix
+(storage.md §4); the ExternalAuth filter fails closed with Authelia
+down *and* the standing auth canary alerts (cluster-infra.md §2);
+the Talos ingress firewall drops an undeclared port on a node
+primary IP.

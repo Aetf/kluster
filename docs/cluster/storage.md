@@ -191,6 +191,23 @@ zero egress + LAN-class latency on cache misses, ~$2.6/mo at 110 GB
 free ops, 3×-stored egress covers read traffic with a warm cache.) Buckets, keys, and
 lifecycle rules are Pulumi-managed like everything else.
 
+**Backup-integrity rules (2026-08-23)** — backups are the actual HA
+mechanism (§5), so backup *deletability* is a first-class threat
+(architecture.md §4.1): a compromised app namespace or CI job must not
+be able to destroy the safety net it lives inside.
+
+-   The backup bucket keeps **prior file versions ≥30 days** (B2
+    lifecycle: hide, then delete) — restic/barman deletions become
+    recoverable hides, which is the ransomware/fat-finger floor. Costs
+    a modest storage overhead on churn; that is the price of the floor.
+-   Keys are **prefix-scoped per consumer**: an app's restic key
+    reaches only `volsync/<its-namespace>/…`; barman and `etcd/`
+    prefixes likewise. The delete/prune-capable key exists only in
+    CI's scheduled jobs (ci.md §3), never in-cluster; the B2 master
+    credential lives in no automation at all, account 2FA on.
+-   Verification item (physical.md §6): a scoped key must fail to
+    list/delete a foreign prefix.
+
 ## 5. Backup architecture (the actual HA mechanism)
 
 Per nodes.md §5, durability = declarative rebuild + backups, drilled:

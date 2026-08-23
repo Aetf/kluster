@@ -110,7 +110,11 @@ The cluster will operate in Dual-Stack mode, prioritizing IPv4.
 
 -   **KubeSpan**: Native WireGuard mesh. Handles NAT traversal automatically
     because the cloud nodes have public IPs, allowing the Homelab worker to
-    initiate all connections outbound — no home-side pinholes.
+    initiate all connections outbound — no home-side pinholes. Peer
+    discovery depends on the public Sidero discovery service
+    (affiliate data is end-to-end encrypted; the service sees
+    endpoints/metadata only) — an external availability dependency on
+    record; self-hosting it fails the standing-rent test.
 -   **KubePrism**: A local HAProxy load balancer running on every node
     (localhost:7445) that balances across all three apiservers. Every node
     and in-cluster component points at this instead of any hardcoded API
@@ -274,7 +278,14 @@ X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
     traffic (**bootstrap verification: confirm no NAT/IPS interference
     on the LAN→pool path**); (c) any future tightening of zone policy
     must name `192.168.70.0/24` via an address group, since no network
-    object will ever exist for it.
+    object will ever exist for it. One tightening ships with the
+    cluster rather than waiting (decided 2026-08-23): an address-group
+    rule **dropping IoT-VLAN → pool** traffic — the `lan` gateway
+    fronts admin UIs (immich, qbittorrent, grafana) and IoT devices
+    are the LAN's least-trusted population; without the rule they
+    reach every VIP via the unconditional ACCEPTs above. Declared via
+    the unifi provider (§5.1); the recorded cross-VLAN dependencies
+    all originate cluster→IoT, so none is affected.
 4.  **Split-horizon DNS**: AdGuard (alice/bob) rewrites public hostnames to
     `lan` VIPs so LAN/ZT clients reach apps (immich!) directly, never via
     the cloud path — preserving the legacy cluster's hard-earned rule that
@@ -331,7 +342,11 @@ bulk-egress workloads and storage locality deciding it for hath.
 
 ## 4. Security & Observability
 
-### 4.1 Threat Model: KubeSpan vs mTLS
+### 4.1 Threat Model
+
+Full findings register: [security-audit.md](security-audit.md)
+(audited 2026-08-23; every accepted finding is designed into the doc it
+belongs to — this section holds the cluster-level statements).
 
 -   **Transport Security**: KubeSpan encrypts all inter-node traffic
     traversing the public internet via WireGuard.
@@ -342,6 +357,34 @@ bulk-egress workloads and storage locality deciding it for hath.
     its legitimate access. Therefore, we use Cilium Network Policies (eBPF
     L3/L4/L7 rules) to strictly isolate namespaces and pods, which is
     superior to complex sidecar-based mTLS.
+-   **Pod → cloud metadata, closed by policy**: the machine config —
+    cluster PKI, etcd encryption key — is delivered via OCI instance
+    metadata (physical.md §1), and `169.254.169.254` is reachable from
+    any pod by default: one curl from a compromised pod to cluster
+    admin. OCI's IMDSv2 auth header is a *static string* (no AWS-style
+    hop limit), so the load-bearing control is the cluster-wide
+    baseline policy denying pod egress to `169.254.0.0/16`
+    (cluster-infra.md §2), verified at bootstrap (physical.md §6);
+    legacy IMDS is additionally disabled on the instances.
+-   **Workload-origin risk, on record**: hath — a closed-source
+    third-party binary serving public traffic and taking H@H network
+    commands — runs on the combined CP+ingress nodes, one kernel away
+    from etcd. Accepted consciously (combined roles are what make the
+    three-node pool affordable); contained by the restricted-PSS
+    default (workloads.md §1), strict limits, and per-app network
+    policy.
+-   **Node surface**: the cloud nodes' primary IPs are public VIPs, and
+    OCI security rules are derived per-service (physical.md §1) — a
+    mis-derived rule must fail closed, so the Talos ingress firewall
+    (default-deny in machine config, physical.md §2) sits beneath them
+    as the node-local layer.
+-   **Routing plane**: the UDM↔worker BGP session is authenticated and
+    prefix-filtered (cluster-infra.md §2) — a compromised worker VM
+    (the design's most exposed node) must not be able to hijack LAN
+    routing.
+-   **Backup plane**: backups are the actual HA mechanism (storage.md
+    §5), so backup *deletability* is a first-class threat — scoped
+    keys + bucket version retention per storage.md §4.
 
 ### 4.2 L7 Observability (Hubble)
 
@@ -480,9 +523,14 @@ already lives:
     known interfaces/ipsets; `zt*` interfaces match neither, so
     ZT-forwarded traffic rides the FORWARD chain's default ACCEPT —
     unpoliced, accepted knowingly (ZT membership is the auth boundary).
--   **ZT Central config joins Pulumi**: network managed routes and
-    member authorizations (including the CI ephemeral-member pre-auth)
-    via the official `zerotier/zerotier` Terraform provider through
+-   **ZT Central config joins Pulumi**: network managed routes, member
+    authorizations (including the CI ephemeral-member pre-auth), and
+    **tag-based flow rules confining CI members** to exactly their
+    targets — UDM SSH, the AdGuard APIs, the homelab host's libvirt
+    SSH — so a leaked CI join credential does not buy general LAN
+    access (necessary because ZT-forwarded traffic rides the UDM's
+    default ACCEPT, above: Central rules are the only policing layer).
+    All via the official `zerotier/zerotier` Terraform provider through
     Pulumi's any-Terraform-provider bridge, in the `physical` stack —
     implementation-time verification: bridge quality of that provider;
     fallback is the two hand-kept Central settings documented as manual

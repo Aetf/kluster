@@ -30,6 +30,14 @@ What a component may **not** do: hostPort, hostNetwork, `externalIPs`
 cluster-scoped resources (those belong to `k8s-base` and go through its
 closed-list rule).
 
+Namespaces are created with **Pod Security `restricted` enforced** by
+default — non-root, no added capabilities, RuntimeDefault seccomp
+(part of containing third-party binaries on the combined CP+ingress
+nodes, architecture.md §4.1). An exception is a declared component
+parameter with the reason on record — the same discipline as
+`backup=None`; the JuiceFS sidecar namespace (§4) is the one current
+holder.
+
 ## 2. Choosing storage: two axes, then the data's character
 
 The storage.md §2 classes are the *menu*; this is how a workload
@@ -188,6 +196,10 @@ per-app number:
     `internet-gw` HTTPRoute; traffic flows cloud ingress → KubeSpan →
     homelab node → LAN. This replaces the legacy VPS proxy entry and
     is the reusable pattern for any future LAN-device backend.
+    Cutover note: HA's `trusted_proxies` must gain the new
+    X-Forwarded-For source (the gateway pods' CIDR) at migration, or
+    client IPs — and HA's login rate-limiting/ip_ban — get judged
+    against the proxy address.
 
 ## 5. Porting from kluster-code
 

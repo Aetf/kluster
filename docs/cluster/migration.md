@@ -30,9 +30,11 @@ owns sequencing, data movement, and teardown.
     both clusters coexist; the Talos worker VM starts at ~60 GB and
     grows only as legacy PVCs/images are reclaimed. Homelab waves
     alternate "migrate → delete legacy data → grow VM disk".
-5.  **Sealing key first**: the legacy sealed-secrets key is restored
-    into the new cluster before any SealedSecret manifest is ported
-    (cluster-infra.md §1).
+5.  **Sealing key first, then rotated last**: the legacy sealed-secrets
+    key is restored into the new cluster before any SealedSecret
+    manifest is ported (cluster-infra.md §1); it is regenerated and
+    the legacy key deleted at decommission (§4, Wave F) —
+    restore-for-continuity, rotate-for-hygiene.
 
 ## 1. Phase 0 — foundations (before any app moves)
 
@@ -151,7 +153,13 @@ orphans, finishing with the disk-reclaim that feeds rule 0.4.
     adguardhome-sync unit removed; qbittorrent/quadlet units removed
     from yadm/aconfmgr; the legacy state backend's Postgres stops last,
     once kluster-code needs no further `pulumi` operations.
-4.  Success criteria: every app serving from the new cluster with green
+4.  **Sealing-key rotation**: with every app migrated, all
+    SealedSecrets are re-sealed against a freshly generated key and
+    the restored legacy key (rule 0.5) is deleted from the cluster.
+    The legacy key exists in years of backups; leaving it valid would
+    let any old backup copy decrypt future secrets
+    (cluster/security-audit.md).
+5.  Success criteria: every app serving from the new cluster with green
     backup-freshness alerts; orphan audit reports zero; legacy spend
-    $0; the only homelab standing services are the ones nodes.md §4.1
-    lists as staying.
+    $0; the legacy sealing key retired; the only homelab standing
+    services are the ones nodes.md §4.1 lists as staying.

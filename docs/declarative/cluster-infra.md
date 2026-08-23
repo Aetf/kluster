@@ -95,8 +95,10 @@ Two channels, chosen by who consumes the secret:
     cluster doesn't exist yet): OCI credentials, the pulumi-cloudflare
     provider token, B2 management keys, the UDM SSH key, ZT tokens for
     CI.
--   Where one external service serves both roles (Cloudflare), issue
-    **two separately-scoped tokens** — one per channel.
+-   Where one external service serves several consumers (Cloudflare),
+    issue **separately-scoped tokens per consumer**: one per channel
+    above, plus a third, zone-limited token for the UDM caddy's own
+    ACME issuance (dns.md §4) delivered as a gw-config device secret.
 
 ## 2. Cilium: the load-bearing component
 
@@ -119,6 +121,16 @@ All decided behavior from architecture.md §3, expressed as config:
     `lan` VIPs as /32 + /128. The UDM side is physical's gw-config
     provider; the session only establishes once both stacks are up —
     acceptable, nothing LAN-facing exists before apps deploy.
+    **Session hardening (2026-08-23, architecture.md §4.1)**: an MD5
+    session password on both ends (SealedSecret on the Cilium side,
+    gw-config device secret on the UDM side, per §1.1), and the UDM's
+    FRR config applies an inbound **prefix-list** (`192.168.70.0/24
+    le 32` + the ULA /64 `le 128`, deny the rest) plus a
+    `maximum-prefix` cap — without the filter, a compromised worker
+    VM (or anything claiming its static IP while it's down) could
+    advertise arbitrary /32s — the DNS servers' addresses included —
+    and MITM the whole LAN. Verified at bootstrap by advertising a
+    bogus prefix (physical.md §6).
 -   **Gateway API**: enabled; two `Gateway`s — `internet-gw` (Envoy
     replicas across the cloud nodes, `externalTrafficPolicy: Local`,
     Service requesting all three primary IPs via `lbipam.cilium.io/ips`
@@ -138,7 +150,18 @@ All decided behavior from architecture.md §3, expressed as config:
     forward-auth middleware's successor; the route helper exposes it
     as an `auth=True` parameter. Bootstrap verification: confirm the
     filter **fails closed** when Authelia is unreachable (fail-open
-    was reported against early builds, cilium#47178). Apps with
+    was reported against early builds, cilium#47178). Because every
+    `auth=True` app (qbittorrent Web UI included — its "run external
+    program" setting makes fail-open an RCE) rides this one mechanism,
+    fail-closed is also **verified continuously, not only at
+    bootstrap**: a standing **auth canary** — a synthetic
+    unauthenticated probe against a protected route, with a vmalert
+    rule firing on anything but a 401/302 — so a Cilium upgrade
+    regressing to fail-open pages instead of silently exposing every
+    gated app, and Cilium bumps merge only with the canary green.
+    (Per-app fallback auth layers were considered and rejected: N app
+    configs guarding against one mechanism's failure is the wrong
+    layer — harden and monitor the mechanism.) Apps with
     native OIDC (immich, grafana, matrix, splitpro) are unaffected by
     this mechanism's availability.
 -   **Hubble**: enabled with relay + UI off by default (metrics into
@@ -146,7 +169,12 @@ All decided behavior from architecture.md §3, expressed as config:
     standing dashboard, per the standing-rent rule).
 -   **Network policy stance** (architecture.md §4.1): default-deny is a
     per-namespace app concern; this stack ships only the cluster-wide
-    baseline (blocking pod→management-plane except where declared).
+    baseline (blocking pod→management-plane except where declared) —
+    which **explicitly includes pod egress to `169.254.0.0/16`**: the
+    OCI metadata service serves the machine config, and OCI's IMDSv2
+    header is static, so this policy is the only thing between a
+    compromised pod and the cluster PKI (architecture.md §4.1;
+    bootstrap verification in physical.md §6).
 
 ## 3. What this stack deliberately does not do
 
