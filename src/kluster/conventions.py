@@ -35,6 +35,12 @@ LABEL_DOMAIN = 'kluster.ucw.phd'
 #: (A1 OCPU-hours, the 200 GB boot+block allowance) is redeemable.
 OCI_REGION = 'us-phoenix-1'
 
+#: The cluster VCN. Chosen clear of everything it must coexist with: the
+#: state-backend appliance's own network, the pod and service ranges, the home
+#: VLANs, the ZeroTier range, and the legacy cluster's 10.42/10.43.
+VCN_CIDR = IPv4Network('10.20.0.0/16')
+VCN_SUBNET_CIDR = IPv4Network('10.20.0.0/24')
+
 # ---------------------------------------------------------------------------
 # Cluster networking
 # ---------------------------------------------------------------------------

@@ -1,10 +1,5 @@
-"""Physical layer of the cluster.
+"""The physical layer: OCI resources, Talos day-1, the homelab VM, the gateway.
 
-This module sets up VMs, basic networking, OSs etc.
+The AWS-era program in `aws.py` is reference-only and imported by nothing; it
+is replaced by the declaration in docs/declarative/physical.md.
 """
-
-from . import aws
-
-
-def setup():
-    aws.setup()

@@ -52,8 +52,10 @@ class MyMocks(pulumi.runtime.Mocks):
             return args.name + '_id', {'id': args.name + '_id'}
         return args.name + '_id', {'id': args.name + '_id', **args.inputs}
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]] | None]:
-        return {}, None
+    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        # The failures element must be iterable: the mock monitor builds
+        # CheckFailures from it, and the stub's Optional is a lie at runtime.
+        return {}, []
 
 
 # Custom Resources for testing

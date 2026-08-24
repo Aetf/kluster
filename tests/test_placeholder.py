@@ -12,8 +12,10 @@ class MyMocks(pulumi.runtime.Mocks):
         # MockResourceArgs.inputs is an untyped dict in the SDK.
         return args.name + '_id', cast('dict[str, Any]', args.inputs)
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]] | None]:
-        return {}, None
+    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        # The failures element must be iterable: the mock monitor builds
+        # CheckFailures from it, and the stub's Optional is a lie at runtime.
+        return {}, []
 
 
 # Must be an async fixture: set_mocks needs the test's running event loop.
