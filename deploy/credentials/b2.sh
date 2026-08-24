@@ -12,6 +12,9 @@
 #
 # Usage:
 #   B2_MASTER_KEY_ID=... B2_MASTER_KEY=... ./b2.sh mint
+#
+# With KLUSTER_KDBX set, the new secret is written straight into the offline
+# database (kdbx.sh) and never printed.
 #   B2_MASTER_KEY_ID=... B2_MASTER_KEY=... ./b2.sh prune <key-id>  # after slots updated
 #
 # Rotation is a re-run: `mint` creates a fresh key, `prune` retires every
@@ -20,6 +23,9 @@
 set -euo pipefail
 
 KEY_NAME=${KEY_NAME:-kluster-management}
+
+# Where the secret lands in the offline database when KLUSTER_KDBX is set.
+KDBX_ENTRY=${KDBX_ENTRY:-tokens/B2 management key}
 
 # Bucket + key administration. No listFiles/readFiles/writeFiles/deleteFiles:
 # managing a bucket never requires touching its contents.
@@ -74,13 +80,20 @@ cmd_mint() {
     b2 bucket list >/dev/null
     echo "verified: the new key authorizes and can list buckets" >&2
 
+    if [[ -n ${KLUSTER_KDBX:-} ]]; then
+        # shellcheck source=deploy/credentials/kdbx.sh
+        source "$(dirname "$0")/kdbx.sh"
+        kdbx_put "$KDBX_ENTRY" "$key_id" "$key_secret"
+        key_secret=""
+    fi
+
     cat <<EOF
 
 key name : $KEY_NAME
 key id   : $key_id
-key      : $key_secret
+${key_secret:+key      : $key_secret}
 
-Store in the slots (credentials.md §4), then '$0 prune $key_id':
+Remaining slots (credentials.md §4), then '$0 prune $key_id':
   - Pulumi config secret: b2:applicationKeyId / b2:applicationKey (physical)
   - CI Environment secret: B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY
 EOF
