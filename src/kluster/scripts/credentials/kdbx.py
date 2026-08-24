@@ -91,16 +91,27 @@ class KdbxStore:
         return [line for line in proc.stdout.splitlines() if line and not line.endswith('/')]
 
     def get(self, entry: str, attribute: str = 'Password') -> str:
-        proc = self._run(['show', '-q', '-a', attribute, str(self.path), entry], check=False)
+        # -s: without it a protected attribute prints as 'PROTECTED'.
+        proc = self._run(['show', '-q', '-s', '-a', attribute, str(self.path), entry], check=False)
         if proc.returncode != 0:
             raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kdbx ls)')
         return proc.stdout.strip()
+
+    def _ensure_group(self, entry: str) -> None:
+        """Create the entry's parent groups; `add` will not create them."""
+        parts = [part for part in entry.strip('/').split('/')[:-1] if part]
+        for depth in range(1, len(parts) + 1):
+            group = '/'.join(parts[:depth])
+            # mkdir fails when the group already exists, which is not an error
+            # here — every call before the last one is expected to.
+            _ = self._run(['mkdir', '-q', str(self.path), group], check=False)
 
     def put(self, entry: str, username: str, secret: str) -> None:
         """Create `entry`, or replace the password of an existing one.
 
         Idempotent by design: a rotation playbook re-runs the same call.
         """
+        self._ensure_group(entry)
         exists = self._run(['show', '-q', str(self.path), entry], check=False).returncode == 0
         verb = 'edit' if exists else 'add'
         # keepassxc-cli consumes the database password first, then the entry's.
