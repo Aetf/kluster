@@ -292,6 +292,24 @@ image needs the arm64 runners), and scrub is the realistic path — the
 affected secrets are the legacy cluster's, live until Wave F. *Lives
 in* ci.md §4.
 
+**Scope, measured**: every secret-bearing blob in the history is a
+version of `Pulumi.dev.yaml` — three blobs across three commits
+(the initial commit, the salt rotation, the AWS setup), carrying the
+encryption salt and seven `secure:` ciphertexts. A scan of all 1,059
+historical blobs for private keys, cloud access keys and provider
+tokens finds nothing else. The file is a stale kluster-code copy that
+has to be regenerated from scratch regardless, so the scrub is a
+removal, not a rewrite:
+
+```
+git filter-repo --invert-paths --path Pulumi.dev.yaml
+```
+
+Verified on a clone: 0 blobs matching the ciphertext or salt markers
+remain, every other path keeps its exact blob hash, and the commit
+count is unchanged. The rewrite changes every commit id, so it is
+followed by a force-push and by re-cloning anywhere the repo exists.
+
 ### L11 — AdGuard credential in the `apps` CI environment is LAN-DNS control
 
 The split-horizon rewrites make `apps` jobs carry the AdGuard admin
