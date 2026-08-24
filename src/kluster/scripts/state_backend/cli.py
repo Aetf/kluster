@@ -32,6 +32,7 @@ def _parser() -> argparse.ArgumentParser:
     _ = render.add_argument('--address', default='192.0.2.10', help='address to issue the server certificate for')
 
     _ = actions.add_parser('provision', help='create or converge the appliance')
+    _ = actions.add_parser('pins', help='check the pinned artefacts against their digests')
 
     bundle = actions.add_parser('bundle', help='write a client bundle (ca/cert/key/url)')
     _ = bundle.add_argument('name', choices=['ci', 'operator'])
@@ -84,6 +85,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     try:
+        if args.action == 'pins':
+            return 0 if provision.verify_pins() else 1
+
         store = KdbxStore.from_env(args.kdbx)
         match args.action:
             case 'render':

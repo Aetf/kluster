@@ -437,3 +437,28 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
             return True
         time.sleep(15)
     return False
+
+
+def verify_pins() -> bool:
+    """Check the pinned artefacts still hash to what settings.py claims.
+
+    Renovate can bump a version but cannot compute the tarball's digest, so
+    this runs in CI on every PR: a bump that leaves AGE_SHA256 stale fails
+    here rather than at first boot, where it would strand the appliance
+    without an encryptor.
+    """
+    ok = True
+
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(settings.AGE_URL, timeout=300) as response:
+        for chunk in iter(lambda: response.read(1 << 20), b''):
+            digest.update(chunk)
+    if digest.hexdigest() != settings.AGE_SHA256:
+        log.error('age: pinned %s, actual %s', settings.AGE_SHA256, digest.hexdigest())
+        ok = False
+    else:
+        log.info('age %s matches its pin', settings.AGE_VERSION)
+
+    release, _, _ = fcos_artifact()
+    log.info('FCOS %s stream is at %s (imported per release, no pin to drift)', settings.FCOS_STREAM, release)
+    return ok

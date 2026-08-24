@@ -52,3 +52,13 @@ def test_passwords_are_url_safe_and_unpadded() -> None:
     password = seeds.restic_password(ROOT, 'ns', 'pvc')
     assert '=' not in password
     assert password.isascii()
+
+
+def test_age_url_matches_the_pinned_version() -> None:
+    """A version bumped without its URL would fetch the old binary and pass
+    its own digest check."""
+    from kluster.scripts.state_backend import settings
+
+    assert settings.AGE_VERSION in settings.AGE_URL
+    assert settings.AGE_URL.endswith('linux-amd64.tar.gz')
+    assert len(settings.AGE_SHA256) == 64
