@@ -1,22 +1,24 @@
+from typing import Any, cast
+
 import pulumi
 import pytest
 import pytest_asyncio
 
 
-# Define the Mocks
 class MyMocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs):
-        outputs = args.inputs
-        return [args.name + '_id', outputs]
+    """Resources answer with their inputs; no provider is ever contacted."""
 
-    def call(self, args: pulumi.runtime.MockCallArgs):
-        return {}
+    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+        # MockResourceArgs.inputs is an untyped dict in the SDK.
+        return args.name + '_id', cast('dict[str, Any]', args.inputs)
+
+    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]] | None]:
+        return {}, None
 
 
-# Setup the test environment
 # Must be an async fixture: set_mocks needs the test's running event loop.
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks():
+async def setup_mocks() -> None:
     pulumi.runtime.set_mocks(
         MyMocks(),
         project='my-project',
@@ -26,6 +28,5 @@ async def setup_mocks():
 
 
 @pytest.mark.asyncio
-async def test_placeholder():
-    # This is a placeholder test to verify the setup
+async def test_placeholder() -> None:
     assert True

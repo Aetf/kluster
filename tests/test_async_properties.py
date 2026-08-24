@@ -1,9 +1,17 @@
+# Pulumi's mock monitor and its gRPC message types carry no type information,
+# and this file exists to reach inside them: it patches RegisterResource to
+# capture the dependency edges Pulumi records. The unknown-type family is
+# suppressed here rather than repo-wide.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportUnknownParameterType=false, reportUnknownArgumentType=false
+# pyright: reportMissingParameterType=false, reportUnnecessaryIsInstance=false
 """
 Verification suite for the native async inputs framework (RFC-001):
 `async_output`, `resolve`, and the `Component` base class.
 """
 
 import asyncio
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -32,36 +40,39 @@ from putils import Component, async_output, resolve  # noqa: E402
 
 # Mock definitions
 class MyMocks(pulumi.runtime.Mocks):
-    def __init__(self, unknown_network_id: bool = False):
-        self.resources = []
+    def __init__(self, unknown_network_id: bool = False) -> None:
+        self.resources: list[pulumi.runtime.MockResourceArgs] = []
         self.unknown_network_id = unknown_network_id
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs):
+    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         self.resources.append(args)
         if args.typ == 'gcp:compute:Network':
             if self.unknown_network_id:
-                return ['', {'id': pulumi.UNKNOWN}]
-            return [args.name + '_id', {'id': args.name + '_id'}]
-        return [args.name + '_id', {'id': args.name + '_id', **args.inputs}]
+                return '', {'id': pulumi.UNKNOWN}
+            return args.name + '_id', {'id': args.name + '_id'}
+        return args.name + '_id', {'id': args.name + '_id', **args.inputs}
 
-    def call(self, args: pulumi.runtime.MockCallArgs):
-        return {}
+    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]] | None]:
+        return {}, None
 
 
 # Custom Resources for testing
 class VPC(pulumi.CustomResource):
-    id: pulumi.Output[str]
-
-    def __init__(self, name: str, opts=None):
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None) -> None:
         super().__init__('gcp:compute:Network', name, {'id': None}, opts)
 
 
 class Subnet(pulumi.CustomResource):
-    id: pulumi.Output[str]
     network_id: pulumi.Output[str]
     cidr: pulumi.Output[str]
 
-    def __init__(self, name: str, network_id: pulumi.Input[str] = None, cidr: pulumi.Input[str] = None, opts=None):
+    def __init__(
+        self,
+        name: str,
+        network_id: pulumi.Input[str] | None = None,
+        cidr: pulumi.Input[str] | None = None,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
         super().__init__('gcp:compute:Subnetwork', name, {'network_id': network_id, 'cidr': cidr}, opts)
 
 
