@@ -514,6 +514,8 @@ dependencies = [
     { name = "pulumi-github" },
     { name = "pulumi-kubernetes" },
     { name = "pulumi-kubernetes-cert-manager" },
+    { name = "pulumi-oci" },
+    { name = "pulumiverse-talos" },
     { name = "requests" },
 ]
 
@@ -540,6 +542,8 @@ requires-dist = [
     { name = "pulumi-github", specifier = ">=6.4.0" },
     { name = "pulumi-kubernetes", specifier = ">=4.23.0" },
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
+    { name = "pulumi-oci", specifier = ">=4.20.0" },
+    { name = "pulumiverse-talos", specifier = ">=0.8.1" },
     { name = "requests", specifier = ">=2.32.3" },
 ]
 
@@ -1032,6 +1036,34 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cc/2a/c74bfa63d2cd02b1ef8f429aa56073ac597631f167320cd2d98072b3231d/pulumi_kubernetes_cert_manager-0.2.0.tar.gz", hash = "sha256:c856900632be71bbd9fe1a8391b569fde7860470c0cbd73d030377319e9c2444", size = 24845, upload-time = "2025-03-14T18:41:19.535Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/f1/f4cb7c8e37fcff83c70d8dc315b534d3e64369a85581373775bf2bf44541/pulumi_kubernetes_cert_manager-0.2.0-py3-none-any.whl", hash = "sha256:66180adbc1eb5d92a0832ea265dea3d9559b7818ed0d396b610087716bbbbbec", size = 26686, upload-time = "2025-03-14T18:41:18.17Z" },
+]
+
+[[package]]
+name = "pulumi-oci"
+version = "4.20.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/3e/61adc45fdb68e1697bf426a6a40c0e64ada32d2e0792d5e3d8940f9c4d6d/pulumi_oci-4.20.0.tar.gz", hash = "sha256:51d4aa2ce6e8120c4cdf5f688ff974827e734f4042a340f47e50c64ae85f71ab", size = 11809685, upload-time = "2026-07-15T06:02:57.636Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ed/d1/75e0661391d7d7c492c363b43f76d31dd4995527be2d06ab5815a801b5ad/pulumi_oci-4.20.0-py3-none-any.whl", hash = "sha256:72675609ee39f2e0b40aa33439f995318a6468fe26227f54d0b2e9c8325c157b", size = 16715425, upload-time = "2026-07-15T06:02:53.546Z" },
+]
+
+[[package]]
+name = "pulumiverse-talos"
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/e3/dfa31daff8752cb634400e2b21e3514ab90cc42d6e2984bdab3ce92aeb56/pulumiverse_talos-0.8.1.tar.gz", hash = "sha256:0f31ce5d9e6e5f620d7e3a16d35713d99b9cd1d14fdaa4ceeab459ba01cccc98", size = 36716, upload-time = "2026-07-29T09:20:05.088Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/27/3371a9b68fbdfb9344cfbc855bbc1e6a20dabe51f615036d2b101007051e/pulumiverse_talos-0.8.1-py3-none-any.whl", hash = "sha256:0195e5c29c5e90d8dfb86e03b40f2d86f643f831b926c578b259e6f01141c09a", size = 57085, upload-time = "2026-07-29T09:20:04.202Z" },
 ]
 
 [[package]]

@@ -20,6 +20,8 @@ dependencies = [
     "pulumi-kubernetes-cert-manager>=0.2.0",
     "cryptography>=50.0.0",
     "oci>=2.184.2",
+    "pulumi-oci>=4.20.0",
+    "pulumiverse-talos>=0.8.1",
 ]
 
 [project.scripts]
