@@ -66,7 +66,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | via cloud endpoints — talosctl proxies to `--nodes <homelab>` through apid over KubeSpan (**bootstrap verification item**) |
-| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (ephemeral member, pre-authorized) — no standing runner, no home inbound ports |
+| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |
 
 Only the `physical` jobs — and `apps` runs that change split-horizon
@@ -80,6 +80,15 @@ leaked join credential does not buy general LAN access. Residual on
 record (audit L11): the AdGuard credential in `apps` is full-admin
 (AdGuard has no scoped API), so LAN-DNS control rides the apps tier —
 accepted alongside the kubeconfig that tier already holds.
+
+Join mechanics (2026-08-24): **two CI identities** — `ci-deploy` for
+the merge chain, `ci-preview` for PR `preview-apps` — one per
+concurrency domain, each domain serialized (the deploy workflow's
+`concurrency` group, wanted for state-lock sanity anyway; a
+`zt-preview` job group). A join cannot span jobs (per-job runner VMs)
+and one identity must never be live twice (ZT maps a node ID to one
+endpoint). Design, rejected alternatives, and the join-latency
+expectation: physical/gateway.md §2.6.
 
 ## 3. Pipeline shape
 

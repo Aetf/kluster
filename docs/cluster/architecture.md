@@ -743,8 +743,9 @@ already lives:
     `flow_rules` (the Central rules language as a string);
     `zerotier_member` carries `authorized`, static `ip_assignments`,
     `tags`, and `capabilities`; `zerotier_identity` generates member
-    keypairs in-state — so the CI member's identity can itself be
-    declared, its private key flowing into the CI environment secret.
+    keypairs in-state — so the CI members' identities (two, one per
+    concurrency domain — gateway.md §2.1/§2.6) can themselves be
+    declared, their private keys flowing into CI environment secrets.
     Implementation-time verification remains the **bridge quality**
     (provider existence ≠ clean Pulumi bridging); fallback is the two
     hand-kept Central settings documented as manual preconditions

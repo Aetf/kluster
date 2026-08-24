@@ -45,7 +45,8 @@ in the desired state (relevant because the tag default is permissive,
 | UDM | `infra` | Static managed IP (`conventions.py`); nexthop of every managed route. |
 | Homelab host | `infra` | Today's only home member — a plain member, never a router (ZT carries no home-LAN routes today); kept as the recovery side-door (§3). |
 | Legacy VPS | `infra` | Retires in Wave F together with its `10.42.0.0/24` route. |
-| CI ephemeral member | `ci` | Identity generated in-state (`zerotier_identity`), private key in the CI environment secret; confined by §2.3. |
+| CI member `ci-deploy` | `ci` | Merge-chain jobs (plan/up-physical, up-apps). Identity generated in-state (`zerotier_identity`), private key in CI environment secrets; never self-collides — the deploy workflow's `concurrency` group serializes chains (§2.6). IPv4-only (§2.3). |
+| CI member `ci-preview` | `ci` | PR `preview-apps` (AdGuard-rewrite diffs). Same generation and confinement; serialized by a `zt-preview` job concurrency group (§2.6). IPv4-only (§2.3). |
 
 Dead weight dropped at import census: the Abacus member (machine no
 longer exists). DNS linkage: the `*.zt.<zone>` block in the `dns`
@@ -184,6 +185,9 @@ Run against a scratch ZT network with the same rules and a throwaway
     query/response round trip) works with the rules applied —
     exercises the multicast settings and the final-accept fallthrough
     together.
+7.  **Join latency**: measure a fresh `ci`-tagged member's
+    join→SSH-reachable time against the UDM (expectation and why it
+    should beat the legacy 1–2 min: §2.6).
 
 ### 2.5 Rollout order
 
@@ -208,6 +212,38 @@ operation (migration.md Phase 0):
 
 Each step is its own previewed `physical` change; rollback of any
 step is removing what it added.
+
+### 2.6 CI join mechanics: two identities, serialized domains
+
+Facts that shape it (decided 2026-08-24):
+
+-   **A join cannot be reused across jobs** — each hosted-runner job
+    is its own VM — and folding stacks into one job to share a join
+    would collapse the per-stack Environment credential partition
+    (ci.md §3). Per-job joins are the shape; the recurring cost is
+    join latency (below).
+-   **One identity live in two places flaps** (ZT maps a node ID to
+    one endpoint at a time), so concurrent jobs must never share an
+    identity. Hence one identity per concurrency domain, each domain
+    serialized: the merge chain by its workflow `concurrency` group
+    (queued — which Pulumi state-lock sanity wants anyway; collapsing
+    pending runs is safe because deploys are cumulative, the newest
+    applies everything), and `preview-apps` by a `zt-preview` job
+    group (a cancelled pending preview is a re-run button — PRs are
+    not cumulative, accepted as rarity).
+-   **Rejected: per-run generated identities** self-authorizing via
+    the Central API — that puts the network-admin Central token in
+    the apps environment, dissolving the confinement the flow rules
+    exist to provide.
+-   **Join latency expectation**: kluster-code's measured 1–2 min
+    wait-for-peer is dominated by NAT traversal toward a NATed host
+    member (relay first, then a hole-punched direct path). Here the
+    peer is the UDM itself, whose ZT socket (host-networking
+    container) sits on the WAN interface un-NATed — the direct path
+    should form on first contact, and traffic flows (slowly, via ZT
+    relays) even before it does. Verified as §2.4 item 7;
+    seconds-class expected, and if it stays minutes it is a per-job
+    fixed cost, not a correctness problem.
 
 ## 3. Failure & recovery (playbook census)
 
