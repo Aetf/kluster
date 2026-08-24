@@ -18,5 +18,11 @@
   which fight a provider-SDK codebase more than they help. Generated CRD
   bindings (`packages/crds`) are excluded — they are not ours to annotate.
   The check runs in CI alongside ruff.
+* **Scripts are Python**, not shell — a shell script needs a reason (a
+  handful of lines with no logic, or a context with no interpreter). They
+  live under `src/kluster/scripts/` and are exposed as console scripts in
+  `pyproject.toml` (`update_crds`, `credentials`), the same way for every
+  script; `just` recipes or symlinks are for convenience on top, never the
+  home of the logic.
 * Repo status and open design decisions are tracked in README "Status & open
   decisions" — check it before starting infra work.

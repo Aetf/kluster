@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 update_crds = 'kluster.scripts.update_crds:main'
+credentials = 'kluster.scripts.credentials.cli:main'
 
 [dependency-groups]
 dev = [
@@ -83,9 +84,6 @@ docstring-code-format = true
 ##
 ## Type checker
 ##
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
 
 
 [tool.basedpyright]
