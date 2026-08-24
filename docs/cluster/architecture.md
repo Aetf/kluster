@@ -477,8 +477,9 @@ paths, matched to the producers' shapes:
 
 -   **CI (event-shaped): one dispatch, nothing else.** The shared
     producer step in CI POSTs a `repository_dispatch` with the
-    convention payload to the ops repo, using the dispatch PAT
-    (below) — CI neither calls HA nor touches issues. The ops
+    convention payload to the ops repo, using an installation
+    token minted per run from the dispatch App (below) — CI
+    neither calls HA nor touches issues. The ops
     repo's **dispatch handler** workflow then does the delivery: HA
     push per tier, issue for `actionable`, and — being already in
     the issue-making place — escalates any tier to an issue when
@@ -488,7 +489,7 @@ paths, matched to the producers' shapes:
     leaves CI entirely. (`GITHUB_TOKEN` clarity: every workflow run
     in every repo gets one, scoped to its own repo — CI keeps its
     own for checkout/automerge; the ops repo's workflows use
-    *theirs* to open issues; the PAT exists only because a token
+    *theirs* to open issues; the App exists only because a token
     cannot cross repos.)
 -   **Cluster (state-shaped): pushes stay direct, issues are
     pulled.** Alertmanager *cannot* trigger the ops repo — its
@@ -514,20 +515,26 @@ paths, matched to the producers' shapes:
 
 Costs and facts on record:
 
--   **The dispatch PAT** (this repo's CI → ops repo):
-    fine-grained, ops repo only, contents:write — the minimum that
-    permits dispatch; GitHub offers no dispatch-only scope, so the
-    same token could push commits there. The original acceptance
-    ("that repo holds only alert plumbing") died when the repo
-    absorbed the scheduled automation and its credentials
-    (talosconfig, B2 keys, the drill set — ci.md §3), so the excess
-    is **fenced instead of shrugged at**: a ruleset on the ops
-    repo's default branch forbids direct pushes (PR-only) — a
-    leaked PAT can dispatch and nothing else; the PAT carries no
-    `workflows` permission (GitHub separately refuses workflow-file
-    edits without it); and the ops repo's workflows are
-    self-contained (inline `run:` steps, no repo-local scripts), so
-    even a landed commit offers no code path a workflow executes.
+-   **The dispatch App** (this repo's CI → ops repo): a
+    single-purpose GitHub App installed on the ops repo alone,
+    carrying contents:write — the minimum that permits dispatch;
+    GitHub offers no dispatch-only permission, so the same token
+    could push commits there. CI holds no long-lived credential:
+    it mints an **8-hour installation token** per run, and the
+    App's private key is a seed held offline (credentials.md §2) —
+    GitHub has no API for creating personal access tokens, which
+    is what makes the App the programmatic shape here rather than
+    a matter of taste. The excess permission is **fenced instead
+    of shrugged at**: a ruleset on the ops repo's default branch
+    forbids direct pushes (PR-only) — a leaked installation token
+    can dispatch and nothing else; the App carries no `workflows`
+    permission (GitHub separately refuses workflow-file edits
+    without it); and the ops repo's workflows are self-contained
+    (inline `run:` steps, no repo-local scripts), so even a landed
+    commit offers no code path a workflow executes. Permissions
+    are per-App, not per-installation, which is why the
+    drift-trigger credential is a **second** App (ci.md §3) rather
+    than another permission on this one.
     Register row in credentials.md.
 -   **The ops repo burns private-repo Actions minutes** (billed
     per-minute, min 1/run): hourly poller ≈ 720 min/mo, the hourly

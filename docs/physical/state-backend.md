@@ -138,8 +138,12 @@ there is nothing for it to edit.)
     scheduled workflow (object-age on the prefix, ci.md §3) — the
     box monitors nothing about itself.
 -   **The age identity rotates by generations; no key is assumed
-    immortal.** Rotation is a designed path, not an emergency
-    improvisation:
+    immortal.** A generation is a *label*, not a stored file: the
+    identity is derived from the root seed as
+    `backup/age/<generation>` (credentials.md §2.2), so rotating one
+    means deriving the next — and a retired root seed stays in the kit
+    until the last dump under it expires. Rotation is a designed path,
+    not an emergency improvisation:
     -   **Every dump is encrypted to the two newest generations plus
         the ops-repo-held drill key** — age is natively multi-recipient,
         and all three public keys sit in the Butane file. The

@@ -143,9 +143,12 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     `pulumi preview --refresh --expect-no-changes`
     on all four stacks (physical in the ungated `physical-plan`
     environment — the accepted posture above, zero clicks), fired
-    weekly by the ops repo's scheduler through a fine-grained PAT
-    scoped to **Actions: write only** — it can trigger runs, never
-    push code (register row in credentials.md). Any diff raises an
+    weekly by the ops repo's scheduler through an installation
+    token from the **trigger App** — a second single-purpose GitHub
+    App, installed on this repo alone and carrying **Actions: write
+    only**, so it can start runs and never push code. Two Apps
+    rather than one because GitHub scopes permissions per App
+    (register rows in credentials.md). Any diff raises an
     `actionable` alert through the standard producer step; playbook:
     human review, then reconcile reality or deploy — drift here
     means something changed behind Pulumi's back, the gw-config
@@ -216,7 +219,7 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     local to that repo. Consequences carried consciously: the ops
     repo now holds real credentials (talosconfig, the B2 etcd
     write key, the drill set — register rows in credentials.md),
-    which is what forced the dispatch-PAT fencing
+    which is what forced the dispatch App's fencing
     (architecture.md §4.3), and its Actions-minutes bill is
     accounted there too. This repo keeps only the event-driven
     set: previews, the merge chain, noop-automerge, images.yml —
