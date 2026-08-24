@@ -1,3 +1,7 @@
 [tools]
 pulumi = "latest"
 uv = "latest"
+# Deterministic age identities are cross-checked against the real tool, and
+# the box's dumps are age-encrypted; butane renders the appliance's Ignition.
+age = "latest"
+"aqua:coreos/butane" = "latest"
