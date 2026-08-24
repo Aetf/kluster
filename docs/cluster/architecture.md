@@ -271,9 +271,9 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
     UDM believe the subnet is directly connected and fight the BGP /32s.
     Firewall policy references it via address groups instead. The ULA
     range follows the same `::1`-style host-address discipline as §1.3.
-2.  **BGP session**: CiliumBGPPeeringPolicy peers with the UDM SE (FRR,
-    AS 65000) over both address families, advertising Service VIPs as
-    /32 + /128 (§5.2 automates the UDM side).
+2.  **BGP session**: Cilium BGPv2 (cluster-infra.md §2) peers with the
+    UDM SE (FRR, AS 65000) over both address families, advertising
+    Service VIPs as /32 + /128 (§5.2 automates the UDM side).
 3.  **Firewall semantics of the routed pool** (ground truth read off the
     UDM's iptables, 2026-08-23): UniFi's zone firewall classifies
     forwarded traffic by **destination ipset**, not interface pairs —
@@ -395,7 +395,9 @@ belongs to — this section holds the cluster-level statements).
     OCI security rules are derived per-service (physical.md §1) — a
     mis-derived rule must fail closed, so the Talos ingress firewall
     (default-deny in machine config, physical.md §2) sits beneath them
-    as the node-local layer.
+    as the node-local layer — policing the host netstack only:
+    Service VIP traffic is answered by the BPF datapath in front of
+    it, so app ports never enter machine config (physical.md §2).
 -   **Routing plane**: the UDM↔worker BGP session is authenticated and
     prefix-filtered (cluster-infra.md §2) — a compromised worker VM
     (the design's most exposed node) must not be able to hijack LAN

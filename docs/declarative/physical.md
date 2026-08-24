@@ -97,10 +97,26 @@ machine_secrets
     in a $0-trust tenancy); kubelet system-reserved so eviction
     actually works (the legacy CP-starvation lesson, architecture.md
     §6.5); the **Talos ingress firewall** (`NetworkRuleConfig`,
-    default-deny with the platform ports enumerated — KubeSpan, apid,
-    6443, NLB listener + health-check ports, intra-VCN) as the
-    node-local layer beneath the derived OCI rules (architecture.md
-    §4.1); kube-apiserver `anonymous-auth=false` pinned and audit
+    default-deny) as the node-local layer beneath the derived OCI
+    rules (architecture.md §4.1) — enumeration rule (2026-08-24):
+    **only ports that terminate in the host netns** — KubeSpan
+    51820, apid 50000, kube-apiserver 6443 (a hostNetwork static
+    pod, so host-side despite also being an NLB listener), kubelet
+    intra-cluster, intra-VCN platform traffic; the homelab worker
+    additionally BGP 179 from the UDM. **Service ports are
+    deliberately absent**: LoadBalancer VIP traffic — NLB health
+    checks on backend ports included — is intercepted by Cilium's
+    BPF datapath at tc ingress *before* nftables, so declared
+    frontends serve without firewall entries while undeclared ports
+    fall through to the host stack and hit the default-deny; the
+    two layers compose, per-service admission control *is* the KPR
+    datapath, and machine config never carries an app port (the
+    co-location principle survives). Verified both ways at
+    bootstrap (§6); recorded fallback if BPF precedence fails on
+    the chosen datapath mode: copy the small public-port census (a
+    `conventions.py` constant — 80/443/22000×2/8443/hath, rarely
+    changing) into machine config, accepting the cross-stack cost
+    only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
     the augmented node's secondary private IP on its interface;
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
@@ -242,4 +258,6 @@ advertisement from the worker (bogus-prefix test, cluster-infra.md
 (storage.md §4); the ExternalAuth filter fails closed with Authelia
 down *and* the standing auth canary alerts (cluster-infra.md §2);
 the Talos ingress firewall drops an undeclared port on a node
-primary IP.
+primary IP, **and** a declared LoadBalancer service port serves
+with no firewall entry (the BPF-precedence check — failure flips
+the recorded public-port-census fallback, §2).

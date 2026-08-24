@@ -37,7 +37,9 @@ The order is a real dependency chain, encoded as Pulumi
 `depends_on`/parent relationships so a single `up` converges from an
 empty cluster:
 
-1.  **Gateway API CRDs** — must exist before Cilium starts its gateway
+1.  **Gateway API CRDs — the experimental channel** (2026-08-24: the
+    ExternalAuth HTTPRoute filter, GEP-1494, ships in experimental,
+    not standard — §2) — must exist before Cilium starts its gateway
     controller.
 2.  **Cilium** (§2) — the cluster has no CNI until this lands (Talos is
     configured `cni: none`; nodes sit NotReady between physical
@@ -129,14 +131,22 @@ All decided behavior from architecture.md §3, expressed as config:
     match (architecture.md §3.2); all from physical outputs) and `lan`
     (`192.168.70.0/24` + the ULA /64). Pool membership via the `serviceSelector` label from
     `conventions.py`. Bootstrap verification: pool-contains-node-IP.
--   **BGP**: `CiliumBGPPeeringPolicy` on the homelab worker only,
-    peering with the UDM (AS 65000) over both families, advertising
-    `lan` VIPs as /32 + /128. The UDM side is physical's gw-config
-    provider; the session only establishes once both stacks are up —
-    acceptable, nothing LAN-facing exists before apps deploy.
+-   **BGP**: Cilium **BGPv2** resources — `CiliumBGPClusterConfig`
+    (node-selected to the homelab worker only) +
+    `CiliumBGPPeerConfig` + `CiliumBGPAdvertisement`; the v1
+    `CiliumBGPPeeringPolicy` is deprecated and **not used** (at the
+    ≥1.20 floor it may be removed outright) — peering with the UDM
+    (AS 65000) over both families, advertising `lan` VIPs as
+    /32 + /128. The UDM side is physical's gw-config provider; the
+    session only establishes once both stacks are up — acceptable,
+    nothing LAN-facing exists before apps deploy.
     **Session hardening (2026-08-23, architecture.md §4.1)**: an MD5
-    session password on both ends (SealedSecret on the Cilium side,
-    gw-config device secret on the UDM side, per §1.1), and the UDM's
+    session password on both ends — BGPv2's `authSecretRef` on the
+    Cilium side; **placement fact on top of §1.1**: the referenced
+    Secret must live in the namespace named by
+    `--bgp-secrets-namespace` (kube-system by default), so its
+    SealedSecret is sealed for that namespace — and a gw-config
+    device secret on the UDM side. The UDM's
     FRR config applies an inbound **prefix-list** (`192.168.70.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap — without the filter, a compromised worker

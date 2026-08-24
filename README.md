@@ -169,7 +169,9 @@ first-session implementation tasks, roughly in order:
    and the ZeroTier Central manual items (physical/homelab-host.md §4, declarative/physical.md §6).
 5. **CI workflows** per framework/ci.md §3, plus the ported+upgraded
    **`images.yml`** (multi-arch via native arm64 runners, CNPG images
-   wired in — ci.md §4); **`packages/crds` regen** for the new chart
+   wired in — ci.md §4; **critical path**: Wave A's splitpro needs
+   this image, arm64 runners need the repo public, and public needs
+   the L10 history scrub first); **`packages/crds` regen** for the new chart
    set; small runbooks as they come up (sealing-key export/restore,
    orphan audit recipe, talosctl day-2 recipes).
 6. Then follow **migration.md** Phase 0 → Waves A–F.

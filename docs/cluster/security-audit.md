@@ -174,7 +174,11 @@ widens exposure with no second layer.
 **Fix.** A Talos `NetworkRuleConfig` ingress firewall (default-deny,
 platform ports enumerated) in machine config, plus explicit
 kube-apiserver `anonymous-auth=false` and audit logging on the public
-6443. Zero runtime cost; pure machine config.
+6443. Zero runtime cost; pure machine config. *Amended 2026-08-24*:
+the enumeration covers **host-netns-terminated ports only** — Service
+VIP traffic is answered by the BPF datapath ahead of nftables
+(verified at bootstrap), so per-service ports never enter machine
+config and the co-location principle survives (physical.md §2).
 
 **Lives in.** physical.md §2, §6 (verification), architecture.md §4.1.
 
@@ -282,7 +286,11 @@ standing-rent test. *Lives in* architecture.md §2.1.
 
 Free arm64 CI runners require flipping the repo public, but its git
 history carries kluster-code-era stack ciphertext + encryption salt.
-Scrub history or rotate the affected secrets first. *Lives in* ci.md §4.
+Scrub history or rotate the affected secrets first. *Amended
+2026-08-24*: this sits on Wave A's critical path (splitpro's operand
+image needs the arm64 runners), and scrub is the realistic path — the
+affected secrets are the legacy cluster's, live until Wave F. *Lives
+in* ci.md §4.
 
 ### L11 — AdGuard credential in the `apps` CI environment is LAN-DNS control
 

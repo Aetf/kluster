@@ -220,7 +220,12 @@ Upgrades over the legacy workflow, both mandatory now:
     hygiene: the git history carries kluster-code-era stack config
     (`Pulumi.dev.yaml` ciphertext + encryption salt) — scrub the
     history or rotate the affected secrets before the flip
-    (cluster/security-audit.md).
+    (cluster/security-audit.md). Sequencing fact (2026-08-24): the
+    flip sits on **Wave A's critical path** (splitpro's pgcron
+    operand needs the multi-arch build), so the scrub happens in
+    repo-plumbing time, not "eventually" — and scrubbing is the
+    realistic option of the two, because the ciphertext's secrets
+    are the *legacy* cluster's, live until Wave F.
 -   **The CNPG images join the CI** — the legacy manual `just docker-*`
     flow retires; heavy builds are exactly what should not depend on a
     workstation. kluster-code's `docker/` retires with the migration
