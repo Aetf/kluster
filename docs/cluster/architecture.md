@@ -236,19 +236,22 @@ VIP — DNAT preserves the source address end-to-end. Costs: home-IP DNS
 (dynamic) and home upload bandwidth. No current workload needs this; it
 exists so the constraint never forces a redesign.
 
-### 3.3 HTTP/S: two Gateways, shared routes
+### 3.3 HTTP/S: three Gateways, shared routes
 
-Cilium Gateway API provides two `Gateway`s: `internet-gw` and `lan-gw`,
-each a LoadBalancer Service from its pool. An app publishes an
-`HTTPRoute` with one or both as `parentRefs`; split-horizon apps
-(immich) attach to both.
+Cilium Gateway API provides three `Gateway`s: `internet-gw`, `lan-gw`,
+and `media-gw` (a second `lan`-pool VIP whose attachment means
+"reachable from the IoT VLAN" — §3.4, cluster-infra.md §2), each a
+LoadBalancer Service from its pool. An app publishes an `HTTPRoute`
+with the matching `parentRefs`; split-horizon apps (immich) attach to
+`internet-gw` + `lan-gw` both.
 
 Client-IP note: `internet-gw`'s Envoy runs as replicas across the cloud
 nodes (every NLB backend has a local Envoy) with
 `externalTrafficPolicy: Local` — real client IPs flow through the
 pass-through NLB into Envoy's access logs and auth decisions without
-X-Forwarded-For games. `lan-gw`'s Envoy is pinned to the homelab VM
-(the node owning its `lan` VIP), likewise `Local`.
+X-Forwarded-For games. `lan-gw`'s and `media-gw`'s Envoys are pinned
+to the homelab VM (the node owning their `lan` VIPs), likewise
+`Local`.
 
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 

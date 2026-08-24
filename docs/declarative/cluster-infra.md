@@ -66,11 +66,14 @@ empty cluster:
     its routing ported from the legacy config (Home Assistant push),
     stays in the stack (~70 Mi, earns its rent as the alerting
     spine). This is the **in-cluster half of the unified alert
-    channel** (architecture.md §4.3): same HA endpoint and payload
-    convention as the CI-side producers, every alert carrying its
-    playbook reference; a second receiver posts `actionable`-tier
-    alerts as a `repository_dispatch` to the repo (the GitHub-issue
-    leg — PAT as a SealedSecret, §1.1).
+    channel** (architecture.md §4.3): same payload convention as the
+    CI-origin alerts, every alert carrying its playbook reference.
+    Alertmanager's one receiver is the HA webhook — it holds **no
+    GitHub credential**; the GitHub-issue leg is *pulled* by the
+    alerts repo's poller reading alertmanager's API (a read-only
+    bearer route through the internet gateway), and HA-delivery
+    failure surfaces as a meta-alert on the notification-failure
+    metric.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0 so the cutover needs no k8s-base change.

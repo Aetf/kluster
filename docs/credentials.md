@@ -21,9 +21,11 @@ facts about them.
     §4.3).
 3.  **Storage channels are a closed set.** Offline store · Pulumi
     config secret (provider-credential channel, cluster-infra.md
-    §1.1) · SealedSecret (in-cluster consumption) · CI environment
-    secret · alerts-repo Actions secret · on-box (delivered by
-    provisioning, e.g. Butane-embedded). A row names its channel(s);
+    §1.1) · SealedSecret (in-cluster consumption) · CI Environment
+    secret (the per-stack GitHub Environments and the `drill`
+    Environment, ci.md §2) · alerts-repo Actions secret · on-box
+    (delivered by provisioning, e.g. Butane-embedded). A row names
+    its channel(s);
     a credential living anywhere else is misplaced.
 4.  **Every key rotates or expires.** Each row carries a cadence or
     expiry and the reminder mechanism (platform e-mail, the ci.md §3

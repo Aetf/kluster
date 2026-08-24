@@ -146,7 +146,9 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
     and the issue — architecture.md §4.3; no delivery logic lives in
     this repo), like deploy failures — the out-of-cluster mirror of
     the in-cluster backup-freshness alert family
-    (cluster-infra.md §3).
+    (cluster-infra.md §3). The unattended **drill workflows**
+    (state-backend rebuild, etcd restore-verify — operations.md §4)
+    are scheduled here too, running in the `drill` Environment.
 
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 

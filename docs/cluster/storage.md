@@ -152,8 +152,8 @@ Three related lessons, folded into policy:
     problem `Retain` had.)
 -   **Orphan audit is a standing procedure.** A `just` recipe compares
     on-disk PV directories against live PVs (per node) and reports
-    unaccounted entries; run with the quarterly restore drills, target
-    zero. The legacy cluster's accumulated retained-PV folders get a
+    unaccounted entries; scheduled quarterly as an unattended check
+    that alerts only on findings (operations.md §4), target zero. The legacy cluster's accumulated retained-PV folders get a
     one-time census during migration — each mapped to an app or
     deleted (migration.md).
 

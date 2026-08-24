@@ -84,7 +84,9 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     configs are declared there, and one standing service leaves the
     homelab host.
 -   **Placement**: rewrites are emitted automatically for any app
-    attaching to both gateways — a split-horizon app cannot forget its
+    with a LAN-side gateway attachment — split-horizon (both
+    gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
+    rewrite targeting the media VIP) — an app cannot forget its
     rewrite because it never writes it by hand. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
 

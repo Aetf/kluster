@@ -36,8 +36,9 @@ Organized by topic: `docs/cluster/` (what we're building and why),
 `docs/physical/` (physical-layer system designs — the machines and
 appliances themselves, as opposed to how they're declared),
 `docs/framework/` (the Pulumi Python framework itself), `docs/declarative/`
-(how each layer is declared in the program — see its README for planned
-docs: physical, dns, cluster-infra, workloads).
+(how each layer is declared in the program: physical, dns,
+cluster-infra, workloads — all written), plus the cross-layer
+registers at the docs root (credentials, operations).
 
 - [docs/cluster/architecture.md](docs/cluster/architecture.md) — the canonical cluster
   architecture (3× OCI A1 combined CP+ingress nodes + Homelab worker;
@@ -66,6 +67,16 @@ docs: physical, dns, cluster-infra, workloads).
   homelab host & worker VM system design: disk shape (nodatacow raw +
   virtio-blk), the second host bridge, two-phase GPU passthrough, the
   host-prep change-set.
+- [docs/physical/gateway.md](docs/physical/gateway.md) — the UDM as a
+  system: ZeroTier network design (roster, routes, CI-confining flow
+  rules, rollout), recovery playbooks, firewall target state (rules
+  census + the deferred IoT→LAN tightening).
+- [docs/credentials.md](docs/credentials.md) — the credential register:
+  every credential's scope, storage slot, rotation; the
+  `deploy/credentials/` distribution mechanism; the offline kit.
+- [docs/operations.md](docs/operations.md) — day-2 operations: the
+  update-ownership matrix, upgrade & node-replacement runbooks, the
+  (almost fully automated) drill program, the playbook index.
 - [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
   `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
   layering (§3). Start here; §1.4 has cookbook examples.
@@ -76,7 +87,8 @@ docs: physical, dns, cluster-infra, workloads).
   design rationale and mechanics of the native async inputs framework (Rev 3).
 - [docs/framework/testing.md](docs/framework/testing.md) — unit testing Pulumi code with mocks.
 - [docs/declarative/README.md](docs/declarative/README.md) — index of the layer-by-layer
-  declarative designs (to be written).
+  declarative designs (physical, dns, cluster-infra, workloads — all
+  written).
 
 ## Status & open decisions
 

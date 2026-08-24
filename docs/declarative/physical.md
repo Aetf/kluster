@@ -210,9 +210,10 @@ NLB and gw-config/FRR settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG, the state-backend micro
 (ci.md §1), and the homelab host-prep change-set (§3). ZeroTier
-Central config (managed routes via the UDM member, CI member pre-auth)
-is Pulumi-managed via the bridged zerotier provider (architecture.md
-§5.3); only if that bridge proves unusable do those two settings fall
+Central config (managed routes via the UDM member, CI member
+pre-auth, and the flow rules — physical/gateway.md §2) is
+Pulumi-managed via the bridged zerotier provider (architecture.md
+§5.3); only if that bridge proves unusable do those settings fall
 back to hand-kept manual preconditions.
 
 Bootstrap-time verifications (carried from README #6 + this doc): LB

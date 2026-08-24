@@ -113,7 +113,8 @@ per-app number:
     family over VolSync/barman metrics — *any* backup whose last
     success is older than its class threshold alerts; a new backed_pvc
     is covered automatically because the metric labels come from the
-    helper. Restore drills stay quarterly (storage.md §5): a backup
+    helper. Restore drills run as unattended automations — monthly
+    VolSync spot-restores among them (operations.md §4): a backup
     that hasn't restored recently is assumed broken.
 
 ## 4. Shaped patterns (the non-trivial apps)
