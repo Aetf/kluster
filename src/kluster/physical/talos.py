@@ -20,7 +20,7 @@ import pulumi
 from pulumiverse_talos import machine
 
 from kluster import conventions
-from putils import Component
+from putils import Component, async_output, resolve
 
 #: Kubelet reservations exist so eviction has something to work with: an
 #: unreserved node starves its own control plane before the kubelet notices.
@@ -130,13 +130,15 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         name: str,
         *,
         cluster_name: str,
-        endpoint: str,
-        cert_sans: Sequence[str],
+        endpoint: pulumi.Input[str],
+        cert_sans: Sequence[pulumi.Input[str]],
         control_plane_nodes: Sequence[str],
         talos_version: str,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
+        self._endpoint = endpoint
+        self._cert_sans = cert_sans
 
         self.secrets = machine.Secrets(
             f'{name}-secrets',
@@ -154,12 +156,19 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
                 # structure under different names.
                 machine_secrets=cast('Any', self.secrets.machine_secrets),
                 talos_version=talos_version,
-                config_patches=patches(endpoint=endpoint, cert_sans=cert_sans),
+                # The endpoint is the load balancer's address, which exists
+                # only once that resource does — so the patches are computed
+                # inside an async_output rather than at declaration time.
+                config_patches=async_output(self._patches),
             )
             for node in control_plane_nodes
         }
 
         self.register_outputs({})
+
+    async def _patches(self) -> list[str]:
+        endpoint, *sans = await resolve(self._endpoint, *self._cert_sans)
+        return patches(endpoint=str(endpoint), cert_sans=[str(san) for san in sans])
 
     @property
     def machine_configs(self) -> dict[str, pulumi.Output[str]]:

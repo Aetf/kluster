@@ -32,8 +32,13 @@ async def setup_mocks() -> None:
 
 
 def build() -> Any:
-    from kluster.physical.nodes import CloudNodes
+    from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
 
+    load_balancer = NodeLoadBalancer(
+        'kluster',
+        compartment_id='ocid1.compartment.test',
+        subnet_id='ocid1.subnet.test',
+    )
     return CloudNodes(
         'kluster',
         compartment_id='ocid1.compartment.test',
@@ -46,6 +51,7 @@ def build() -> Any:
         fault_domains=['FAULT-DOMAIN-1', 'FAULT-DOMAIN-2', 'FAULT-DOMAIN-3'],
         availability_domain='ZRbp:PHX-AD-1',
         augmented='cp1',
+        load_balancer=load_balancer,
     )
 
 
@@ -84,11 +90,13 @@ async def test_the_vip_is_reserved_and_secondary() -> None:
 
 @pytest.mark.asyncio
 async def test_management_ports_preserve_the_client_address() -> None:
-    from kluster.physical.nodes import MANAGEMENT_PORTS
+    from kluster.physical.nodes import MANAGEMENT_PORTS, NodeLoadBalancer
 
-    nodes = build()
-    assert set(nodes.backend_sets) == set(MANAGEMENT_PORTS)
-    for backend_set in nodes.backend_sets.values():
+    balancer = NodeLoadBalancer('lb', compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
+    assert set(balancer.backend_sets) == set(MANAGEMENT_PORTS)
+    for backend_set in balancer.backend_sets.values():
         assert await backend_set.is_preserve_source.future() is True
+
     # Every node backs every management port.
+    nodes = build()
     assert len(nodes.backends) == len(MANAGEMENT_PORTS) * 3

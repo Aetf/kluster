@@ -14,11 +14,18 @@ scheduling constraints declared beside the workload (architecture.md §3.2).
 Listeners are not a fixed list. The management ports live here because they
 belong to the cluster rather than to any service; a service's listener is
 declared beside the service that needs it.
+
+The load balancer is a component of its own because the dependency runs
+through it: a node's machine configuration names the cluster endpoint, which
+*is* the load balancer's address, while the backends that point at the nodes
+are separate resources created afterwards. Declaring both in one component
+would ask Pulumi to resolve a cycle that does not actually exist.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pulumi
 import pulumi_oci as oci
@@ -28,6 +35,75 @@ from putils import Component, async_output, resolve
 #: Talos' API and the Kubernetes API. Both are cluster-level, both terminate
 #: on the nodes themselves, and neither belongs to a workload.
 MANAGEMENT_PORTS: tuple[int, ...] = (6443, 50000)
+
+
+class NodeLoadBalancer(Component):
+    """The NLB and its management backend sets — the cluster's endpoint."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        compartment_id: pulumi.Input[str],
+        subnet_id: pulumi.Input[str],
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        super().__init__(name, opts=opts)
+
+        self.load_balancer = oci.networkloadbalancer.NetworkLoadBalancer(
+            f'{name}-nlb',
+            compartment_id=compartment_id,
+            subnet_id=subnet_id,
+            display_name=f'{name}-nlb',
+            is_private=False,
+            # Client-address preservation is the backend set's
+            # `is_preserve_source` below; this flag is the different,
+            # transparent-routing mode and stays off.
+            is_preserve_source_destination=False,
+            nlb_ip_version='IPV4_AND_IPV6',
+            opts=self.child_opts(),
+        )
+
+        self.backend_sets = {
+            port: oci.networkloadbalancer.BackendSet(
+                f'{name}-nlb-{port}',
+                name=f'port{port}',
+                network_load_balancer_id=self.load_balancer.id,
+                policy='FIVE_TUPLE',
+                is_preserve_source=True,
+                health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
+                opts=self.child_opts(),
+            )
+            for port in MANAGEMENT_PORTS
+        }
+
+        self.listeners = [
+            oci.networkloadbalancer.Listener(
+                f'{name}-nlb-listener-{port}',
+                name=f'port{port}',
+                network_load_balancer_id=self.load_balancer.id,
+                default_backend_set_name=self.backend_sets[port].name,
+                port=port,
+                protocol='TCP',
+                opts=self.child_opts(),
+            )
+            for port in MANAGEMENT_PORTS
+        ]
+
+        self.register_outputs({})
+
+    @property
+    def address(self) -> pulumi.Output[str]:
+        """The public IPv4 the cluster endpoint and certificate SANs name."""
+
+        def public_v4(addresses: Sequence[Any]) -> str:
+            for address in addresses:
+                text = str(address.ip_address or '')
+                if address.is_public and '.' in text:
+                    return text
+            raise ValueError('the load balancer has no public IPv4 address')
+
+        return self.load_balancer.ip_addresses.apply(public_v4)
 
 
 class CloudNodes(Component):
@@ -44,15 +120,17 @@ class CloudNodes(Component):
         ocpus: float,
         memory_gb: float,
         boot_volume_gb: int,
-        fault_domains: Sequence[str],
+        fault_domains: pulumi.Input[Sequence[str]],
         availability_domain: pulumi.Input[str],
         augmented: str,
+        load_balancer: NodeLoadBalancer,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
         if augmented not in machine_configs:
             raise ValueError(f'augmented node {augmented!r} is not among {sorted(machine_configs)}')
 
+        self._fault_domains = fault_domains
         self.instances: dict[str, oci.core.Instance] = {}
         for index, (node, machine_config) in enumerate(sorted(machine_configs.items())):
             self.instances[node] = oci.core.Instance(
@@ -60,8 +138,9 @@ class CloudNodes(Component):
                 compartment_id=compartment_id,
                 availability_domain=availability_domain,
                 # Spread by construction: a fault domain per node, wrapping if
-                # the region ever offers fewer than three.
-                fault_domain=fault_domains[index % len(fault_domains)],
+                # the region ever offers fewer than three. The list is a
+                # regional fact read at apply time, not a constant.
+                fault_domain=async_output(lambda position=index: self._fault_domain(position)),
                 display_name=f'{name}-{node}',
                 shape='VM.Standard.A1.Flex',
                 shape_config=oci.core.InstanceShapeConfigArgs(ocpus=ocpus, memory_in_gbs=memory_gb),
@@ -108,38 +187,11 @@ class CloudNodes(Component):
             opts=self.child_opts(protect=True),
         )
 
-        self.load_balancer = oci.networkloadbalancer.NetworkLoadBalancer(
-            f'{name}-nlb',
-            compartment_id=compartment_id,
-            subnet_id=subnet_id,
-            display_name=f'{name}-nlb',
-            is_private=False,
-            # Client-address preservation is the backend set's
-            # `is_preserve_source` below; this flag is the different,
-            # transparent-routing mode and stays off.
-            is_preserve_source_destination=False,
-            nlb_ip_version='IPV4_AND_IPV6',
-            opts=self.child_opts(),
-        )
-
-        self.backend_sets = {
-            port: oci.networkloadbalancer.BackendSet(
-                f'{name}-nlb-{port}',
-                name=f'port{port}',
-                network_load_balancer_id=self.load_balancer.id,
-                policy='FIVE_TUPLE',
-                is_preserve_source=True,
-                health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
-                opts=self.child_opts(),
-            )
-            for port in MANAGEMENT_PORTS
-        }
-
         self.backends = [
             oci.networkloadbalancer.Backend(
                 f'{name}-nlb-{port}-{node}',
-                backend_set_name=self.backend_sets[port].name,
-                network_load_balancer_id=self.load_balancer.id,
+                backend_set_name=load_balancer.backend_sets[port].name,
+                network_load_balancer_id=load_balancer.load_balancer.id,
                 target_id=instance.id,
                 port=port,
                 opts=self.child_opts(),
@@ -148,20 +200,11 @@ class CloudNodes(Component):
             for node, instance in sorted(self.instances.items())
         ]
 
-        self.listeners = [
-            oci.networkloadbalancer.Listener(
-                f'{name}-nlb-listener-{port}',
-                name=f'port{port}',
-                network_load_balancer_id=self.load_balancer.id,
-                default_backend_set_name=self.backend_sets[port].name,
-                port=port,
-                protocol='TCP',
-                opts=self.child_opts(),
-            )
-            for port in MANAGEMENT_PORTS
-        ]
-
         self.register_outputs({})
+
+    async def _fault_domain(self, position: int) -> str:
+        domains = await resolve(self._fault_domains)
+        return str(domains[position % len(domains)])
 
     async def _augmented_vnic_id(self) -> str:
         """The primary VNIC of the augmented node.

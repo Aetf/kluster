@@ -35,6 +35,18 @@ LABEL_DOMAIN = 'kluster.ucw.phd'
 #: (A1 OCPU-hours, the 200 GB boot+block allowance) is redeemable.
 OCI_REGION = 'us-phoenix-1'
 
+#: The cloud fleet: three combined control-plane/ingress nodes, one of which
+#: additionally carries the block volume, the secondary private IP and the
+#: reserved public address (architecture.md §3.2).
+CLOUD_NODES = ('cp1', 'cp2', 'cp3')
+AUGMENTED_NODE = 'cp1'
+
+#: Designed against the conservative half of the A1 allowance (2 OCPU/12 GB),
+#: so the architecture stays valid if the free tier halves again (nodes.md §3.2).
+NODE_OCPUS = 1
+NODE_MEMORY_GB = 8
+NODE_BOOT_VOLUME_GB = 50
+
 #: The cluster VCN. Chosen clear of everything it must coexist with: the
 #: state-backend appliance's own network, the pod and service ranges, the home
 #: VLANs, the ZeroTier range, and the legacy cluster's 10.42/10.43.
