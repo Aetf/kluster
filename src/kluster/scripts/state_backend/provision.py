@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import lzma
+import os
 import shutil
 import subprocess as sp
 import tempfile
@@ -59,29 +60,59 @@ class Oci:
     compartment_id: str
     config: dict[str, Any]
 
+    #: The SDK defaults to ~/.oci/config; this estate keeps it under XDG,
+    #: where the containerized CLI reads it from too.
+    CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
+
     @classmethod
     def load(cls, compartment_id: str | None = None) -> Oci:
-        config = oci.config.from_file()
+        location = os.environ.get('OCI_CLI_CONFIG_FILE') or str(cls.CONFIG_FILE)
+        config = oci.config.from_file(location)
         compartment = compartment_id or config.get('compartment-id')
         if not compartment:
             raise ValueError('no compartment: pass --compartment or set compartment-id in ~/.oci/config')
         return cls(compartment_id=str(compartment), config=config)
 
     @property
+    def _retry(self) -> Any:
+        """Retry the transient 404s a young tenancy serves.
+
+        OCI answers `NotAuthorizedOrNotFound` for a while after an IAM change
+        and, sporadically, for calls that succeed on the next attempt — the
+        same authorization that just worked. Bounded retries turn that into
+        latency; a real permission problem still surfaces, just later.
+        """
+        return (
+            oci.retry.RetryStrategyBuilder(
+                max_attempts_check=True,
+                max_attempts=6,
+                total_elapsed_time_check=True,
+                total_elapsed_time_seconds=300,
+                retry_max_wait_between_calls_seconds=30,
+                service_error_check=True,
+                service_error_retry_on_any_5xx=True,
+                service_error_retry_config={404: ['NotAuthorizedOrNotFound'], 429: []},
+                backoff_type=oci.retry.BACKOFF_FULL_JITTER_EQUAL_ON_THROTTLE_VALUE,
+            )
+            .add_service_error_check()
+            .get_retry_strategy()
+        )
+
+    @property
     def network(self) -> oci.core.VirtualNetworkClient:
-        return oci.core.VirtualNetworkClient(self.config)
+        return oci.core.VirtualNetworkClient(self.config, retry_strategy=self._retry)
 
     @property
     def compute(self) -> oci.core.ComputeClient:
-        return oci.core.ComputeClient(self.config)
+        return oci.core.ComputeClient(self.config, retry_strategy=self._retry)
 
     @property
     def identity(self) -> oci.identity.IdentityClient:
-        return oci.identity.IdentityClient(self.config)
+        return oci.identity.IdentityClient(self.config, retry_strategy=self._retry)
 
     @property
     def object_storage(self) -> oci.object_storage.ObjectStorageClient:
-        return oci.object_storage.ObjectStorageClient(self.config)
+        return oci.object_storage.ObjectStorageClient(self.config, retry_strategy=self._retry)
 
 
 def _find(items: list[Any], display_name: str) -> Any | None:
