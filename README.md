@@ -90,91 +90,60 @@ registers at the docs root (credentials, operations).
   declarative designs (physical, dns, cluster-infra, workloads — all
   written).
 
-## Status & open decisions
+## Status
 
-Foundation (framework, entrypoint, tests, docs) is settled as of 2026-08-15:
-putils RFC-001 Rev 3, `pulumi.run` entrypoint, pulumi 3.257, ruff clean.
+**Built.** The framework (putils RFC-001 Rev 3, `pulumi.run` entrypoint), the
+four-stack dispatch, `conventions.py`, the credential scripts
+(`credentials`: the offline store, the root seed and its derivations, the B2
+seed key), the state-backend appliance's definition and provisioner
+(`state-backend`), the CI workflow set, and renovate. Ruff, `basedpyright`
+strict and the tests are clean across everything but the three pre-Talos
+leftovers named below.
 
-Open items to settle before / during detailed design, roughly in order:
+**Standing in OCI**: the appliance's own VCN, subnet, gateway, security group
+and reserved public IP, plus the imported Fedora CoreOS image. The instance
+itself is one `state-backend provision` away — the command needs the offline
+database, so it runs on the workstation that holds it.
 
-1. **State backend — decided 2026-08-22** (docs/framework/ci.md §1):
-   `postgres://` DIY backend on an OCI E2.1.Micro (public TLS + scram,
-   scheduled pg_dump→B2). To do: stand up the micro + port
-   deploy/state-backend, then regenerate stack config + secrets from
-   scratch (`Pulumi.dev.yaml` is a stale kluster-code copy) before the
-   first real `pulumi up`.
-2. **CI — designed 2026-08-22** (docs/framework/ci.md §2–3): PR = parallel
-   per-layer previews + noop-automerge; merge = chained per-layer ups
-   (no separate post-merge preview); ZT join only in physical jobs. To
-   do: implement workflows, port noop-automerge + HA failure push.
-3. **Stack layering — decided 2026-08-22** (docs/framework/pulumi.md §3):
-   four stacks `physical` / `dns` / `k8s-base` / `apps`; conventions
-   shared as code, StackReference carries machine facts only. To do:
-   split the entrypoint accordingly.
-4. **Physical-layer implementation**: `src/kluster/physical/aws.py`
-   implements the abandoned AWS plan (talos 1.8.3 hardcoded, AMI lookup
-   unused) and is reference-only; replace with the chosen cloud provider
-   + libvirt + UniFi/gw-config providers per architecture.md §5.
-5. **Legacy k3s residue**: `kx.py` (SealedSecret, chart pins from old config)
+Open items, roughly in order:
+
+1. **State backend**: launch the instance, then regenerate the stack configs
+   and passphrase from scratch (`Pulumi.dev.yaml` is a stale kluster-code copy,
+   and the history scrub removes it — cluster/security-audit.md L10) and create
+   the four stacks.
+2. **Repo plumbing**: GitHub rulesets (rebase-merge, up-to-date requirement),
+   the per-stack Environments and their secrets, `kluster-ops`' scheduled
+   workflows, and the two GitHub Apps' installation wiring.
+3. **Physical-layer implementation**: `src/kluster/physical/aws.py` implements
+   the abandoned AWS plan and is reference-only; it is replaced by the OCI +
+   libvirt + UniFi/gw-config declaration of declarative/physical.md.
+4. **Legacy k3s residue**: `kx.py` (SealedSecret, chart pins from old config)
    and `base_cluster/nodes.py` (k3s `svccontroller` labels) predate the
-   Talos/Cilium design; rewrite alongside the new base cluster. Regenerate
-   `packages/crds` for the new chart set (Cilium, Gateway API, ...) when it
-   firms up.
-6. **Cloud site — decided 2026-08-22** (docs/cluster/nodes.md §3.1-3.2):
-   **OCI, 3× A1.Flex 1 OCPU/8 GB under PAYG as combined CP+ingress
-   nodes** ($0 today; ≤~$21/mo if the free-allowance halving reaches
-   PAYG), Vultr vhp 4 GB ($24, single node + homelab CP) as the scripted
-   fallback. Control plane moves cloud-side (architecture.md §6.5 for
-   the reversal rationale). Remaining bootstrap verifications: LB-IPAM
-   pool containing node primary IPs; NLB dual-stack + source-preservation
-   semantics; etcd fsync on OCI block volumes; A1 capacity at creation;
-   Egress Gateway under the chosen routing mode + reserved-IP↔secondary-
-   private-IP NAT (the hath dedicated-VIP pattern, architecture.md §3.2).
-7. **DNS absorption**: all public DNS records move into pulumi-cloudflare;
-   port zones from the DNSControl repo (github.com/Aetf/dns) and retire it
-   (architecture.md §5.1).
-8. **Storage residue** (docs/cluster/storage.md): B2 bucket decided; JuiceFS CSI
-   not installed (one quarantined per-app user: VPS syncthing/dav);
-   Longhorn deferred out of the initial build — local-path + VolSync is
-   the default, adoption criteria on file (§3.2); second homelab worker
-   VM deferred.
+   Talos/Cilium design; they are rewritten alongside the new base cluster, and
+   `packages/crds` is regenerated for the new chart set.
+5. **DNS absorption**: public records move into pulumi-cloudflare; the zones
+   are ported from the DNSControl repo (github.com/Aetf/dns), which then
+   retires. Its census is stale in three places (physical/gateway.md §2.1).
+6. **Storage residue** (docs/cluster/storage.md): JuiceFS CSI is not installed
+   (one quarantined per-app user), Longhorn is deferred with adoption criteria
+   on file, and the second homelab worker VM is deferred.
 
-## Implementation kickoff (design phase closed 2026-08-22)
+## Working order
 
-The design set is complete and internally consistent; these are the
-first-session implementation tasks, roughly in order:
+The remaining build, in dependency order:
 
-1. **`conventions.py` initial values** — the constants every doc
-   references but deliberately left to implementation: pool labels,
-   gateway/storage-class/anchor names, DNS zone sets, backup retention
-   classes, and the concrete `lan` ULA /64.
-2. **Tenancy + backend bootstrap** — OCI PAYG signup (home region is
-   permanent), the state-backend micro + ported `deploy/state-backend`
-   + pg_dump timer (framework/ci.md §1), then regenerate stack
-   configs/passphrase (open item 1) and create the four stacks.
-3. **Repo plumbing** — renovate config (the CI design assumes
-   renovate-class PRs), GitHub rulesets (rebase-merge, up-to-date
-   requirement — mind the kluster-code lessons), noop-automerge
-   permissions, the private **`kluster-ops`** repo (notification hub
-   + every scheduled workflow, architecture.md §4.3 / ci.md §3; its
-   default branch PR-only), CI secrets inventory (passphrase, backend
-   URL, provider tokens per cluster-infra.md §1.1, the two ZT CI
-   member identities — gateway.md §2.6) — populated via the
-   `deploy/credentials/` slot-map scripts (credentials.md §4), not by
-   hand.
-4. **Physical stack implementation** per declarative/physical.md
-   (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
-   verification checklist (physical.md §6) — every item verified before
-   any app migrates. Includes the homelab host-prep aconfmgr change-set
-   and the ZeroTier Central manual items (physical/homelab-host.md §4, declarative/physical.md §6).
-5. **CI workflows** per framework/ci.md §3, plus the ported+upgraded
-   **`images.yml`** (multi-arch via native arm64 runners, CNPG images
-   wired in — ci.md §4; **critical path**: Wave A's splitpro needs
-   this image, arm64 runners need the repo public, and public needs
-   the L10 history scrub first); **`packages/crds` regen** for the new chart
-   set; small runbooks as they come up (sealing-key export/restore,
-   orphan audit recipe, talosctl day-2 recipes).
-6. Then follow **migration.md** Phase 0 → Waves A–F.
+1. **Launch the state-backend instance** (`state-backend provision`), then
+   regenerate stack configs and create the four stacks.
+2. **Physical stack** per declarative/physical.md, gated by the bootstrap
+   verification checklist (§6) — every item verified before any app migrates.
+   Includes the homelab host-prep aconfmgr change-set (physical/homelab-host.md
+   §4).
+3. **The rest of CI**: the ported+upgraded **`images.yml`** (multi-arch via
+   native arm64 runners, CNPG images wired in — ci.md §4; **critical path**:
+   Wave A's splitpro needs this image, arm64 runners need the repo public, and
+   public needs the L10 history scrub first), `packages/crds` regen for the new
+   chart set, and the small runbooks as they come up.
+4. Then **migration.md** Phase 0 → Waves A–F.
 
 Deliberately *not* pre-decided (settle on first contact, in this
 order of appearance): exact Talos/Cilium/chart version pins (renovate
