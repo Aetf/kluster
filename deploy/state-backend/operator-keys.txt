@@ -1,0 +1,3 @@
+# SSH is a diagnosis path only (state-backend.md §1); the box is never
+# configured by hand.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINw7INn0QDg0LA+/KtpgUsyNXGEDhPDoQEf7EyKTgS2c aetf@Aetf-Arch-Homelab

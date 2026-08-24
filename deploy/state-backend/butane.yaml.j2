@@ -1,0 +1,226 @@
+# The state-backend appliance, whole (docs/physical/state-backend.md).
+#
+# Rendered to Ignition at provision time and delivered as OCI user_data: the
+# box is defined here and nowhere else, and the only apply path is
+# re-provisioning it. Nothing on it is mutated in place, so anything missing
+# from this file does not exist on the machine.
+#
+# Secrets ride Ignition deliberately (§1): no untrusted workload runs here, so
+# instance metadata is readable only by the instance itself and by OCI
+# principals who are root-equivalent for this box anyway.
+variant: fcos
+version: 1.5.0
+
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+{%- for key in operator_keys %}
+        - {{ key }}
+{%- endfor %}
+
+storage:
+  directories:
+    - path: /var/lib/pgstate
+      mode: 0700
+      user:
+        id: {{ postgres_uid }}
+      group:
+        id: {{ postgres_uid }}
+    - path: /etc/kluster/pki
+      mode: 0755
+    - path: /etc/kluster/initdb
+      mode: 0755
+    - path: /opt/bin
+      mode: 0755
+
+  files:
+    # --- PKI: derived from the root seed (credentials.md §2.2) -------------
+    - path: /etc/kluster/pki/ca.crt
+      mode: 0644
+      contents:
+        inline: |
+{{ ca_cert | indent(10, true) }}
+    - path: /etc/kluster/pki/server.crt
+      mode: 0644
+      user:
+        id: {{ postgres_uid }}
+      group:
+        id: {{ postgres_uid }}
+      contents:
+        inline: |
+{{ server_cert | indent(10, true) }}
+    - path: /etc/kluster/pki/server.key
+      mode: 0600
+      user:
+        id: {{ postgres_uid }}
+      group:
+        id: {{ postgres_uid }}
+      contents:
+        inline: |
+{{ server_key | indent(10, true) }}
+
+    # Certificate authentication is the only way in over TCP: a client
+    # certificate's CN is the role it becomes. The local socket is trusted
+    # because reaching it already means being root on this box — the image's
+    # own initdb and the dump timer are its only users.
+    - path: /etc/kluster/pki/pg_hba.conf
+      mode: 0644
+      user:
+        id: {{ postgres_uid }}
+      group:
+        id: {{ postgres_uid }}
+      contents:
+        inline: |
+          local   all   all                 trust
+          hostssl all   all   0.0.0.0/0     cert clientcert=verify-full
+          hostssl all   all   ::/0          cert clientcert=verify-full
+
+    - path: /etc/kluster/initdb/00-roles.sql
+      mode: 0644
+      contents:
+        inline: |
+          -- Roles are certificate subjects, so they carry no passwords. The
+          -- image creates {{ ci_role }} and the database; this adds the
+          -- operator and the mapping the CN-based auth expects.
+          CREATE ROLE {{ operator_role }} LOGIN SUPERUSER;
+
+    # --- Backup pipeline ---------------------------------------------------
+    - path: /etc/kluster/age-recipients.txt
+      mode: 0644
+      contents:
+        inline: |
+{%- for recipient in age_recipients %}
+          {{ recipient }}
+{%- endfor %}
+
+    - path: /etc/kluster/state-dump.env
+      mode: 0600
+      contents:
+        inline: |
+          PG_DATABASE={{ database }}
+          PG_ROLE={{ ci_role }}
+          B2_KEY_ID={{ b2_dump_key_id }}
+          B2_KEY={{ b2_dump_key }}
+          B2_BUCKET_ID={{ b2_bucket_id }}
+          B2_PREFIX={{ b2_prefix }}
+
+    - path: /usr/local/bin/state-dump
+      mode: 0755
+      contents:
+        inline: |
+{{ dump_script | indent(10, true) }}
+
+    # Reboots land in a known window: the blip is the same either way, but a
+    # scheduled one is never mistaken for an incident.
+    - path: /etc/zincati/config.d/55-updates-strategy.toml
+      mode: 0644
+      contents:
+        inline: |
+          [updates]
+          strategy = "periodic"
+
+          [[updates.periodic.window]]
+          days = [ "{{ reboot_day }}" ]
+          start_time = "{{ reboot_time }}"
+          length_minutes = {{ reboot_window_minutes }}
+
+  links:
+    - path: /etc/localtime
+      target: ../usr/share/zoneinfo/UTC
+      overwrite: true
+
+systemd:
+  units:
+    # Postgres, pinned to a major line; podman-auto-update follows the minor
+    # stream, safe for the same reason the OS stream is — nothing here
+    # outlives pg_dump plus a re-provision.
+    - name: pgstate.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Pulumi state Postgres
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Restart=always
+        RestartSec=10
+        ExecStartPre=-/usr/bin/podman rm -f pgstate
+        ExecStart=/usr/bin/podman run --replace --name pgstate \
+          --label io.containers.autoupdate=registry \
+          --publish 5432:5432 \
+          --shm-size 128m \
+          --env POSTGRES_DB={{ database }} \
+          --env POSTGRES_USER={{ ci_role }} \
+          --env POSTGRES_HOST_AUTH_METHOD=trust \
+          --volume /var/lib/pgstate:/var/lib/postgresql/data:Z \
+          --volume /etc/kluster/pki:/pki:ro,Z \
+          --volume /etc/kluster/initdb:/docker-entrypoint-initdb.d:ro,Z \
+          {{ postgres_image }} \
+          postgres \
+            -c listen_addresses=* \
+            -c ssl=on \
+            -c ssl_cert_file=/pki/server.crt \
+            -c ssl_key_file=/pki/server.key \
+            -c ssl_ca_file=/pki/ca.crt \
+            -c hba_file=/pki/pg_hba.conf
+        ExecStop=/usr/bin/podman stop -t 30 pgstate
+
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: podman-auto-update.timer
+      enabled: true
+
+    # age is fetched once and pinned by hash: FCOS has no package-manager path
+    # this design would accept, and the encryptor must exist before the first
+    # dump runs. Renovate bumps the pin in this file.
+    - name: age-install.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install the pinned age binary
+        After=network-online.target
+        Wants=network-online.target
+        ConditionPathExists=!/opt/bin/age
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/bash -c 'set -euo pipefail; \
+          tmp=$(mktemp -d); \
+          curl -fsSL -o "$tmp/age.tgz" {{ age_url }}; \
+          echo "{{ age_sha256 }}  $tmp/age.tgz" | sha256sum -c -; \
+          tar -xzf "$tmp/age.tgz" -C "$tmp"; \
+          install -m 0755 "$tmp/age/age" /opt/bin/age; \
+          rm -rf "$tmp"'
+
+        [Install]
+        WantedBy=multi-user.target
+
+    - name: state-dump.service
+      contents: |
+        [Unit]
+        Description=Dump, encrypt and upload the Pulumi state
+        After=pgstate.service age-install.service
+        Requires=age-install.service
+
+        [Service]
+        Type=oneshot
+        EnvironmentFile=/etc/kluster/state-dump.env
+        ExecStart=/usr/local/bin/state-dump
+
+    - name: state-dump.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Daily Pulumi state dump
+
+        [Timer]
+        OnCalendar={{ dump_schedule }}
+        RandomizedDelaySec=900
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target

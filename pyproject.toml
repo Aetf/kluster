@@ -19,11 +19,13 @@ dependencies = [
     "pulumi-github>=6.4.0",
     "pulumi-kubernetes-cert-manager>=0.2.0",
     "cryptography>=50.0.0",
+    "oci>=2.184.2",
 ]
 
 [project.scripts]
 update_crds = 'kluster.scripts.update_crds:main'
 credentials = 'kluster.scripts.credentials.cli:main'
+state-backend = 'kluster.scripts.state_backend.cli:main'
 
 [dependency-groups]
 dev = [

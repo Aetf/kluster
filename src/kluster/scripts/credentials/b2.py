@@ -184,3 +184,67 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> tuple[str, str]:
             log.info('deleting superseded management key %s', existing['applicationKeyId'])
             session.delete_key(existing['applicationKeyId'])
     return key_id, key
+
+
+#: The uploader's whole permission: it cannot list, read, or delete, so a
+#: compromised appliance cannot walk the dump history (storage.md §4).
+DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
+
+
+def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: int) -> str:
+    """Create the bucket if absent and pin its retention. Returns the bucket id.
+
+    Retention is a lifecycle rule rather than a pruning job precisely so the
+    uploader needs no delete capability; hiding then deleting is what gives a
+    retired encryption key a definite end of life.
+    """
+    rules = [
+        {
+            'fileNamePrefix': f'{prefix}/',
+            'daysFromUploadingToHiding': retention_days,
+            'daysFromHidingToDeleting': 1,
+        }
+    ]
+    existing = session.post('b2_list_buckets', {'accountId': session.account_id, 'bucketName': name})['buckets']
+    if existing:
+        bucket_id = str(existing[0]['bucketId'])
+        if existing[0].get('lifecycleRules') != rules:
+            _ = session.post(
+                'b2_update_bucket',
+                {'accountId': session.account_id, 'bucketId': bucket_id, 'lifecycleRules': rules},
+            )
+            log.info('bucket %s: retention set to %d days', name, retention_days)
+        return bucket_id
+
+    created = session.post(
+        'b2_create_bucket',
+        {
+            'accountId': session.account_id,
+            'bucketName': name,
+            'bucketType': 'allPrivate',
+            'lifecycleRules': rules,
+        },
+    )
+    log.info('created bucket %s', name)
+    return str(created['bucketId'])
+
+
+def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> tuple[str, str]:
+    """A write-only key confined to one prefix of one bucket."""
+    data = session.post(
+        'b2_create_key',
+        {
+            'accountId': session.account_id,
+            'keyName': name,
+            'capabilities': list(DUMP_CAPABILITIES),
+            'bucketId': bucket_id,
+            'namePrefix': f'{prefix}/',
+        },
+    )
+    key_id, key = str(data['applicationKeyId']), str(data['applicationKey'])
+    for existing in session.keys():
+        if existing['keyName'] == name and existing['applicationKeyId'] != key_id:
+            log.info('deleting superseded dump key %s', existing['applicationKeyId'])
+            session.delete_key(str(existing['applicationKeyId']))
+    log.info('minted %s (%s)', name, key_id)
+    return key_id, key
