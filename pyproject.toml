@@ -31,6 +31,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruamel-yaml>=0.19.1",
     "ruff>=0.15.11",
+    "basedpyright>=1.39.10",
 ]
 ##
 ## Project management section
@@ -86,3 +87,18 @@ docstring-code-format = true
 venvPath = "."
 venv = ".venv"
 
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+include = ["src", "tests", "__main__.py"]
+# Generated CRD bindings: crd2pulumi's output is not ours to annotate.
+exclude = ["packages/crds", "**/__pycache__", ".venv"]
+# basedpyright-only opinions that fight a Pulumi codebase more than they help:
+# provider SDKs surface Any at every boundary, and Pulumi resources are
+# constructed for effect, not for their return value.
+reportAny = false
+reportExplicitAny = false
+reportUnusedCallResult = false
