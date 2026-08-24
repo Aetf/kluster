@@ -249,8 +249,13 @@ shape itself):
     IPv6: **/56 GUA per VCN**, $0. VCN/IGW/NAT/service gateway/S2S VPN:
     all $0. In-region transfer (node ↔ Object Storage): $0.
 -   Block storage: **200 GB total (boot + block, home region)** free +
-    5 volume backups — covers the Talos boot disk *and* hath's 50 Gi
-    cache at $0. Beyond: $0.0255/GB-mo (+$0.017 at Balanced VPU).
+    5 volume backups. Beyond: $0.0255/GB-mo (+$0.017 at Balanced VPU).
+    **The tenancy's footprint exceeds this by design**: OCI's minimum
+    boot volume is 50 GB, so three A1 boots + the state-backend micro's
+    boot + hath's 50 GB cache volume = **250 GB**, i.e. ~$1.28/mo at
+    VPU 0. Accepted rather than designed around — the alternative
+    (folding hath's cache into a boot volume) would cost it the
+    independent-volume boundary storage.md §3.3 relies on.
 -   **Bastion service: free** — an out-of-band SSH path to the node
     when the cluster/KubeSpan is down. Vault software keys + secrets:
     free. NLB ×1 + 10 Mbps flexible LB ×1: free (unused by the Cilium
