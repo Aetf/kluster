@@ -4,7 +4,7 @@
 # codebase under the full standard rather than relaxing it globally.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 # pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false
-# pyright: reportMissingTypeStubs=false
+# pyright: reportMissingTypeStubs=false, reportUnknownLambdaType=false
 """Creating the appliance in OCI.
 
 Every step is an `ensure_*`: re-running converges rather than duplicating, so
@@ -120,6 +120,34 @@ def _find(items: list[Any], display_name: str) -> Any | None:
         if item.display_name == display_name and item.lifecycle_state not in ('TERMINATED', 'TERMINATING'):
             return item
     return None
+
+
+def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> Any:
+    """Poll `fetch` until its resource reaches `target`.
+
+    The SDK's own waiter re-raises the transient 404s described on the client
+    above, which on an hour-long image import means losing the wait to a blip.
+    """
+    deadline = time.monotonic() + timeout
+    last = ''
+    while time.monotonic() < deadline:
+        try:
+            resource = _data(fetch())
+        except oci.exceptions.ServiceError as exc:
+            if exc.status != 404:
+                raise
+            time.sleep(15)
+            continue
+        state = str(resource.lifecycle_state)
+        if state != last:
+            log.info('%s: %s', what, state)
+            last = state
+        if state == target:
+            return resource
+        if state in ('FAILED', 'TERMINATED', 'DELETED'):
+            raise RuntimeError(f'{what} ended in {state}')
+        time.sleep(15)
+    raise TimeoutError(f'{what} never reached {target}')
 
 
 def ensure_network(client: Oci) -> tuple[str, str]:
@@ -357,15 +385,7 @@ def ensure_image(client: Oci) -> str:
         )
     )
     log.info('importing image %s', created.id)
-    image = _data(
-        oci.wait_until(
-            client.compute,
-            client.compute.get_image(created.id),
-            'lifecycle_state',
-            'AVAILABLE',
-            max_wait_seconds=3600,
-        )
-    )
+    image = _await_state(lambda: client.compute.get_image(created.id), 'AVAILABLE', what=f'image {image_name}')
     return str(image.id)
 
 
@@ -400,7 +420,7 @@ def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, 
         )
     )
     log.info('launched %s', launched.id)
-    _ = oci.wait_until(compute, compute.get_instance(launched.id), 'lifecycle_state', 'RUNNING', max_wait_seconds=1800)
+    _ = _await_state(lambda: compute.get_instance(launched.id), 'RUNNING', what=_name('vm'), timeout=1800)
     return str(launched.id)
 
 
