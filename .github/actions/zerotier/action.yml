@@ -1,0 +1,60 @@
+name: Join ZeroTier
+description: >
+  Join the estate's ZeroTier network as a pre-authorized CI member, using an
+  identity generated in Pulumi state rather than a Central API token — a leaked
+  join credential is then one confined member, not the ability to enrol more
+  (physical/gateway.md §2.6).
+
+inputs:
+  network_id:
+    description: The ZeroTier network to join
+    required: true
+  identity:
+    description: The member's identity.secret
+    required: true
+  wait_for:
+    description: host:port to wait for before returning, if any
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install ZeroTier
+      shell: bash
+      run: curl -fsSL https://install.zerotier.com | sudo bash
+
+    - name: Install the member identity
+      shell: bash
+      env:
+        IDENTITY: ${{ inputs.identity }}
+      run: |
+        set -euo pipefail
+        sudo systemctl stop zerotier-one
+        printf '%s' "$IDENTITY" | sudo tee /var/lib/zerotier-one/identity.secret >/dev/null
+        sudo chmod 600 /var/lib/zerotier-one/identity.secret
+        sudo zerotier-idtool getpublic /var/lib/zerotier-one/identity.secret \
+          | sudo tee /var/lib/zerotier-one/identity.public >/dev/null
+        sudo systemctl start zerotier-one
+        sudo zerotier-cli join ${{ inputs.network_id }}
+
+    # The flow rules drop the first packets while tag credentials are still
+    # being exchanged, and a fresh runner needs a moment to find a path, so
+    # readiness is asserted against the actual dependency rather than assumed.
+    - name: Wait for the target
+      if: inputs.wait_for != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        host="${{ inputs.wait_for }}"
+        for i in $(seq 1 60); do
+          if timeout 3 bash -c "cat < /dev/null > /dev/tcp/${host/:/\/}" 2>/dev/null; then
+            echo "${host} reachable after ${i} attempts"
+            exit 0
+          fi
+          if [ $((i % 10)) -eq 0 ]; then sudo zerotier-cli peers || true; fi
+          sleep 3
+        done
+        echo "::error::${host} unreachable over ZeroTier after 180s"
+        sudo zerotier-cli listnetworks || true
+        exit 1

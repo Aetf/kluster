@@ -1,0 +1,131 @@
+name: deploy
+
+# The merge chain (framework/ci.md §3). `up` performs its own preview, so
+# there is no separate preview job — except for physical, whose apply sits
+# behind an approval gate and therefore gets a plan first: a zero diff (the
+# common case) skips the gated job entirely and the chain proceeds with no
+# clicks, while a real diff stalls the whole chain until a human reads it.
+
+on:
+  push:
+    branches: [main]
+  # The weekly drift check and manual re-runs enter here too.
+  workflow_dispatch:
+
+# Serialized: one chain at a time, which state locking wants anyway and which
+# is what makes a single ZeroTier identity per domain safe.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan-physical:
+    runs-on: ubuntu-latest
+    # Ungated on purpose: reading the diff is the approval moment, so the
+    # reading itself must not need approval.
+    environment: physical-plan
+    outputs:
+      diff: ${{ steps.plan.outputs.diff }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - uses: ./.github/actions/zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - name: Plan
+        id: plan
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: |
+          if mise x -- pulumi preview --stack physical --diff --expect-no-changes; then
+            echo 'diff=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'diff=true' >> "$GITHUB_OUTPUT"
+          fi
+
+  up-physical:
+    needs: plan-physical
+    if: needs.plan-physical.outputs.diff == 'true'
+    runs-on: ubuntu-latest
+    # Reviewer-gated: this is the layer that can root the gateway.
+    environment: physical
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - uses: ./.github/actions/zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - name: Up
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi up --stack physical --yes --diff
+
+  up-dns:
+    needs: [plan-physical, up-physical]
+    # A skipped gate job must not cascade-skip the chain.
+    if: always() && needs.up-physical.result != 'failure' && needs.plan-physical.result == 'success'
+    runs-on: ubuntu-latest
+    environment: dns
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - name: Up
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi up --stack dns --yes --diff
+
+  up-k8s-base:
+    needs: [plan-physical, up-physical]
+    if: always() && needs.up-physical.result != 'failure' && needs.plan-physical.result == 'success'
+    runs-on: ubuntu-latest
+    environment: k8s-base
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - name: Up
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi up --stack k8s-base --yes --diff
+
+  up-apps:
+    needs: up-k8s-base
+    if: always() && needs.up-k8s-base.result == 'success'
+    runs-on: ubuntu-latest
+    environment: apps
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      # Split-horizon rewrites live on the UDM.
+      - uses: ./.github/actions/zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - name: Up
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi up --stack apps --yes --diff

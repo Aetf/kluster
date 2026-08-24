@@ -1,0 +1,92 @@
+name: preview
+
+# Per-layer previews for a PR, in parallel (previews mutate nothing). They only
+# ever report: whether a PR may merge unattended is noop-automerge's decision.
+#
+# `physical` has no PR preview by design (framework/ci.md §3): its credentials
+# can root the gateway, so they are main-only. A physical change is reviewed as
+# code here, and its resource diff is read in plan-physical's output on main —
+# that reading is the approval moment.
+#
+# `pull_request`, never `pull_request_target`: a preview executes the PR's
+# Python with provider credentials, so fork PRs must not get secrets.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dns: ${{ steps.filter.outputs.dns }}
+      k8s-base: ${{ steps.filter.outputs.k8s-base }}
+      apps: ${{ steps.filter.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v5
+      # Path filtering saves job setup, nothing more: anything shared runs
+      # every layer and lets the previews no-op internally.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared: &shared
+              - 'src/kluster/conventions.py'
+              - 'src/putils/**'
+              - 'packages/crds/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+            dns:
+              - *shared
+              - 'src/kluster/stacks/dns.py'
+              - 'Pulumi.dns.yaml'
+            k8s-base:
+              - *shared
+              - 'src/kluster/stacks/k8s_base.py'
+              - 'Pulumi.k8s-base.yaml'
+            apps:
+              - *shared
+              - 'src/kluster/stacks/apps.py'
+              - 'Pulumi.apps.yaml'
+
+  preview:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [dns, k8s-base, apps]
+    # Per-stack Environments are the credential partition: the dns job sees
+    # only the Cloudflare token, apps never holds the UDM key.
+    environment: ${{ matrix.stack }}
+    if: needs.changes.outputs[matrix.stack] == 'true'
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+
+      - run: mise x uv -- uv sync --locked
+
+      # Only apps touches the LAN (the AdGuard rewrites live on the UDM).
+      - name: Join ZeroTier
+        if: matrix.stack == 'apps'
+        uses: ./.github/actions/zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+
+      - name: Preview
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi preview --stack ${{ matrix.stack }} --diff

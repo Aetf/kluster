@@ -1,0 +1,49 @@
+name: checks
+
+# Everything that can be judged without touching the cloud: formatting, lint,
+# types, unit tests, and the appliance's pinned digests. No secrets, so it runs
+# for forks too.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+
+      - name: Install dependencies
+        run: mise x uv -- uv sync --locked
+
+      - name: Format
+        run: mise x uv -- uv run ruff format --check .
+
+      - name: Lint
+        run: mise x uv -- uv run ruff check .
+
+      - name: Types
+        run: mise x uv -- uv run basedpyright
+
+      # A hung coroutine must fail the job rather than burn the runner's hour.
+      - name: Tests
+        run: timeout 300 mise x -- uv run pytest -q
+
+      # Renovate can bump a pinned version but cannot recompute its digest;
+      # this is what stops a stale hash from reaching the appliance.
+      - name: Pinned artefacts
+        run: mise x uv -- uv run state-backend pins

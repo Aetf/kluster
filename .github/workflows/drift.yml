@@ -1,0 +1,59 @@
+name: drift
+
+# The weekly drift check (framework/ci.md §3), fired by the ops repo's
+# scheduler through the trigger App — this repo carries no `schedule:` trigger
+# by rule, because once public a scheduled workflow sits under GitHub's 60-day
+# inactivity auto-disable, and a freshness check that dies quietly is worse
+# than none.
+#
+# `--refresh` is load-bearing: a plain preview diffs code against cached state
+# and would report zero for a console hand-edit. The consequence is carried
+# consciously — refreshing adopts the drift into state, so the alert fires
+# first and reconciling is what its playbook demands.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: physical
+            environment: physical-plan
+            zerotier: true
+          - stack: dns
+            environment: dns
+            zerotier: false
+          - stack: k8s-base
+            environment: k8s-base
+            zerotier: false
+          - stack: apps
+            environment: apps
+            zerotier: true
+    environment: ${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - uses: ./.github/actions/zerotier
+        if: matrix.zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - name: Refresh and compare
+        env:
+          PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
+          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
+        run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh --diff --expect-no-changes
