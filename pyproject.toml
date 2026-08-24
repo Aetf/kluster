@@ -105,7 +105,6 @@ exclude = [
     "src/kluster/kx.py",
     "src/kluster/physical/aws.py",
     "src/kluster/base_cluster",
-    "src/kluster/main.py",
 ]
 # basedpyright-only opinions that fight a Pulumi codebase more than they help:
 # provider SDKs surface Any at every boundary, and Pulumi resources are
