@@ -12,7 +12,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import b2
+from . import b2, seeds
 from .kdbx import PATH_ENV, KdbxError, KdbxStore
 
 log = logging.getLogger(__name__)
@@ -32,6 +32,11 @@ def _parser() -> argparse.ArgumentParser:
     kdbx_actions = kdbx_cmd.add_subparsers(dest='action', required=True)
     ls = kdbx_actions.add_parser('ls', help='list entry paths')
     _ = ls.add_argument('group', nargs='?', default='/')
+
+    seed_cmd = families.add_parser('seed', help='the root seed behind every derived secret')
+    _ = seed_cmd.add_argument('--entry', default=seeds.ROOT_ENTRY, help='entry holding the root seed')
+    seed_actions = seed_cmd.add_subparsers(dest='action', required=True)
+    _ = seed_actions.add_parser('init', help='create the root seed (bring-up, once)')
 
     b2_cmd = families.add_parser('b2', help='the B2 seed key')
     _ = b2_cmd.add_argument('--seed-entry', default='seeds/B2 seed key', help='entry holding the seed key')
@@ -61,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             case ('kdbx', 'ls'):
                 for entry in store.entries(args.group):
                     print(entry)
+            case ('seed', 'init'):
+                seeds.init_root(store, args.entry)
             case ('b2', 'create-seed'):
                 _ = b2.create_seed(store, master_entry=args.master_entry, seed_entry=args.seed_entry)
             case ('b2', 'rotate-seed'):

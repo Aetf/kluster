@@ -17,6 +17,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import secrets
+
+from .kdbx import KdbxError, KdbxStore
 
 #: Domain separation, so a root seed can never collide with another system's
 #: use of the same HKDF construction.
@@ -93,3 +96,40 @@ def ca_scalar(root: bytes) -> bytes:
 def cert_scalar(root: bytes, name: str) -> bytes:
     """P-256 private scalar for one certificate under the CA (`ci`, `operator`, the server)."""
     return derive(root, f'state-backend/cert/{name}')
+
+
+#: Where the root seed lives in the offline store.
+ROOT_ENTRY = 'seeds/Root seed'
+
+ROOT_LENGTH = 32
+
+
+def generate_root() -> bytes:
+    return secrets.token_bytes(ROOT_LENGTH)
+
+
+def load_root(store: KdbxStore, entry: str = ROOT_ENTRY) -> bytes:
+    root = base64.b64decode(store.get(entry))
+    if len(root) < ROOT_LENGTH:
+        raise KdbxError(f'{entry!r} holds {len(root)} bytes; a root seed is {ROOT_LENGTH}')
+    return root
+
+
+def store_root(store: KdbxStore, root: bytes, entry: str = ROOT_ENTRY) -> None:
+    store.put(entry, 'root-seed', base64.b64encode(root).decode())
+
+
+def init_root(store: KdbxStore, entry: str = ROOT_ENTRY) -> None:
+    """Create the root seed, refusing to overwrite an existing one.
+
+    Overwriting would orphan every secret derived from the old seed —
+    including the backups encrypted under it — so replacing a live root is
+    the rotation path (credentials.md §4.2), never this command.
+    """
+    try:
+        _ = store.get(entry)
+    except KdbxError:
+        pass
+    else:
+        raise KdbxError(f'{entry!r} already holds a root seed; rotating one is `credentials rotate`')
+    store_root(store, generate_root(), entry)

@@ -60,7 +60,7 @@ everything in §3 grows out of it.
 | OCI seed API key (IAM-manage in tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
 | Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | **Yes** — `POST /user/tokens` mints a same-permission successor |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key stays an account root, used only to re-seed |
-| GitHub App private keys + app ids (**two** single-purpose Apps: dispatch, trigger — permissions are per-App) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
+| GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
 | **Root seed** (32 random bytes) | Every locally-generated secret, by derivation (§2.2) | Generated, not minted (§2.2) |
 
