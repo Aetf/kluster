@@ -137,6 +137,19 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
 -   Ported unchanged from kluster-code: rebase-merge (not squash —
     committer identity), zero-diff **noop-automerge** for renovate-class
     PRs, Home Assistant push notification on deploy failure.
+-   **Weekly drift check (2026-08-24)**: a `workflow_dispatch`
+    workflow in this repo runs `pulumi preview --expect-no-changes`
+    on all four stacks (physical in the ungated `physical-plan`
+    environment — the accepted posture above, zero clicks), fired
+    weekly by the ops repo's scheduler through a fine-grained PAT
+    scoped to **Actions: write only** — it can trigger runs, never
+    push code (register row in credentials.md). Any diff raises an
+    `actionable` alert through the standard producer step; playbook:
+    human review, then reconcile reality or deploy — drift here
+    means something changed behind Pulumi's back, the gw-config
+    estate and the OCI console being the realistic sources. This
+    closes the "hand edits never surface" gap that deleting the
+    post-merge preview left open.
 -   **Credential partitioning (2026-08-23, from the security audit;
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare
@@ -183,7 +196,8 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     B2 `etcd/` and state-backend `pg_dump` prefixes, the
     server-cert expiry probe ≥30 days —
     physical/state-backend.md §6), the issue-sync poller, the
-    **slot-drift probe** (credentials.md §4), and the unattended
+    **slot-drift probe** (credentials.md §4), the **weekly drift
+    trigger** (below), and the unattended
     **drill workflows** (state-backend rebuild, etcd restore-verify
     — operations.md §4) in the ops repo's `drill` Environment.
     Their failures need no dispatch hop — the delivery logic is

@@ -32,7 +32,9 @@ secondary private), and bucket names/endpoints.
 ## 1. OCI (pulumi-oci)
 
 -   **VCN**: dual-stack (IPv4 + the assigned /56 GUA), one public
-    subnet, internet gateway. Security rules are **derived, not
+    subnet, internet gateway, and a **service gateway** (2026-08-24 —
+    node ↔ Object Storage/OCIR traffic rides the in-region $0 path
+    instead of the IGW). Security rules are **derived, not
     enumerated**: the platform baseline (KubeSpan, Talos/kube
     management, intra-VCN) is declared here, while per-service ingress
     rules are emitted beside the services that need them (same
@@ -188,7 +190,8 @@ hooks; the UDM's **SSH host key is pinned** in provider config — the
 session crosses ZeroTier, and an accept-new first contact would hand
 a MITM root on the gateway) manages the device's entire desired state — FRR/BGP (neighbor =
 the worker VM's IP from the libvirt resource), the nspawn estate
-(units + digest-pinned rootfs from homelab-containers CI — including
+(units + digest-pinned rootfs from homelab-containers CI via
+`GwArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
 `/data`-persisted identity, architecture.md §5.3), on_boot.d,
 caddy, AdGuard static configs, secrets. ZT Central's network config

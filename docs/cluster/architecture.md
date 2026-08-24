@@ -499,8 +499,9 @@ paths, matched to the producers' shapes:
     So: **alertmanager → HA stays a native receiver** (instant, no
     third party in the home-alert path — the § above), and the
     issue leg is pulled: the ops repo's **poller** workflow
-    reads alertmanager's API on a schedule (read-only bearer-token
-    route through the internet gateway) and syncs issues for firing
+    reads alertmanager's API on a schedule (the read-only
+    header-match route at the internet gateway —
+    cluster-infra.md §1) and syncs issues for firing
     `actionable` alerts. The cluster holds **no GitHub credential
     at all**, and polling buys dead-man semantics for free: N
     consecutive unreachable polls opens a "monitoring unreachable"
@@ -542,8 +543,8 @@ Costs and facts on record:
     (m-lab's alertmanager-github-receiver) with a PAT as a
     SealedSecret.
 -   **Verification item**: the alertmanager read route is a new
-    public read-only surface (bearer token at the gateway, its own
-    register row). (The scheduled-workflow inactivity auto-disable
+    public read-only surface (the header-match token route,
+    cluster-infra.md §1; its own register row). (The scheduled-workflow inactivity auto-disable
     concern is resolved structurally: the 60-day rule applies to
     public repos, every scheduled workflow lives in the private ops
     repo, and the public kluster repo keeps none — ci.md §3.)
@@ -678,6 +679,17 @@ drives gw-config**:
     content against the device over SSH; `create/update` writes to `/data`
     (surviving firmware updates) and runs the hook. This is exactly
     aconfmgr-style convergence, previewable in `pulumi preview`.
+    Bulk artifacts get their own resource, **`GwArtifact`**
+    (2026-08-24): inputs `{url, sha256, target path, hook}` — state
+    carries the URL and digest, **never bytes**; `diff` compares the
+    pin against a device-side marker file (`/data/…/<name>.digest`);
+    `create/update` downloads on the runner, verifies the sha256,
+    streams over SSH, writes the marker, runs the hook. Rootfs images
+    ride this, keeping preview cheap and state small. Implementation
+    rule for both resources: secret-bearing inputs (device secrets in
+    `GwFile` content) are declared secret
+    (`Output.secret`/`additional_secret_outputs`) so they never
+    render in plain preview or state output.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
     address families, plus a static route for the `lan` pool subnet's
     firewall context) is rendered from the physical layer's outputs and

@@ -281,9 +281,15 @@ because ~110 GB doesn't fit a small instance disk:
 -   **Preferred: per-app JuiceFS with node-local metadata** — its own
     filesystem on an object bucket chosen by the §4 placement rule
     (same-region OCI Object Storage; B2 on the Vultr fallback — §4),
-    metadata in **SQLite (or a
-    single-instance Redis) on its cloud node's block volume**, mounted
-    in-pod (sidecar), automatic metadata backup to the bucket. This kills
+    metadata in **SQLite on node-local storage — local-path on the
+    node's boot volume** (2026-08-24; deliberately *not* the
+    augmented node's block volume, which is hath's and protected),
+    mounted in-pod (sidecar), automatic metadata backup to the
+    bucket. The metadata volume is `backup=None` on record: the
+    JuiceFS auto metadata dump to its own bucket is the recovery
+    path, and the ultimate fallback is reseeding the whole replica
+    over the syncthing protocol. The local chunk cache rides the
+    boot volume too, size-capped. This kills
     root cause (a) *by construction* (no metadata hop ever crosses the
     WAN), and root cause (b) is answered by **honest sizing, not hope**:
     the sidecar gets real requests/limits of **0.5–1 GiB** (legacy mount

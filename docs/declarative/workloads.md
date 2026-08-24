@@ -144,9 +144,10 @@ per-app number:
     than going rewrite-only.
 -   **JuiceFS-quarantined app (VPS-successor syncthing + dav)**:
     in-pod juicefs mount (sidecar, no CSI) with 0.5–1 GiB requests,
-    SQLite metadata on the cloud node's volume, its own OCI bucket
-    (from physical outputs), metadata auto-backup to the bucket
-    (storage.md §6). Implementation fact: an in-pod FUSE mount needs
+    SQLite metadata on local-path on the node's boot volume
+    (`backup=None` — the auto metadata dump to the bucket plus
+    syncthing reseed are the recovery, storage.md §6), its own OCI
+    bucket (from physical outputs). Implementation fact: an in-pod FUSE mount needs
     `/dev/fuse` + `SYS_ADMIN` (a privileged-PSS namespace) — this app
     is the one standing exception to the unprivileged default, on
     record here rather than discovered at deploy time.

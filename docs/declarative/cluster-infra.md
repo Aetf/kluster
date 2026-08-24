@@ -72,10 +72,19 @@ empty cluster:
     CI-origin alerts, every alert carrying its playbook reference.
     Alertmanager's one receiver is the HA webhook — it holds **no
     GitHub credential**; the GitHub-issue leg is *pulled* by the
-    ops repo's poller reading alertmanager's API (a read-only
-    bearer route through the internet gateway), and HA-delivery
-    failure surfaces as a meta-alert on the notification-failure
-    metric.
+    ops repo's poller reading alertmanager's API through a
+    **dedicated header-match route** at the internet gateway
+    (2026-08-24): the HTTPRoute forwards only `method: GET` + path
+    `/api/v2/alerts` + an exact `Authorization: Bearer <token>`
+    header match — anything else 404s. **Read-only by method
+    match**, no auth middleware involved. Accepted and recorded:
+    the token literal sits inside the HTTPRoute spec (a Pulumi
+    config secret at render time, but readable through the k8s
+    API) — tolerable for an alert-list read token; the recorded
+    alternative, if that ever bothers, is Authelia OAuth2
+    client_credentials + ExternalAuth bearer validation.
+    HA-delivery failure surfaces as a meta-alert on the
+    notification-failure metric.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
     day 0 so the cutover needs no k8s-base change.
