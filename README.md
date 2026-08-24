@@ -155,10 +155,13 @@ first-session implementation tasks, roughly in order:
 3. **Repo plumbing** — renovate config (the CI design assumes
    renovate-class PRs), GitHub rulesets (rebase-merge, up-to-date
    requirement — mind the kluster-code lessons), noop-automerge
-   permissions, CI secrets inventory (passphrase, backend URL, provider
-   tokens per cluster-infra.md §1.1, ZT ephemeral-member credential) —
-   populated via the `deploy/credentials/` slot-map scripts
-   (credentials.md §4), not by hand.
+   permissions, the private **`kluster-ops`** repo (notification hub
+   + every scheduled workflow, architecture.md §4.3 / ci.md §3; its
+   default branch PR-only), CI secrets inventory (passphrase, backend
+   URL, provider tokens per cluster-infra.md §1.1, the two ZT CI
+   member identities — gateway.md §2.6) — populated via the
+   `deploy/credentials/` slot-map scripts (credentials.md §4), not by
+   hand.
 4. **Physical stack implementation** per declarative/physical.md
    (replaces `src/kluster/physical/aws.py`), gated by the bootstrap
    verification checklist (physical.md §6) — every item verified before

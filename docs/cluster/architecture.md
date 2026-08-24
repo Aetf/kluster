@@ -423,7 +423,7 @@ adding its playbook is one change.
 
 **Terminology, fixed (2026-08-24)**: **"CI" means the kluster repo's
 GitHub Actions** — the deployment pipeline. Workflows in any other
-repo are always named with their repo ("the alerts repo's dispatch
+repo are always named with their repo ("the ops repo's dispatch
 handler"), never called CI.
 
 **One channel, two producers (2026-08-24).** Every alert — cluster
@@ -440,7 +440,7 @@ producer paths exist by necessity, not preference:
 -   **Out-of-cluster**: CI alerts (deploy failures, the ci.md §3
     scheduled checks) must not route through the cluster — they
     exist precisely to fire when it can't. They deliver via the
-    alerts repo (below): CI already runs on GitHub, so the detour
+    ops repo (below): CI already runs on GitHub, so the detour
     adds no failure domain.
 
 The shared convention is what makes the paths one channel: a push
@@ -452,7 +452,7 @@ payload convention carries a tier, and the tier decides delivery:
 
 -   **`notify`** (informational, self-resolving): HA push only.
 -   **`actionable`** (has a playbook, needs a human): HA push **and
-    a GitHub issue in the private alerts repo** (below) —
+    a GitHub issue in the private ops repo** (below) —
     deduplicated by alert identity
     (one open issue per firing alert; body = summary + playbook
     link), closed by the human as the playbook completes. The issue
@@ -461,20 +461,22 @@ payload convention carries a tier, and the tier decides delivery:
     natively e-mails issue notifications — **it is also the e-mail
     fallback, with no SMTP credential anywhere**. HA-webhook failure
     escalates to an issue, by a mechanism that differs per origin
-    (below): the alerts repo's dispatch handler escalates CI-origin
+    (below): the ops repo's dispatch handler escalates CI-origin
     alerts in place; the cluster side raises a meta-alert.
 
-**All delivery logic lives in the alerts repo (2026-08-24).**
-`kluster-alerts` is the notification hub: tier semantics, HA payload
-formatting, dedup, and issue creation exist only in its workflows.
+**All delivery logic lives in the ops repo (2026-08-24; renamed
+`kluster-alerts` → `kluster-ops` when it absorbed the system's
+scheduled automation — ci.md §3).** `kluster-ops` is the notification
+hub: tier semantics, HA payload formatting, dedup, and issue creation
+exist only in its workflows.
 What remains outside it is producer plumbing, not logic — one
 dispatch call in CI, one receiver line in alertmanager. Two intake
 paths, matched to the producers' shapes:
 
 -   **CI (event-shaped): one dispatch, nothing else.** The shared
     producer step in CI POSTs a `repository_dispatch` with the
-    convention payload to the alerts repo, using the dispatch PAT
-    (below) — CI neither calls HA nor touches issues. The alerts
+    convention payload to the ops repo, using the dispatch PAT
+    (below) — CI neither calls HA nor touches issues. The ops
     repo's **dispatch handler** workflow then does the delivery: HA
     push per tier, issue for `actionable`, and — being already in
     the issue-making place — escalates any tier to an issue when
@@ -483,18 +485,18 @@ paths, matched to the producers' shapes:
     and scheduled checks are not pages). The HA webhook credential
     leaves CI entirely. (`GITHUB_TOKEN` clarity: every workflow run
     in every repo gets one, scoped to its own repo — CI keeps its
-    own for checkout/automerge; the alerts repo's workflows use
+    own for checkout/automerge; the ops repo's workflows use
     *theirs* to open issues; the PAT exists only because a token
     cannot cross repos.)
 -   **Cluster (state-shaped): pushes stay direct, issues are
-    pulled.** Alertmanager *cannot* trigger the alerts repo — its
+    pulled.** Alertmanager *cannot* trigger the ops repo — its
     webhook body is a fixed schema that can neither take GitHub's
     `{event_type, client_payload}` shape nor push a commit, and
     GitHub exposes no arbitrary-body trigger (the first cut's
     direct-dispatch receiver was infeasible; correction on record).
     So: **alertmanager → HA stays a native receiver** (instant, no
     third party in the home-alert path — the § above), and the
-    issue leg is pulled: the alerts repo's **poller** workflow
+    issue leg is pulled: the ops repo's **poller** workflow
     reads alertmanager's API on a schedule (read-only bearer-token
     route through the internet gateway) and syncs issues for firing
     `actionable` alerts. The cluster holds **no GitHub credential
@@ -509,35 +511,52 @@ paths, matched to the producers' shapes:
 
 Costs and facts on record:
 
--   **The dispatch PAT** (this repo's CI → alerts repo):
-    fine-grained, alerts repo only, contents:write — the minimum
-    that permits dispatch; GitHub offers no dispatch-only scope, so
-    the same token could push commits to the alerts repo. Accepted:
-    that repo holds only alert plumbing and a read-only monitoring
-    token, and a leak never touches this repo. Register row in
-    credentials.md.
--   **The poller burns private-repo Actions minutes** (billed
-    per-minute, min 1/run: hourly ≈ 720 min/mo against the
-    account-wide 2000-min free pool). Cadence is a tuning knob — the
-    push leg is instant, the issue leg tolerates the poll interval.
-    If minutes or latency ever bite, the recorded alternative is an
-    in-cluster adapter (m-lab's alertmanager-github-receiver) with a
-    PAT as a SealedSecret.
--   **Verification items**: confirm GitHub's inactivity auto-disable
-    of scheduled workflows (documented for public repos) does not
-    hit the private alerts repo; the alertmanager read route is a
-    new public read-only surface (bearer token at the gateway, its
-    own register row).
+-   **The dispatch PAT** (this repo's CI → ops repo):
+    fine-grained, ops repo only, contents:write — the minimum that
+    permits dispatch; GitHub offers no dispatch-only scope, so the
+    same token could push commits there. The original acceptance
+    ("that repo holds only alert plumbing") died when the repo
+    absorbed the scheduled automation and its credentials
+    (talosconfig, B2 keys, the drill set — ci.md §3), so the excess
+    is **fenced instead of shrugged at**: a ruleset on the ops
+    repo's default branch forbids direct pushes (PR-only) — a
+    leaked PAT can dispatch and nothing else; the PAT carries no
+    `workflows` permission (GitHub separately refuses workflow-file
+    edits without it); and the ops repo's workflows are
+    self-contained (inline `run:` steps, no repo-local scripts), so
+    even a landed commit offers no code path a workflow executes.
+    Register row in credentials.md.
+-   **The ops repo burns private-repo Actions minutes** (billed
+    per-minute, min 1/run): hourly poller ≈ 720 min/mo, the hourly
+    etcd snapshot roughly as much again, plus freshness probes and
+    the monthly/quarterly drills — together at or somewhat above
+    the account-wide 2000-min free pool. Accepted as a few dollars
+    a month at worst ("billed, not killed"); the recorded knobs are
+    folding poller + snapshot into one hourly workflow, and cadence
+    — except etcd's, whose RPO ≤ 1 h is a target, not a knob. The
+    push leg is instant regardless; the issue leg tolerates the
+    poll interval. If minutes or latency ever truly bite, the
+    recorded alternative for the issue leg is an in-cluster adapter
+    (m-lab's alertmanager-github-receiver) with a PAT as a
+    SealedSecret.
+-   **Verification item**: the alertmanager read route is a new
+    public read-only surface (bearer token at the gateway, its own
+    register row). (The scheduled-workflow inactivity auto-disable
+    concern is resolved structurally: the 60-day rule applies to
+    public repos, every scheduled workflow lives in the private ops
+    repo, and the public kluster repo keeps none — ci.md §3.)
 -   A GitHub App was considered and rejected as ceremony for one
     endpoint.
 
-**Issues live in a dedicated private alerts repo (2026-08-24).**
+**Issues live in the dedicated private ops repo (2026-08-24).**
 This repo going public is the end goal, so alert issues must never
 live here — hosting them in-repo would have made a certain future
-migration look like a conditional. A separate always-private repo
-(`kluster-alerts`) holds the dispatch-receiving workflow and the
-issues; it also keeps alert noise out of this repo's issue tracker,
-which the public repo needs for real issues. Consequences on record:
+migration look like a conditional. The always-private `kluster-ops`
+holds the dispatch-receiving workflow, the issues — and, by the same
+decision's amendment, **every scheduled workflow in the system**
+(ci.md §3: the deployment repo stays event-driven; the ops repo owns
+everything on a clock). It also keeps alert noise out of this repo's
+issue tracker, which the public repo needs for real issues. Consequences on record:
 
 -   **Content rule is secret hygiene, not a field whitelist.**
     Because the issue is private (and its e-mail goes only to the

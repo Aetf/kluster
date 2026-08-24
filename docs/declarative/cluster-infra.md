@@ -70,7 +70,7 @@ empty cluster:
     CI-origin alerts, every alert carrying its playbook reference.
     Alertmanager's one receiver is the HA webhook — it holds **no
     GitHub credential**; the GitHub-issue leg is *pulled* by the
-    alerts repo's poller reading alertmanager's API (a read-only
+    ops repo's poller reading alertmanager's API (a read-only
     bearer route through the internet gateway), and HA-delivery
     failure surfaces as a meta-alert on the notification-failure
     metric.

@@ -23,7 +23,8 @@ facts about them.
     config secret (provider-credential channel, cluster-infra.md
     §1.1) · SealedSecret (in-cluster consumption) · CI Environment
     secret (the per-stack GitHub Environments and the `drill`
-    Environment, ci.md §2) · alerts-repo Actions secret · on-box
+    Environment, ci.md §2) · ops-repo secret (Actions or its
+    `drill` Environment) · on-box
     (delivered by provisioning, e.g. Butane-embedded). A row names
     its channel(s);
     a credential living anywhere else is misplaced.
@@ -113,19 +114,19 @@ backed up, and inherited is §2.1.
 | Cloudflare token (zones) | DNS edit, estate zones only | Pulumi config secret + CI env | `dns`, `apps` (CNAMEs) | Yearly |
 | Cloudflare token (DNS-01) | `_acme-challenge` edit only | SealedSecret | cert-manager | Yearly |
 | B2 key (management) | Bucket/key/lifecycle admin | Pulumi config secret + CI env | `physical` | Yearly |
-| B2 keys (writers) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4, storage.md §4): VolSync, CNPG barman, etcd snapshots; the micro pg_dump key is `writeFiles` alone | SealedSecret (in-cluster) · CI env (etcd) · on-box (micro) | restic/barman, ci.md §3, micro cron | Yearly; scripted |
+| B2 keys (writers) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4, storage.md §4): VolSync, CNPG barman, etcd snapshots; the micro pg_dump key is `writeFiles` alone | SealedSecret (in-cluster) · ops-repo secret (etcd) · on-box (micro) | restic/barman, ops-repo snapshot workflow, micro cron | Yearly; scripted |
 | UDM SSH key | gw-config push (host key pinned) | Pulumi config secret + CI env | `physical` | Yearly |
 | UniFi API key | Dedicated local admin, Network API | Pulumi config secret + CI env | `physical` | Yearly |
 | ZeroTier Central API token | The one network | Pulumi config secret + CI env | `physical` | Yearly |
 | ZT CI member identities (`ci-deploy`, `ci-preview`) | One per concurrency domain (gateway.md §2.6), both `ci`-tagged and flow-rule-confined (§2.3) | CI env (generated in-state; both in `apps`, `ci-deploy` also in `physical-plan`/`physical`) | CI per-run join | With flow-rule changes or yearly |
-| GitHub dispatch PAT | `kluster-alerts` contents:write (excess: can push there — accepted, architecture.md §4.3) | CI env | Alert producer step | GitHub expiry + reminder e-mail |
-| HA webhook URL/ID | One notify endpoint | SealedSecret (alertmanager) · alerts-repo Actions secret | alertmanager; alerts-repo dispatch handler | On exposure; low value alone |
-| Alertmanager read token | Read-only alert list at the gateway route | alerts-repo Actions secret | Issue-sync poller | Yearly |
+| GitHub dispatch PAT | `kluster-ops` contents:write, no `workflows` permission (excess fenced: PR-only default branch — architecture.md §4.3) | CI env | Alert producer step | GitHub expiry + reminder e-mail |
+| HA webhook URL/ID | One notify endpoint | SealedSecret (alertmanager) · ops-repo secret | alertmanager; ops-repo dispatch handler | On exposure; low value alone |
+| Alertmanager read token | Read-only alert list at the gateway route | ops-repo secret | Issue-sync poller | Yearly |
 | State-backend client certs (`ci`, `operator`) | postgres:// mTLS | CI env · operator machine | Pulumi state access | 2–3 y; ci.md §3 expiry probe |
-| age drill key | Decrypt the **latest** pg_dump for the automated rebuild drill only (no new exposure: CI's client cert already reads the live DB) | `drill` Environment secret — **one slot**: its contract is latest-dump-only, so rotation forces a fresh dump then destroys the old key, no N−1 bookkeeping (state-backend.md §5) | Drill workflow (operations.md §4) | Yearly, independent of the offline generations |
-| Drill-environment credentials (OCI drill-compartment user, B2 dump-prefix read-only key) | Create/destroy in the drill compartment; read dumps — nothing else | `drill` Environment secrets | Drill workflows | Yearly |
+| age drill key | Decrypt the **latest** pg_dump for the automated rebuild drill only (no new exposure: CI's client cert already reads the live DB) | ops-repo `drill` Environment secret — **one slot**: its contract is latest-dump-only, so rotation forces a fresh dump then destroys the old key, no N−1 bookkeeping (state-backend.md §5) | Drill workflow (operations.md §4) | Yearly, independent of the offline generations |
+| Drill-environment credentials (OCI drill-compartment user, B2 dump-prefix read-only key) | Create/destroy in the drill compartment; read dumps — nothing else | ops-repo `drill` Environment secrets | Drill workflows | Yearly |
 | Pulumi state passphrase | Decrypts state secrets | CI env (all stacks) | every `pulumi` run | Rotate on compromise; offline escrow (§2) |
-| Talos machine secrets + talosconfig | Cluster PKI roots | Pulumi state (physical) · CI env (talosconfig for etcd snapshots) | Talos ops, ci.md §3 | Cluster lifetime; regenerate = rebuild |
+| Talos machine secrets + talosconfig | Cluster PKI roots | Pulumi state (physical) · CI env (physical ops) · ops-repo secret (etcd snapshots) | Talos ops; ops-repo snapshot workflow | Cluster lifetime; regenerate = rebuild |
 | kubeconfig | cluster-admin | physical output → CI env | `k8s-base`, `apps` | With cluster CA |
 | sealed-secrets sealing key | Decrypts every SealedSecret | In-cluster + offline export (playbook) | controller | Restored from legacy → rotated at Wave F, then on compromise |
 | libvirt SSH identity | Homelab host, virsh only | Pulumi config secret + CI env | `physical` (worker VM) | Yearly |
@@ -139,8 +140,9 @@ The register's executable form — rule 5 made concrete:
 -   **A slot map, checked in.** A declarative manifest in
     `deploy/credentials/` maps each register row to its target
     slots: GitHub Environment secret (repo + environment + name, set
-    via `gh secret set --env`), alerts-repo Actions secret
-    (`gh secret set -R`), Pulumi config secret
+    via `gh secret set --env`), ops-repo secret
+    (`gh secret set -R`, incl. its `drill` Environment), Pulumi
+    config secret
     (`pulumi config set --secret` per stack), SealedSecret
     (kubeseal → committed manifest path). The table above is the
     human-readable view; the slot map is the machine-readable one,
@@ -149,17 +151,18 @@ The register's executable form — rule 5 made concrete:
     in the map → verify (re-read slot metadata, or fire the
     consumer's probe). Idempotent, so **rotation playbooks call the
     same script** — rotation is a re-run, not a second procedure.
--   **Slot-drift probe**: a scheduled check compares the slot map
+-   **Slot-drift probe**: an ops-repo scheduled workflow compares the slot map
     against reality in both directions — `gh` secret listings and
     `pulumi config` keys. A live slot with no map entry, or a map
     entry with no live slot, raises an `actionable` alert. This
     (plus the expiry/destroy-date tripwires, operations.md §4)
     replaces the calendar register-review: a document nobody
     re-reads is how key sprawl happened last time.
--   **The `drill` Environment**: unattended drills need cloud
-    credentials, but the `physical` Environment's required-reviewer
-    gate must not be the thing a quarterly automation waits on — so
-    drill workflows run in a dedicated Environment whose credentials
+-   **The `drill` Environment (in the ops repo, ci.md §3)**:
+    unattended drills need cloud credentials, but the `physical`
+    Environment's required-reviewer gate must not be the thing a
+    quarterly automation waits on — so drill workflows run in a
+    dedicated ops-repo Environment whose credentials
     are scoped to what a drill may touch (the OCI **drill
     compartment**, a dump-prefix **read-only** B2 key, the drill age
     key) and nothing else. No reviewer gate; the scope is the gate.

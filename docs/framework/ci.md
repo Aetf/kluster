@@ -162,32 +162,39 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     credentials**, so who can trigger one is a security boundary, not
     a convenience setting. noop-automerge stays scoped to renovate
     lockfile/pin PRs; repo secret scanning + push protection on.
-    A dedicated **`drill` Environment** carries the unattended
-    drills' credentials (drill-compartment OCI user, dump-read B2
-    key, drill age key) with **no reviewer gate — the scope is the
-    gate** (credentials.md §4); Environment secrets are populated by
+    A dedicated **`drill` Environment — in the ops repo, where the
+    drill workflows run** — carries the unattended drills'
+    credentials (drill-compartment OCI user, dump-read B2 key, drill
+    age key) with **no reviewer gate — the scope is the gate**
+    (credentials.md §4); Environment secrets are populated by
     the `deploy/credentials/` distribution scripts, not by hand.
--   **One scheduled workflow owns the outside-cluster backups**
-    (decided 2026-08-23 — storage.md §5 names the backups but not
-    their owner): the hourly **etcd snapshot** runs here (`talosctl
-    etcd snapshot` against the NLB endpoint → upload to B2), because
-    CI already holds the talosconfig and B2 credentials and a
-    scheduled job pays no standing rent — no in-cluster CronJob, no
-    talosconfig copied into the cluster. The same workflow does the
-    **freshness check for backups vmalert can't see**: object-age
-    assertions on the B2 `etcd/` and state-backend `pg_dump` prefixes
-    (the micro's cron is otherwise unmonitored), plus the state
-    backend's server-cert expiry probe (≥30 days remaining;
-    physical/state-backend.md §6, playbooks §7),
-    failing into the **out-of-cluster half of the unified alert
-    channel** (a shared producer step: one `repository_dispatch` to
-    the private alerts repo, whose dispatch handler does the HA push
-    and the issue — architecture.md §4.3; no delivery logic lives in
-    this repo), like deploy failures — the out-of-cluster mirror of
-    the in-cluster backup-freshness alert family
-    (cluster-infra.md §3). The unattended **drill workflows**
-    (state-backend rebuild, etcd restore-verify — operations.md §4)
-    are scheduled here too, running in the `drill` Environment.
+-   **Everything on a clock lives in the ops repo; this repo is
+    event-driven only** (2026-08-24, amending the 2026-08-23 "one
+    scheduled workflow here" decision): once public, this repo's
+    scheduled workflows would sit under GitHub's 60-day inactivity
+    auto-disable — and the freshness checks silently dying with the
+    thing they watch is exactly what the dead-man design exists to
+    prevent. So the private **`kluster-ops`** repo (the notification
+    hub, architecture.md §4.3) owns the complete scheduled census:
+    the hourly **etcd snapshot** (`talosctl etcd snapshot` against
+    the NLB endpoint → upload to B2 — no in-cluster CronJob, no
+    talosconfig copied into the cluster), the **freshness checks
+    for backups vmalert can't see** (object-age assertions on the
+    B2 `etcd/` and state-backend `pg_dump` prefixes, the
+    server-cert expiry probe ≥30 days —
+    physical/state-backend.md §6), the issue-sync poller, the
+    **slot-drift probe** (credentials.md §4), and the unattended
+    **drill workflows** (state-backend rebuild, etcd restore-verify
+    — operations.md §4) in the ops repo's `drill` Environment.
+    Their failures need no dispatch hop — the delivery logic is
+    local to that repo. Consequences carried consciously: the ops
+    repo now holds real credentials (talosconfig, the B2 etcd
+    write key, the drill set — register rows in credentials.md),
+    which is what forced the dispatch-PAT fencing
+    (architecture.md §4.3), and its Actions-minutes bill is
+    accounted there too. This repo keeps only the event-driven
+    set: previews, the merge chain, noop-automerge, images.yml —
+    **zero `schedule:` triggers, by rule**.
 
 ## 4. Self-built images (decided 2026-08-22: they live in this repo)
 

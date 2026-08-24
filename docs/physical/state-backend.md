@@ -94,8 +94,9 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     is standing rent for nothing: the compromise response is
     "regenerate the CA, reissue all three, re-provision" — playbook
     §7.1.
--   **Expiry is monitored, not remembered**: the scheduled workflow
-    (ci.md §3) asserts ≥30 days remaining on the server cert via an
+-   **Expiry is monitored, not remembered**: the ops repo's
+    scheduled workflow (ci.md §3) asserts ≥30 days remaining on the
+    server cert via an
     `openssl s_client` probe (no credentials needed), failing into the
     unified alert channel (architecture.md §4.3). Response: playbook §7.1.
 
@@ -133,14 +134,14 @@ there is nothing for it to edit.)
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
--   Freshness is asserted **from outside** by the scheduled workflow
-    (object-age on the prefix, ci.md §3) — the box monitors nothing
-    about itself.
+-   Freshness is asserted **from outside** by the ops repo's
+    scheduled workflow (object-age on the prefix, ci.md §3) — the
+    box monitors nothing about itself.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** Rotation is a designed path, not an emergency
     improvisation:
     -   **Every dump is encrypted to the two newest generations plus
-        the CI-held drill key** — age is natively multi-recipient,
+        the ops-repo-held drill key** — age is natively multi-recipient,
         and all three public keys sit in the Butane file. The
         generational pair makes per-object key attribution
         unnecessary (deploys are intentionally manual, so git dates
@@ -149,9 +150,11 @@ there is nothing for it to edit.)
         and 30 days after a rotation the current key alone covers
         the entire retention window. The **drill key**
         (operations.md §4, credentials.md) exists so the rebuild
-        drill runs unattended; it adds no exposure — CI's client
-        cert already reads the live database — while the offline
-        generations keep the survive-loss-of-CI role. It needs **no
+        drill runs unattended; it adds no new *class* of exposure —
+        the kluster CI's client cert already reads the live
+        database, and the ops repo holding the key is fenced at
+        the same private tier (architecture.md §4.3) — while the
+        offline generations keep the survive-loss-of-GitHub role. It needs **no
         generational pair of its own**: its contract is decrypting
         the *latest* object only (retention coverage is the offline
         keys' job), so its rotation script swaps the Butane
@@ -169,7 +172,7 @@ there is nothing for it to edit.)
         records each generation with its rotate date and
         earliest-destroy date; destroying the key on that date is
         what actually ends the old generation's exposure. At most
-        two *generational* private keys are ever live — the CI-held
+        two *generational* private keys are ever live — the ops-repo-held
         drill key sits outside the generations. (The offline
         register is §2 of the
         [credential register](../credentials.md), which inventories
@@ -197,7 +200,8 @@ Everything observable lives **outside** the box:
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
--   The scheduled workflow (ci.md §3) asserts pg_dump freshness
+-   The ops repo's scheduled workflow (ci.md §3) asserts pg_dump
+    freshness
     (object-age on B2) and server-cert expiry (≥30 days), alerting
     into the unified alert channel (architecture.md §4.3). Each alert maps to a playbook: stale
     dump → §7.3's restore path doubles as the diagnosis start; cert
@@ -225,7 +229,7 @@ executable playbooks (the §1 scripts plus their runbooks in
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: fresh dump → merge → re-provision (new major initdb's) →
     restore → clean `pulumi preview`.
--   **§7.3 Rebuild / DR drill (quarterly, automated in CI).** §7.2
+-   **§7.3 Rebuild / DR drill (quarterly, automated in the ops repo).** §7.2
     minus the pin bump: provision a scratch micro from Butane,
     restore the latest age-encrypted B2 object via the **drill key**,
     verify, destroy — unattended, alert on failure (operations.md

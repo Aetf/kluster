@@ -76,26 +76,30 @@ and the human appears exactly where an offline secret or physical
 action is irreducible.
 
 **The enabler for the biggest drill**: pg_dumps gain a third age
-recipient — a **CI-held drill key** (credentials.md). This adds no
-exposure: CI already holds a client cert that reads the live
-database, so a CI-decryptable dump discloses nothing CI cannot
-already read; the offline generations keep their actual role,
-surviving the loss of GitHub/CI itself. With it, the state-backend
-rebuild drill runs unattended end to end.
+recipient — an **ops-repo-held drill key** (credentials.md). This
+adds no new *class* of exposure: the kluster CI already reads the
+live database through its client cert, and the ops repo holding the
+drill key is fenced at the same private tier (PR-only default
+branch, architecture.md §4.3); the offline generations keep their
+actual role, surviving the loss of GitHub itself. With it, the
+state-backend rebuild drill runs unattended end to end.
 
 | Drill | Cadence | Form |
 | --- | --- | --- |
 | CNPG restore (immich pattern, ported from legacy) | Monthly | Automated, alert on failure |
-| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Automated in CI, alert on failure |
-| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated in CI, alert on failure |
+| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Automated (ops repo), alert on failure |
+| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated (ops repo), alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
 | Credential expiry + destroy-date tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when a date approaches/passes |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
-Every automated drill is covered by a **freshness alert** (the
-backup-freshness family, cluster-infra.md §3): a drill that silently
-stops running is indistinguishable from a failing one. The only
+Every scheduled drill above runs in the **ops repo** (ci.md §3 —
+the deployment repo carries no scheduled workflows; the in-cluster
+VolSync spot-restore is the one exception, driven by the cluster
+itself). Every automated drill is covered by a **freshness alert**
+(the backup-freshness family, cluster-infra.md §3): a drill that
+silently stops running is indistinguishable from a failing one. The only
 calendar ritual left is the yearly offline-day issue.
 
 ## 5. Playbook index
