@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from . import seeds
 
@@ -146,7 +146,7 @@ def server_credential(root: bytes, address: str, *, now: dt.datetime | None = No
         root,
         label='server',
         common_name=address,
-        usage=x509.ExtendedKeyUsage([x509.ExtendedKeyUsageOID.SERVER_AUTH]),
+        usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
         san=x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]),
         now=now or dt.datetime.now(dt.timezone.utc),
     )
@@ -160,7 +160,7 @@ def client_credential(root: bytes, name: str, *, now: dt.datetime | None = None)
         root,
         label=f'client/{name}',
         common_name=name,
-        usage=x509.ExtendedKeyUsage([x509.ExtendedKeyUsageOID.CLIENT_AUTH]),
+        usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
         san=None,
         now=now or dt.datetime.now(dt.timezone.utc),
     )
