@@ -30,6 +30,11 @@ from .kdbx import KdbxStore
 
 log = logging.getLogger(__name__)
 
+
+class CredentialRejected(RuntimeError):
+    pass
+
+
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
 SEED_KEY_NAME = 'kluster-seed'
@@ -69,6 +74,13 @@ class Session:
     @classmethod
     def authorize(cls, key_id: str, key: str) -> Session:
         resp = requests.get(AUTHORIZE_URL, auth=(key_id, key), timeout=30)
+        if resp.status_code == 401:
+            # The id is not the secret; naming it is what makes a wrong
+            # username field (an account e-mail, say) diagnosable at a glance.
+            raise CredentialRejected(
+                f"B2 rejected key id {key_id!r} — the entry's username must be the key id "
+                '(for the master key, that is the account id) and its password the key itself'
+            )
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()
         return cls(

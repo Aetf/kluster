@@ -32,6 +32,8 @@ def _parser() -> argparse.ArgumentParser:
     kdbx_actions = kdbx_cmd.add_subparsers(dest='action', required=True)
     ls = kdbx_actions.add_parser('ls', help='list entry paths')
     _ = ls.add_argument('group', nargs='?', default='/')
+    show = kdbx_actions.add_parser('show', help="an entry's non-secret attributes")
+    _ = show.add_argument('entry')
 
     seed_cmd = families.add_parser('seed', help='the root seed behind every derived secret')
     _ = seed_cmd.add_argument('--entry', default=seeds.ROOT_ENTRY, help='entry holding the root seed')
@@ -66,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
             case ('kdbx', 'ls'):
                 for entry in store.entries(args.group):
                     print(entry)
+            case ('kdbx', 'show'):
+                for name, value in store.describe(args.entry).items():
+                    print(f'{name}: {value}')
             case ('seed', 'init'):
                 seeds.init_root(store, args.entry)
             case ('b2', 'create-seed'):
@@ -74,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
                 _ = b2.rotate_seed(store, seed_entry=args.seed_entry)
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family} {args.action}')
-    except KdbxError as exc:
+    except (KdbxError, b2.CredentialRejected) as exc:
         log.error('%s', exc)
         return 1
     return 0

@@ -92,6 +92,10 @@ class KdbxStore:
         proc = self._run(['ls', '-q', '-R', '-f', str(self.path), group])
         return [line for line in proc.stdout.splitlines() if line and not line.endswith('/')]
 
+    def describe(self, entry: str) -> dict[str, str]:
+        """The entry's non-secret attributes — enough to diagnose a wrong field."""
+        return {name: self.get(entry, attribute=name) for name in ('Title', 'UserName', 'URL', 'Notes')}
+
     def get(self, entry: str, attribute: str = 'Password') -> str:
         # -s: without it a protected attribute prints as 'PROTECTED'.
         proc = self._run(['show', '-q', '-s', '-a', attribute, str(self.path), entry], check=False)
