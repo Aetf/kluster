@@ -14,7 +14,7 @@ import contextvars
 import functools
 import inspect
 import traceback
-from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar
+from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar, cast
 
 import pulumi
 import pulumi.runtime
@@ -38,7 +38,9 @@ async def unwrap(value: Nested[T]) -> T:
     # Implemented using recursive function to satisfy the typing system
     # See https://stackoverflow.com/a/77836491
     if isinstance(value, Awaitable):
-        next_value = await value
+        # The recursion is what the type system cannot follow: `await` on a
+        # Nested[T] yields another Nested[T], which is only T at the bottom.
+        next_value = cast('Nested[T]', await value)
         if __debug__ and inspect.isawaitable(next_value):
             pulumi.warn(f'Programming error: nested awaitables: {next_value}')
         return await unwrap(next_value)
@@ -55,14 +57,14 @@ def _log_error(what: object) -> None:
 Param = ParamSpec('Param')
 
 
-def task(func: Callable[Param, Awaitable[T]]):
+def task(func: Callable[Param, Awaitable[T]]) -> Callable[Param, 'asyncio.Task[T]']:
     """
     Decorator to turn coroutines into tasks.
 
     Will also log errors, so failures don't go unreported.
     """
 
-    async def runner(*pargs, **kwargs):
+    async def runner(*pargs: Param.args, **kwargs: Param.kwargs) -> T:
         try:
             return await func(*pargs, **kwargs)
         except Exception:
@@ -70,20 +72,20 @@ def task(func: Callable[Param, Awaitable[T]]):
             raise
 
     @functools.wraps(func)
-    def wrapper(*pargs, **kwargs):
+    def wrapper(*pargs: Param.args, **kwargs: Param.kwargs) -> 'asyncio.Task[T]':
         return asyncio.create_task(runner(*pargs, **kwargs))
 
     return wrapper
 
 
-def background(func):
+def background(func: Callable[Param, T]) -> Callable[Param, Awaitable[T]]:
     """
     Turns a synchronous function into an async one by running it in a
     background thread.
     """
 
     @functools.wraps(func)
-    def wrapper(*pargs, **kwargs):
+    def wrapper(*pargs: Param.args, **kwargs: Param.kwargs) -> Awaitable[T]:
         loop = asyncio.get_running_loop()
         return loop.run_in_executor(None, functools.partial(func, *pargs, **kwargs))
 
@@ -105,7 +107,7 @@ class _AsyncOutputCtx:
 
     __slots__ = ('deps', 'secret')
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.deps: set[pulumi.Resource] = set()
         self.secret: bool = False
 
@@ -119,7 +121,7 @@ _async_output_ctx: contextvars.ContextVar[_AsyncOutputCtx | None] = contextvars.
 )
 
 
-def resolve(*outputs: pulumi.Output | Any) -> Awaitable[Any]:
+def resolve(*outputs: 'pulumi.Output[Any] | Any') -> Awaitable[Any]:
     """
     Natively await one or more Pulumi outputs inside an `async_output` coroutine.
 
@@ -143,7 +145,7 @@ def resolve(*outputs: pulumi.Output | Any) -> Awaitable[Any]:
     return _resolve(outputs)
 
 
-async def _resolve(outputs: tuple) -> Any:
+async def _resolve(outputs: tuple[Any, ...]) -> Any:
     ctx = _async_output_ctx.get()
     if ctx is None:
         raise RuntimeError(
@@ -203,12 +205,17 @@ def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output
 
     result = asyncio.ensure_future(run())
 
-    async def pick(index: int):
+    async def pick(index: int) -> Any:
         return (await result)[index]
 
-    return pulumi.Output(
-        asyncio.ensure_future(pick(0)),  # resources
-        asyncio.ensure_future(pick(1)),  # value
-        asyncio.ensure_future(pick(2)),  # is_known
-        asyncio.ensure_future(pick(3)),  # is_secret
+    # Output's constructor is untyped in the SDK; the coroutines above supply
+    # exactly the four futures it expects.
+    return cast(
+        'pulumi.Output[T]',
+        pulumi.Output(
+            asyncio.ensure_future(pick(0)),  # resources
+            asyncio.ensure_future(pick(1)),  # value
+            asyncio.ensure_future(pick(2)),  # is_known
+            asyncio.ensure_future(pick(3)),  # is_secret
+        ),
     )

@@ -7,7 +7,7 @@ code; inputs that need async preparation are wrapped with `putils.async_output`.
 See docs/rfc-001-native-async-inputs.md.
 """
 
-from typing import Optional
+from typing import Any, ClassVar, Optional
 
 import pulumi
 
@@ -43,8 +43,12 @@ class Component(pulumi.ComponentResource):
     ```
     """
 
+    #: Pulumi's type token for the component, defaulted from module and class
+    #: name and overridable through the class keyword.
+    __pulumi_type__: ClassVar[str]
+
     @classmethod
-    def __init_subclass__(cls, *, pulumi_type: Optional[str] = None, **kwargs):
+    def __init_subclass__(cls, *, pulumi_type: Optional[str] = None, **kwargs: object):
         super().__init_subclass__(**kwargs)
         if pulumi_type is not None:
             cls.__pulumi_type__ = pulumi_type
@@ -59,7 +63,7 @@ class Component(pulumi.ComponentResource):
         """
         super().__init__(self.__pulumi_type__, name=name, props=None, opts=opts)
 
-    def child_opts(self, *, opts: Optional[pulumi.ResourceOptions] = None, **kwargs) -> pulumi.ResourceOptions:
+    def child_opts(self, *, opts: Optional[pulumi.ResourceOptions] = None, **kwargs: Any) -> pulumi.ResourceOptions:
         """
         ResourceOptions for a sub-resource: ``parent=self`` plus any extra
         options, merged with `opts` (which wins on conflicts).
