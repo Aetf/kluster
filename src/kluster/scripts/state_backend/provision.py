@@ -324,7 +324,12 @@ def ensure_image(client: Oci) -> str:
 
     image = _find(_data(client.compute.list_images(client.compartment_id, display_name=image_name)), image_name)
     if image is not None:
-        return str(image.id)
+        # An import in flight is not yet a bootable image; launching against
+        # one fails, so converge on the finished state rather than its name.
+        image_id = str(image.id)
+        if str(image.lifecycle_state) != 'AVAILABLE':
+            _ = _await_state(lambda: client.compute.get_image(image_id), 'AVAILABLE', what=f'image {image_name}')
+        return image_id
 
     namespace = _data(client.object_storage.get_namespace())
     storage = client.object_storage
