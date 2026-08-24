@@ -95,8 +95,18 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests", "__main__.py"]
-# Generated CRD bindings: crd2pulumi's output is not ours to annotate.
-exclude = ["packages/crds", "**/__pycache__", ".venv"]
+# Generated CRD bindings are not ours to annotate; the three pre-Talos
+# leftovers are rewritten rather than retrofitted (AGENTS.md), and the
+# exclusion goes away with them.
+exclude = [
+    "packages/crds",
+    "**/__pycache__",
+    ".venv",
+    "src/kluster/kx.py",
+    "src/kluster/physical/aws.py",
+    "src/kluster/base_cluster",
+    "src/kluster/main.py",
+]
 # basedpyright-only opinions that fight a Pulumi codebase more than they help:
 # provider SDKs surface Any at every boundary, and Pulumi resources are
 # constructed for effect, not for their return value.

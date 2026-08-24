@@ -1,3 +1,9 @@
+# tqdm and ruamel.yaml are only partially typed, and this script is mostly
+# glue over both; `pulumi_kubernetes._utilities` is where the SDK keeps its
+# plugin version, with no public equivalent.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false
+# pyright: reportPrivateUsage=false, reportCallIssue=false, reportArgumentType=false
 from io import BytesIO
 import logging
 import logging.config
@@ -9,7 +15,7 @@ import sys
 import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, List, IO, Generator, Mapping
+from typing import IO, Any, Dict, Generator, List, Mapping
 from contextlib import contextmanager
 import argparse
 
@@ -37,7 +43,7 @@ log = logging.getLogger(__name__)
 
 
 @contextmanager
-def tqdm_wrap_file_read(fileobj: IO[bytes], /, **kwargs) -> Generator[IO[bytes], None, None]:
+def tqdm_wrap_file_read(fileobj: IO[bytes], /, **kwargs: Any) -> Generator[Any, None, None]:
     kwargs = {'unit': 'B', 'unit_scale': True, 'unit_divisor': 1024, 'miniters': 1, **kwargs}
     with tqdm.wrapattr(fileobj, 'read', **kwargs) as wrapped:
         yield wrapped
