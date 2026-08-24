@@ -1,15 +1,21 @@
-"""The B2 credential family (docs/credentials.md §3).
+"""The B2 credential family (docs/credentials.md §2–§3).
 
-Mints the **management key** the `physical` stack runs on: bucket, key and
-lifecycle administration with **no file capabilities at all** — the credential
-that manages the backup buckets cannot read a byte out of them.
+Three credentials, three lifetimes:
 
-The master application key stays an offline-tier credential: it is read out of
-the KeePassXC database for the duration of one call and never lands in an
-environment variable, a shell history, or on disk.
+-   the **account master key** — an account root, held offline, used only to
+    create the seed if it is ever lost;
+-   the **seed key** — offline, and the only B2 credential that ever gets
+    stored: it mints the management key and, because `b2_create_key` needs
+    nothing but `writeKeys`, its own successor, which is what makes B2
+    rotation a script rather than a console visit;
+-   the **management key** — what the `physical` stack actually runs on,
+    minted at bring-up straight into its slots and never written to the
+    offline store.
 
-Rotation is a re-run: `mint` creates a fresh key and writes it to its slots,
-`prune` retires every older key of the same name once the new one is live.
+Seed and management carry the same capabilities: what separates them is
+lifetime and reach, not permission. Neither carries file capabilities at
+all — the credential that manages the backup buckets cannot read a byte out
+of them.
 """
 
 from __future__ import annotations
@@ -26,12 +32,14 @@ log = logging.getLogger(__name__)
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
-DEFAULT_KEY_NAME = 'kluster-management'
+SEED_KEY_NAME = 'kluster-seed'
+MANAGEMENT_KEY_NAME = 'kluster-management'
 
-#: Bucket and key administration only. Managing a bucket never requires
-#: touching its contents, so listFiles/readFiles/writeFiles/deleteFiles are
-#: deliberately absent.
-MANAGEMENT_CAPABILITIES: tuple[str, ...] = (
+#: Bucket and key administration. Managing a bucket never requires touching
+#: its contents, so listFiles/readFiles/writeFiles/deleteFiles are absent;
+#: writeKeys/deleteKeys are what let the seed replace itself and mint the
+#: prefix-scoped writer keys.
+CAPABILITIES: tuple[str, ...] = (
     'listBuckets',
     'readBuckets',
     'writeBuckets',
@@ -69,6 +77,19 @@ class Session:
             token=data['authorizationToken'],
         )
 
+    @classmethod
+    def from_entry(cls, store: KdbxStore, entry: str) -> Session:
+        """Authorize with a credential held in the offline store.
+
+        The seed leaves the database for the duration of one call and never
+        reaches an environment variable or a shell history.
+        """
+        key_id = store.get(entry, attribute='UserName')
+        key = store.get(entry)
+        if not key_id or not key:
+            raise ValueError(f'{entry!r} must hold the key id as its username and the key as its password')
+        return cls.authorize(key_id, key)
+
     def post(self, api: str, body: dict[str, Any]) -> dict[str, Any]:
         resp = requests.post(
             f'{self.api_url}/b2api/v3/{api}',
@@ -79,10 +100,10 @@ class Session:
         resp.raise_for_status()
         return resp.json()
 
-    def create_key(self, name: str, capabilities: tuple[str, ...]) -> tuple[str, str]:
+    def create_key(self, name: str) -> tuple[str, str]:
         data = self.post(
             'b2_create_key',
-            {'accountId': self.account_id, 'keyName': name, 'capabilities': list(capabilities)},
+            {'accountId': self.account_id, 'keyName': name, 'capabilities': list(CAPABILITIES)},
         )
         return data['applicationKeyId'], data['applicationKey']
 
@@ -94,34 +115,60 @@ class Session:
         _ = self.post('b2_delete_key', {'applicationKeyId': key_id})
 
 
-def _master_session(store: KdbxStore, master_entry: str) -> Session:
-    key_id = store.get(master_entry, attribute='UserName')
-    key = store.get(master_entry)
-    if not key_id or not key:
-        raise ValueError(f'{master_entry!r} must hold the master key id as its username and the key as its password')
-    return Session.authorize(key_id, key)
-
-
-def mint(store: KdbxStore, *, master_entry: str, entry: str, name: str = DEFAULT_KEY_NAME) -> str:
-    """Create a management key, verify it, and store it. Returns its key id."""
-    session = _master_session(store, master_entry)
-    key_id, key = session.create_key(name, MANAGEMENT_CAPABILITIES)
-
-    # Verify by using it, not by trusting the response.
+def _mint_verified(session: Session, name: str) -> tuple[str, str]:
+    """Create a key and prove it works before anything depends on it."""
+    key_id, key = session.create_key(name)
     minted = Session.authorize(key_id, key)
     _ = minted.post('b2_list_buckets', {'accountId': minted.account_id})
-    log.info('verified: %s authorizes and can list buckets', key_id)
+    log.info('minted %s (%s), verified against the API', name, key_id)
+    return key_id, key
 
-    store.put(entry, key_id, key)
-    log.info('minted %s as %s', name, key_id)
-    log.info("remaining slots: pulumi config (physical), CI environment; then 'credentials b2 prune %s'", key_id)
+
+def create_seed(store: KdbxStore, *, master_entry: str, seed_entry: str) -> str:
+    """Create the seed key from the account master key. Returns its key id.
+
+    Needed once at bring-up, and again only if the seed is lost — routine
+    rotation is `rotate_seed`, which never touches the account root.
+    """
+    session = Session.from_entry(store, master_entry)
+    key_id, key = _mint_verified(session, SEED_KEY_NAME)
+    store.put(seed_entry, key_id, key)
     return key_id
 
 
-def prune(store: KdbxStore, *, master_entry: str, keep: str, name: str = DEFAULT_KEY_NAME) -> None:
-    """Delete every key named `name` except `keep` — the tail of a rotation."""
-    session = _master_session(store, master_entry)
-    for key in session.keys():
-        if key['keyName'] == name and key['applicationKeyId'] != keep:
-            log.info('deleting superseded key %s', key['applicationKeyId'])
-            session.delete_key(key['applicationKeyId'])
+def rotate_seed(store: KdbxStore, *, seed_entry: str) -> str:
+    """Have the seed mint its successor, store it, and delete the old keys.
+
+    The old key is deleted only after the new one is stored and verified, so
+    an interrupted rotation leaves a working seed either way.
+    """
+    session = Session.from_entry(store, seed_entry)
+    previous = store.get(seed_entry, attribute='UserName')
+
+    key_id, key = _mint_verified(session, SEED_KEY_NAME)
+    store.put(seed_entry, key_id, key)
+
+    for existing in session.keys():
+        if existing['keyName'] == SEED_KEY_NAME and existing['applicationKeyId'] != key_id:
+            log.info('deleting superseded seed %s', existing['applicationKeyId'])
+            session.delete_key(existing['applicationKeyId'])
+    log.info('seed rotated: %s -> %s', previous, key_id)
+    return key_id
+
+
+def mint_management(store: KdbxStore, *, seed_entry: str) -> tuple[str, str]:
+    """Mint the management key for the bring-up pipeline to place in its slots.
+
+    Deliberately returns the credential instead of storing it: the offline
+    store holds seeds, never the credentials automation consumes
+    (credentials.md §1 rule 2).
+    """
+    session = Session.from_entry(store, seed_entry)
+    key_id, key = _mint_verified(session, MANAGEMENT_KEY_NAME)
+    # Retire predecessors only once the replacement works: a failed mint must
+    # leave the running stack's credential alone.
+    for existing in session.keys():
+        if existing['keyName'] == MANAGEMENT_KEY_NAME and existing['applicationKeyId'] != key_id:
+            log.info('deleting superseded management key %s', existing['applicationKeyId'])
+            session.delete_key(existing['applicationKeyId'])
+    return key_id, key

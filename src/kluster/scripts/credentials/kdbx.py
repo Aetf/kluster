@@ -72,7 +72,9 @@ class KdbxStore:
             raise KdbxError(f'could not unlock {self.path}')
         self._password = password
 
-    def _run(self, args: list[str], *, password: str | None = None, stdin: str = '', check: bool = True) -> sp.CompletedProcess[str]:
+    def _run(
+        self, args: list[str], *, password: str | None = None, stdin: str = '', check: bool = True
+    ) -> sp.CompletedProcess[str]:
         if password is None:
             self.unlock()
             password = self._password

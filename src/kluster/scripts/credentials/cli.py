@@ -33,18 +33,19 @@ def _parser() -> argparse.ArgumentParser:
     ls = kdbx_actions.add_parser('ls', help='list entry paths')
     _ = ls.add_argument('group', nargs='?', default='/')
 
-    b2_cmd = families.add_parser('b2', help='the B2 management key')
-    _ = b2_cmd.add_argument(
+    b2_cmd = families.add_parser('b2', help='the B2 seed key')
+    _ = b2_cmd.add_argument('--seed-entry', default='seeds/B2 seed key', help='entry holding the seed key')
+    b2_actions = b2_cmd.add_subparsers(dest='action', required=True)
+    create = b2_actions.add_parser(
+        'create-seed',
+        help='create the seed from the account master key (bring-up, or seed loss)',
+    )
+    _ = create.add_argument(
         '--master-entry',
         required=True,
-        help='entry holding the master application key (id as username, key as password)',
+        help='entry holding the account master key (id as username, key as password)',
     )
-    _ = b2_cmd.add_argument('--entry', default='tokens/B2 management key', help='entry the minted key is written to')
-    _ = b2_cmd.add_argument('--name', default=b2.DEFAULT_KEY_NAME, help='B2 key name')
-    b2_actions = b2_cmd.add_subparsers(dest='action', required=True)
-    _ = b2_actions.add_parser('mint', help='create a management key and store it')
-    prune = b2_actions.add_parser('prune', help='delete superseded keys of the same name')
-    _ = prune.add_argument('keep', help='key id currently in the slots')
+    _ = b2_actions.add_parser('rotate-seed', help='have the seed mint and install its successor')
 
     return parser
 
@@ -60,10 +61,10 @@ def main(argv: list[str] | None = None) -> int:
             case ('kdbx', 'ls'):
                 for entry in store.entries(args.group):
                     print(entry)
-            case ('b2', 'mint'):
-                _ = b2.mint(store, master_entry=args.master_entry, entry=args.entry, name=args.name)
-            case ('b2', 'prune'):
-                b2.prune(store, master_entry=args.master_entry, keep=args.keep, name=args.name)
+            case ('b2', 'create-seed'):
+                _ = b2.create_seed(store, master_entry=args.master_entry, seed_entry=args.seed_entry)
+            case ('b2', 'rotate-seed'):
+                _ = b2.rotate_seed(store, seed_entry=args.seed_entry)
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family} {args.action}')
     except KdbxError as exc:

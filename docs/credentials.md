@@ -31,7 +31,7 @@ facts about them.
     construction* (it must be able to mint its successors), which is
     exactly why nothing consumes a seed at runtime.
 5.  **Every seed mints its own successor where the platform allows**
-    (§2.3). Rotation is then a script, not a checklist, and the two
+    (the table in §2). Rotation is then a script, not a checklist, and the two
     platforms that cannot do it are named rather than forgotten.
 6.  **Storage channels are a closed set.** Offline store (seeds only)
     · Pulumi config secret (provider-credential channel,
