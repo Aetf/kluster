@@ -86,12 +86,12 @@ rebuild drill runs unattended end to end.
 | Drill | Cadence | Form |
 | --- | --- | --- |
 | CNPG restore (immich pattern, ported from legacy) | Monthly | Automated, alert on failure |
-| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.4) | Quarterly | Automated in CI, alert on failure |
+| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Automated in CI, alert on failure |
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated in CI, alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
 | Credential expiry + destroy-date tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when a date approaches/passes |
-| **Offline day**: age key rotation (proves offline custody, state-backend.md §7.5) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+| **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 Every automated drill is covered by a **freshness alert** (the
 backup-freshness family, cluster-infra.md §3): a drill that silently
@@ -106,7 +106,7 @@ Owning docs keep the content — the index only locates it.
 
 | Playbook family | Lives in |
 | --- | --- |
-| State backend (cert/CA, NSG refresh, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
+| State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
 | Gateway (ZT container down, firmware-wiped estate, UDM replacement) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, augmented-node extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |

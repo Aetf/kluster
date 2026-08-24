@@ -28,7 +28,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     `deploy/state-backend/`, re-provision as the only apply path,
     auto-updating OS and Postgres, externally monitored, every alert
     backed by a playbook. The full design — OS & config management,
-    Postgres lifecycle, PKI, NSG posture, backup, monitoring,
+    Postgres lifecycle, PKI, network exposure, backup, monitoring,
     playbooks — is
     **[physical/state-backend.md](../physical/state-backend.md)**;
     the rest of this section keeps only what CI itself needs to know.
@@ -42,9 +42,9 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
     **mandatory client certificates** (`verify-full` by literal IP —
     no DNS in the hot path). CI holds the `ci` client cert as an
     Environment secret; local runs hold `operator` in the mise env.
-    The NSG allowlist is a coarse pre-filter (GitHub ranges snapshot
-    + home /32) — when it drifts, the symptom is a connection
-    *timeout* and the response is the state-backend NSG playbook.
+    The NSG permits 5432 from anywhere — the client cert is
+    deliberately the only wall (state-backend.md §4; the
+    GitHub-ranges allowlist died on NSG rule-quota arithmetic).
     State secrets remain passphrase-encrypted regardless
     (`PULUMI_CONFIG_PASSPHRASE` in CI secrets / local mise env).
 -   **Tenancy co-fate, mitigated**: the backend now shares fate with the

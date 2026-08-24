@@ -127,8 +127,12 @@ passphrase. Password auth on the open internet is a standing
 brute-force + Postgres-CVE surface, and the OS was left unspecified.
 
 **Fix.** Client-certificate verification made **mandatory** (not
-"available hardening"); an OCI NSG narrows 5432 to the published GitHub
-Actions ranges; the `pg_dump` is age-encrypted before upload (it
+"available hardening") — *amended 2026-08-24*: the NSG-allowlist half
+of the fix was dropped as unimplementable (`api.github.com/meta` lists
+thousands of CIDRs against an NSG rule quota in the hundreds, and a
+home-/32-only rule would break CI), so client-cert mTLS is
+deliberately the only wall (state-backend.md §4); the `pg_dump` is
+age-encrypted before upload (it
 carries every stack's ciphertext + salt). **OS: an immutable,
 auto-updating container OS fully provisioned at create time** (Fedora
 CoreOS preferred — Ignition + podman quadlets; the box is a

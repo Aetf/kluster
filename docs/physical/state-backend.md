@@ -26,8 +26,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 -   **Single source of truth: `deploy/state-backend/`** — one Butane
     file plus a provision script wrapping the `oci` CLI (image import
-    if needed, instance launch with the rendered Ignition, NSG rule
-    list). Butane renders to Ignition at provision time (`butane` via
+    if needed, instance launch with the rendered Ignition, and the
+    trivial NSG — 5432/22 open, §4). Butane renders to Ignition at provision time (`butane` via
     mise). The Butane file is reviewed like any code: renovate opens
     pin-bump PRs against it (§2), humans merge them.
 -   **The only apply path is re-provision.** No configuration agent,
@@ -36,7 +36,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     minutes of 5432 downtime — CI retries, local ops re-run). SSH
     exists (operator key in Ignition) for **diagnosis only**. The
     no-drift rule is what makes "the repo describes the box" true;
-    the quarterly drill (§7.4) is what keeps that claim tested.
+    the quarterly drill (§7.3) is what keeps that claim tested.
 -   **OS updates: Zincati `periodic` strategy** — reboots confined to
     a weekly maintenance window (exact window chosen at
     implementation), not finalized the moment a rollout arrives:
@@ -48,7 +48,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **Every hand operation is a script.** The box is outside Pulumi,
     but not outside version control: `deploy/state-backend/` carries
     the executable form of every operation this document names —
-    provision/re-provision, NSG sync, restore, key rotation. The
+    provision/re-provision, restore, key rotation. The
     playbooks (§7) *invoke* these scripts; a procedure that exists
     only as prose in a playbook is a bug.
 -   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
@@ -66,7 +66,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     applies minor/patch releases — the same trust-the-stream posture
     as the OS, safe for the same reason (nothing outlives
     `pg_dump` + re-provision).
--   **Major upgrades take the rebuild path** (§7.3): final dump → pin
+-   **Major upgrades take the rebuild path** (§7.2): final dump → pin
     bump → re-provision (fresh data dir, initdb'd by the new major) →
     restore. At tens of MB of state, owning `pg_upgrade` machinery
     buys nothing. (The *in-cluster* CNPG databases are the opposite
@@ -102,15 +102,20 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 ## 4. Network exposure
 
 Public 5432 with TLS + scram + **mandatory client certificates** — the
-client cert is the wall. The OCI NSG is a **coarse pre-filter, not the
-wall**: 5432 narrowed to a *snapshot* of the published GitHub Actions
-ranges (`api.github.com/meta`) plus the home uplink's current /32 for
-local runs. No automatic refresh — the ranges drift, and when a shift
-breaks CI the symptom is a **connection timeout** (not an auth
-failure); the response is playbook §7.2. A scheduled workflow
-auto-editing security rules was considered and rejected: a standing
-OCI write-credential to save a rare two-line edit fails the
-standing-rent test.
+client cert is the wall, and **the only wall** (decided 2026-08-24):
+the NSG permits 5432 (and SSH, key-auth only) from anywhere. The
+earlier GitHub-Actions-ranges allowlist died on arithmetic —
+`api.github.com/meta` lists thousands of CIDRs against an NSG rule
+quota in the hundreds, so the "coarse pre-filter" cannot be
+expressed, aggregating it until it fits is theater, and a
+home-/32-only rule would simply break CI. What an arbitrary IP
+reaches is Postgres's TLS handshake rejecting certificate-less
+clients; brute force buys nothing against cert auth, and the
+Postgres-CVE surface is bounded by the auto-updating minor stream
+(§2) plus the re-provision posture — the same appliance logic as
+everything else on this box. (A scheduled workflow auto-editing
+security rules was already rejected on standing-rent grounds; now
+there is nothing for it to edit.)
 
 ## 5. Backup
 
@@ -155,7 +160,7 @@ standing-rent test.
     -   **Rotate at least yearly** (and on compromise or custody
         change): generate generation N+1 offline, swap the Butane
         recipients `[N, N−1] → [N+1, N]`, re-provision — playbook
-        §7.5, via the rotation script (§1). The path stays warm
+        §7.4, via the rotation script (§1). The path stays warm
         because it is the same re-provision as everything else.
     -   **Old keys get a definite end of life**: generation N−1
         becomes destroyable **30 days after the rotation to N+1** —
@@ -195,12 +200,13 @@ Everything observable lives **outside** the box:
 -   The scheduled workflow (ci.md §3) asserts pg_dump freshness
     (object-age on B2) and server-cert expiry (≥30 days), alerting
     into the unified alert channel (architecture.md §4.3). Each alert maps to a playbook: stale
-    dump → §7.4's restore path doubles as the diagnosis start; cert
-    expiry → §7.1; connection timeouts → §7.2.
+    dump → §7.3's restore path doubles as the diagnosis start; cert
+    expiry → §7.1; an unreachable box → §7.3's rebuild is also the
+    diagnosis path (there is no NSG allowlist to refresh — §4).
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under
     the disk, and OS staleness is bounded by the quarterly
-    re-provision drill (§7.4), which always lands the current image.
+    re-provision drill (§7.3), which always lands the current image.
     If either ever bites first, that is the signal to add the probe —
     not before.
 
@@ -216,22 +222,18 @@ executable playbooks (the §1 scripts plus their runbooks in
     (<30 days) or key compromise. Outline: issue offline (compromise:
     regenerate CA, reissue all three certs, redistribute client
     certs) → update Butane → re-provision → `verify-full` check.
--   **§7.2 NSG range refresh.** Trigger: connection *timeouts* from
-    CI/local (auth errors are §7.1's domain). Outline: NSG-sync
-    script against current `api.github.com/meta` + home /32 → re-run
-    the failed job.
--   **§7.3 Postgres major upgrade.** Trigger: renovate major pin PR.
+-   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: fresh dump → merge → re-provision (new major initdb's) →
     restore → clean `pulumi preview`.
--   **§7.4 Rebuild / DR drill (quarterly, automated in CI).** §7.3
+-   **§7.3 Rebuild / DR drill (quarterly, automated in CI).** §7.2
     minus the pin bump: provision a scratch micro from Butane,
     restore the latest age-encrypted B2 object via the **drill key**,
     verify, destroy — unattended, alert on failure (operations.md
     §4). One pass exercises B2 download, decryption,
     provision-from-Butane, restore, and cert delivery. The *offline*
-    age identity is proven separately by the yearly rotation (§7.5),
+    age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it.
--   **§7.5 age identity rotation.** Trigger: yearly cadence, key
+-   **§7.4 age identity rotation.** Trigger: yearly cadence, key
     compromise, custody change. Outline: generate N+1 offline +
     register entry (rotate / earliest-destroy dates) → swap Butane
     recipients `[N, N−1] → [N+1, N]` → re-provision → verify both
