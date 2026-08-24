@@ -102,6 +102,16 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 ## 4. Network exposure
 
+**The appliance owns its own network.** A VCN, public subnet, internet
+gateway, NSG and reserved public IP, all created by the provision script
+and none of them the cluster's: the cluster VCN is a `physical`-stack
+resource, and putting the box inside it would invert the dependency this
+whole design exists to avoid (Pulumi needs the backend before it can
+create anything). The isolation is a bonus, not the point. The **reserved**
+public IP is load-bearing rather than tidy — the server certificate's SAN
+is that literal address, so an ephemeral IP would invalidate the
+certificate on every re-provision.
+
 Public 5432 with TLS + scram + **mandatory client certificates** — the
 client cert is the wall, and **the only wall** (decided 2026-08-24):
 the NSG permits 5432 (and SSH, key-auth only) from anywhere. The
