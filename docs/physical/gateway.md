@@ -110,11 +110,15 @@ drop
 ;
 accept ethertype arp;
 
-# CI confinement: three targets, each flow as outbound leg + return leg.
-# Targets: UDM SSH (gw-config push), the AdGuard APIs (alice/bob),
+# CI confinement: four targets, each flow as outbound leg + return leg.
+# Targets: UDM SSH (gw-config push), the UDM's UniFi Network API
+# (443, the UniFi OS proxy — the unifi provider's controller calls,
+# declarative/physical.md §4), the AdGuard APIs (alice/bob),
 # the homelab host's libvirt SSH.
 accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport 22;
 accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport 22;
+accept tseq role 2 and ipdest <udm-zt-ip>/32      and dport <unifi-api>;
+accept treq role 2 and ipsrc <udm-zt-ip>/32      and sport <unifi-api>;
 accept tseq role 2 and ipdest <adguard-addrs>    and dport <adguard-api>;
 accept treq role 2 and ipsrc <adguard-addrs>     and sport <adguard-api>;
 accept tseq role 2 and ipdest <homelab-host>/32  and dport 22;
@@ -171,7 +175,7 @@ forwards them on default ACCEPT (architecture.md §5.3).
 Run against a scratch ZT network with the same rules and a throwaway
 `ci`-tagged member:
 
-1.  CI member reaches exactly its three targets (SSH banner / API
+1.  CI member reaches exactly its four targets (SSH banner / API
     response), including the **return leg** (rules are stateless — a
     working handshake proves both directions).
 2.  CI member cannot ping or reach any other LAN address through the

@@ -251,8 +251,8 @@ root. Pin the host key in provider config. *Lives in* physical.md §4.
 
 A leaked CI join credential otherwise joins the home network with
 unpoliced forwarding (zt* rides the UDM's default ACCEPT). ZT Central
-tag-based flow rules limit CI members to UDM SSH, the AdGuard APIs, and
-libvirt SSH. *Lives in* architecture.md §5.3, ci.md §2.
+tag-based flow rules limit CI members to UDM SSH, the UDM's UniFi
+Network API, the AdGuard APIs, and libvirt SSH. *Lives in* architecture.md §5.3, ci.md §2.
 
 ### L6 — libvirt SSH identity is root-equivalent
 

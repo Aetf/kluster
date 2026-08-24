@@ -86,7 +86,7 @@ state-backend rebuild drill runs unattended end to end.
 
 | Drill | Cadence | Form |
 | --- | --- | --- |
-| CNPG restore (immich pattern, ported from legacy) | Monthly | Automated, alert on failure |
+| CNPG restore (immich pattern, ported from legacy) | Monthly | Automated in-cluster, alert on failure |
 | State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Automated (ops repo), alert on failure |
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated (ops repo), alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
@@ -95,9 +95,10 @@ state-backend rebuild drill runs unattended end to end.
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 Every scheduled drill above runs in the **ops repo** (ci.md §3 —
-the deployment repo carries no scheduled workflows; the in-cluster
-VolSync spot-restore is the one exception, driven by the cluster
-itself). Every automated drill is covered by a **freshness alert**
+the deployment repo carries no scheduled workflows; the two
+in-cluster drills, VolSync spot-restore and the CNPG restore, are
+the exceptions — kube-native scratch-namespace operations driven by
+the cluster itself, so the ops repo never needs a kubeconfig). Every automated drill is covered by a **freshness alert**
 (the backup-freshness family, cluster-infra.md §3): a drill that
 silently stops running is indistinguishable from a failing one. The only
 calendar ritual left is the yearly offline-day issue.

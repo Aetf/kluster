@@ -61,7 +61,7 @@ registers at the docs root (credentials, operations).
   waves A–F, data-movement techniques, decommission checklist.
 - [docs/physical/state-backend.md](docs/physical/state-backend.md) — the
   state-backend appliance (FCOS on the OCI micro): config management,
-  Postgres lifecycle, PKI, NSG posture, backup, monitoring, and the
+  Postgres lifecycle, PKI, network exposure, backup, monitoring, and the
   operational playbooks.
 - [docs/physical/homelab-host.md](docs/physical/homelab-host.md) — the
   homelab host & worker VM system design: disk shape (nodatacow raw +

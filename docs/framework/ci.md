@@ -75,7 +75,8 @@ image bump stays entirely public-endpoint. The AdGuard rewrite
 resources tolerate an unreachable UDM by failing only their own
 resources, not the whole up. CI's ZT members are **tag-confined by
 Central flow rules** (managed with the rest of the ZT config,
-architecture.md §5.3) to exactly the three targets in the table — a
+architecture.md §5.3) to exactly the four targets in the table
+(UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a
 leaked join credential does not buy general LAN access. Residual on
 record (audit L11): the AdGuard credential in `apps` is full-admin
 (AdGuard has no scoped API), so LAN-DNS control rides the apps tier —
@@ -138,7 +139,8 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     committer identity), zero-diff **noop-automerge** for renovate-class
     PRs, Home Assistant push notification on deploy failure.
 -   **Weekly drift check (2026-08-24)**: a `workflow_dispatch`
-    workflow in this repo runs `pulumi preview --expect-no-changes`
+    workflow in this repo runs
+    `pulumi preview --refresh --expect-no-changes`
     on all four stacks (physical in the ungated `physical-plan`
     environment — the accepted posture above, zero clicks), fired
     weekly by the ops repo's scheduler through a fine-grained PAT
@@ -147,7 +149,17 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     `actionable` alert through the standard producer step; playbook:
     human review, then reconcile reality or deploy — drift here
     means something changed behind Pulumi's back, the gw-config
-    estate and the OCI console being the realistic sources. This
+    estate and the OCI console being the realistic sources.
+    `--refresh` is load-bearing for the second source: a plain
+    preview diffs code against *cached* state and never queries
+    providers, so a console hand-edit leaves code == state and
+    reports zero diff — only the gw-config estate would surface
+    without it (GwFile/GwArtifact `diff` reads the device,
+    architecture.md §5.2). Consequence carried consciously:
+    `--refresh` rewrites state to match reality, so a drift run
+    adopts the drift into state and the next deploy's diff is
+    desired-vs-reality — acceptable, because the alert fires first
+    and reconciling is exactly what its playbook demands. This
     closes the "hand edits never surface" gap that deleting the
     post-merge preview left open.
 -   **Credential partitioning (2026-08-23, from the security audit;
