@@ -71,8 +71,11 @@ backed up, and inherited is §2.1.
     comes from physical custody; the KDBX layer adds one real
     property on top — a USB stick lost or copied *on its own*
     discloses nothing.
--   **Copies: two.** One at home, one off-site (locations are an
-    implementation-time blank — a register note, not repo content).
+-   **Copies: two.** One at home, one off-site at a friend's (the exact
+    locations are a register note, not repo content); the master copy of
+    the database lives on the operator workstation, where the
+    `credentials` scripts write it, and re-issuing the kit is a copy onto
+    both sticks.
     Losing the home to fire must not lose the recovery root
     (the same reasoning that keeps backups off the OCI tenancy).
 -   **Contents = §2's rows plus a printed README**: the recovery
@@ -92,7 +95,7 @@ backed up, and inherited is §2.1.
     rotation playbooks with no separate upkeep. The **yearly offline day
     (operations.md §4) opens one kit and verifies it against §2's
     table** — a stale kit is a failed drill, same as any other.
--   **Succession**: the successor (an implementation-time blank)
+-   **Succession**: the successor (**Miu**)
     knows the kit locations and that this README exists — that is
     the entire protocol; no shared passphrases, no ceremony. The
     offline-day check includes re-reading the README with fresh
@@ -151,7 +154,13 @@ The register's executable form — rule 5 made concrete:
 -   **One script per credential family**: mint → push to every slot
     in the map → verify (re-read slot metadata, or fire the
     consumer's probe). Idempotent, so **rotation playbooks call the
-    same script** — rotation is a re-run, not a second procedure.
+    same script** — rotation is a re-run, not a second procedure. They
+    are subcommands of the `credentials` console script
+    (`src/kluster/scripts/credentials/`), which treats the offline
+    database as a slot like any other — and reads from it too, so a
+    parent credential (the B2 master key minting the management key)
+    never leaves the store for an environment variable. It runs on the
+    workstation holding the database.
 -   **Slot-drift probe**: an ops-repo scheduled workflow compares the slot map
     against reality in both directions — `gh` secret listings and
     `pulumi config` keys. A live slot with no map entry, or a map

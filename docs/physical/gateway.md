@@ -48,8 +48,15 @@ in the desired state (relevant because the tag default is permissive,
 | CI member `ci-deploy` | `ci` | Merge-chain jobs (plan/up-physical, up-apps). Identity generated in-state (`zerotier_identity`), private key in CI environment secrets; never self-collides — the deploy workflow's `concurrency` group serializes chains (§2.6). IPv4-only (§2.3). |
 | CI member `ci-preview` | `ci` | PR `preview-apps` (AdGuard-rewrite diffs). Same generation and confinement; serialized by a `zt-preview` job concurrency group (§2.6). IPv4-only (§2.3). |
 
-Dead weight dropped at import census: the Abacus member (machine no
-longer exists). DNS linkage: the `*.zt.<zone>` block in the `dns`
+Import census (2026-08-24, against ZT Central): 11 members live. Three
+`*.zt` records name members that no longer exist (Abacus, Aetf-Arch-Mac,
+Aetf-MacbookPro) and are dropped; five live members have no record
+(PC-Homelab, S26 Ultra, Pixel 7 Pro, Aetf-Handheld, Aetf-Win-XPS) and
+gain one; OnePlus6T's record holds a stale address. Member names
+containing spaces are normalized to DNS labels by the record helper, not
+renamed in Central. The managed addresses the roster assigns (the UDM and
+the two CI identities, `conventions.py`) are outside every address in
+use. DNS linkage: the `*.zt.<zone>` block in the `dns`
 stack (dns.md §2) mirrors this roster — a `udm.zt` record is added,
 `abacus.zt` dropped, and the VPS's record retires with it in Wave F.
 Roster and records change in the same review since both live in Pulumi.
