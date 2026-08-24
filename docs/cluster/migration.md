@@ -26,10 +26,16 @@ owns sequencing, data movement, and teardown.
     yadm/aconfmgr (qbittorrent unit, quadlets, state-backend compose,
     adguardhome-sync), DNSControl. Each step ends with a
     removal/pointer commit — nothing tracked twice or by nothing.
-4.  **NVMe space is interleaved** (nodes.md §4.2): ~85 GB free while
-    both clusters coexist; the Talos worker VM starts at ~60 GB and
-    grows only as legacy PVCs/images are reclaimed. Homelab waves
-    alternate "migrate → delete legacy data → grow VM disk".
+4.  **NVMe space *and* RAM are interleaved** (nodes.md §4.2): ~85 GB
+    free and no spare RAM while both clusters coexist — legacy k3s
+    still holds ~16 GiB of the host's 32, so the worker VM **cannot
+    start at its 20 GiB end-state size**. It starts at ~60 GB disk /
+    **~10 GiB RAM** and grows stepwise: each homelab wave first scales
+    down its legacy apps (rule 1 already does this), then bumps the VM
+    by the freed amount (a config change + VM reboot, scheduled at the
+    head of the wave — 20 GiB must be reached by Wave C's
+    immich/jellyfin move). Homelab waves alternate "migrate → delete
+    legacy data → grow VM disk/RAM".
 5.  **Sealing key first, then rotated last**: the legacy sealed-secrets
     key is restored into the new cluster before any SealedSecret
     manifest is ported (cluster-infra.md §1); it is regenerated and
@@ -55,14 +61,19 @@ owns sequencing, data movement, and teardown.
     imported wholesale (records still pointing at `archvps.hosts`; the
     import census also drops dead weight — `abacus.hosts`, its ZT
     entry, jupyter/mc records).
-3.  **Verification gate** — the consolidated checklist
-    (physical.md §6): LB-IPAM pool with node IPs; NLB dual-stack +
-    source preservation; etcd fsync on block volumes; Egress Gateway
-    under the routing mode + reserved-IP NAT; talosctl→homelab via
-    cloud endpoints; Cilium MTU over KubeSpan; VFIO capability on a
-    scratch VM. **No app migrates until this gate passes** — every
-    item is cheaper to fix on an empty cluster.
-4.  `k8s-base` up; sealing key restored; backup-freshness alerts live.
+3.  `k8s-base` up; sealing key restored; backup-freshness alerts
+    live. (Talos-level checks that need no CNI — etcd fsync, A1
+    capacity, talosctl→homelab via cloud endpoints — may run before
+    this step; everything Cilium-shaped cannot.)
+4.  **Verification gate** — the consolidated checklist
+    (physical.md §6), run **after `k8s-base`** because most items
+    exercise Cilium: LB-IPAM pool with the on-the-wire node IPs; NLB
+    dual-stack + source preservation; Egress Gateway under the
+    routing mode + reserved-IP NAT; MTU over KubeSpan; the security
+    verifications (pod→IMDS denied, bogus-BGP rejected, ExternalAuth
+    fail-closed) — alongside the physical-only items (etcd fsync;
+    VFIO capability on a scratch VM). **No app migrates until this
+    gate passes** — every item is cheaper to fix on an empty cluster.
 
 ## 2. Waves
 

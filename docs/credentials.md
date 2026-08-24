@@ -102,6 +102,7 @@ backed up, and inherited is §2.1.
 | State-backend CA private key | Signs server/client certs (state-backend.md §3) | ~10 y; compromise = regenerate + reissue all |
 | age backup private keys (gen N, N−1) | Decrypt state-backend pg_dumps | Yearly generation; destroy retired key at rotation + 30 d |
 | Pulumi state passphrase (escrow copy) | Recover state secrets if CI copy is lost | Rotate on compromise; working copy is a CI secret (§3) |
+| sealed-secrets sealing key (offline export) | Recover every SealedSecret if the cluster is lost before a rebuild restores the controller | Re-export at Wave F's rotation and on any later rotation (export/restore runbook); working copy lives in-cluster (§3) |
 | Account roots: OCI tenancy, GitHub, Cloudflare, Backblaze, ZeroTier Central | Console/owner access + MFA recovery | Per-platform hygiene; MFA recovery codes stored alongside |
 
 ## 3. Automation tier
@@ -112,7 +113,7 @@ backed up, and inherited is §2.1.
 | Cloudflare token (zones) | DNS edit, estate zones only | Pulumi config secret + CI env | `dns`, `apps` (CNAMEs) | Yearly |
 | Cloudflare token (DNS-01) | `_acme-challenge` edit only | SealedSecret | cert-manager | Yearly |
 | B2 key (management) | Bucket/key/lifecycle admin | Pulumi config secret + CI env | `physical` | Yearly |
-| B2 keys (writers) | Prefix-scoped, write-only (audit H4): VolSync, CNPG barman, etcd snapshots, micro pg_dump | SealedSecret (in-cluster) · CI env (etcd) · on-box (micro) | restic/barman, ci.md §3, micro cron | Yearly; scripted |
+| B2 keys (writers) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4, storage.md §4): VolSync, CNPG barman, etcd snapshots; the micro pg_dump key is `writeFiles` alone | SealedSecret (in-cluster) · CI env (etcd) · on-box (micro) | restic/barman, ci.md §3, micro cron | Yearly; scripted |
 | UDM SSH key | gw-config push (host key pinned) | Pulumi config secret + CI env | `physical` | Yearly |
 | UniFi API key | Dedicated local admin, Network API | Pulumi config secret + CI env | `physical` | Yearly |
 | ZeroTier Central API token | The one network | Pulumi config secret + CI env | `physical` | Yearly |

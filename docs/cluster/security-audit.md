@@ -96,10 +96,12 @@ second half.
 
 **Fix.** Bucket keeps prior file versions ≥30 days (hide-then-delete
 lifecycle) so deletes are recoverable; per-consumer prefix-scoped keys
-(an app reaches only its own `volsync/<ns>/…`); the prune-capable key
-lives only in CI's scheduled job, the master credential in no
-automation, account 2FA on. Verified: a scoped key cannot touch a
-foreign prefix.
+**without `deleteFiles`** (an app reaches only its own
+`volsync/<ns>/…`, and its prune's deletes degrade to lifecycle-purged
+hides — retention semantics survive, destruction doesn't); no
+delete-capable key in any automation, the master credential offline
+only, account 2FA on. Verified: a scoped key cannot touch a foreign
+prefix.
 
 **Lives in.** storage.md §4 (integrity rules), physical.md §6
 (verification), architecture.md §4.1.
@@ -268,6 +270,17 @@ standing-rent test. *Lives in* architecture.md §2.1.
 Free arm64 CI runners require flipping the repo public, but its git
 history carries kluster-code-era stack ciphertext + encryption salt.
 Scrub history or rotate the affected secrets first. *Lives in* ci.md §4.
+
+### L11 — AdGuard credential in the `apps` CI environment is LAN-DNS control
+
+The split-horizon rewrites make `apps` jobs carry the AdGuard admin
+credential (AdGuard has no scoped API), so the frictionless apps tier
+can rewrite any LAN name — LAN-wide DNS hijack from the lowest-tier
+credential set. Accepted residual: that environment already holds
+cluster-admin kubeconfig (H3's accepted core), so this adds breadth,
+not depth, and the ZT flow rules still confine where the credential is
+usable from. Stated so the apps tier is never mistaken for harmless.
+*Lives in* ci.md §2.
 
 ---
 

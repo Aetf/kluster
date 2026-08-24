@@ -76,7 +76,10 @@ resources tolerate an unreachable UDM by failing only their own
 resources, not the whole up. CI's ZT members are **tag-confined by
 Central flow rules** (managed with the rest of the ZT config,
 architecture.md §5.3) to exactly the three targets in the table — a
-leaked join credential does not buy general LAN access.
+leaked join credential does not buy general LAN access. Residual on
+record (audit L11): the AdGuard credential in `apps` is full-admin
+(AdGuard has no scoped API), so LAN-DNS control rides the apps tier —
+accepted alongside the kubeconfig that tier already holds.
 
 ## 3. Pipeline shape
 

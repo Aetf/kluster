@@ -200,11 +200,20 @@ be able to destroy the safety net it lives inside.
     lifecycle: hide, then delete) — restic/barman deletions become
     recoverable hides, which is the ransomware/fat-finger floor. Costs
     a modest storage overhead on churn; that is the price of the floor.
--   Keys are **prefix-scoped per consumer**: an app's restic key
-    reaches only `volsync/<its-namespace>/…`; barman and `etcd/`
-    prefixes likewise. The delete/prune-capable key exists only in
-    CI's scheduled jobs (ci.md §3), never in-cluster; the B2 master
-    credential lives in no automation at all, account 2FA on.
+-   Keys are **prefix-scoped per consumer**, capabilities
+    `listFiles + readFiles + writeFiles` and **never `deleteFiles`**:
+    an app's restic key reaches only `volsync/<its-namespace>/…`;
+    barman and `etcd/` prefixes likewise. (restic/barman need
+    list+read even to *back up* — a literally write-only key cannot
+    work — and their prunes still run in-cluster per the retention
+    classes: without `deleteFiles`, a B2 deletion degrades to a
+    **hide**, which the ≥30-day lifecycle rule purges. Retention
+    semantics are preserved while nothing in automation can destroy
+    a version before it ages out.) **No delete-capable key exists in
+    any automation**; the B2 master credential lives offline only,
+    account 2FA on. The one genuine write-only key is the micro's
+    pg_dump uploader (`writeFiles` alone — it keeps no index,
+    state-backend.md §5).
 -   Verification item (physical.md §6): a scoped key must fail to
     list/delete a foreign prefix.
 

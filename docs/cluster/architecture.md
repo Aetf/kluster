@@ -37,7 +37,8 @@ lock-in, and declarative management using Pulumi.
 -   **CNI & Routing**: Cilium (eBPF-based, kube-proxy replacement).
 -   **Ingress (both sides, unified)**: every exposed app is a
     `type: LoadBalancer` Service drawing from one of two Cilium LB IPAM
-    pools — `internet` (the cloud nodes' primary public IPs, fronted by
+    pools — `internet` (the cloud nodes' primary addresses as seen on
+    the wire, §3.2; publicly reachable via OCI's 1:1 NAT and fronted by
     the free OCI NLB) or `lan` (dedicated dual-stack subnet BGP-announced
     to the UDM SE). HTTP/S goes through Cilium Gateway API (Envoy)
     gateways that are themselves LoadBalancer Services from these pools
@@ -140,7 +141,7 @@ reach the VIP differs:
 
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
-| `internet` | The three cloud nodes' **primary** public IPv4 + IPv6 (§3.2) | OCI routes each IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
+| `internet` | The three cloud nodes' primary addresses **as seen on the wire** (§3.2): v4 = the primary **private** IPs (OCI 1:1-NATs each public IPv4 to its VNIC private IP — the interface never carries the public address), v6 = the GUAs (no NAT, on-interface) | OCI routes each public IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
 | `lan` | Dedicated dual-stack subnet, e.g. `192.168.70.0/24` + a ULA `/64` — deliberately *not* inside the LAN's `192.168.80.0/24` | BGP-announced to the UDM SE (§3.4) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
@@ -180,11 +181,17 @@ Internet ingress is two layers, both free:
     NLB is L3/4 pass-through with **source-IP preservation** and health
     checks; one listener per public port (80, 443, syncthing 22000/tcp+udp,
     …), backend set = the three cloud nodes.
-2.  **Cilium terminates on the node primary IPs.** The `internet` pool
-    contains all three nodes' primary IPs; every internet Service
-    requests *all three* via the `lbipam.cilium.io/ips` annotation (plus
-    a `sharing-key`, ports disambiguate). The NLB DNATs the front IP to a
-    healthy backend node's primary IP, where the KPR datapath matches the
+2.  **Cilium terminates on the node primary addresses — the on-the-wire
+    forms.** OCI 1:1-NATs each public IPv4 to the VNIC's primary
+    *private* IP (the interface never carries the public address), so
+    packets arrive with dst = the private IP; the v6 GUAs are
+    on-interface, no NAT. The `internet` pool therefore contains the
+    three **primary private IPv4s + the GUAs** — a pool holding the
+    public v4 literals would never match arriving traffic. Every
+    internet Service requests *all three* via the `lbipam.cilium.io/ips`
+    annotation (plus a `sharing-key`, ports disambiguate). The NLB DNATs
+    the front IP to a healthy backend node's private IP, where the KPR
+    datapath matches the
     frontend and forwards to a pod — locally (`externalTrafficPolicy:
     Local`, client IP preserved end-to-end through the pass-through NLB)
     or via SNAT to another node (`Cluster`).

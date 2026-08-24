@@ -117,7 +117,9 @@ standing-rent test.
 -   A systemd timer (quadlet) runs `pg_dump -Fc`, **age-encrypts**
     the dump — it holds every stack's ciphertext *and* salt — and
     uploads to B2 under the state-backend prefix with a
-    **prefix-scoped, write-only key**. Pruning is not the box's job:
+    **prefix-scoped key holding `writeFiles` alone** — the system's
+    one genuinely write-only key: unlike restic, the uploader keeps
+    no index to read (storage.md §4). Pruning is not the box's job:
     RPO ≤ 24 h is fine — state is re-derivable from reality
     (`pulumi refresh`/import) at worst.
 -   **Retention, explicit: STANDARD class — daily, kept 30 days —

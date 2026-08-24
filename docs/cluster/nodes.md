@@ -30,9 +30,10 @@ workloads. This means the cloud pool needs:
     idles at ~0.4 cores); workload CPU limits keep bursts away from etcd
     (architecture.md §6.5 for why this budget, honestly kept, avoids the
     legacy CP-starvation failure).
--   **Stable public dual-stack IPs** per node (primary IPs double as the
-    `internet` pool VIPs) plus the NLB as the DNS-stable front
-    (architecture.md §3.2).
+-   **Stable public dual-stack IPs** per node (their on-the-wire forms —
+    the v4 *private* primaries behind OCI's 1:1 NAT, plus the v6 GUAs —
+    double as the `internet` pool VIPs, architecture.md §3.2) plus the
+    NLB as the DNS-stable front.
 -   Ability to boot **Talos Linux** — a hard filter: the provider must
     support custom images/ISOs (excludes AWS Lightsail and most managed
     VPS products).
@@ -356,7 +357,11 @@ scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
 -   **Worker VM** (pure worker — the control plane lives cloud-side,
     architecture.md §1.1): **12–16 vCPU / 20 GiB RAM**, disk on local
     NVMe. RAM math: 32 − 4 (HAOS) − 4 (ARC) − 2 (host+podman) − ~1
-    (qemu/host overhead) ≈ 21 GiB. Today's ~16 GiB in-cluster usage
+    (qemu/host overhead) ≈ 21 GiB. **20 GiB is the end state, not the
+    boot size**: while legacy k3s still holds ~16 GiB the VM starts at
+    ~10 GiB and grows stepwise as each migration wave stops its legacy
+    workloads (migration.md §0.4 — RAM is interleaved exactly like the
+    NVMe below). Today's ~16 GiB in-cluster usage
     already includes ~5 GiB of infra tax that the economy program (§4.4)
     shrinks — and with etcd/apiserver moved off this VM its share drops
     further (kubelet+containerd+Cilium ≈ 1.5 GiB) — so ~20 GiB carries
@@ -433,7 +438,10 @@ by construction; Tier 0 remains the foundation everything else sits on:
     hands-on. The **cold-standby drill** covers total-cloud-loss
     (tenancy termination included): bootstrap a temporary single-node CP
     on the homelab host (libvirt) from the latest etcd snapshot in
-    ~30–60 min, then rebuild the cloud pool at leisure.
+    ~30–60 min, then rebuild the cloud pool at leisure. (The scratch
+    CP VM's ~4 GiB has no standing slack to come from on the 32 GB
+    host — the drill script explicitly squeezes ARC / the worker VM
+    for the duration and restores them after.)
 -   **Tier 1 — workload HA**: apps that support replication run
     multi-replica across the pools (CNPG multi-instance, stateless ×2).
     Even under full CP loss, running workloads keep serving — kubelet

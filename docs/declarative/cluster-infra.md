@@ -123,9 +123,11 @@ All decided behavior from architecture.md §3, expressed as config:
     outbound-v6 mechanism (architecture.md §3.5); MTU sized for the
     KubeSpan underlay (WireGuard overhead — verify, don't assume).
 -   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
-    three node primary IPs + the augmented node's secondary private IP,
-    all from physical outputs) and `lan` (`192.168.70.0/24` + the ULA
-    /64). Pool membership via the `serviceSelector` label from
+    on-the-wire node addresses: the three primary **private** IPv4s +
+    the v6 GUAs + the augmented node's secondary private IP — OCI
+    1:1-NATs public v4 to private, so public v4 literals would never
+    match (architecture.md §3.2); all from physical outputs) and `lan`
+    (`192.168.70.0/24` + the ULA /64). Pool membership via the `serviceSelector` label from
     `conventions.py`. Bootstrap verification: pool-contains-node-IP.
 -   **BGP**: `CiliumBGPPeeringPolicy` on the homelab worker only,
     peering with the UDM (AS 65000) over both families, advertising

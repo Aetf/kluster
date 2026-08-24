@@ -130,9 +130,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 
 ## 3. Homelab (pulumi-libvirt)
 
--   **Worker VM**: 12–16 vCPU / 20 GiB (nodes.md §4.2), bridged to the
-    LAN, disk on NVMe (starts ~60 GB, grows as migration reclaims
-    space). The VM's **system design** — disk shape (raw sparse on a
+-   **Worker VM**: 12–16 vCPU / 20 GiB end-state (nodes.md §4.2),
+    bridged to the LAN, disk on NVMe — both disk *and* RAM start
+    smaller during migration and grow per wave (~60 GB / ~10 GiB at
+    bootstrap; migration.md §0.4). The VM's **system design** — disk shape (raw sparse on a
     nodatacow subvolume, virtio-blk), the second host bridge, the
     two-phase GPU passthrough, and the host-prep aconfmgr change-set
     the program assumes — is
@@ -216,8 +217,10 @@ Pulumi-managed via the bridged zerotier provider (architecture.md
 §5.3); only if that bridge proves unusable do those settings fall
 back to hand-kept manual preconditions.
 
-Bootstrap-time verifications (carried from README #6 + this doc): LB
-IPAM pool containing node primary IPs; NLB dual-stack listeners +
+Bootstrap-time verifications (carried from README #6 + this doc; note
+that several items exercise Cilium and therefore run only after
+`k8s-base` is up — the gate's place in the sequence is
+migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack listeners +
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; Egress Gateway under the chosen routing mode +
 reserved-IP↔secondary-private-IP NAT; Cilium MTU over the KubeSpan

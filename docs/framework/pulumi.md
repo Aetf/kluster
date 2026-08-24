@@ -222,8 +222,9 @@ Boundary rules:
     names (autonaming disabled; see cluster-infra.md §0). Resources
     that deliberately keep autonaming expose their generated names as
     stack outputs — dynamic names are machine facts. StackReferences
-    otherwise carry only physical's machine facts: kubeconfig, node
-    IPs, NLB IP, bucket names.
+    otherwise carry only machine facts: physical's kubeconfig, node
+    IPs, NLB IP, bucket names — and `dns`'s zone IDs, consumed by
+    `apps` for its co-located records (declarative/dns.md §1).
 -   **Namespaces belong to apps**: each app component creates its own
     namespace (legacy habit preserved); `k8s-base` owns only shared,
     cluster-scoped infrastructure.

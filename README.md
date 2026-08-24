@@ -57,8 +57,8 @@ registers at the docs root (credentials, operations).
   mechanism.
 - [docs/cluster/migration.md](docs/cluster/migration.md) — the migration plan:
   standing rules (per-app stop-copy-start + DNS repoint, tracker
-  retirement, NVMe interleave), the Phase-0 verification gate, waves
-  A–E, data-movement techniques, decommission checklist.
+  retirement, NVMe/RAM interleave), the Phase-0 verification gate,
+  waves A–F, data-movement techniques, decommission checklist.
 - [docs/physical/state-backend.md](docs/physical/state-backend.md) — the
   state-backend appliance (FCOS on the OCI micro): config management,
   Postgres lifecycle, PKI, NSG posture, backup, monitoring, and the
