@@ -76,12 +76,21 @@ by merging "zero-diff" dependency bumps unreviewed, after which the
 `up` job runs them with full credentials.
 
 **Fix.** Per-stack GitHub Environments (dns sees only Cloudflare; apps
-never holds the UDM key / OCI admin creds; `physical` is main-only with
-a required-reviewer gate — the one approval door kept, because a layer
-that can root the gateway is not the frictionless-apps layer). Previews
-run only for same-repo branches (`pull_request`, never
-`pull_request_target`; fork PRs get no secrets). noop-automerge scoped
-to renovate lockfile/pin PRs; secret scanning + push protection on.
+never holds the UDM key / OCI admin creds; physical credentials are
+main-only, split across two environments — ungated `physical-plan` for
+the zero-diff plan job, reviewer-gated `physical` for applies (ci.md
+§3, amended 2026-08-24) — the one approval door kept, because a layer
+that can root the gateway is not the frictionless-apps layer). PRs get
+no physical preview at all. Previews run only for same-repo branches
+(`pull_request`, never `pull_request_target`; fork PRs get no
+secrets). noop-automerge scoped to renovate lockfile/pin PRs; secret
+scanning + push protection on. **Residual, accepted 2026-08-24**:
+merged main code — noop-automerged dependency bumps included —
+executes with physical credentials in the ungated plan job; the gate
+guards *apply*, not execution. Chosen over a gated weekly drift
+preview for zero-click renovate cadence; a bump that actually changes
+physical rendering still surfaces as a plan diff and stalls at the
+gate.
 
 **Lives in.** ci.md §2 (ZT confinement), §3 (partitioning + preview
 boundary).

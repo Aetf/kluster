@@ -84,16 +84,32 @@ accepted alongside the kubeconfig that tier already holds.
 ## 3. Pipeline shape
 
 ```
-PR:    detect-changes ─→ preview-{physical, dns, k8s-base, apps} (parallel)
+PR:    detect-changes ─→ preview-{dns, k8s-base, apps} (parallel;
+                          physical has no PR preview — its credentials
+                          are main-only, see partitioning below)
                             └─ all zero-diff → noop-automerge (ported)
-merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
-                └──needs──→ up-dns (parallel to k8s-base)
+merge: plan-physical ──zero diff──→ (up-physical skipped)
+            └────────── diff ────→ up-physical [approval gate]
+       ──→ up-k8s-base ──needs──→ up-apps
+       ──→ up-dns (parallel to k8s-base)
 ```
 
--   **Merge side runs `up` only.** `pulumi up --yes` performs its own
-    preview as phase one; a separate post-merge preview job would be a
-    duplicate. The zero-diff "gate" on merge is simply that an up with
-    nothing to do is a fast no-op.
+-   **Merge side runs `up` only — except `physical`, which gets a plan
+    job** (2026-08-24, superseding the pure-up shape): for
+    dns/k8s-base/apps, `pulumi up --yes` performs its own preview as
+    phase one and a separate preview job would be a duplicate; the
+    zero-diff "gate" is simply that an up with nothing to do is a fast
+    no-op. `physical` differs because its up sits behind the approval
+    gate: **`plan-physical`** runs `pulumi preview --expect-no-changes`
+    in the ungated `physical-plan` environment first — zero diff (the
+    common case: shared-code/lockfile merges) skips `up-physical`
+    entirely and the chain proceeds with **zero clicks**; a real diff
+    routes to `up-physical` in the gated `physical` environment, and
+    the whole chain waits for the approval (correct: downstream layers
+    may depend on the physical change). Workflow mechanics on record:
+    downstream jobs need skip-tolerant conditions
+    (`if: always() && needs.up-physical.result != 'failure'` shape) —
+    a skipped gate job must not cascade-skip the chain.
 -   **PR previews run in parallel** (previews don't mutate state). When
     an upstream layer has a diff, downstream previews are computed
     against the *current* StackReference outputs and may be off — accepted
@@ -112,15 +128,26 @@ merge: up-physical ──needs──→ up-k8s-base ──needs──→ up-apps
 -   Ported unchanged from kluster-code: rebase-merge (not squash —
     committer identity), zero-diff **noop-automerge** for renovate-class
     PRs, Home Assistant push notification on deploy failure.
--   **Credential partitioning (2026-08-23, from the security audit)**:
-    secrets live in **per-stack GitHub Environments** — the `dns` jobs
-    see only the Cloudflare token, `apps` never holds the UDM key or
-    OCI admin credentials, and the `physical` environment (UDM root
-    SSH, OCI, ZT) is restricted to main-branch deployments **with a
-    required-reviewer gate**: the one approval door kept. kluster-code
-    deleted its gate for the *apps* cadence, and apps stay
-    frictionless here too — but a layer that can root the gateway is
-    not that layer. Previews run only for same-repo branches
+-   **Credential partitioning (2026-08-23, from the security audit;
+    physical split amended 2026-08-24)**: secrets live in **per-stack
+    GitHub Environments** — the `dns` jobs see only the Cloudflare
+    token, `apps` never holds the UDM key or OCI admin credentials,
+    and the physical credentials (UDM root SSH, OCI, ZT) are
+    **main-only, split across two environments**: ungated
+    `physical-plan` for the plan job, reviewer-gated `physical` for
+    actual applies — the one approval door kept, guarding *apply*.
+    kluster-code deleted its gate for the *apps* cadence, and apps
+    stay frictionless here too — but a layer that can root the
+    gateway is not that layer. **PRs get no physical preview at
+    all**: a physical-path PR is reviewed as code, and its resource
+    diff is read in `plan-physical`'s output on main — reading it is
+    the approval moment before `up-physical`. Residual, accepted
+    2026-08-24 (audit H3): merged main code — noop-automerged
+    dependency bumps included — executes with physical credentials
+    in the ungated plan job without per-run human approval; the
+    compensation is that any bump which actually changes physical
+    rendering surfaces as a plan diff and stalls at the gate for
+    human eyes. Previews run only for same-repo branches
     (`pull_request`; fork PRs get no secrets, `pull_request_target` is
     never used): a preview **executes the PR's Python with provider
     credentials**, so who can trigger one is a security boundary, not
