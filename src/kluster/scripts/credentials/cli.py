@@ -16,6 +16,7 @@ import argparse
 import getpass
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -48,6 +49,16 @@ def _parser() -> argparse.ArgumentParser:
         help='where an account root lives in the estate, e.g. b2="accounts/Backblaze"',
     )
     _ = boot.add_argument('--only', default=None, metavar='<member>', help='create just this seed (repair, seed loss)')
+
+    der = families.add_parser('derive', help='the secrets computed from the derivation seed (§2.2)')
+    der_actions = der.add_subparsers(dest='action', required=True, metavar='<action>')
+    env = der_actions.add_parser('env', help='shell exports for a Pulumi run; use with eval')
+    _ = env.add_argument(
+        '--bundle-dir',
+        type=Path,
+        default=Path.home() / '.config' / 'kluster' / 'state-backend',
+        help='where `state-backend` wrote the client bundle',
+    )
 
     rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
     _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
@@ -150,6 +161,15 @@ def main(argv: list[str] | None = None) -> int:
                 store.remember(password)
             case ('kdbx', _, 'forget'):
                 store.forget()
+            case ('derive', _, 'env'):
+                # Written to stdout for `eval`, and refused when stdout is the
+                # terminal: a passphrase in the scrollback is a passphrase in
+                # the next screen-share.
+                if sys.stdout.isatty():
+                    log.error('this prints a passphrase; pipe it: eval "$(credentials derive env)"')
+                    return 1
+                for name, value in lifecycle.environment(store, args.bundle_dir).items():
+                    print(f'export {name}={shlex.quote(value)}')
             case ('bootstrap', _, _):
                 created = lifecycle.bootstrap(
                     store,

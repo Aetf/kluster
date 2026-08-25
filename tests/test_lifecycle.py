@@ -127,3 +127,29 @@ def test_rotation_writes_a_new_seed_and_leaves_the_retired_kit_untouched(
     # §2.2: the retired seed outlives its rotation, because backups encrypted
     # under it cannot be re-encrypted retroactively.
     assert seeds.load_seed(kit) == retired
+
+
+def test_the_environment_derives_the_passphrase_and_reads_the_url(
+    kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path
+) -> None:
+    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+    bundle = tmp_path / 'bundle'
+    bundle.mkdir()
+    _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+
+    values = lifecycle.environment(kit, bundle)
+
+    # Derived, never stored: the passphrase lives in no slot an operator can
+    # read, which is why there was no way to obtain it before.
+    assert values['PULUMI_CONFIG_PASSPHRASE'] == seeds.pulumi_passphrase(seeds.load_seed(kit))
+    assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
+
+
+def test_a_missing_bundle_still_yields_the_passphrase(kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path) -> None:
+    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+
+    values = lifecycle.environment(kit, tmp_path / 'absent')
+
+    # The appliance not existing yet is the normal case during bring-up.
+    assert 'PULUMI_CONFIG_PASSPHRASE' in values
+    assert 'PULUMI_BACKEND_URL' not in values

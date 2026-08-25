@@ -48,8 +48,16 @@ the server by literal IP (`sslmode=verify-full`) so the hot path never depends
 on DNS — which is itself something this backend deploys.
 
 ```sh
-export PULUMI_BACKEND_URL="postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=$HOME/.config/kluster/state-backend/ca.crt&sslcert=$HOME/.config/kluster/state-backend/client.crt&sslkey=$HOME/.config/kluster/state-backend/client.key"
-export PULUMI_CONFIG_PASSPHRASE=...    # derived from the derivation seed
+eval "$(mise x uv -- uv run credentials derive env)"
+```
+
+That derives `PULUMI_CONFIG_PASSPHRASE` from the derivation seed — it is
+stored nowhere, so there is nothing to look up — and reads
+`PULUMI_BACKEND_URL` out of the client bundle written above. The URL itself
+is:
+
+```sh
+postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=$HOME/.config/kluster/state-backend/ca.crt&sslcert=$HOME/.config/kluster/state-backend/client.crt&sslkey=$HOME/.config/kluster/state-backend/client.key
 ```
 
 The certificate's Common Name *is* the Postgres role: `operator` locally,

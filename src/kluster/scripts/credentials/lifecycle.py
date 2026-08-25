@@ -103,6 +103,25 @@ def create_seed(seed: entries.Seed, *, kit: KdbxStore, estate: Estate, prompt: P
     raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
 
 
+def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
+    """The variables a Pulumi run needs, derived and read rather than stored.
+
+    `PULUMI_CONFIG_PASSPHRASE` is a derivation of the seed (§2.2) and lives in
+    no slot an operator can read, so before this there was no way to obtain it
+    -- the state-backend README told the reader to export it without saying
+    where from. `PULUMI_BACKEND_URL` is read from the bundle the appliance's
+    provisioner writes, so the two halves of "log in to the backend" come from
+    one command.
+    """
+    values = {'PULUMI_CONFIG_PASSPHRASE': seeds.pulumi_passphrase(seeds.load_seed(kit))}
+    url = bundle_dir / 'backend-url'
+    if url.is_file():
+        values['PULUMI_BACKEND_URL'] = url.read_text().strip()
+    else:
+        log.warning('no %s; run `state-backend provision` (or `state-backend bundle operator`) first', url)
+    return values
+
+
 def bootstrap(kit: KdbxStore, *, estate: Estate, prompt: Prompt, only: str | None = None) -> list[str]:
     """Fill the kit with every §2 row. Returns the members it created.
 
