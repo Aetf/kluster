@@ -32,30 +32,24 @@ jobs:
       apps: ${{ steps.filter.outputs.apps }}
     steps:
       - uses: actions/checkout@v5
-      # Path filtering saves job setup, nothing more: anything shared runs
-      # every layer and lets the previews no-op internally.
+      # Path filtering saves job setup, nothing more, so it is a deny-list:
+      # a preview that should have run and did not is invisible (the job is
+      # skipped, and a skipped job is green), while a preview that runs
+      # needlessly costs a minute and no-ops internally. An allow-list gets
+      # this backwards -- every new file defaults to being missed, which is
+      # how `config.py` and the stack dispatch came to match nothing.
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            shared: &shared
-              - 'src/kluster/conventions.py'
-              - 'src/putils/**'
-              - 'packages/crds/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-            dns:
-              - *shared
-              - 'src/kluster/stacks/dns.py'
-              - 'Pulumi.dns.yaml'
-            k8s-base:
-              - *shared
-              - 'src/kluster/stacks/k8s_base.py'
-              - 'Pulumi.k8s-base.yaml'
-            apps:
-              - *shared
-              - 'src/kluster/stacks/apps.py'
-              - 'Pulumi.apps.yaml'
+            dns: &code
+              - '!docs/**'
+              - '!**/*.md'
+              - '!.agents/**'
+              - '!.vscode/**'
+              - '!.gitignore'
+            k8s-base: *code
+            apps: *code
 
   preview:
     needs: changes
