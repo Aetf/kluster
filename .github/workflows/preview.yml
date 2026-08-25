@@ -27,9 +27,11 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      dns: ${{ steps.filter.outputs.dns }}
-      k8s-base: ${{ steps.filter.outputs.k8s-base }}
-      apps: ${{ steps.filter.outputs.apps }}
+      # The filter's own JSON array of matching names, which is the shape the
+      # matrix below needs: a job-level `if` cannot read the `matrix` context
+      # at all (it is not in scope there), so selecting stacks has to happen
+      # by building the matrix rather than by filtering it afterwards.
+      stacks: ${{ steps.filter.outputs.changes }}
     steps:
       - uses: actions/checkout@v5
       # Path filtering saves job setup, nothing more, so it is a deny-list:
@@ -52,15 +54,18 @@ jobs:
 
   preview:
     needs: changes
+    # An empty matrix is not an error but it is also not a job, and a matrix
+    # built from an empty array would be one -- so the whole job stands down
+    # when nothing matched.
+    if: needs.changes.outputs.stacks != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        stack: [dns, k8s-base, apps]
+        stack: ${{ fromJSON(needs.changes.outputs.stacks) }}
     # Per-stack Environments are the credential partition: the dns job sees
     # only the Cloudflare token, apps never holds the UDM key.
     environment: ${{ matrix.stack }}
-    if: needs.changes.outputs[matrix.stack] == 'true'
     steps:
       - uses: actions/checkout@v5
 
