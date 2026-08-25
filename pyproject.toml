@@ -1,11 +1,13 @@
 [project]
 name = "kluster"
 version = "0.1.0"
-description = "Add your description here"
+description = "Pulumi program for a Talos/Cilium hybrid Kubernetes cluster spanning OCI and a homelab LAN"
 authors = [
     { name = "Aetf", email = "aetf@unlimited-code.works" }
 ]
 readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">= 3.12"
 
 dependencies = [

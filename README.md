@@ -112,3 +112,7 @@ without an implementation is a subcommand that refuses with its own name. The
 build order is [cluster/migration.md](docs/cluster/migration.md) §1, which is
 the same order for a rebuild from nothing; implementation-period issues are
 tracked in the `kluster-ops` repo, not here.
+
+## License
+
+MIT OR Apache-2.0, at your option.
