@@ -11,8 +11,6 @@ requires-python = ">= 3.12"
 dependencies = [
     "pulumi>=3.254.0",
     "pulumi-kubernetes>=4.23.0",
-    "pulumi-awsx>=2.19.0",
-    "pulumi-aws>=6.61.0",
     "requests>=2.32.3",
     "jinja2>=3.1.4",
     "pulumi-crds",
@@ -99,7 +97,7 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests", "deploy", "__main__.py"]
-# Generated CRD bindings are not ours to annotate; the three pre-Talos
+# Generated CRD bindings are not ours to annotate; the two pre-Talos
 # leftovers are rewritten rather than retrofitted (AGENTS.md), and the
 # exclusion goes away with them.
 exclude = [
@@ -107,7 +105,6 @@ exclude = [
     "**/__pycache__",
     ".venv",
     "src/kluster/kx.py",
-    "src/kluster/physical/aws.py",
     "src/kluster/base_cluster",
 ]
 # basedpyright-only opinions that fight a Pulumi codebase more than they help:

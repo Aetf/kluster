@@ -14,7 +14,7 @@ Project managed by [uv](https://github.com/astral-sh/uv) and mise.
 | --- | --- |
 | `__main__.py` | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
 | `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. Stable and fully tested. |
-| `src/kluster/` | The cluster program itself. `physical/` is the OCI + Talos declaration; `physical/aws.py` beside it is a pre-Talos leftover, excluded from the checks until rewritten. |
+| `src/kluster/` | The cluster program itself: `physical/` declares the OCI and Talos layer, `stacks/` dispatches, `scripts/` holds the console scripts. |
 | `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (currently still the legacy cluster's chart set). |
 | `docs/` | Design docs — see index below. |
 | `tests/` | Unit tests for the framework layer (Pulumi mocks, no cloud access). |
@@ -97,9 +97,9 @@ stack dispatch, `conventions.py`, the credential scripts (`credentials`: the
 offline store, the derivation seed and what it derives, the B2 seed key), the
 state-backend appliance's definition and provisioner (`state-backend`), the CI
 workflow set, and renovate. Ruff, `basedpyright` strict and the tests are clean
-across everything but the three pre-Talos leftovers (`kx.py`,
-`physical/aws.py`, `base_cluster/`), which are excluded until they are
-rewritten rather than retrofitted.
+across everything but the two pre-Talos leftovers (`kx.py`,
+`base_cluster/`), which are excluded until they are rewritten rather
+than retrofitted.
 
 **Standing in OCI**: the appliance's own VCN, subnet, gateway, security group
 and reserved public IP, plus the imported Fedora CoreOS image. The instance
