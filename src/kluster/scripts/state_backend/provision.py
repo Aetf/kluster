@@ -619,6 +619,11 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
         try:
             probe = sp.run(
                 ['openssl', 's_client', '-connect', f'{address}:{settings.PORT}', '-starttls', 'postgres', '-brief'],
+                # s_client keeps the connection open reading stdin after the
+                # handshake, so an inherited terminal makes a *successful*
+                # probe hang until the timeout below and report itself as no
+                # answer -- the wait could never finish once the port opened.
+                stdin=sp.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -632,7 +637,7 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
             # the path drops the packets instead of refusing them. Treating
             # either as fatal ends the wait at the moment the box comes up.
             answered = False
-            reason = 'no response within 30s — either still starting, or the packets are being dropped'
+            reason = 'no answer within 30s — either still starting, or the packets are being dropped'
         if answered:
             return True
         elapsed = time.monotonic() - started

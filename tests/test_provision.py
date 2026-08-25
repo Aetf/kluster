@@ -257,3 +257,25 @@ def test_replacing_forgets_the_destroyed_box_s_host_key(converge: Any) -> None:
     _ = _run(replace=True)
 
     assert recorder.forgotten == ['192.0.2.10']
+
+
+def test_the_readiness_probe_closes_its_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Otherwise the wait can never finish on a workstation.
+
+    `openssl s_client` keeps the connection open reading stdin once the
+    handshake is done, so with a terminal inherited from the operator's shell
+    a *successful* probe hangs until the timeout and is reported as no answer.
+    On a machine that came up in 90 seconds this looked like packets being
+    dropped for as long as the operator was willing to wait.
+    """
+    seen: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object) -> Any:
+        seen.update(kwargs)
+        seen['argv'] = argv
+        return type('Completed', (), {'returncode': 0, 'stderr': ''})()
+
+    monkeypatch.setattr(provision.sp, 'run', fake_run)
+
+    assert provision.wait_for_backend('192.0.2.10', timeout=1) is True
+    assert seen['stdin'] is provision.sp.DEVNULL
