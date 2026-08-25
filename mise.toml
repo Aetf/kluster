@@ -1,7 +1,7 @@
 # Both are secrets in the sense that matters here -- the passphrase decrypts
 # every stack's config, the URL names a client key -- so mise does not echo
 # them back in `mise env` or a task's command line.
-redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL"]
+redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL", "GITHUB_TOKEN"]
 
 # Pinned, not `latest`: CI installs from this file, so a floating version is a
 # breaking upgrade that lands without a PR, a preview, or a way to bisect it.
@@ -42,5 +42,18 @@ PULUMI_BACKEND_URL = """
 {{- read_file(path=bundle) | trim -}}
 {%- else -%}
 {{- env.PULUMI_BACKEND_URL | default(value="") -}}
+{%- endif -%}
+"""
+# The `github` stack's credential, by the same mechanism -- but it is an
+# account root from the personal estate rather than something derived, so the
+# file is written by hand and nothing in this repo can recreate it
+# (docs/credentials.md §2, framework/github.md §1). Note that `gh` reads this
+# variable too: inside this directory it will act as the admin token.
+GITHUB_TOKEN = """
+{%- set cached = [config_root, '.github.token'] | join_path -%}
+{%- if cached is file -%}
+{{- read_file(path=cached) | trim -}}
+{%- else -%}
+{{- env.GITHUB_TOKEN | default(value="") -}}
 {%- endif -%}
 """

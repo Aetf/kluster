@@ -6,3 +6,5 @@ __pycache__/
 lib/crds/build
 # The derived Pulumi passphrase, cached for local previews (mise.toml).
 .pulumi.secret
+# The github stack's admin token, held in the personal estate (mise.toml).
+.github.token

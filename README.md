@@ -56,6 +56,11 @@ rsync -a ~/.config/kluster/state-backend/ <host>:~/.config/kluster/state-backend
 mise x uv -- uv run credentials derive passphrase | ssh <host> 'umask 077; cat > ~/kluster/.pulumi.secret'
 ```
 
+The `github` stack additionally needs `GITHUB_TOKEN`, which `mise.toml` reads
+from a git-ignored `.github.token`. That one is an account root rather than a
+derived secret: nothing here can recreate it, which is deliberate -- that stack
+is applied by hand and never by CI.
+
 The console scripts — `credentials`, `state-backend`, `update_crds` — are the
 operator-side half of the estate; each one's `--help` is written to say when it
 is run, not only what it does.

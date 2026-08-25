@@ -31,7 +31,13 @@ not apply it. The same reasoning the `physical` gate rests on
 
 The credential itself is an account-root-scoped token from the
 personal estate (credentials.md §2), used on the operator machine and
-pushed to no slot.
+pushed to no slot. On that machine it reaches the provider the same way
+the Pulumi passphrase does: `mise.toml` reads `GITHUB_TOKEN` from a
+git-ignored `.github.token`, falling back to the environment. Unlike
+the passphrase it is not derived from anything, so no command in this
+repository can recreate it -- the file is written by hand from the
+estate, and its absence is what stops this stack from being applied by
+accident.
 
 ## 2. What the plan permits today
 
