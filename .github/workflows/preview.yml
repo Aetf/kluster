@@ -71,9 +71,9 @@ jobs:
 
       - run: mise x uv -- uv sync --locked
 
-      # Only apps touches the LAN (the AdGuard rewrites live on the UDM).
+      # Only dns touches the LAN (the AdGuard rewrites live on the UDM).
       - name: Join ZeroTier
-        if: matrix.stack == 'apps'
+        if: matrix.stack == 'dns'
         uses: ./.github/actions/zerotier
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}

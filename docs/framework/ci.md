@@ -66,14 +66,17 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | via cloud endpoints — talosctl proxies to `--nodes <homelab>` through apid over KubeSpan (**bootstrap verification item**) |
-| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `apps` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
+| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |
 
-Only the `physical` jobs — and `apps` runs that change split-horizon
-rewrites (AdGuard lives on the UDM) — touch ZeroTier; a typical app
-image bump stays entirely public-endpoint. The AdGuard rewrite
-resources tolerate an unreachable UDM by failing only their own
-resources, not the whole up. CI's ZT members are **tag-confined by
+Only the `physical` and `dns` jobs touch ZeroTier; `apps` — the stack
+that changes daily — reaches nothing but the cluster, because the
+split-horizon rewrites its routes imply are applied by `dns` from the
+same plain-data declaration (dns.md §3). A typical app image bump
+stays entirely public-endpoint, and ZeroTier's availability is not a
+dependency of it. The AdGuard rewrite resources tolerate an
+unreachable UDM by failing only their own resources, not the whole
+up. CI's ZT members are **tag-confined by
 Central flow rules** (managed with the rest of the ZT config,
 architecture.md §5.3) to exactly the four targets in the table
 (UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a

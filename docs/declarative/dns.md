@@ -76,6 +76,12 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
 -   **Mechanism**: a dynamic-provider resource wrapping the AdGuard
     rewrite API (the legacy golinks work established the technique),
     applied **directly to both instances** — idempotent diff/apply.
+-   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
+    the AdGuard pair is on the UDM: putting the rewrites here keeps the
+    LAN reachability requirement — the ZeroTier join, and its
+    availability as a dependency of every CI run that touches the stack
+    — off the busiest stack in the repo and on the quietest one. `apps`
+    then needs no LAN access at all.
 -   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
     config, the sync service is redundant *and* a conflict source (it
     would overwrite bob's Pulumi-written rewrites). Consequence,
@@ -87,7 +93,12 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
     rewrite targeting the media VIP) — an app cannot forget its
-    rewrite because it never writes it by hand. LAN ULA AAAAs are
+    rewrite because it never writes it by hand. Crossing a stack
+    boundary does not weaken that: an app's route declaration is
+    **plain data** in a module both stacks import, so `apps` builds
+    its HTTPRoutes from it and `dns` builds the rewrites from the same
+    rows. One edit, two stack diffs, both previewable — rather than
+    one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
 
 ## 4. LAN DNS: three name planes

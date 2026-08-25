@@ -19,7 +19,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
 | Exposure | pool label + route kind per the routing matrix, via the helpers (`public_route`/`public_port`/`lan_route`), which also emit the NLB listener + security rule for internet ports; `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `iot_reachable=True` attaches `media-gw` — the explicit "IoT may reach this" decision (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
-| DNS | emitted by the same helpers (CNAME to anchor; AdGuard rewrite for split-horizon) | dns.md |
+| DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), the augmented node for dedicated-VIP workloads, GPU resource requests | architecture.md §3.6 |
 | Network policy | per-namespace default-deny + explicit allows, part of the component | architecture.md §4.1 |

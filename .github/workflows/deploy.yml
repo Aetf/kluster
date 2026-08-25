@@ -85,6 +85,12 @@ jobs:
         with:
           experimental: true
       - run: mise x uv -- uv sync --locked
+      # The AdGuard rewrites are DNS and live on the UDM, so this is the one
+      # stack that reaches the LAN (dns.md §3).
+      - uses: ./.github/actions/zerotier
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          identity: ${{ secrets.ZEROTIER_IDENTITY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
@@ -119,11 +125,6 @@ jobs:
         with:
           experimental: true
       - run: mise x uv -- uv sync --locked
-      # Split-horizon rewrites live on the UDM.
-      - uses: ./.github/actions/zerotier
-        with:
-          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
-          identity: ${{ secrets.ZEROTIER_IDENTITY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
