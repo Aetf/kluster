@@ -187,3 +187,32 @@ def test_dump_raises_when_either_half_fails(
 
     with pytest.raises(SystemExit, match=message):
         state_dump.dump(pg_env / 'out.age')
+
+
+def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Postgres binds 5432 before initdb finishes, so the probe hangs.
+
+    A `TimeoutExpired` escaping the loop ends the wait at exactly the moment
+    the appliance is coming up, which is what it did the first time it ran.
+    """
+    import subprocess as sp
+
+    from kluster.scripts.state_backend import provision
+
+    calls: list[int] = []
+
+    def probe(*_args: object, **_kwargs: object) -> sp.CompletedProcess[str]:
+        calls.append(1)
+        if len(calls) < 3:
+            raise sp.TimeoutExpired(cmd='openssl', timeout=30)
+        return sp.CompletedProcess(args=[], returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(provision.sp, 'run', probe)
+
+    def instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(provision.time, 'sleep', instant)
+
+    assert provision.wait_for_backend('192.0.2.10', timeout=600) is True
+    assert len(calls) == 3

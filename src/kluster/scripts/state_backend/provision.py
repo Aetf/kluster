@@ -498,13 +498,22 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
         _duration(timeout),
     )
     while time.monotonic() < deadline:
-        probe = sp.run(
-            ['openssl', 's_client', '-connect', f'{address}:{settings.PORT}', '-starttls', 'postgres', '-brief'],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if probe.returncode == 0:
+        try:
+            probe = sp.run(
+                ['openssl', 's_client', '-connect', f'{address}:{settings.PORT}', '-starttls', 'postgres', '-brief'],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            answered = probe.returncode == 0
+        except sp.TimeoutExpired:
+            # The interesting half of "not ready yet". Postgres binds 5432
+            # before initdb finishes, so the port accepts the connection and
+            # then says nothing: the probe hangs instead of being refused.
+            # Treating that as an error ends the wait at the exact moment the
+            # box is coming up.
+            answered = False
+        if answered:
             return True
         elapsed = time.monotonic() - started
         if elapsed - announced >= 60:
