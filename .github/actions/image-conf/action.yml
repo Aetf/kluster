@@ -1,0 +1,42 @@
+name: Image conf
+description: >
+  Derive an image's ghcr reference and build-arg file from its docker/*.conf,
+  so the build and the manifest jobs read the tag from one place.
+
+inputs:
+  image:
+    description: The docker/<image>.conf basename.
+    required: true
+
+outputs:
+  ref:
+    description: The ghcr reference to build and publish, tag included.
+    value: ${{ steps.conf.outputs.ref }}
+  args-file:
+    description: The conf reduced to build args, for `buildah --build-arg-file`.
+    value: ${{ steps.conf.outputs.args-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: conf
+      shell: bash
+      run: |
+        set -euo pipefail
+        conf="docker/${{ inputs.image }}.conf"
+
+        # The conf is *sourced*, not parsed, because TAG is written as an
+        # expression over the other keys — `TAG="${PG_MAJOR}.${PG_MINOR}-${PG_REV}"`
+        # for the CNPG operands, a bare version for the rest. That keeps a
+        # version bump a one-line edit renovate can make, with the tag
+        # following from it.
+        set -a; . "$conf"; set +a
+
+        # ghcr paths are lowercase and the owner login is not.
+        echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+
+        # IMAGE and TAG address the registry, everything else addresses the
+        # Containerfile; the two names are reserved for that reason.
+        args="$RUNNER_TEMP/${{ inputs.image }}.build-args"
+        grep -vE '^(IMAGE|TAG)=' "$conf" > "$args"
+        echo "args-file=$args" >> "$GITHUB_OUTPUT"
