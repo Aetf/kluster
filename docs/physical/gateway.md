@@ -156,7 +156,7 @@ discovery *does* depend on, declared rather than assumed:
 -   **Network multicast settings** are explicit fields on the
     `zerotier_network` resource: broadcast enabled, and
     `multicast_limit` ≥ the roster size (the default 32 is ample
-    today; the constraint is recorded so roster growth cannot
+    today; the constraint is recorded, so roster growth cannot
     silently break discovery).
 -   **The CI member stays IPv4-only**: its `drop` pair would eat its
     own ICMPv6 neighbor discovery if it ever received a v6
@@ -231,11 +231,11 @@ Facts that shape it (decided 2026-08-24):
 -   **A join cannot be reused across jobs** — each hosted-runner job
     is its own VM — and folding stacks into one job to share a join
     would collapse the per-stack Environment credential partition
-    (ci.md §3). Per-job joins are the shape; the recurring cost is
-    join latency (below).
+    (ci.md §3). Per-job joins are the shape; their recurring cost is the
+    latency of each join (below).
 -   **One identity live in two places flaps** (ZT maps a node ID to
     one endpoint at a time), so concurrent jobs must never share an
-    identity. Hence one identity per concurrency domain, each domain
+    identity. Hence, one identity per concurrency domain, each domain
     serialized: the merge chain by its workflow `concurrency` group
     (queued — which Pulumi state-lock sanity wants anyway; collapsing
     pending runs is safe because deploys are cumulative, the newest

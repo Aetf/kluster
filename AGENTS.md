@@ -40,5 +40,5 @@
     alice/bob as instance names). A one-off gets the prose fixed instead.
   - Run it **one file at a time**: given many files at once it hangs rather
     than finishing. It also mis-columns inside very long table rows and
-    reports a fragment of a word as a misspelling — those are artefacts, not
+    reports a fragment of a word as a misspelling — those are artifacts, not
     dictionary entries.

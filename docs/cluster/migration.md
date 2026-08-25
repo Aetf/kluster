@@ -38,7 +38,7 @@ owns sequencing, data movement, and teardown.
     legacy data → grow VM disk/RAM".
 5.  **Sealing key first, then rotated last**: the legacy sealed-secrets
     key is restored into the new cluster before any SealedSecret
-    manifest is ported (cluster-infra.md §1); it is regenerated and
+    manifest is ported (cluster-infra.md §1); it is regenerated, and
     the legacy key deleted at decommission (§4, Wave F) —
     restore-for-continuity, rotate-for-hygiene.
 

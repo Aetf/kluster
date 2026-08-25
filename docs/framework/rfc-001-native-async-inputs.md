@@ -183,7 +183,7 @@ a secret stays secret in state (at whole-value granularity — if any resolved
 output was secret, the entire result is marked secret).
 
 `resolve` awaited *outside* an `async_output` coroutine raises `RuntimeError`
-immediately: there, dependencies would be silently dropped and a preview
+immediately: there, dependencies would be silently dropped, and a preview
 unknown would crash the program instead of degrading to an unknown output.
 This includes the `pulumi.run` program entrypoint (§5a).
 
@@ -231,7 +231,7 @@ independent — it gathers all dependencies at once and wakes up once.
 4.  **Secretness propagates at whole-value granularity.** If any output
     resolved by the coroutine is secret, the entire `async_output` result is
     marked secret. When only a fragment of the result is actually sensitive,
-    prefer passing the secret as a separate plain input so the non-sensitive
+    prefer passing the secret as a separate plain input, so the non-sensitive
     inputs keep readable diffs.
 5.  **`resolve` is only valid inside `async_output`.** Anywhere else —
     including the `pulumi.run` entrypoint or a bare `@task` coroutine — it
@@ -259,7 +259,7 @@ The two features are complementary, at different layers:
     `await` in the entrypoint does not (awaiting an unknown output's value
     there yields `None`/sentinels with no graph edge).
 
-Consequently `resolve` refuses to run in the entrypoint (§5.5); pass values
+Consequently, `resolve` refuses to run in the entrypoint (§5.5); pass values
 into components and let their `async_output` coroutines do the awaiting.
 
 --------------------------------------------------------------------------------

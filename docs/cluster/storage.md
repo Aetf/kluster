@@ -293,7 +293,7 @@ because ~110 GB doesn't fit a small instance disk:
     root cause (a) *by construction* (no metadata hop ever crosses the
     WAN), and root cause (b) is answered by **honest sizing, not hope**:
     the sidecar gets real requests/limits of **0.5–1 GiB** (legacy mount
-    pods idle at ~130 Mi but that idle figure is exactly what starved
+    pods idle at ~130 Mi, but that idle figure is exactly what starved
     them under load) — this number is in the cloud node's RAM budget
     (nodes.md §4.4), not discovered in an incident. Satisfies every
     clause of the quarantine policy above — the census becomes exactly

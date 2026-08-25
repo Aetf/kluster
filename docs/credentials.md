@@ -159,9 +159,9 @@ carry — so a rotation run by a successor starts in the personal estate
 
 Some secrets are not minted by any provider — a passphrase, a CA key,
 a backup encryption key. Storing each one would turn the kit back into
-a growing token drawer, so instead **one 32-byte derivation seed** is stored
-and each secret is **derived from it** with HKDF-SHA256 under a stable
-label:
+a growing token drawer, so instead **one 32-byte derivation seed** is
+stored, and each secret is **derived from it** with HKDF-SHA256 under a
+stable label:
 
 | Label | Derived secret |
 | --- | --- |

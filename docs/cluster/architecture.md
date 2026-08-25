@@ -241,7 +241,7 @@ homelab-side (too big for the cloud pool), the cloud path can't serve it
 Expose it via the **home uplink** instead: UDM port-forward to its `lan`
 VIP — DNAT preserves the source address end-to-end. Costs: home-IP DNS
 (dynamic) and home upload bandwidth. No current workload needs this; it
-exists so the constraint never forces a redesign.
+exists, so the constraint never forces a redesign.
 
 ### 3.3 HTTP/S: three Gateways, shared routes
 
@@ -799,7 +799,7 @@ the UDM): solves only the return-route half that a single static route
 already covers, keeps the host on the data path for every ZT client,
 and adds a second BGP peer for a subnet that never changes. Rejected;
 likewise plain status quo (host router + static route) — functionally
-adequate but it couples the remote-management path to one non-gateway
+adequate, but it couples the remote-management path to one non-gateway
 machine, exactly what the rest of the design just removed.
 
 ## 6. Alternatives Considered
@@ -919,8 +919,8 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
     USB3 controller, the Wi-Fi/BT card, and a USB dongle — KubeVirt USB/PCI
     passthrough has no hot-plug (dongle re-seat ⇒ VM restart) and pins the
     VM anyway, so cluster placement buys nothing; (c) the KubeVirt+CDI+
-    Multus(bridge) stack plus Talos-specific friction (SELinux regression
+    Multus (bridge) stack plus Talos-specific friction (SELinux regression
     talos#10083-class issues) is real operational surface for zero gained
-    capability. Instead HAOS is **adopted by the Pulumi physical layer via
+    capability. Instead, HAOS is **adopted by the Pulumi physical layer via
     pulumi-libvirt** (§5.1): declared, versioned, previewable — but a host
     concern, like the NAS.
