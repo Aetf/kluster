@@ -1,117 +1,97 @@
-# kluster-py
+# kluster
 
-Pulumi Python code for the next-generation hybrid Kubernetes cluster: Talos
-Linux spanning an OCI VCN and the Homelab LAN, with Cilium networking. This
-repo succeeds `~/projects/kluster-code` (the k3s-based legacy cluster); it
-will run nearly the same workloads on new infrastructure, with everything —
-cloud instances, gateways, storage, DNS — managed by Pulumi.
+[![checks](https://github.com/Aetf/kluster/actions/workflows/checks.yml/badge.svg)](https://github.com/Aetf/kluster/actions/workflows/checks.yml)
+[![deploy](https://github.com/Aetf/kluster/actions/workflows/deploy.yml/badge.svg)](https://github.com/Aetf/kluster/actions/workflows/deploy.yml)
 
-Project managed by [uv](https://github.com/astral-sh/uv) and mise.
+One person's home infrastructure, declared: a Talos Linux Kubernetes cluster
+spanning an OCI VCN and a homelab LAN with Cilium networking, plus the
+machines around it — the gateway, DNS, the appliance holding Pulumi's own
+state. Everything is Pulumi Python, applied by CI, and the design decisions
+behind it are written down in `docs/` rather than lost.
+
+It succeeds a k3s-based cluster and will run nearly the same workloads on new
+infrastructure. It is not a template: it names one estate's hosts, networks
+and accounts throughout, and nothing here is parameterized for reuse. It is
+public because the CI security model needs it to be — branch protection is
+not available on a private repository under this plan — and readable because
+the reasoning is the point.
+
+Managed with [uv](https://github.com/astral-sh/uv) and
+[mise](https://mise.jdx.dev).
 
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `__main__.py` | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
-| `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. Stable and fully tested. |
-| `src/kluster/` | The cluster program itself: `physical/` declares the OCI and Talos layer, `stacks/` dispatches, `scripts/` holds the console scripts. |
-| `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (currently still the legacy cluster's chart set). |
-| `docs/` | Design docs — see index below. |
-| `tests/` | Unit tests for the framework layer (Pulumi mocks, no cloud access). |
+| `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. |
+| `src/kluster/` | The program itself: `physical/` declares the OCI and Talos layer, `stacks/` dispatches, `scripts/` holds the console scripts. |
+| `deploy/` | Deployment material that is not library code — the state-backend appliance's Butane file, its dump script, its operator keys. |
+| `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (still the legacy cluster's chart set). |
+| `docs/` | Design docs. |
+| `tests/` | Unit tests: the framework layer against Pulumi mocks, the scripts against real files. No cloud access. |
 
-## Tools
+## Working on it
 
-**pulumi**: `mise x -- pulumi`.
+```sh
+mise x uv -- uv sync
+timeout 300 mise x uv -- uv run pytest    # always with a timeout: an
+                                          # unresolved coroutine hangs
+mise x uv -- uv run ruff check .
+mise x uv -- uv run basedpyright
+mise x -- pulumi preview --stack <layer>
+```
 
-Anything installed by `uv`:
+A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
+written by `state-backend provision` beside the client certificate it names,
+and `PULUMI_CONFIG_PASSPHRASE`, derived from the offline derivation seed and
+stored in no slot at all. `mise.toml` picks up the first from the client bundle
+in `~/.config/kluster/state-backend/`, and the second from a git-ignored
+`.pulumi.secret` — so a workstation without the offline kit needs the bundle
+copied to it and the passphrase cached once:
 
-**ruff**: `mise x uv -- uv run ruff`.
+```sh
+# on the workstation that holds the kit
+rsync -a ~/.config/kluster/state-backend/ <host>:~/.config/kluster/state-backend/
+mise x uv -- uv run credentials derive passphrase | ssh <host> 'umask 077; cat > ~/kluster/.pulumi.secret'
+```
 
-**tests**: `timeout 60 mise x uv -- uv run pytest` (always use a timeout; a
-coroutine that never resolves hangs instead of failing).
+The console scripts — `credentials`, `state-backend`, `update_crds` — are the
+operator-side half of the estate; each one's `--help` is written to say when it
+is run, not only what it does.
 
 ## Docs
 
-Organized by topic: `docs/cluster/` (what we're building and why),
-`docs/physical/` (physical-layer system designs — the machines and
-appliances themselves, as opposed to how they're declared),
-`docs/framework/` (the Pulumi Python framework itself), `docs/declarative/`
-(how each layer is declared in the program: physical, dns,
-cluster-infra, workloads — all written), plus the cross-layer
-registers at the docs root (credentials, operations).
+Four directories and two registers. `docs/cluster/` is what is being built and
+why; `docs/physical/` designs the machines and appliances themselves;
+`docs/declarative/` covers how each layer is declared in the program;
+`docs/framework/` is the Pulumi Python framework, the CI, and the forge. At the
+root, [credentials.md](docs/credentials.md) is the register of every credential
+— scope, slot, rotation — and [operations.md](docs/operations.md) is day-2:
+update ownership, upgrade and replacement runbooks, the drill program.
 
-- [docs/cluster/architecture.md](docs/cluster/architecture.md) — the canonical cluster
-  architecture (3× OCI A1 combined CP+ingress nodes + Homelab worker;
-  Talos, KubeSpan, Cilium; two-pool LoadBalancer ingress behind the free
-  NLB), including superseded alternatives.
-- [docs/cluster/nodes.md](docs/cluster/nodes.md) — node & provider selection (OCI
-  decided, Vultr scripted fallback; all prices verified against official
-  sources), OCI commercial-model deep dive, homelab host inventory & VM
-  sizing, measured infra tax & economy program, HA tiers.
-- [docs/cluster/storage.md](docs/cluster/storage.md) — storage classes (local-path +
-  VolSync, NAS, object storage; Longhorn deferred), backup architecture,
-  JuiceFS root causes & containment policy.
-- [docs/cluster/security-audit.md](docs/cluster/security-audit.md) — independent
-  security audit (2026-08-23): the findings register behind
-  architecture.md §4.1, each fix designed into the doc that owns the
-  mechanism.
-- [docs/cluster/migration.md](docs/cluster/migration.md) — the migration plan:
-  standing rules (per-app stop-copy-start + DNS repoint, tracker
-  retirement, NVMe/RAM interleave), the Phase-0 verification gate,
-  waves A–F, data-movement techniques, decommission checklist.
-- [docs/physical/state-backend.md](docs/physical/state-backend.md) — the
-  state-backend appliance (FCOS on the OCI micro): config management,
-  Postgres lifecycle, PKI, network exposure, backup, monitoring, and the
-  operational playbooks.
-- [docs/physical/homelab-host.md](docs/physical/homelab-host.md) — the
-  homelab host & worker VM system design: disk shape (nodatacow raw +
-  virtio-blk), the second host bridge, two-phase GPU passthrough, the
-  host-prep change-set.
-- [docs/physical/gateway.md](docs/physical/gateway.md) — the UDM as a
-  system: ZeroTier network design (roster, routes, CI-confining flow
-  rules, rollout), recovery playbooks, firewall target state (rules
-  census + the deferred IoT→LAN tightening).
-- [docs/credentials.md](docs/credentials.md) — the credential register:
-  every credential's scope, storage slot, rotation; the
-  `deploy/credentials/` distribution mechanism; the offline kit.
-- [docs/operations.md](docs/operations.md) — day-2 operations: the
-  update-ownership matrix, upgrade & node-replacement runbooks, the
-  (almost fully automated) drill program, the playbook index.
-- [docs/framework/pulumi.md](docs/framework/pulumi.md) — the Pulumi Python framework: `Component`,
-  `async_output`/`resolve`, `pulumi.run`, and the decided three-stack
-  layering (§3). Start here; §1.4 has cookbook examples.
-- [docs/framework/ci.md](docs/framework/ci.md) — state backend (Postgres on an
-  OCI micro) and the CI pipeline (per-layer previews/ups, connectivity
-  matrix, noop-automerge).
-- [docs/framework/rfc-001-native-async-inputs.md](docs/framework/rfc-001-native-async-inputs.md) —
-  design rationale and mechanics of the native async inputs framework (Rev 3).
-- [docs/framework/testing.md](docs/framework/testing.md) — unit testing Pulumi code with mocks.
-- [docs/declarative/README.md](docs/declarative/README.md) — index of the layer-by-layer
-  declarative designs (physical, dns, cluster-infra, workloads — all
-  written).
+Reading order for a stranger:
+[cluster/architecture.md](docs/cluster/architecture.md) (the canonical design,
+including what was rejected), then
+[framework/pulumi.md](docs/framework/pulumi.md) (§1.4 is the cookbook), then
+whichever layer is in question. The migration plan and its wave order live in
+[cluster/migration.md](docs/cluster/migration.md), which is also the order for
+a rebuild from nothing.
 
 ## Status
 
-**Built.** The framework (putils RFC-001 Rev 3, `pulumi.run` entrypoint), the
-stack dispatch, `conventions.py`, the credential scripts (`credentials`: the
-offline store, the derivation seed and what it derives, the B2 seed key), the
-state-backend appliance's definition and provisioner (`state-backend`), the CI
-workflow set, and renovate. Ruff, `basedpyright` strict and the tests are clean
-across everything but the two pre-Talos leftovers (`kx.py`,
-`base_cluster/`), which are excluded until they are rewritten rather
-than retrofitted.
-
-**Standing in OCI**: the appliance's own VCN, subnet, gateway, security group
-and reserved public IP, plus the imported Fedora CoreOS image. The instance
-itself is one `state-backend provision` away — the command needs the offline
-database, so it runs on the workstation that holds it.
+Under construction, in the open. Built and running: the framework (RFC-001
+Rev 3), the stack dispatch, the credential scripts, and the state-backend
+appliance — a Fedora CoreOS box in OCI serving Pulumi's Postgres state over
+mutual TLS, whose only apply path is re-provisioning it from this repository.
+The CI workflow set and renovate are wired.
 
 What is *not* built announces itself rather than being listed here: an
 unimplemented stack raises from its entrypoint, and a seed the register names
-without an implementation is a subcommand that refuses with its own name. The
-build order is [cluster/migration.md](docs/cluster/migration.md) §1, which is
-the same order for a rebuild from nothing; implementation-period issues are
-tracked in the `kluster-ops` repo, not here.
+without an implementation is a subcommand that refuses with its own name. Two
+pre-Talos leftovers (`kx.py`, `base_cluster/`) are excluded from lint and
+types until they are rewritten rather than retrofitted. Implementation issues
+are tracked in a separate ops repository, deliberately not here.
 
 ## License
 
