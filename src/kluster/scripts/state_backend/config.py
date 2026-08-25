@@ -45,7 +45,7 @@ def operator_keys() -> list[str]:
     return [line.strip() for line in lines if line.strip() and not line.startswith('#')]
 
 
-def render_ignition(root: bytes, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> str:
+def render_ignition(seed: bytes, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> str:
     """Butane in, validated Ignition out."""
     environment = Environment(
         loader=FileSystemLoader(DEPLOY_DIR),
@@ -53,8 +53,8 @@ def render_ignition(root: bytes, *, address: str, dump_key_id: str, dump_key: st
         keep_trailing_newline=True,
     )
     recipients = [
-        age.generation(root, settings.AGE_GENERATION).public,
-        age.generation(root, settings.AGE_GENERATION - 1).public,
+        age.generation(seed, settings.AGE_GENERATION).public,
+        age.generation(seed, settings.AGE_GENERATION - 1).public,
     ]
     butane = environment.get_template(TEMPLATE).render(
         operator_keys=operator_keys(),
@@ -63,9 +63,9 @@ def render_ignition(root: bytes, *, address: str, dump_key_id: str, dump_key: st
         database=settings.DATABASE,
         ci_role=settings.CI_ROLE,
         operator_role=settings.OPERATOR_ROLE,
-        ca_cert=pki.ca_credential(root).cert_pem.decode().strip(),
-        server_cert=pki.server_credential(root, address).cert_pem.decode().strip(),
-        server_key=pki.server_credential(root, address).key_pem.decode().strip(),
+        ca_cert=pki.ca_credential(seed).cert_pem.decode().strip(),
+        server_cert=pki.server_credential(seed, address).cert_pem.decode().strip(),
+        server_key=pki.server_credential(seed, address).key_pem.decode().strip(),
         age_recipients=recipients,
         age_url=settings.AGE_URL,
         age_sha256=settings.AGE_SHA256,
@@ -91,20 +91,20 @@ def render_ignition(root: bytes, *, address: str, dump_key_id: str, dump_key: st
     return proc.stdout
 
 
-def client_bundle(root: bytes, *, name: str, address: str) -> ClientBundle:
+def client_bundle(seed: bytes, *, name: str, address: str) -> ClientBundle:
     """The `ci` or `operator` credential, with the URL that uses it.
 
     `verify-full` against a literal IP: the state backend's hot path must not
     depend on DNS, which is itself something this backend deploys.
     """
-    credential = pki.client_credential(root, name)
+    credential = pki.client_credential(seed, name)
     url = (
         f'postgres://{name}@{address}:{settings.PORT}/{settings.DATABASE}'
         '?sslmode=verify-full&sslrootcert=$KLUSTER_PG_CA'
         '&sslcert=$KLUSTER_PG_CERT&sslkey=$KLUSTER_PG_KEY'
     )
     return ClientBundle(
-        ca_cert=pki.ca_credential(root).cert_pem,
+        ca_cert=pki.ca_credential(seed).cert_pem,
         cert=credential.cert_pem,
         key=credential.key_pem,
         url=url,

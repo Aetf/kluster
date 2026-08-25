@@ -94,8 +94,9 @@ registers at the docs root (credentials, operations).
 
 **Built.** The framework (putils RFC-001 Rev 3, `pulumi.run` entrypoint), the
 four-stack dispatch, `conventions.py`, the credential scripts
-(`credentials`: the offline store, the root seed and its derivations, the B2
-seed key), the state-backend appliance's definition and provisioner
+(`credentials`: the offline store, the derivation seed and what it
+derives, the B2 seed key), the state-backend appliance's definition and
+provisioner
 (`state-backend`), the CI workflow set, and renovate. Ruff, `basedpyright`
 strict and the tests are clean across everything but the three pre-Talos
 leftovers named below.

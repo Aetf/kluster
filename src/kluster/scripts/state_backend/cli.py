@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) -> int:
-    root = seeds.load_root(store)
+    seed = seeds.load_seed(store)
 
     session = b2.Session.from_entry(store, seed_entry)
     bucket_id = b2.ensure_bucket(
@@ -63,7 +63,7 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) ->
     log.info('appliance address: %s', address)
 
     ignition = config.render_ignition(
-        root, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
+        seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
     )
     image_id = provision.ensure_image(client)
     instance_id = provision.ensure_instance(
@@ -71,7 +71,7 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) ->
     )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 
-    config.write_client_bundle(config.client_bundle(root, name='operator', address=address), DEFAULT_BUNDLE_DIR)
+    config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), DEFAULT_BUNDLE_DIR)
 
     if not provision.wait_for_backend(address):
         log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             case 'render':
                 print(
                     config.render_ignition(
-                        seeds.load_root(store),
+                        seeds.load_seed(store),
                         address=args.address,
                         dump_key_id='rendered-without-a-key',
                         dump_key='rendered-without-a-key',
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 return _provision(store, seed_entry=args.seed_entry, compartment=args.compartment)
             case 'bundle':
                 config.write_client_bundle(
-                    config.client_bundle(seeds.load_root(store), name=args.name, address=args.address),
+                    config.client_bundle(seeds.load_seed(store), name=args.name, address=args.address),
                     args.directory,
                 )
             case _:  # pragma: no cover - argparse rejects everything else

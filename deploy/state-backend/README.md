@@ -18,8 +18,8 @@ exposed as the `state-backend` console script.
 ## Provisioning
 
 Runs on the workstation holding the offline database — the PKI and the
-encryption identities are derived from the root seed, and the B2 credentials
-are minted from the seed key:
+encryption identities are derived from the derivation seed, and the B2
+credentials are minted from the seed key:
 
 ```sh
 export KLUSTER_KDBX=~/path/to/kluster.kdbx
@@ -49,7 +49,7 @@ on DNS — which is itself something this backend deploys.
 
 ```sh
 export PULUMI_BACKEND_URL="postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=$HOME/.config/kluster/state-backend/ca.crt&sslcert=$HOME/.config/kluster/state-backend/client.crt&sslkey=$HOME/.config/kluster/state-backend/client.key"
-export PULUMI_CONFIG_PASSPHRASE=...    # derived from the root seed
+export PULUMI_CONFIG_PASSPHRASE=...    # derived from the derivation seed
 ```
 
 The certificate's Common Name *is* the Postgres role: `operator` locally,
@@ -69,7 +69,8 @@ to enforce it.
 
 ## Losing it
 
-The daily dump is age-encrypted to identities derived from the root seed and
-lands in B2 under a prefix whose lifecycle rule enforces retention. Recovery is
+The daily dump is age-encrypted to identities derived from the derivation
+seed and lands in B2 under a prefix whose lifecycle rule enforces retention.
+Recovery is
 a re-provision followed by `pg_restore` of the newest object — the same path
 the quarterly drill exercises, which is why nothing about it is improvised.

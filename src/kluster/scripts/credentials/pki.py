@@ -1,9 +1,9 @@
-"""The state-backend's PKI, derived from the root seed.
+"""The state-backend's PKI, derived from the derivation seed.
 
 A single-purpose private CA with exactly three certificates under it — the
 server and the `ci`/`operator` clients (physical/state-backend.md §3). Nothing
-here is escrowed: every private key is an HKDF derivation of the root seed, so
-losing the box (or the CA file) costs a re-provision, not a recovery.
+here is escrowed: every private key is an HKDF derivation of the derivation
+seed, so losing the box (or the CA file) costs a re-provision, not a recovery.
 
 P-256 rather than RSA because a private scalar is a deterministic function of
 the seed, which deterministic RSA generation is not (credentials.md §2.2).
@@ -46,9 +46,9 @@ def _private_key(scalar: bytes) -> ec.EllipticCurvePrivateKey:
     return ec.derive_private_key(value, CURVE)
 
 
-def _serial(root: bytes, label: str) -> int:
+def _serial(seed: bytes, label: str) -> int:
     """A stable serial, so re-issuing a certificate does not invent identity."""
-    return int.from_bytes(seeds.derive(root, f'state-backend/serial/{label}', 20), 'big') >> 1
+    return int.from_bytes(seeds.derive(seed, f'state-backend/serial/{label}', 20), 'big') >> 1
 
 
 def _name(common_name: str) -> x509.Name:
@@ -71,20 +71,20 @@ def _pem_key(key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def ca_key(root: bytes) -> ec.EllipticCurvePrivateKey:
-    return _private_key(seeds.ca_scalar(root))
+def ca_key(seed: bytes) -> ec.EllipticCurvePrivateKey:
+    return _private_key(seeds.ca_scalar(seed))
 
 
-def ca_credential(root: bytes, *, now: dt.datetime | None = None) -> Credential:
+def ca_credential(seed: bytes, *, now: dt.datetime | None = None) -> Credential:
     now = now or dt.datetime.now(dt.timezone.utc)
-    key = ca_key(root)
+    key = ca_key(seed)
     name = _name('kluster state-backend CA')
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
-        .serial_number(_serial(root, 'ca'))
+        .serial_number(_serial(seed, 'ca'))
         .not_valid_before(now)
         .not_valid_after(now + CA_VALIDITY)
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
@@ -108,7 +108,7 @@ def ca_credential(root: bytes, *, now: dt.datetime | None = None) -> Credential:
 
 
 def _leaf(
-    root: bytes,
+    seed: bytes,
     *,
     label: str,
     common_name: str,
@@ -116,14 +116,14 @@ def _leaf(
     san: x509.SubjectAlternativeName | None,
     now: dt.datetime,
 ) -> Credential:
-    key = _private_key(seeds.cert_scalar(root, label))
-    issuer = ca_key(root)
+    key = _private_key(seeds.cert_scalar(seed, label))
+    issuer = ca_key(seed)
     builder = (
         x509.CertificateBuilder()
         .subject_name(_name(common_name))
         .issuer_name(_name('kluster state-backend CA'))
         .public_key(key.public_key())
-        .serial_number(_serial(root, label))
+        .serial_number(_serial(seed, label))
         .not_valid_before(now)
         .not_valid_after(now + LEAF_VALIDITY)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
@@ -135,7 +135,7 @@ def _leaf(
     return Credential(key_pem=_pem_key(key), cert_pem=cert.public_bytes(serialization.Encoding.PEM))
 
 
-def server_credential(root: bytes, address: str, *, now: dt.datetime | None = None) -> Credential:
+def server_credential(seed: bytes, address: str, *, now: dt.datetime | None = None) -> Credential:
     """The Postgres server certificate.
 
     Its SAN is the reserved public IP as a literal: clients connect with
@@ -143,7 +143,7 @@ def server_credential(root: bytes, address: str, *, now: dt.datetime | None = No
     any DNS dependency.
     """
     return _leaf(
-        root,
+        seed,
         label='server',
         common_name=address,
         usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
@@ -152,12 +152,12 @@ def server_credential(root: bytes, address: str, *, now: dt.datetime | None = No
     )
 
 
-def client_credential(root: bytes, name: str, *, now: dt.datetime | None = None) -> Credential:
+def client_credential(seed: bytes, name: str, *, now: dt.datetime | None = None) -> Credential:
     """A client certificate; its Common Name is the Postgres role it becomes."""
     if name not in CLIENT_NAMES:
         raise ValueError(f'unknown client {name!r}; the CA issues to {CLIENT_NAMES}')
     return _leaf(
-        root,
+        seed,
         label=f'client/{name}',
         common_name=name,
         usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),

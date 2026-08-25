@@ -16,7 +16,7 @@ RFC_CASE_1_SALT = bytes.fromhex('000102030405060708090a0b0c')
 RFC_CASE_1_INFO = bytes.fromhex('f0f1f2f3f4f5f6f7f8f9')
 RFC_CASE_1_OKM = bytes.fromhex('3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865')
 
-ROOT = bytes(range(32))
+SEED = bytes(range(32))
 
 
 def test_hkdf_matches_rfc5869_case_3() -> None:
@@ -28,18 +28,18 @@ def test_hkdf_matches_rfc5869_case_1() -> None:
 
 
 def test_derivation_is_deterministic() -> None:
-    assert seeds.derive(ROOT, 'a') == seeds.derive(ROOT, 'a')
+    assert seeds.derive(SEED, 'a') == seeds.derive(SEED, 'a')
 
 
 def test_labels_separate_secrets() -> None:
-    assert seeds.derive(ROOT, 'a') != seeds.derive(ROOT, 'b')
-    assert seeds.age_seed(ROOT, 1) != seeds.age_seed(ROOT, 2)
-    assert seeds.cert_scalar(ROOT, 'ci') != seeds.cert_scalar(ROOT, 'operator')
+    assert seeds.derive(SEED, 'a') != seeds.derive(SEED, 'b')
+    assert seeds.age_seed(SEED, 1) != seeds.age_seed(SEED, 2)
+    assert seeds.cert_scalar(SEED, 'ci') != seeds.cert_scalar(SEED, 'operator')
 
 
 def test_roots_separate_secrets() -> None:
     other = bytes(range(1, 33))
-    assert seeds.pulumi_passphrase(ROOT) != seeds.pulumi_passphrase(other)
+    assert seeds.pulumi_passphrase(SEED) != seeds.pulumi_passphrase(other)
 
 
 def test_short_root_is_rejected() -> None:
@@ -48,7 +48,7 @@ def test_short_root_is_rejected() -> None:
 
 
 def test_passwords_are_url_safe_and_unpadded() -> None:
-    password = seeds.pulumi_passphrase(ROOT)
+    password = seeds.pulumi_passphrase(SEED)
     assert '=' not in password
     assert password.isascii()
 

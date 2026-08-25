@@ -149,10 +149,10 @@ there is nothing for it to edit.)
     box monitors nothing about itself.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** A generation is a *label*, not a stored file: the
-    identity is derived from the root seed as
+    identity is derived from the derivation seed as
     `backup/age/<generation>` (credentials.md §2.2), so rotating one
-    means deriving the next — and a retired root seed stays in the kit
-    until the last dump under it expires. Rotation is a designed path,
+    means deriving the next — and a retired seed stays in the kit until
+    the last dump under it expires. Rotation is a designed path,
     not an emergency improvisation:
     -   **Every dump is encrypted to the two newest generations plus
         the ops-repo-held drill key** — age is natively multi-recipient,

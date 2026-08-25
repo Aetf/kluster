@@ -51,7 +51,7 @@ facts about them.
     two and the right home for what a program *generates* (Talos
     machine secrets, ZeroTier identities, restic repository
     passwords). One passphrase protects both, and that passphrase is
-    derived from the root seed — so either channel opens from the kit
+    derived from the derivation seed — so either channel opens from the kit
     and from nothing else.
 7.  **Provisioning is scripted.** Minting and distributing a
     credential is an executable procedure — a `credentials`
@@ -75,7 +75,7 @@ everything in §3 grows out of it.
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key stays an account root, used only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
-| **Root seed** (32 random bytes) | Every locally-generated secret, by derivation (§2.2) | Generated, not minted (§2.2) |
+| **Derivation seed** (32 random bytes) | Every locally-generated secret, by derivation (§2.2) | Generated, not minted (§2.2) |
 
 The two "No" rows are the whole manual surface of a rotation: the
 rotation script stops, prints what to create in which console, and
@@ -128,11 +128,11 @@ resumes when the new value is handed to it.
     offline-day check includes re-reading the README with fresh eyes:
     instructions rot faster than keys.
 
-### 2.2 The root seed: one secret behind every generated key
+### 2.2 The derivation seed: one secret behind every generated key
 
 Some secrets are not minted by any provider — a passphrase, a CA key,
 a backup encryption key. Storing each one would turn the kit back into
-a growing token drawer, so instead **one 32-byte root seed** is stored
+a growing token drawer, so instead **one 32-byte derivation seed** is stored
 and each secret is **derived from it** with HKDF-SHA256 under a stable
 label:
 
@@ -147,7 +147,7 @@ Consequences, all deliberate:
 
 -   **Every label here is consumed offline.** The four derivations
     happen during bring-up, rotation, or provisioning; no running
-    program holds the root seed, which is what keeps §1's rule 4
+    program holds the derivation seed, which is what keeps §1's rule 4
     ("nothing consumes a seed at runtime") true rather than aspirational.
     Secrets a *program* generates — restic repository passwords among
     them — belong in Pulumi state (rule 6), not on this table: state
@@ -157,7 +157,7 @@ Consequences, all deliberate:
     convenience.** A restic repository's password exists only in state
     and in the SealedSecret rendered from it. Lose both the backend and
     its dumps and the B2 backups survive with nothing to open them —
-    which is why the recovery chain (kit → root seed → age identity →
+    which is why the recovery chain (kit → derivation seed → age identity →
     the dump in B2 → state) is drilled rather than assumed
     (operations.md §4).
 -   **Asymmetric keys are derived, so their algorithms are
@@ -170,7 +170,7 @@ Consequences, all deliberate:
     not data, because every sealed value is itself derived or
     re-mintable. Re-sealing is a script, not an archaeology project —
     which is why no offline export of it exists.
--   **A retired root seed outlives its rotation.** Rotating the root
+-   **A retired derivation seed outlives its rotation.** Rotating it
     re-derives everything going forward but cannot retroactively
     re-encrypt existing backups, so the previous seed stays in the kit
     (marked with its earliest-destroy date) until the last backup
@@ -193,16 +193,16 @@ offline; none of it is copied by hand.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
 | ZT CI member identities (`ci-deploy`, `ci-preview`) | generated in-state (`zerotier_identity`) | One per concurrency domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
-| Pulumi state passphrase | root seed | Decrypts state secrets | CI env (all stacks) | every `pulumi` run |
-| State-backend CA + certs (`ci`, `operator`) | root seed | postgres:// mTLS | on-box (server) · CI env · operator machine | Pulumi state access |
-| age backup identity | root seed | Decrypts state-backend pg_dumps | on-box (public half) · ops-repo `drill` Environment (private half, latest-dump-only) | micro cron, drill workflow |
+| Pulumi state passphrase | derivation seed | Decrypts state secrets | CI env (all stacks) | every `pulumi` run |
+| State-backend CA + certs (`ci`, `operator`) | derivation seed | postgres:// mTLS | on-box (server) · CI env · operator machine | Pulumi state access |
+| age backup identity | derivation seed | Decrypts state-backend pg_dumps | on-box (public half) · ops-repo `drill` Environment (private half, latest-dump-only) | micro cron, drill workflow |
 | restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state · SealedSecret (via `backed_pvc`) | VolSync |
 | Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state · CI env · ops-repo secret | Talos ops, etcd snapshot workflow |
 | kubeconfig | `physical` output | cluster-admin | CI env | `k8s-base`, `apps` |
 | UDM SSH key, libvirt SSH identity | generated | gw-config push (host key pinned) / virsh only | Pulumi config secret + CI env | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret + CI env | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `apps` rewrites |
-| Alertmanager read token | root seed (`alertmanager/read`) | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
+| Alertmanager read token | derivation seed (`alertmanager/read`) | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret | alertmanager, dispatch handler |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo `drill` Environment | Drill workflows |
 
@@ -239,7 +239,7 @@ credential estate exists. Stages run in dependency order, each pushing
 into slots that exist by the time it runs:
 
 1.  **Local derivations** — passphrase, state-backend CA and certs,
-    age identity: derived from the root seed (§2.2), no network.
+    age identity: derived from the derivation seed (§2.2), no network.
 2.  **State backend** — the micro's Ignition carries the server cert
     and the B2 dump key; the `ci`/`operator` client certs go to their
     slots. The backend must exist before any stack config does.
@@ -261,7 +261,7 @@ verifies, the kit goes back in its envelope.
 
 `--family <name>` re-runs one family; `--all` rotates the whole seed
 set and **writes a new database file**: unseal the old, have each
-seed mint its successor, derive a new root seed, write the new
+seed mint its successor, derive a new derivation seed, write the new
 database, verify every slot against it, then record the old file's
 earliest-destroy date (§2.2's backup-retention rule). The GitHub App
 private key and the ZeroTier token are explicit pauses — the script

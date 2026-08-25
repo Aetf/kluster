@@ -1,10 +1,10 @@
-"""age identities derived from the root seed.
+"""age identities derived from the derivation seed.
 
 The state-backend's dumps are age-encrypted (physical/state-backend.md §5) to
 a pair of generations plus the drill key. A generation is a *label*, not a
-stored file: its identity is `backup/age/<generation>` derived from the root
-seed, so rotating means deriving the next and re-provisioning — nothing to
-escrow, nothing to lose.
+stored file: its identity is `backup/age/<generation>` derived from the
+derivation seed, so rotating means deriving the next and re-provisioning —
+nothing to escrow, nothing to lose.
 
 age's X25519 identity is exactly a 32-byte scalar in Bech32 clothing, which is
 what makes the derivation possible: the derived bytes *are* the key.
@@ -83,6 +83,6 @@ def identity_from_scalar(scalar: bytes) -> Identity:
     )
 
 
-def generation(root: bytes, number: int) -> Identity:
+def generation(seed: bytes, number: int) -> Identity:
     """The identity of backup key generation `number`."""
-    return identity_from_scalar(seeds.age_seed(root, number))
+    return identity_from_scalar(seeds.age_seed(seed, number))

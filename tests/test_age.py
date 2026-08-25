@@ -8,7 +8,7 @@ import pytest
 
 from kluster.scripts.credentials import age, seeds
 
-ROOT = bytes(range(32))
+SEED = bytes(range(32))
 
 age_keygen = shutil.which('age-keygen')
 needs_age = pytest.mark.skipif(age_keygen is None, reason='age-keygen not on PATH (mise x -- ...)')
@@ -23,7 +23,7 @@ def test_bech32_matches_bip173_vector() -> None:
 
 @needs_age
 def test_derived_public_key_matches_age_keygen() -> None:
-    identity = age.generation(ROOT, 1)
+    identity = age.generation(SEED, 1)
     assert age_keygen is not None
     proc = sp.run(
         [age_keygen, '-y'],
@@ -37,15 +37,15 @@ def test_derived_public_key_matches_age_keygen() -> None:
 
 
 def test_identity_shape() -> None:
-    identity = age.generation(ROOT, 1)
+    identity = age.generation(SEED, 1)
     assert identity.secret.startswith('AGE-SECRET-KEY-1')
     assert identity.public.startswith('age1')
 
 
 def test_generations_differ() -> None:
-    assert age.generation(ROOT, 1).public != age.generation(ROOT, 2).public
+    assert age.generation(SEED, 1).public != age.generation(SEED, 2).public
 
 
 def test_scalar_length_is_checked() -> None:
     with pytest.raises(ValueError):
-        _ = age.identity_from_scalar(seeds.derive(ROOT, 'x', 16))
+        _ = age.identity_from_scalar(seeds.derive(SEED, 'x', 16))
