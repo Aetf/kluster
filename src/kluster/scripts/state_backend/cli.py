@@ -11,7 +11,7 @@ import logging
 import sys
 from pathlib import Path
 
-from kluster.scripts.credentials import b2, seeds
+from kluster.scripts.credentials import b2, entries, seeds
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 from . import config, provision, settings
@@ -24,7 +24,11 @@ DEFAULT_BUNDLE_DIR = Path.home() / '.config' / 'kluster' / 'state-backend'
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='state-backend', description=__doc__)
     _ = parser.add_argument('--kdbx', type=Path, default=None, help='the cluster KeePassXC database')
-    _ = parser.add_argument('--seed-entry', default='seeds/B2 seed key', help='entry holding the B2 seed key')
+    _ = parser.add_argument(
+        '--seed-entry',
+        default=entries.SEEDS['b2'].entry,
+        help='entry holding the B2 seed key',
+    )
     _ = parser.add_argument('--compartment', default=None, help='OCI compartment (default: ~/.oci/config)')
     actions = parser.add_subparsers(dest='action', required=True)
 

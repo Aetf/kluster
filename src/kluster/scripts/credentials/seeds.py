@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import secrets
 
+from . import entries
 from .kdbx import KdbxError, KdbxStore
 
 #: Domain separation, so a derivation seed can never collide with another system's
@@ -92,8 +93,9 @@ def cert_scalar(seed: bytes, name: str) -> bytes:
     return derive(seed, f'state-backend/cert/{name}')
 
 
-#: Where the derivation seed lives in the offline store.
-SEED_ENTRY = 'seeds/Root seed'
+#: Where the derivation seed lives in the offline store -- the register's
+#: decision, not this module's (entries.py).
+SEED_ENTRY = entries.SEEDS['derivation'].entry
 
 SEED_LENGTH = 32
 

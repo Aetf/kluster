@@ -57,7 +57,7 @@ class KdbxError(RuntimeError):
 
 
 def _path(entry: str) -> list[str]:
-    """`'seeds/B2 seed key'` as pykeepass addresses it."""
+    """An entry path as pykeepass addresses it: `'seeds/B2 seed key'` -> `['seeds', 'B2 seed key']`."""
     return [part for part in entry.strip('/').split('/') if part]
 
 

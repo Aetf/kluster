@@ -17,7 +17,7 @@ import logging
 import sys
 from pathlib import Path
 
-from . import b2, seeds
+from . import b2, entries, seeds
 from .kdbx import MASTER_PATH_ENV, PATH_ENV, KdbxError, KdbxStore
 
 log = logging.getLogger(__name__)
@@ -40,35 +40,37 @@ def _parser() -> argparse.ArgumentParser:
     show = kdbx_actions.add_parser('show', help="an entry's non-secret attributes")
     _ = show.add_argument('entry')
 
-    # One member per §2 row. They are peers: the derivation seed is the source
-    # of everything *derived*, the others the source of everything *minted* --
-    # neither is above the other, which is why no member is called a root.
+    # The tree is generated from §2's table rather than written out, so a
+    # seed that exists in the register and nowhere in the code shows up as a
+    # subcommand that refuses to run -- not as a subcommand that is missing.
     seed_cmd = families.add_parser('seed', help='the seed layer (§2), one member per row')
-    seeds_ = seed_cmd.add_subparsers(dest='member', required=True, metavar='<member>')
-
-    derivation = seeds_.add_parser('derivation', help='the 32 bytes behind every derived secret (§2.2)')
-    _ = derivation.add_argument('--entry', default=seeds.SEED_ENTRY, help='entry holding the seed')
-    derivation_actions = derivation.add_subparsers(dest='action', required=True, metavar='<action>')
-    _ = derivation_actions.add_parser('init', help='create it (bring-up, once)')
-
-    b2_cmd = seeds_.add_parser('b2', help='the B2 seed key')
-    _ = b2_cmd.add_argument('--entry', default='seeds/B2 seed key', help='entry holding the seed key')
-    b2_actions = b2_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
-    create = b2_actions.add_parser('create', help='mint it from the account master key (bring-up, or seed loss)')
-    _ = create.add_argument(
-        '--master-entry',
-        required=True,
-        help='entry holding the account master key (id as username, key as password)',
-    )
-    # The account roots live in the personal estate, not in the kit (§2), so
-    # this is the one action that opens two databases.
-    _ = create.add_argument(
-        '--master-kdbx',
-        type=Path,
-        default=None,
-        help=f'the database holding the account master key (default: ${MASTER_PATH_ENV})',
-    )
-    _ = b2_actions.add_parser('rotate', help='have the seed mint and install its successor')
+    members = seed_cmd.add_subparsers(dest='member', required=True, metavar='<member>')
+    for seed in entries.SEEDS.values():
+        member = members.add_parser(seed.member, help=f'mints {seed.mints}')
+        _ = member.add_argument('--entry', default=seed.entry, help=f'entry holding it (default: {seed.entry})')
+        actions = member.add_subparsers(dest='action', required=True, metavar='<action>')
+        create = actions.add_parser(
+            'create',
+            help='generate it (bring-up, once)'
+            if seed.member == 'derivation'
+            else 'mint it from the account root (bring-up, or seed loss)',
+        )
+        if seed.member not in ('derivation', *entries.MANUAL):
+            # The account roots live in the personal estate, not in the kit
+            # (§2), so minting is the one action that opens two databases.
+            _ = create.add_argument(
+                '--master-entry',
+                required=True,
+                help='entry holding the account master key (id as username, key as password)',
+            )
+            _ = create.add_argument(
+                '--master-kdbx',
+                type=Path,
+                default=None,
+                help=f'the database holding it (default: ${MASTER_PATH_ENV})',
+            )
+        if seed.self_reproducing:
+            _ = actions.add_parser('rotate', help='have the seed mint and install its successor')
 
     return parser
 
@@ -87,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             case ('kdbx', _, 'show'):
                 for name, value in store.describe(args.entry).items():
                     print(f'{name}: {value}')
-            case ('seed', 'derivation', 'init'):
+            case ('seed', 'derivation', 'create'):
                 seeds.init_seed(store, args.entry)
             case ('seed', 'b2', 'create'):
                 master = KdbxStore.from_env(args.master_kdbx, env=MASTER_PATH_ENV, flag='--master-kdbx')
@@ -99,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
+            case ('seed', member, action) if member in entries.SEEDS:
+                raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family} {args.action}')
     except (KdbxError, b2.CredentialRejected) as exc:
