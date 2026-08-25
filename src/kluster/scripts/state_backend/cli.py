@@ -36,6 +36,11 @@ def _parser() -> argparse.ArgumentParser:
     _ = render.add_argument('--address', default='192.0.2.10', help='address to issue the server certificate for')
 
     _ = actions.add_parser('provision', help='create or converge the appliance')
+
+    # Diagnosis only: the box is never configured by hand (state-backend.md
+    # §1). Needs no offline database, so it does not ask for one.
+    ssh_cmd = actions.add_parser('ssh', help='log in to the appliance for diagnosis')
+    _ = ssh_cmd.add_argument('command', nargs='*', help='run this instead of a login shell')
     _ = actions.add_parser('pins', help='check the pinned artefacts against their digests')
 
     bundle = actions.add_parser('bundle', help='write a client bundle (ca/cert/key/url)')
@@ -101,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.action == 'pins':
             return 0 if provision.verify_pins() else 1
+        if args.action == 'ssh':
+            return provision.ssh(provision.Oci.load(args.compartment), args.command)
 
         store = KdbxStore.from_env(args.kdbx)
         match args.action:

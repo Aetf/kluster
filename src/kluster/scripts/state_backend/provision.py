@@ -32,6 +32,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -114,6 +115,13 @@ class Oci:
     @property
     def object_storage(self) -> oci.object_storage.ObjectStorageClient:
         return oci.object_storage.ObjectStorageClient(self.config, retry_strategy=self._retry)
+
+
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        if line.strip():
+            return line.strip()
+    return ''
 
 
 def _duration(seconds: float) -> str:
@@ -333,6 +341,38 @@ def fcos_artifact() -> tuple[str, str, str]:
     return str(release), str(disk['location']), str(disk['sha256'])
 
 
+def reserved_address(client: Oci) -> str:
+    """The appliance's address, looked up rather than created.
+
+    `ensure_reserved_ip` reserves one when none exists, which is right during
+    provisioning and wrong for everything else: a diagnosis command must not
+    allocate cloud resources as a side effect of being unable to find them.
+    """
+    existing = _data(
+        client.network.list_public_ips(scope='REGION', compartment_id=client.compartment_id, lifetime='RESERVED')
+    )
+    public_ip = _find(existing, _name('ip'))
+    if public_ip is None:
+        raise RuntimeError(f'no reserved address named {_name("ip")}; has the appliance been provisioned?')
+    return str(public_ip.ip_address)
+
+
+def ssh(client: Oci, command: Sequence[str]) -> int:
+    """Log in to the appliance, or run one command on it.
+
+    SSH is a diagnosis path only (state-backend.md §1): the box is never
+    configured by hand, and the only apply path is re-provision. This exists
+    so that reading a log does not start with looking up an address.
+
+    Replaces this process rather than wrapping it, so an interactive session
+    gets a real terminal and the exit status is ssh's own.
+    """
+    address = reserved_address(client)
+    argv = ['ssh', f'core@{address}', *command]
+    log.info('%s', ' '.join(argv))
+    os.execvp('ssh', argv)
+
+
 def ensure_image(client: Oci) -> str:
     """Import the FCOS qcow2 as a custom image, once per release."""
     release, url, sha256 = fcos_artifact()
@@ -497,6 +537,7 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
         settings.PORT,
         _duration(timeout),
     )
+    reason = 'not tried yet'
     while time.monotonic() < deadline:
         try:
             probe = sp.run(
@@ -506,20 +547,30 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
                 timeout=30,
             )
             answered = probe.returncode == 0
+            reason = _first_line(probe.stderr) or f'openssl exited {probe.returncode}'
         except sp.TimeoutExpired:
-            # The interesting half of "not ready yet". Postgres binds 5432
-            # before initdb finishes, so the port accepts the connection and
-            # then says nothing: the probe hangs instead of being refused.
-            # Treating that as an error ends the wait at the exact moment the
-            # box is coming up.
+            # Two very different things look like this, which is why the
+            # reason is reported rather than swallowed: Postgres binds 5432
+            # before initdb finishes and then says nothing, and a firewall on
+            # the path drops the packets instead of refusing them. Treating
+            # either as fatal ends the wait at the moment the box comes up.
             answered = False
+            reason = 'no response within 30s — either still starting, or the packets are being dropped'
         if answered:
             return True
         elapsed = time.monotonic() - started
         if elapsed - announced >= 60:
-            log.info('still no answer on %s:%d after %s', address, settings.PORT, _duration(elapsed))
+            log.info('still waiting after %s: %s', _duration(elapsed), reason)
             announced = elapsed
         time.sleep(15)
+    log.error('last attempt said: %s', reason)
+    log.error(
+        'the appliance may be healthy and this path blocked: `state-backend ssh` reaches it over 22, '
+        'and `openssl s_client -connect %s:%d -starttls postgres -brief </dev/null` from another host '
+        'separates a broken box from a broken route',
+        address,
+        settings.PORT,
+    )
     return False
 
 

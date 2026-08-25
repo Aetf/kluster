@@ -10,7 +10,7 @@ this file is how to operate it.
 | --- | --- |
 | `butane.yaml.j2` | The machine, whole: Postgres quadlet, PKI, `pg_hba`, age recipients, the dump timer, the reboot window. |
 | `state-dump.py` | What that timer runs — `pg_dump` → age → B2, standard library only. |
-| `operator-keys.txt` | SSH keys for diagnosis. The box is never configured by hand. |
+| `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 
 The code that renders and applies these is `src/kluster/scripts/state_backend/`,
 exposed as the `state-backend` console script.

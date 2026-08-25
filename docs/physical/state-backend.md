@@ -40,7 +40,12 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     no SSH mutation: any change = PR to the Butane file → hand-run
     re-provision (terminate + launch with the new `user_data`;
     minutes of 5432 downtime — CI retries, local ops re-run). SSH
-    exists (operator key in Ignition) for **diagnosis only**. The
+    exists (operator key in Ignition) for **diagnosis only** —
+    `state-backend ssh` looks the address up and logs in, so reading a
+    log does not start with finding an IP. Note the key set is
+    `deploy/state-backend/operator-keys.txt`: a workstation whose key
+    is not in it cannot reach the box at all, which is a re-provision
+    to fix, not an `ssh-copy-id`. The
     no-drift rule is what makes "the repo describes the box" true;
     the quarterly drill (§7.3) is what keeps that claim tested.
 -   **OS updates: Zincati `periodic` strategy** — reboots confined to
