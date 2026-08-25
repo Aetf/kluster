@@ -110,19 +110,31 @@ missing because the stack is not written yet (kluster-ops#10).
 
 ### 3.1 The first apply
 
-Three of these exist already, so Pulumi has to adopt them rather than
-create them. Once, from the operator's machine, before the first `up`:
+Only the two repositories need adopting. `Repository`'s create is a
+create — it fails on a name that exists — so once, from the operator's
+machine, before the first `up`:
 
 ```sh
 mise x -- pulumi import -s github github:index/repository:Repository kluster kluster
 mise x -- pulumi import -s github github:index/repository:Repository kluster-ops kluster-ops
-mise x -- pulumi import -s github github:index/repositoryEnvironment:RepositoryEnvironment \
-    physical-plan kluster:physical-plan
 ```
 
-The generated code `import` prints is ignored — the resources are
-already declared here; what is wanted is the state entry. Everything
-else the stack declares does not exist yet and is created normally.
+The generated code `import` prints is ignored: the resources are already
+declared here, and what is wanted is the state entry. Note that `import`
+protects what it adopts (`--protect` defaults to true), which matches
+the `protect` these two carry in the program anyway.
+
+**`physical-plan` is not imported**, even though it already exists.
+`RepositoryEnvironment`'s create is a `PUT`, so declaring it adopts the
+existing Environment rather than colliding with it — and importing it
+would have to reproduce this program's URN, which parents each
+Environment under its repository. An import at the default (unparented)
+URN produces a state entry the program cannot match, so the next preview
+is "create the parented one, delete the imported one", and the delete is
+blocked by the protection the import just applied. Recovering from that
+is `pulumi state unprotect <urn>` then `pulumi state delete <urn>`: both
+touch state only, leaving the Environment on GitHub for the create to
+adopt.
 
 ## 4. What is not declared
 

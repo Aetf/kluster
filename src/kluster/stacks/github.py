@@ -65,7 +65,6 @@ async def main() -> None:
         has_issues=True,
         has_projects=False,
         has_wiki=False,
-        has_downloads=False,
         # Rebase only. A squash rewrites authorship to the merging identity,
         # which for an unattended merge is `noreply@github.com`; a merge commit
         # would defeat the linear history the branch protection below asks for.
@@ -75,7 +74,6 @@ async def main() -> None:
         allow_auto_merge=True,
         allow_update_branch=True,
         delete_branch_on_merge=True,
-        vulnerability_alerts=True,
         security_and_analysis={
             'secret_scanning': {'status': 'enabled'},
             'secret_scanning_push_protection': {'status': 'enabled'},
@@ -97,15 +95,23 @@ async def main() -> None:
         has_issues=True,
         has_projects=False,
         has_wiki=False,
-        has_downloads=False,
         allow_rebase_merge=True,
         allow_squash_merge=False,
         allow_merge_commit=False,
         delete_branch_on_merge=True,
-        vulnerability_alerts=True,
         archive_on_destroy=True,
         opts=pulumi.ResourceOptions(protect=True),
     )
+
+    # Its own resource rather than the `Repository` field of the same name,
+    # which the provider deprecated in favour of exactly this.
+    for name, repository in ((DEPLOYMENT_REPO, deployment), (OPS_REPO, ops)):
+        _ = github.RepositoryVulnerabilityAlerts(
+            name,
+            repository=repository.name,
+            enabled=True,
+            opts=pulumi.ResourceOptions(parent=repository),
+        )
 
     # What the public flip bought (github.md §2). `strict` is "the branch must
     # be up to date", without which a green check describes code that was never

@@ -134,3 +134,13 @@ def test_secret_scanning_is_only_claimed_where_the_plan_offers_it() -> None:
     # private ops repository is an API error, not a stricter setting.
     assert _one(REPOSITORY, 'kluster')['securityAndAnalysis']['secretScanning'] == {'status': 'enabled'}
     assert 'securityAndAnalysis' not in _one(REPOSITORY, 'kluster-ops')
+
+
+def test_vulnerability_alerts_are_asked_for_where_the_provider_still_answers() -> None:
+    # The `Repository` field of the same name is deprecated in favour of this
+    # resource; asking both ways is how a deprecation becomes a diff loop.
+    alerts = _all('github:index/repositoryVulnerabilityAlerts:RepositoryVulnerabilityAlerts')
+
+    assert set(alerts) == {'kluster', 'kluster-ops'}
+    assert all(inputs['enabled'] is True for inputs in alerts.values())
+    assert all('vulnerabilityAlerts' not in inputs for inputs in _all(REPOSITORY).values())
