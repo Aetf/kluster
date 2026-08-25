@@ -457,8 +457,13 @@ by construction; Tier 0 remains the foundation everything else sits on:
     protocol necessity (its dedicated VIP survives node loss; only the
     cache volume ties it to a node at a time).
 -   **Tier 3 — control-plane HA (delivered by design)**: etcd quorum
-    across the three cloud nodes, same region, same AD-or-better
-    placement (spread across fault domains). Degradation ladder: lose
+    across the three cloud nodes, same region, **one availability
+    domain each** (fault domains are the tiebreak where a region offers
+    fewer ADs than nodes). The AD spread is not only about independent
+    failure domains: A1 capacity is per-AD, so a fleet packed into one
+    AD draws its replacements from a single pool — and "replace at
+    leisure" below assumes that pool has something in it. Degradation
+    ladder: lose
     1 node → quorum holds, replace at leisure (the capacity hold, §3.2);
     lose 2 → etcd disaster recovery from the surviving member
     (re-bootstrap single-member, scale back to 3 — minutes-to-an-hour of

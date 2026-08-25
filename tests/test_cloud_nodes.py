@@ -1,10 +1,10 @@
 """The node fleet's shape.
 
 The properties asserted here are the ones a later `pulumi diff` cannot show
-because they are structural: that no two nodes share a fault domain, that the
-legacy metadata endpoint is off on every one of them, and that the dedicated
-VIP is a reserved address attached to a secondary private IP rather than an
-ephemeral one.
+because they are structural: that no two nodes share an availability domain,
+that the legacy metadata endpoint is off on every one of them, and that the
+dedicated VIP is a reserved address attached to a secondary private IP rather
+than an ephemeral one.
 """
 
 from typing import Any, cast
@@ -31,7 +31,17 @@ async def setup_mocks() -> None:
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
 
 
-def build() -> Any:
+#: Three availability domains, each with the three fault domains OCI offers,
+#: laid out the way the stack's `_placements` orders them: every AD used once
+#: before any AD is used twice.
+PLACEMENTS = [
+    ('ZRbp:PHX-AD-1', 'FAULT-DOMAIN-1'),
+    ('ZRbp:PHX-AD-2', 'FAULT-DOMAIN-1'),
+    ('ZRbp:PHX-AD-3', 'FAULT-DOMAIN-1'),
+]
+
+
+def build(placements: list[tuple[str, str]] | None = None) -> Any:
     from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
 
     load_balancer = NodeLoadBalancer(
@@ -48,18 +58,28 @@ def build() -> Any:
         ocpus=1,
         memory_gb=8,
         boot_volume_gb=50,
-        fault_domains=['FAULT-DOMAIN-1', 'FAULT-DOMAIN-2', 'FAULT-DOMAIN-3'],
-        availability_domain='ZRbp:PHX-AD-1',
+        placements=PLACEMENTS if placements is None else placements,
         augmented='cp1',
         load_balancer=load_balancer,
     )
 
 
 @pytest.mark.asyncio
-async def test_nodes_do_not_share_a_fault_domain() -> None:
+async def test_nodes_do_not_share_an_availability_domain() -> None:
     nodes = build()
-    domains = [await instance.fault_domain.future() for instance in nodes.instances.values()]
+    domains = [await instance.availability_domain.future() for instance in nodes.instances.values()]
+    # An AD is the independent failure domain, and A1 capacity is per-AD, so
+    # this is the spread that matters (nodes.md §5).
     assert len(set(domains)) == len(domains) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_single_ad_region_falls_back_to_fault_domains() -> None:
+    single = [('ZRbp:PHX-AD-1', f'FAULT-DOMAIN-{n}') for n in (1, 2, 3)]
+    nodes = build(single)
+
+    domains = [await instance.fault_domain.future() for instance in nodes.instances.values()]
+    assert len(set(domains)) == 3
 
 
 @pytest.mark.asyncio

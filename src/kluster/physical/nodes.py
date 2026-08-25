@@ -2,7 +2,8 @@
 
 Three A1 instances, each a control-plane node *and* an ingress node
 (architecture.md §1.1): etcd quorum lives in one region, and the same three
-machines terminate public traffic. They are spread across fault domains, so
+machines terminate public traffic. They are spread across availability
+domains before fault domains, so
 losing one takes neither quorum nor ingress with it.
 
 One of the three is **augmented** — it additionally carries a block volume, a
@@ -120,8 +121,7 @@ class CloudNodes(Component):
         ocpus: float,
         memory_gb: float,
         boot_volume_gb: int,
-        fault_domains: pulumi.Input[Sequence[str]],
-        availability_domain: pulumi.Input[str],
+        placements: pulumi.Input[Sequence[tuple[str, str]]],
         augmented: str,
         load_balancer: NodeLoadBalancer,
         opts: pulumi.ResourceOptions | None = None,
@@ -130,17 +130,18 @@ class CloudNodes(Component):
         if augmented not in machine_configs:
             raise ValueError(f'augmented node {augmented!r} is not among {sorted(machine_configs)}')
 
-        self._fault_domains = fault_domains
+        self._placements = placements
         self.instances: dict[str, oci.core.Instance] = {}
         for index, (node, machine_config) in enumerate(sorted(machine_configs.items())):
             self.instances[node] = oci.core.Instance(
                 f'{name}-{node}',
                 compartment_id=compartment_id,
-                availability_domain=availability_domain,
-                # Spread by construction: a fault domain per node, wrapping if
-                # the region ever offers fewer than three. The list is a
-                # regional fact read at apply time, not a constant.
-                fault_domain=async_output(lambda position=index: self._fault_domain(position)),
+                # Spread by construction: one placement per node, wrapping
+                # if the region offers fewer placements than there are nodes.
+                # The list is a regional fact read at apply time (the stack's
+                # `_placements`), not a constant.
+                availability_domain=async_output(lambda position=index: self._placement(position, 0)),
+                fault_domain=async_output(lambda position=index: self._placement(position, 1)),
                 display_name=f'{name}-{node}',
                 shape='VM.Standard.A1.Flex',
                 shape_config=oci.core.InstanceShapeConfigArgs(ocpus=ocpus, memory_in_gbs=memory_gb),
@@ -202,9 +203,9 @@ class CloudNodes(Component):
 
         self.register_outputs({})
 
-    async def _fault_domain(self, position: int) -> str:
-        domains = await resolve(self._fault_domains)
-        return str(domains[position % len(domains)])
+    async def _placement(self, position: int, half: int) -> str:
+        placements = await resolve(self._placements)
+        return str(placements[position % len(placements)][half])
 
     async def _augmented_vnic_id(self) -> str:
         """The primary VNIC of the augmented node.

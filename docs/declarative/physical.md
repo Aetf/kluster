@@ -45,8 +45,9 @@ secondary private), and bucket names/endpoints.
     extensions initially), and a custom-image import brings the
     factory-built image into OCI. The schematic ID is part of the
     declared state, so image contents are reproducible.
--   **Nodes**: 3× `VM.Standard.A1.Flex` (1 OCPU / 8 GB), spread across
-    fault domains, boot volume ~50 GB. Machine config is delivered as
+-   **Nodes**: 3× `VM.Standard.A1.Flex` (1 OCPU / 8 GB), one per
+    availability domain (fault domains only as the tiebreak, nodes.md
+    §5), boot volume ~50 GB. Machine config is delivered as
     base64 `user_data` in instance metadata (the Talos `oracle` platform
     reads the OCI metadata service) — day-0 needs no network apply.
     **Legacy IMDS (v1) is disabled** on every instance; note OCI's v2

@@ -52,8 +52,7 @@ async def main() -> None:
         talos_version=talos_version,
     )
 
-    availability_domain = async_output(lambda: _first_availability_domain(compartment_id))
-    fault_domains = async_output(lambda: _fault_domains(compartment_id))
+    placements = async_output(lambda: _placements(compartment_id))
 
     nodes = CloudNodes(
         conventions.CLUSTER_NAME,
@@ -64,8 +63,7 @@ async def main() -> None:
         ocpus=conventions.NODE_OCPUS,
         memory_gb=conventions.NODE_MEMORY_GB,
         boot_volume_gb=conventions.NODE_BOOT_VOLUME_GB,
-        fault_domains=fault_domains,
-        availability_domain=availability_domain,
+        placements=placements,
         augmented=conventions.AUGMENTED_NODE,
         load_balancer=load_balancer,
     )
@@ -78,22 +76,37 @@ async def main() -> None:
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
 
-async def _first_availability_domain(compartment_id: str) -> str:
+async def _placements(compartment_id: str) -> list[tuple[str, str]]:
+    """(availability domain, fault domain) pairs, in the order nodes take them.
+
+    Availability domain first, fault domain only as the tiebreak. An AD is an
+    independent failure domain where a fault domain is a rack, but the reason
+    this is not merely nicer is capacity: A1 capacity is per-AD, so a fleet
+    packed into one AD draws its replacements from a single pool -- and
+    "replace at leisure" after losing a node (nodes.md §5, tier 3) assumes a
+    pool that has something in it.
+
+    Both lists are regional facts read at apply time. A region offering one AD
+    degrades to plain fault-domain spread, which is what this used to do
+    unconditionally.
+    """
     domains = await oci.identity.get_availability_domains_output(compartment_id=compartment_id).future()
     assert domains is not None
-    return domains.availability_domains[0].name
+    availability = [str(domain.name) for domain in domains.availability_domains]
 
+    faults: list[list[str]] = []
+    for name in availability:
+        found = await oci.identity.get_fault_domains_output(
+            compartment_id=compartment_id,
+            availability_domain=name,
+        ).future()
+        assert found is not None
+        faults.append([str(domain.name) for domain in found.fault_domains])
 
-async def _fault_domains(compartment_id: str) -> list[str]:
-    """Every fault domain of the availability domain the fleet lives in.
-
-    Read rather than hard-coded: the count is a regional fact, and the nodes
-    are spread across whatever is actually offered.
-    """
-    availability_domain = await _first_availability_domain(compartment_id)
-    domains = await oci.identity.get_fault_domains_output(
-        compartment_id=compartment_id,
-        availability_domain=availability_domain,
-    ).future()
-    assert domains is not None
-    return [str(domain.name) for domain in domains.fault_domains]
+    # Column-major: every AD is used once before any AD is used twice.
+    depth = max(len(domains) for domains in faults)
+    return [
+        (name, faults[position][level % len(faults[position])])
+        for level in range(depth)
+        for position, name in enumerate(availability)
+    ]
