@@ -139,6 +139,7 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
                 log.warning('[4/6] %s', reason)
             log.warning('[4/6] replacing %s — 5432 goes away until the new box answers', existing.id)
             provision.terminate_instance(client, str(existing.id))
+            provision.forget_host_key(address)
         # Minting is deliberately on this side of the branch. B2 returns an
         # application key's secret once, so the box's copy cannot be read back
         # and re-used, and minting a replacement revokes what the box is

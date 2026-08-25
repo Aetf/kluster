@@ -516,6 +516,23 @@ def terminate_instance(client: Oci, instance_id: str) -> None:
     )
 
 
+def forget_host_key(address: str) -> None:
+    """Drop the terminated box's host key from the operator's known_hosts.
+
+    The address is reserved and the box is cattle, so every replace hands the
+    same address a freshly generated host key -- and ssh, correctly, refuses
+    the next login as a possible man-in-the-middle. The identity that changed
+    is the one this command just destroyed, so forgetting it here is the
+    honest bookkeeping; the alternative is an operator pasting `ssh-keygen -R`
+    from an alarming error message on every re-provision.
+    """
+    if shutil.which('ssh-keygen') is None:  # pragma: no cover - ssh is a hard dependency of `ssh`
+        return
+    removal = sp.run(['ssh-keygen', '-R', address], capture_output=True, text=True, timeout=30)
+    if removal.returncode == 0:
+        log.info('removed the old host key for %s from known_hosts', address)
+
+
 def ensure_instance(
     client: Oci,
     *,

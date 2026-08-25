@@ -81,6 +81,7 @@ class _Recorder:
         self.terminated: int = 0
         self.launched: int = 0
         self.launched_metadata: dict[str, str] = {}
+        self.forgotten: list[str] = []
 
 
 def _returning(value: Any) -> Callable[..., Any]:
@@ -141,6 +142,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(provision, 'find_instance', find)
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
         monkeypatch.setattr(provision, 'ensure_instance', launch)
+        monkeypatch.setattr(provision, 'forget_host_key', recorder.forgotten.append)
         monkeypatch.setattr(provision, 'attach_reserved_ip', _returning(None))
         monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
         monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
@@ -241,3 +243,17 @@ def test_a_launch_records_what_the_next_converge_compares(converge: Any) -> None
         CURRENT,
         'key-id',
     )
+
+
+def test_replacing_forgets_the_destroyed_box_s_host_key(converge: Any) -> None:
+    """The reserved address outlives the box, so ssh sees an identity change.
+
+    Which it reports as a possible man-in-the-middle -- on a machine the
+    command in front of it just destroyed.
+    """
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+
+    _ = _run(replace=True)
+
+    assert recorder.forgotten == ['192.0.2.10']

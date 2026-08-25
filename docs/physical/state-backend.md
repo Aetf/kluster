@@ -46,7 +46,11 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     finding an IP. Note the key set is
     `deploy/state-backend/operator-keys.txt`: a workstation whose key
     is not in it cannot reach the box at all, which is a re-provision
-    to fix, not an `ssh-copy-id`. The
+    to fix, not an `ssh-copy-id`. The address is reserved and the box
+    is cattle, so each replace gives the same address a new host key
+    and ssh reports a possible man-in-the-middle; the replace path
+    therefore drops the destroyed box's key from `known_hosts` itself.
+    The
     no-drift rule is what makes "the repo describes the box" true;
     the quarterly drill (§7.3) is what keeps that claim tested.
 -   **The box decides that by carrying its own bill of materials.**
