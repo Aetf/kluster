@@ -284,31 +284,28 @@ standing-rent test. *Lives in* architecture.md §2.1.
 
 ### L10 — Repo history hygiene before going public
 
-Free arm64 CI runners require flipping the repo public, but its git
-history carries kluster-code-era stack ciphertext + encryption salt.
-Scrub history or rotate the affected secrets first. *Amended
-2026-08-24*: this sits on Wave A's critical path (splitpro's operand
-image needs the arm64 runners), and scrub is the realistic path — the
-affected secrets are the legacy cluster's, live until Wave F. *Lives
-in* ci.md §4.
+**Closed 2026-08-25**: history scrubbed, repository public.
 
-**Scope, measured**: every secret-bearing blob in the history is a
-version of `Pulumi.dev.yaml` — three blobs across three commits
-(the initial commit, the salt rotation, the AWS setup), carrying the
-encryption salt and seven `secure:` ciphertexts. A scan of all 1,059
+Free arm64 CI runners and the whole CI security model (framework/
+github.md §2) require a public repository, and the history carried
+kluster-code-era stack ciphertext — every secret-bearing blob was a
+version of `Pulumi.dev.yaml`: three blobs across three commits (the
+initial commit, the salt rotation, the AWS setup), carrying the
+encryption salt and seven `secure:` ciphertexts. A scan of all
 historical blobs for private keys, cloud access keys and provider
-tokens finds nothing else. The file is a stale kluster-code copy that
-has to be regenerated from scratch regardless, so the scrub is a
-removal, not a rewrite:
+tokens found nothing else. The file was a stale kluster-code copy due
+to be regenerated from scratch regardless, so the fix was a removal
+rather than a rewrite:
 
 ```
 git filter-repo --invert-paths --path Pulumi.dev.yaml
 ```
 
-Verified on a clone: 0 blobs matching the ciphertext or salt markers
-remain, every other path keeps its exact blob hash, and the commit
-count is unchanged. The rewrite changes every commit id, so it is
-followed by a force-push and by re-cloning anywhere the repo exists.
+Post-conditions, verified on the rewritten history: no blob matches the
+ciphertext or salt markers, every other path keeps its exact blob hash,
+and the commit count is unchanged. Because the rewrite changed every
+commit id, a clone predating it is not fast-forwardable — re-clone
+rather than pull. *Lives in* ci.md §4.
 
 ### L11 — AdGuard credential in the `apps` CI environment is LAN-DNS control
 

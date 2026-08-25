@@ -559,9 +559,9 @@ Costs and facts on record:
     endpoint.
 
 **Issues live in the dedicated private ops repo (2026-08-24).**
-This repo going public is the end goal, so alert issues must never
-live here — hosting them in-repo would have made a certain future
-migration look like a conditional. The always-private `kluster-ops`
+This repo is public (2026-08-25), so alert issues must never live
+here — hosting them in-repo would have made a certain migration look
+like a conditional. The always-private `kluster-ops`
 holds the dispatch-receiving workflow, the issues — and, by the same
 decision's amendment, **every scheduled workflow in the system**
 (ci.md §3: the deployment repo stays event-driven; the ops repo owns

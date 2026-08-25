@@ -35,29 +35,29 @@ pushed to no slot.
 
 ## 2. What the plan permits today
 
-Measured against the account, not assumed: on **GitHub Free, a private
-repository cannot have branch protection or rulesets at all** — the API
-answers `403 Upgrade to GitHub Pro or make this repository public` for
-both. Environments and environment secrets do respond on the API for a
-private repository (one, `physical-plan`, exists), but the protection
-rules that make an environment a *gate* — required reviewers, wait
-timers — are documented as public-repository-or-paid-plan.
+`kluster` is **public** (2026-08-25), which is what makes the rest of
+this document buildable. Measured against the account: on GitHub Free a
+*private* repository cannot have branch protection or rulesets at all —
+the API answers `403 Upgrade to GitHub Pro or make this repository
+public` for both — and the protection rules that make an environment a
+*gate* (required reviewers, wait timers) are public-repository-or-paid
+as well. Environments and environment secrets are the one half that
+responds on a private repository.
 
 Two consequences, both load-bearing:
 
--   **`kluster` going public is a prerequisite for its own CI security
-    model**, not only for the arm64 runners images.yml needs (ci.md
-    §4). Until then "the preview was empty" cannot be enforced as a
-    required check, and the reviewer gate in front of `up-physical`
-    (ci.md §2) cannot exist. The history scrub that unblocks going
-    public is therefore on the critical path of more than it looked.
+-   **The public flip was a prerequisite for this repository's own CI
+    security model**, not only for the arm64 runners images.yml needs
+    (ci.md §4). "The preview was empty" can be a required check, and
+    the reviewer gate in front of `up-physical` (ci.md §2) can exist,
+    only because of it.
 -   **`kluster-ops` stays private, so it will never have branch
     protection** on this plan. Nothing in the design asks it to: its
     `drill` Environment is deliberately ungated — its scope is the
     gate (credentials.md §4) — and the ops repo holds no stack.
 
-Until the flip, this stack declares what the plan allows, and the rest
-is written down here rather than silently missing.
+Nothing in §3 is blocked by the plan any more; what is missing there is
+missing because the stack is not written yet (kluster-ops#10).
 
 ## 3. What is declared
 
@@ -74,8 +74,7 @@ is written down here rather than silently missing.
 -   **Branch protection on `main`**: required checks and up-to-date
     branch, which is what makes "the preview was empty" a statement
     about the code that will be on `main` rather than about a stale
-    branch. **Blocked until the repository is public** (§2), and
-    declared so that the flip is the only remaining step.
+    branch. Available since the repository went public (§2).
 -   **App installations**: which repositories the dispatch and trigger
     Apps are installed on, and with what repository selection.
 

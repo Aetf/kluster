@@ -170,14 +170,15 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     and reconciling is exactly what its playbook demands. This
     closes the "hand edits never surface" gap that deleting the
     post-merge preview left open.
--   **Not yet enforceable while the repo is private.** Branch
+-   **Enforceable because the repo is public** (2026-08-25). Branch
     protection and rulesets return `403` on a private repository
     under this account's plan, and an Environment's reviewer gate is
-    a public-repository feature too (framework/github.md §2). Every
-    gate below is therefore *designed and declared* but inert until
-    `kluster` goes public — the zero-diff proof cannot be a required
-    check, and `up-physical`'s approval door cannot be built. Treat
-    the visibility flip as a security milestone, not a packaging one.
+    a public-repository feature too (framework/github.md §2), so the
+    visibility flip was a security milestone rather than a packaging
+    one: it is what lets the zero-diff proof be a required check and
+    `up-physical`'s approval door exist. The gates below are declared
+    by the `github` stack, which is not written yet
+    (kluster-ops#10) — until it runs they are designed, not applied.
 -   **Credential partitioning (2026-08-23, from the security audit;
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare
@@ -258,16 +259,12 @@ Upgrades over the legacy workflow, both mandatory now:
     CNPG operand runs there). Builds use GitHub's free native arm64
     runners (public repos) + a manifest-stitch job; no qemu, which also
     keeps the Rust-heavy vchord build viable. Free arm64 runners
-    require **flipping this repo public**, which is gated on history
-    hygiene: the git history carries kluster-code-era stack config
-    (`Pulumi.dev.yaml` ciphertext + encryption salt) — scrub the
-    history or rotate the affected secrets before the flip
-    (cluster/security-audit.md). Sequencing fact (2026-08-24): the
-    flip sits on **Wave A's critical path** (splitpro's pgcron
-    operand needs the multi-arch build), so the scrub happens in
-    repo-plumbing time, not "eventually" — and scrubbing is the
-    realistic option of the two, because the ciphertext's secrets
-    are the *legacy* cluster's, live until Wave F.
+    require a public repository: **this repo is public since
+    2026-08-25**, after the history scrub that removed the
+    kluster-code-era `Pulumi.dev.yaml` ciphertext and encryption salt
+    (cluster/security-audit.md L10). The same flip is what makes the
+    branch protection and reviewer gates in §2 possible at all
+    (framework/github.md §2).
 -   **The CNPG images join the CI** — the legacy manual `just docker-*`
     flow retires; heavy builds are exactly what should not depend on a
     workstation. kluster-code's `docker/` retires with the migration
