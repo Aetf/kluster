@@ -22,6 +22,7 @@ dependencies = [
     "oci>=2.184.2",
     "pulumi-oci>=4.20.0",
     "pulumiverse-talos>=0.8.1",
+    "pykeepass>=4.2.0",
 ]
 
 [project.scripts]

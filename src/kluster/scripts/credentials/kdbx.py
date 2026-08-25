@@ -1,6 +1,6 @@
-"""Access to the cluster's dedicated KeePassXC database.
+"""Access to the KeePassXC databases the credential scripts read and write.
 
-The database is the canonical offline store (docs/credentials.md §2.1): §2's
+The seed kit is the canonical offline store (docs/credentials.md §2.1): §2's
 rows live in it and nowhere else, and a rotation playbook's "update the offline
 store" step writes it. Scripting that step is what keeps the store fresh
 without upkeep — the write events *are* the rotation events.
@@ -9,25 +9,37 @@ Credentials are also *read* from here, so minting a key never needs its parent
 secret in an environment variable or a shell history: the operator types the
 master password once and the script takes it from there.
 
-Runs on the machine holding the database (`keepassxc-cli` required); the two
-USB copies of the kit are refreshed from it at rotation.
+The database is manipulated in-process through `pykeepass` rather than by
+shelling out to `keepassxc-cli`. Two reasons: `bootstrap` and `rotate` each
+have to *create* a database (§4), which the CLI can do only interactively; and
+a library call cannot leak a secret into an argv another process can read.
+`pykeepass` ships no type information, so this module is the whole of its
+untyped surface -- everything it exports is annotated.
 """
+
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
 
 from __future__ import annotations
 
 import getpass
 import logging
 import os
-import shutil
-import subprocess as sp
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+from pykeepass import PyKeePass, create_database
+from pykeepass.exceptions import CredentialsError
+
+if TYPE_CHECKING:
+    from pykeepass.entry import Entry
+    from pykeepass.group import Group
 
 log = logging.getLogger(__name__)
 
-#: Environment variable naming the database, so the path is configurable and
-#: never hard-coded to one machine's layout.
-#: The seed kit (credentials.md §2.1).
+#: The seed kit (credentials.md §2.1). Named by environment variable so the
+#: path is configurable and never hard-coded to one machine's layout.
 PATH_ENV = 'KLUSTER_KDBX'
 
 #: The operator's personal estate, which holds the account roots. Read at
@@ -35,21 +47,31 @@ PATH_ENV = 'KLUSTER_KDBX'
 #: so that everything in the kit is rotatable (§2).
 MASTER_PATH_ENV = 'KLUSTER_MASTER_KDBX'
 
+#: The attributes an entry carries natively; anything else is a custom
+#: property, which is how a seed records what it is without spending a field.
+_NATIVE = ('Title', 'UserName', 'Password', 'URL', 'Notes')
+
 
 class KdbxError(RuntimeError):
     pass
 
 
+def _path(entry: str) -> list[str]:
+    """`'seeds/B2 seed key'` as pykeepass addresses it."""
+    return [part for part in entry.strip('/').split('/') if part]
+
+
 @dataclass
 class KdbxStore:
-    """One unlocked KeePassXC database.
+    """One KeePassXC database, unlocked at most once per process.
 
-    The master password is prompted for once per process and kept only in
-    memory for the lifetime of the run.
+    The master password is prompted for on first use and kept only in memory
+    for the lifetime of the run, so a bring-up that touches the kit five times
+    still asks once (§4.1).
     """
 
     path: Path
-    _password: str | None = field(default=None, repr=False)
+    _db: PyKeePass | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, path: Path | None = None, *, env: str = PATH_ENV, flag: str = '--kdbx') -> KdbxStore:
@@ -60,75 +82,124 @@ class KdbxStore:
             path = Path(raw).expanduser()
         if not path.is_file():
             raise KdbxError(f'no database at {path}')
-        if shutil.which('keepassxc-cli') is None:
-            raise KdbxError('keepassxc-cli not found — run this on the machine holding the database')
         return cls(path=path)
 
-    def unlock(self) -> None:
-        """Ask for the master password and prove it opens the database.
+    @classmethod
+    def create(cls, path: Path, password: str) -> KdbxStore:
+        """A new, empty database — the output of `bootstrap` and of `rotate`.
 
-        Verifying up front means a wrong password fails before a rotation has
+        Refuses an existing file: rotation writes a *new* database and the old
+        one stays until its last derived secret has expired (§2.2), so
+        overwriting is never the intent.
+        """
+        if path.exists():
+            raise KdbxError(f'{path} already exists; rotation writes a new file rather than replacing one')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return cls(path=path, _db=create_database(str(path), password=password))
+
+    def unlock(self) -> None:
+        """Ask for the master password and open the database.
+
+        Opening up front means a wrong password fails before a rotation has
         minted anything, not halfway through one.
         """
-        if self._password is not None:
+        if self._db is not None:
             return
-        password = getpass.getpass(f'master password for {self.path.name}: ')
-        proc = self._run(['ls', '-q', str(self.path)], password=password, check=False)
-        if proc.returncode != 0:
-            raise KdbxError(f'could not unlock {self.path}')
-        self._password = password
+        self.unlock_with(getpass.getpass(f'master password for {self.path.name}: '))
 
-    def _run(
-        self, args: list[str], *, password: str | None = None, stdin: str = '', check: bool = True
-    ) -> sp.CompletedProcess[str]:
-        if password is None:
-            self.unlock()
-            password = self._password
-        assert password is not None
-        return sp.run(
-            ['keepassxc-cli', *args],
-            input=f'{password}\n{stdin}',
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+    def unlock_with(self, password: str) -> None:
+        """Open with a password already in hand.
+
+        Bring-up holds two databases open at once (the kit and the estate,
+        §2), and a caller that has prompted for itself should not be made to
+        prompt again through this class.
+        """
+        if self._db is not None:
+            return
+        try:
+            self._db = PyKeePass(str(self.path), password=password)
+        except CredentialsError as exc:
+            raise KdbxError(f'could not unlock {self.path}') from exc
+
+    @property
+    def _open(self) -> PyKeePass:
+        self.unlock()
+        assert self._db is not None
+        return self._db
+
+    def _entry(self, entry: str) -> Entry:
+        # A path lookup matches at most one entry, but the signature admits a
+        # list; collapse both shapes here so no caller has to.
+        found = cast('Entry | list[Entry] | None', self._open.find_entries(path=_path(entry)))
+        if isinstance(found, list):
+            found = found[0] if found else None
+        if found is None:
+            raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kdbx ls)')
+        return found
 
     def entries(self, group: str = '/') -> list[str]:
         """Entry paths under `group`, so a caller can be told what exists."""
-        proc = self._run(['ls', '-q', '-R', '-f', str(self.path), group])
-        return [line for line in proc.stdout.splitlines() if line and not line.endswith('/')]
+        prefix = _path(group)
+        found = cast('list[Entry]', self._open.entries or [])
+        paths = ('/'.join(part for part in entry.path if part) for entry in found if entry.path)
+        return sorted(path for path in paths if _path(path)[: len(prefix)] == prefix)
 
     def describe(self, entry: str) -> dict[str, str]:
         """The entry's non-secret attributes — enough to diagnose a wrong field."""
-        return {name: self.get(entry, attribute=name) for name in ('Title', 'UserName', 'URL', 'Notes')}
+        found = self._entry(entry)
+        return {
+            'Title': str(found.title or ''),
+            'UserName': str(found.username or ''),
+            'URL': str(found.url or ''),
+            'Notes': str(found.notes or ''),
+        }
 
     def get(self, entry: str, attribute: str = 'Password') -> str:
-        # -s: without it a protected attribute prints as 'PROTECTED'.
-        proc = self._run(['show', '-q', '-s', '-a', attribute, str(self.path), entry], check=False)
-        if proc.returncode != 0:
-            raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kdbx ls)')
-        return proc.stdout.strip()
+        found = self._entry(entry)
+        match attribute:
+            case 'Password':
+                value = found.password
+            case 'UserName':
+                value = found.username
+            case 'Title':
+                value = found.title
+            case 'URL':
+                value = found.url
+            case 'Notes':
+                value = found.notes
+            case custom:
+                value = found.get_custom_property(custom)
+        if value is None:
+            raise KdbxError(f'entry {entry!r} has no {attribute}')
+        return str(value)
 
-    def _ensure_group(self, entry: str) -> None:
-        """Create the entry's parent groups; `add` will not create them."""
-        parts = [part for part in entry.strip('/').split('/')[:-1] if part]
+    def _group(self, parts: list[str]) -> Group:
+        """The group at `parts`, creating every level that is missing."""
+        group = cast('Group', self._open.root_group)
         for depth in range(1, len(parts) + 1):
-            group = '/'.join(parts[:depth])
-            # mkdir fails when the group already exists, which is not an error
-            # here — every call before the last one is expected to.
-            _ = self._run(['mkdir', '-q', str(self.path), group], check=False)
+            existing = cast('Group | list[Group] | None', self._open.find_groups(path=parts[:depth]))
+            if isinstance(existing, list):
+                existing = existing[0] if existing else None
+            group = existing if existing is not None else self._open.add_group(group, parts[depth - 1])
+        return group
 
     def put(self, entry: str, username: str, secret: str) -> None:
         """Create `entry`, or replace the password of an existing one.
 
-        Idempotent by design: a rotation playbook re-runs the same call.
+        Idempotent by design: a rotation playbook re-runs the same call. The
+        database is saved on every write, so an interrupted run leaves the
+        writes that already succeeded on disk rather than in memory.
         """
-        self._ensure_group(entry)
-        exists = self._run(['show', '-q', str(self.path), entry], check=False).returncode == 0
-        verb = 'edit' if exists else 'add'
-        # keepassxc-cli consumes the database password first, then the entry's.
-        _ = self._run(
-            [verb, '-q', str(self.path), entry, '--username', username, '--password-prompt'],
-            stdin=f'{secret}\n',
-        )
-        log.info('kdbx: %sed %s', verb, entry)
+        parts = _path(entry)
+        existing = cast('Entry | list[Entry] | None', self._open.find_entries(path=parts))
+        if isinstance(existing, list):
+            existing = existing[0] if existing else None
+        if existing is None:
+            _ = self._open.add_entry(self._group(parts[:-1]), parts[-1], username, secret)
+            verb = 'added'
+        else:
+            existing.username = username
+            existing.password = secret
+            verb = 'edited'
+        self._open.save()
+        log.info('kdbx: %s %s', verb, entry)
