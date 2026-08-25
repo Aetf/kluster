@@ -15,10 +15,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import os
 import sys
 from pathlib import Path
 
-from . import b2, entries, seeds
+from . import b2, entries, lifecycle, seeds
 from .kdbx import MASTER_PATH_ENV, PATH_ENV, KdbxError, KdbxStore
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,24 @@ def _parser() -> argparse.ArgumentParser:
         help=f'the seed kit (default: ${PATH_ENV})',
     )
     families = parser.add_subparsers(dest='family', required=True, metavar='<family>')
+
+    # The three things done to a kit (§4). Each walks §2's table in order and
+    # skips what is already there, so an interrupted run is resumed by
+    # re-running it rather than by remembering where it stopped.
+    boot = families.add_parser('bootstrap', help='fill a kit with every seed (§4.1); creates the kit if absent')
+    _ = boot.add_argument('--master-kdbx', type=Path, default=None, help=f'the personal estate (${MASTER_PATH_ENV})')
+    _ = boot.add_argument(
+        '--master-entry',
+        action='append',
+        default=[],
+        metavar='<member>=<entry>',
+        help='where an account root lives in the estate, e.g. b2="accounts/Backblaze"',
+    )
+    _ = boot.add_argument('--only', default=None, metavar='<member>', help='create just this seed (repair, seed loss)')
+
+    rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
+    _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
+    _ = rot.add_argument('--only', default=None, metavar='<member>', help='rotate just this seed')
 
     kdbx_cmd = families.add_parser('kdbx', help='the offline store itself (§2.1)')
     kdbx_actions = kdbx_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
@@ -80,12 +99,41 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _kit(args: argparse.Namespace) -> KdbxStore:
+    """The seed kit, created on the spot if `bootstrap` is starting from none.
+
+    Every other command needs it to exist already: creating one by accident,
+    because a path was mistyped, would look like an empty kit rather than a
+    missing one.
+    """
+    path = args.kdbx or (Path(raw).expanduser() if (raw := os.environ.get(PATH_ENV)) else None)
+    if args.family == 'bootstrap' and path is not None and not path.exists():
+        log.info('no kit at %s; creating it', path)
+        return KdbxStore.create(path, getpass.getpass(f'new master password for {path.name}: '))
+    return KdbxStore.from_env(args.kdbx)
+
+
+def _estate(args: argparse.Namespace) -> lifecycle.Estate:
+    """The personal estate, opened only if a seed actually needs an account root."""
+    by_member: dict[str, str] = {}
+    for pair in args.master_entry:
+        member, _, entry = str(pair).partition('=')
+        if not entry:
+            raise KdbxError(f'--master-entry wants <member>=<entry>, not {pair!r}')
+        by_member[member] = entry
+
+    store = None
+    if args.master_kdbx is not None or os.environ.get(MASTER_PATH_ENV):
+        store = KdbxStore.from_env(args.master_kdbx, env=MASTER_PATH_ENV, flag='--master-kdbx')
+    return lifecycle.Estate(store=store, entries_by_member=by_member)
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     args = _parser().parse_args(argv)
 
     try:
-        store = KdbxStore.from_env(args.kdbx)
+        store = _kit(args)
 
         match (args.family, getattr(args, 'member', None), args.action):
             case ('kdbx', _, 'ls'):
@@ -102,6 +150,19 @@ def main(argv: list[str] | None = None) -> int:
                 store.remember(password)
             case ('kdbx', _, 'forget'):
                 store.forget()
+            case ('bootstrap', _, _):
+                created = lifecycle.bootstrap(
+                    store,
+                    estate=_estate(args),
+                    prompt=input,
+                    only=args.only,
+                )
+                log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
+            case ('rotate', _, _):
+                successor = KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: '))
+                rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only)
+                log.info('rotated %s into %s', ', '.join(rotated), args.into)
+                log.warning('keep %s until the last secret derived from it has expired (§2.2)', store.path)
             case ('seed', 'derivation', 'create'):
                 seeds.init_seed(store, args.entry)
             case ('seed', 'b2', 'create'):

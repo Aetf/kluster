@@ -153,17 +153,22 @@ def create_seed(*, master: KdbxStore, seeds: KdbxStore, master_entry: str, seed_
     return key_id
 
 
-def rotate_seed(store: KdbxStore, *, seed_entry: str) -> str:
+def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = None) -> str:
     """Have the seed mint its successor, store it, and delete the old keys.
 
     The old key is deleted only after the new one is stored and verified, so
     an interrupted rotation leaves a working seed either way.
+
+    `into` is where the successor is written, defaulting to the database the
+    predecessor came from. A whole-kit rotation writes a *new* file (§4.2) and
+    the retired one must stay exactly as it was, so it passes the successor
+    explicitly rather than letting this edit the kit it is reading.
     """
     session = Session.from_entry(store, seed_entry)
     previous = store.get(seed_entry, attribute='UserName')
 
     key_id, key = _mint_verified(session, SEED_KEY_NAME)
-    store.put(seed_entry, key_id, key)
+    (into or store).put(seed_entry, key_id, key)
 
     for existing in session.keys():
         if existing['keyName'] == SEED_KEY_NAME and existing['applicationKeyId'] != key_id:

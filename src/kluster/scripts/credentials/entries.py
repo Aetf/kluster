@@ -45,9 +45,23 @@ class Seed:
     #: Whether it can mint its own successor, or a console must (§2).
     self_reproducing: bool
 
+    #: What a human has to do in a console when no API can do it. Empty for
+    #: everything the scripts mint themselves. Stated here rather than in a
+    #: runbook so that `bootstrap` can read it out at the moment it stops.
+    console: str = ''
+
+    #: A file the platform hands over once, stored as an attachment (§2.1)
+    #: rather than in the password field.
+    attachment: str = ''
+
     @property
     def entry(self) -> str:
         return f'{GROUP}/{self.title}'
+
+    @property
+    def manual(self) -> bool:
+        """Whether creating this one is a console step rather than a call."""
+        return bool(self.console)
 
 
 SEEDS: dict[str, Seed] = {
@@ -87,6 +101,13 @@ SEEDS: dict[str, Seed] = {
             identifier='the client id (the JWT issuer)',
             mints='installation tokens for kluster-ops contents:write',
             self_reproducing=False,
+            console=(
+                'github.com/settings/apps → New GitHub App named "kluster dispatch".\n'
+                '  Permissions: Repository → Contents: Read and write. No webhook.\n'
+                '  Install it on kluster-ops only, then generate a private key.\n'
+                '  The JWT issuer is the *client id*, not the numeric app id.'
+            ),
+            attachment='private-key.pem',
         ),
         Seed(
             member='github-trigger',
@@ -94,6 +115,13 @@ SEEDS: dict[str, Seed] = {
             identifier='the client id (the JWT issuer)',
             mints='installation tokens for kluster actions:write',
             self_reproducing=False,
+            console=(
+                'github.com/settings/apps → New GitHub App named "kluster trigger".\n'
+                '  Permissions: Repository → Actions: Read and write. No webhook.\n'
+                '  Install it on kluster only, then generate a private key.\n'
+                '  The JWT issuer is the *client id*, not the numeric app id.'
+            ),
+            attachment='private-key.pem',
         ),
         Seed(
             member='zerotier',
@@ -101,11 +129,16 @@ SEEDS: dict[str, Seed] = {
             identifier='zerotier-central',
             mints='nothing; it is itself the provider credential',
             self_reproducing=False,
+            console=(
+                'my.zerotier.com → Account → API Access Tokens → New Token.\n'
+                '  ZeroTier has no token API, so this is the one credential\n'
+                '  that cannot mint its own successor.'
+            ),
         ),
     )
 }
 
 #: The seeds a console must create, because their platform has no API for it
-#: (§2). `bootstrap` and `rotate` stop and prompt for these rather than
+#: (§2). `bootstrap` and `rotate` stop and print the steps rather than
 #: pretending they can be automated.
-MANUAL = tuple(seed.member for seed in SEEDS.values() if not seed.self_reproducing and seed.member != 'derivation')
+MANUAL = tuple(seed.member for seed in SEEDS.values() if seed.manual)

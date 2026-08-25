@@ -267,7 +267,9 @@ store** first (`credentials kdbx remember` puts it there; nothing else
 writes to it, and a machine without a Secret Service simply falls
 through to typing it). Bring-up holds two databases open — the kit and
 the estate, §2 — and then runs for minutes, so the alternative is two
-typed passwords guarding a process nobody is watching. Stages run in dependency order, each pushing
+typed passwords guarding a process nobody is watching.
+
+Stages run in dependency order, each pushing
 into slots that exist by the time it runs:
 
 1.  **Local derivations** — passphrase, state-backend CA and certs,
@@ -289,10 +291,23 @@ into slots that exist by the time it runs:
 A stage that fails is re-run; nothing is parked. Once the last stage
 verifies, the kit goes back in its envelope.
 
+**Resumable by probing, not by bookkeeping.** Each stage asks whether
+its output exists and skips if it does, so an interrupted bootstrap is
+resumed by re-running the same command, and `--only <member>` is the
+repair path when a single seed is lost. A checkpoint file would record
+"this ran" — which stops being true the moment someone deletes a key in
+a console, and the run after that would skip the repair.
+
+**The console steps live in the register, not in a runbook.** Each §2
+row that no API can create carries the instructions for creating it
+(`entries.py`), so `bootstrap` prints them at the moment it stops
+rather than sending the operator to look for a document.
+
 ### 4.2 `credentials rotate`
 
-`--family <name>` re-runs one family; `--all` rotates the whole seed
-set and **writes a new database file**: unseal the old, have each
+`--only <member>` re-runs one row; the default rotates the whole seed
+set. It **writes a new database file** (`--into`), and the retired one
+is left byte-for-byte as it was: unseal the old, have each
 seed mint its successor, derive a new derivation seed, write the new
 database, verify every slot against it, then record the old file's
 earliest-destroy date (§2.2's backup-retention rule). The GitHub App

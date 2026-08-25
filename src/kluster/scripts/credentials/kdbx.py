@@ -242,6 +242,41 @@ class KdbxStore:
             group = existing if existing is not None else self._open.add_group(group, parts[depth - 1])
         return group
 
+    def attach(self, entry: str, filename: str, data: bytes) -> None:
+        """Attach a file to an entry, replacing one of the same name.
+
+        Key material that is a file rather than a string lives here (§2.1):
+        a GitHub App's private key is a PEM the platform hands over once.
+        """
+        found = self._entry(entry)
+        for existing in list(found.attachments):
+            if existing.filename == filename:
+                found.delete_attachment(existing)
+        binary_id = self._open.add_binary(data)
+        _ = found.add_attachment(binary_id, filename)
+        self._open.save()
+        log.info('kdbx: attached %s to %s', filename, entry)
+
+    def attachment(self, entry: str, filename: str) -> bytes:
+        """One attachment's bytes."""
+        found = self._entry(entry)
+        for existing in found.attachments:
+            if existing.filename == filename:
+                return bytes(existing.data)
+        raise KdbxError(f'entry {entry!r} has no attachment {filename!r}')
+
+    def attachments(self, entry: str) -> list[str]:
+        """The names of an entry's attachments."""
+        return sorted(str(a.filename) for a in self._entry(entry).attachments)
+
+    def has(self, entry: str) -> bool:
+        """Whether the entry exists, without raising when it does not."""
+        try:
+            _ = self._entry(entry)
+        except KdbxError:
+            return False
+        return True
+
     def put(self, entry: str, username: str, secret: str) -> None:
         """Create `entry`, or replace the password of an existing one.
 
