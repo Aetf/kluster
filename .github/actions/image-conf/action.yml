@@ -37,6 +37,17 @@ runs:
 
         # IMAGE and TAG address the registry, everything else addresses the
         # Containerfile; the two names are reserved for that reason.
+        #
+        # The arg file is written from the *sourced* values, not by filtering
+        # the conf's lines: the confs carry renovate hints and prose comments
+        # that buildah must not be handed, and a value written in terms of
+        # another key -- or in quotes -- has to arrive resolved rather than
+        # verbatim.
         args="$RUNNER_TEMP/${{ inputs.image }}.build-args"
-        grep -vE '^(IMAGE|TAG)=' "$conf" > "$args"
+        : > "$args"
+        keys=$(sed -nE 's/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=.*/\1/p' "$conf" \
+          | grep -vxE 'IMAGE|TAG' | sort -u || true)
+        for key in $keys; do
+          printf '%s=%s\n' "$key" "${!key}" >> "$args"
+        done
         echo "args-file=$args" >> "$GITHUB_OUTPUT"

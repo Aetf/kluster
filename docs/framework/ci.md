@@ -289,8 +289,11 @@ latter written as an expression over the other keys
 (`TAG="${PG_MAJOR}.${PG_MINOR}-${PG_REV}-${VECTORCHORD_SEMVER}"`) so
 that the composite tags the CNPG operands need still reduce a bump to
 the one line renovate edits. The two names are reserved and are not
-passed on as build args; `TARGETARCH` is supplied by the workflow,
-because under native builds the runner decides the architecture.
+passed on as build args, and what buildah is handed is the *resolved*
+values rather than the file's lines — the confs carry renovate hints and
+prose comments that are not build args at all. `TARGETARCH` is supplied
+by the workflow, because under native builds the runner decides the
+architecture.
 
 The blog is deliberately **not** an image (workloads.md §4: built
 branch + git-sync).

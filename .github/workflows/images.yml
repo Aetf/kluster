@@ -139,9 +139,13 @@ jobs:
         env:
           REF: ${{ steps.conf.outputs.ref }}
           ARCH: ${{ matrix.platform.arch }}
+          # Through the environment and stdin, never on the command line: a
+          # public repository's process table is not the place for the token.
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          buildah login -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}' ghcr.io
+          printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
           buildah push "$REF-$ARCH"
 
   manifest:
@@ -166,9 +170,11 @@ jobs:
       - name: Stitch the manifest
         env:
           REF: ${{ steps.conf.outputs.ref }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          buildah login -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}' ghcr.io
+          printf '%s' "$REGISTRY_TOKEN" | buildah login -u "$REGISTRY_USER" --password-stdin ghcr.io
           buildah manifest create "$REF" \
             "docker://$REF-amd64" \
             "docker://$REF-arm64"
