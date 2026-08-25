@@ -38,11 +38,14 @@ def _parser() -> argparse.ArgumentParser:
     provision_cmd = actions.add_parser('provision', help='create the appliance, or converge everything around it')
     # Re-provision is the appliance's only apply path (state-backend.md §1),
     # and it is destructive by construction: a new box, a new dump key, and
-    # whatever state was not in the last dump.
+    # whatever state was not in the last dump. `provision` decides for itself
+    # whether that is needed by comparing the box to the commit; this flag is
+    # for the case with no diff to find -- rotating the dump key, or replacing
+    # a box that is broken in some way the metadata cannot show.
     _ = provision_cmd.add_argument(
         '--replace',
         action='store_true',
-        help='terminate the existing box and build a new one (applies a changed Butane file)',
+        help='rebuild even if the box already matches (rotates the dump key with it)',
     )
 
     # Diagnosis only: the box is never configured by hand (state-backend.md
@@ -57,6 +60,49 @@ def _parser() -> argparse.ArgumentParser:
     _ = bundle.add_argument('--directory', type=Path, default=DEFAULT_BUNDLE_DIR)
 
     return parser
+
+
+def _drift(
+    seed: bytes,
+    session: b2.Session,
+    existing: object | None,
+    *,
+    address: str,
+    bucket_id: str,
+    replace: bool,
+) -> list[str]:
+    """Why the running box is not the box this commit describes.
+
+    An empty list is the skip condition, and it is the *only* one: provision
+    applies the current commit, so anything the repository changed -- the
+    Butane file, an operator key, a pinned image, the address the server
+    certificate is issued for -- makes the box stale in exactly the same way,
+    and the dump key is one component among them rather than a special case.
+
+    The comparison is per component (config.digests), so the reason a box is
+    being replaced names what changed instead of asserting that something did.
+    """
+    if existing is None:
+        return []
+    if replace:
+        return ['--replace was asked for']
+
+    recorded, dump_key_id = provision.instance_config(existing)
+    reasons: list[str] = []
+    if not b2.dump_key_is_current(
+        session, dump_key_id, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
+    ):
+        # The box cannot be handed a new key without being rebuilt: the
+        # secret only exists inside the Ignition it booted with.
+        reasons.append(f'the dump key the box holds ({dump_key_id or "none recorded"}) is not the intended one')
+
+    intended = config.digests(seed, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id)
+    changed = config.drift(intended, recorded)
+    if changed and not recorded:
+        reasons.append('the box predates this bookkeeping, so what it was built from cannot be compared')
+    elif changed:
+        reasons.append(f'the machine definition changed: {", ".join(changed)}')
+    return reasons
 
 
 def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, replace: bool) -> int:
@@ -83,19 +129,22 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
     log.info('appliance address: %s', address)
 
     existing = provision.find_instance(client)
-    if existing is not None and not replace:
-        # Minting a dump key revokes the one the box is running on -- B2
-        # returns an application key's secret once, so the box's copy cannot
-        # be read back and re-used. Doing it on a run that then leaves the
-        # instance alone would break the nightly dump silently, until 02:30
-        # the next day. The key's lifetime is the instance's.
-        log.info('[4/6] appliance %s already exists; leaving it and its dump key alone', existing.id)
-        log.info('       to apply a changed Butane file or rotate the dump key: --replace')
+    reasons = _drift(seed, session, existing, address=address, bucket_id=bucket_id, replace=replace)
+    if existing is not None and not reasons:
+        log.info('[4/6] appliance %s matches the repository; nothing to do', existing.id)
         instance_id = str(existing.id)
     else:
         if existing is not None:
+            for reason in reasons:
+                log.warning('[4/6] %s', reason)
             log.warning('[4/6] replacing %s — 5432 goes away until the new box answers', existing.id)
             provision.terminate_instance(client, str(existing.id))
+        # Minting is deliberately on this side of the branch. B2 returns an
+        # application key's secret once, so the box's copy cannot be read back
+        # and re-used, and minting a replacement revokes what the box is
+        # holding: on a run that then leaves the instance alone that breaks
+        # the nightly dump silently, until it next fires. The key's lifetime
+        # is the instance's.
         log.info('[4/6] minting the dump key and rendering Ignition for %s', address)
         dump_key_id, dump_key = b2.mint_dump_key(
             session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
@@ -107,7 +156,13 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
         image_id = provision.ensure_image(client)
         log.info('[6/6] instance')
         instance_id = provision.ensure_instance(
-            client, subnet_id=subnet_id, nsg_id=nsg_id, image_id=image_id, ignition=ignition
+            client,
+            subnet_id=subnet_id,
+            nsg_id=nsg_id,
+            image_id=image_id,
+            ignition=ignition,
+            digests=config.digests(seed, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id),
+            dump_key_id=dump_key_id,
         )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 

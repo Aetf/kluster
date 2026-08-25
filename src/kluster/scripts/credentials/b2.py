@@ -239,6 +239,29 @@ def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: i
     return str(created['bucketId'])
 
 
+def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix: str, name: str) -> bool:
+    """Whether `key_id` is still the write-only key this bucket and prefix want.
+
+    The appliance's copy of the secret cannot be read back, so "is the box
+    holding the right credential" is answered by identity: a key that is gone
+    (deleted in the console, superseded by another mint) or one whose scope no
+    longer matches the settings is not the intended key, and the only way to
+    put the intended one on the box is to build a new box.
+    """
+    if not key_id:
+        return False
+    for existing in session.keys():
+        if existing['applicationKeyId'] != key_id:
+            continue
+        return (
+            existing['keyName'] == name
+            and existing.get('bucketId') == bucket_id
+            and existing.get('namePrefix') == f'{prefix}/'
+            and sorted(existing.get('capabilities') or []) == sorted(DUMP_CAPABILITIES)
+        )
+    return False
+
+
 def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> tuple[str, str]:
     """A write-only key confined to one prefix of one bucket."""
     data = session.post(

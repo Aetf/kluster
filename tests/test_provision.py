@@ -7,6 +7,7 @@ do that -- the diagnosis path.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -66,11 +67,20 @@ def test_a_terminated_address_does_not_count() -> None:
 class _Recorder:
     """Enough of the provision surface to watch what a converge run touches."""
 
-    def __init__(self, *, instance_exists: bool) -> None:
+    def __init__(
+        self,
+        *,
+        instance_exists: bool,
+        metadata: dict[str, str] | None = None,
+        dump_key_current: bool = True,
+    ) -> None:
         self.instance_exists: bool = instance_exists
+        self.metadata: dict[str, str] = {} if metadata is None else metadata
+        self.dump_key_current: bool = dump_key_current
         self.minted: int = 0
         self.terminated: int = 0
         self.launched: int = 0
+        self.launched_metadata: dict[str, str] = {}
 
 
 def _returning(value: Any) -> Callable[..., Any]:
@@ -80,6 +90,19 @@ def _returning(value: Any) -> Callable[..., Any]:
         return value
 
     return stub
+
+
+#: What a box built from the current commit records about itself. The tests
+#: below vary this rather than the repository, because the property under test
+#: is "box differs from commit", not any particular way of differing.
+CURRENT = {'butane': 'aaaa', 'operator_keys': 'bbbb'}
+
+
+def _built_from(digests: dict[str, str], *, dump_key_id: str = 'key-id') -> dict[str, str]:
+    return {
+        provision.CONFIG_METADATA: json.dumps(digests, sort_keys=True),
+        provision.DUMP_KEY_METADATA: dump_key_id,
+    }
 
 
 @pytest.fixture
@@ -93,19 +116,23 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             return ('key-id', 'key-secret')
 
         def find(*_args: object, **_kwargs: object) -> Any:
-            return type('Instance', (), {'id': 'ocid1.instance.existing'})() if recorder.instance_exists else None
+            if not recorder.instance_exists:
+                return None
+            return type('Instance', (), {'id': 'ocid1.instance.existing', 'metadata': recorder.metadata})()
 
         def terminate(*_args: object, **_kwargs: object) -> None:
             recorder.terminated += 1
             recorder.instance_exists = False
 
-        def launch(*_args: object, **_kwargs: object) -> str:
+        def launch(*_args: object, digests: dict[str, str], dump_key_id: str, **_kwargs: object) -> str:
             recorder.launched += 1
+            recorder.launched_metadata = _built_from(digests, dump_key_id=dump_key_id)
             return 'ocid1.instance.new'
 
         monkeypatch.setattr(b2.Session, 'from_entry', staticmethod(_returning(object())))
         monkeypatch.setattr(b2, 'ensure_bucket', _returning('bucket-id'))
         monkeypatch.setattr(b2, 'mint_dump_key', mint)
+        monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
         monkeypatch.setattr(provision.Oci, 'load', classmethod(_returning(object())))
         monkeypatch.setattr(provision, 'ensure_network', _returning(('vcn', 'subnet')))
         monkeypatch.setattr(provision, 'ensure_security_group', _returning('nsg'))
@@ -117,6 +144,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(provision, 'attach_reserved_ip', _returning(None))
         monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
         monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
+        monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT)))
         monkeypatch.setattr(config, 'client_bundle', _returning(object()))
         monkeypatch.setattr(config, 'write_client_bundle', _returning(None))
         monkeypatch.setattr(cli.seeds, 'load_seed', _returning(bytes(32)))
@@ -124,43 +152,92 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
     return install
 
 
-def test_a_converge_run_does_not_revoke_the_running_box_s_dump_key(converge: Any) -> None:
-    """B2 returns an application key's secret once.
+def _run(replace: bool = False) -> int:
+    from kluster.scripts.state_backend import cli
 
-    So the box's copy cannot be read back, and minting a replacement revokes
-    what the box is holding. A run that then leaves the instance alone would
-    break the nightly dump silently until it next fires -- which is what it
-    did.
+    return cli._provision(object(), seed_entry='e', compartment=None, replace=replace)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+
+
+def test_a_box_that_matches_the_commit_is_left_alone(converge: Any) -> None:
+    """The skip condition, and the reason the nightly dump survives a converge.
+
+    B2 returns an application key's secret once, so the box's copy cannot be
+    read back and minting a replacement revokes what the box is holding. A run
+    that mints and then leaves the instance alone breaks the dump silently
+    until it next fires -- which is what it did.
     """
-    from kluster.scripts.state_backend import cli
-
-    recorder = _Recorder(instance_exists=True)
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
     converge(recorder)
 
-    assert cli._provision(object(), seed_entry='e', compartment=None, replace=False) == 0  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    assert _run() == 0
 
-    assert recorder.minted == 0
-    assert recorder.terminated == 0
-    assert recorder.launched == 0
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
 
 
-def test_replace_terminates_first_then_mints_for_the_new_box(converge: Any) -> None:
-    from kluster.scripts.state_backend import cli
+def test_a_changed_machine_definition_replaces_the_box(converge: Any) -> None:
+    """Not only the Butane file: any component of `config.digests`.
 
-    recorder = _Recorder(instance_exists=True)
+    This is what makes provision an apply of the current commit rather than a
+    create-if-absent -- the box is compared to the repository, and the dump
+    key is one component of that comparison rather than the only one that
+    ever triggered a rebuild.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
     converge(recorder)
 
-    assert cli._provision(object(), seed_entry='e', compartment=None, replace=True) == 0  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    assert _run() == 0
+
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
+
+
+def test_a_box_whose_dump_key_b2_no_longer_has_is_replaced(converge: Any) -> None:
+    # The secret exists only inside the Ignition the box booted with, so a key
+    # that is gone (or re-scoped) cannot be handed over without a new box.
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT), dump_key_current=False)
+    converge(recorder)
+
+    assert _run() == 0
+
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
+
+
+def test_a_box_without_the_bookkeeping_is_replaced(converge: Any) -> None:
+    # A box that cannot say what it was built from is not evidence that it
+    # matches; silence converges rather than passing.
+    recorder = _Recorder(instance_exists=True, metadata={})
+    converge(recorder)
+
+    assert _run() == 0
+
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
+
+
+def test_replace_rebuilds_a_box_that_matches(converge: Any) -> None:
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+
+    assert _run(replace=True) == 0
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (1, 1, 1)
 
 
 def test_a_first_run_mints_and_launches(converge: Any) -> None:
-    from kluster.scripts.state_backend import cli
-
     recorder = _Recorder(instance_exists=False)
     converge(recorder)
 
-    assert cli._provision(object(), seed_entry='e', compartment=None, replace=False) == 0  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    assert _run() == 0
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 1, 1)
+
+
+def test_a_launch_records_what_the_next_converge_compares(converge: Any) -> None:
+    """Without this the loop never closes: a box built now would read as drift."""
+    recorder = _Recorder(instance_exists=False)
+    converge(recorder)
+    _ = _run()
+
+    assert provision.instance_config(type('Instance', (), {'metadata': recorder.launched_metadata})()) == (
+        CURRENT,
+        'key-id',
+    )

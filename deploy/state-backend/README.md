@@ -33,6 +33,14 @@ reserved public IP, imports the pinned Fedora CoreOS release as a custom image,
 renders the Ignition and launches the instance — then writes the operator's
 client bundle to `~/.config/kluster/state-backend/`.
 
+**It applies the current commit.** A run compares the box to the repository —
+the Butane file, the operator keys, the pins, the certificate identities, the
+B2 dump key's scope — and replaces the instance when they differ, saying which
+component did. A matching box is left untouched, including its dump key, whose
+secret exists only in the Ignition it booted with. `--replace` forces the
+rebuild when there is no diff to find (rotating the dump key, or discarding a
+box that is broken in a way its metadata cannot show).
+
 Other commands:
 
 ```sh
@@ -53,12 +61,17 @@ eval "$(mise x uv -- uv run credentials derive env)"
 
 That derives `PULUMI_CONFIG_PASSPHRASE` from the derivation seed — it is
 stored nowhere, so there is nothing to look up — and reads
-`PULUMI_BACKEND_URL` out of the client bundle written above. The URL itself
-is:
+`PULUMI_BACKEND_URL` out of the client bundle written above. The URL names the
+bundle's files by absolute path, because nothing on the path expands a
+variable inside a connection string:
 
 ```sh
-postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=$HOME/.config/kluster/state-backend/ca.crt&sslcert=$HOME/.config/kluster/state-backend/client.crt&sslkey=$HOME/.config/kluster/state-backend/client.key
+postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=/home/you/.config/kluster/state-backend/ca.crt&sslcert=.../client.crt&sslkey=.../client.key
 ```
+
+Moving the bundle therefore invalidates the URL beside it; re-run
+`state-backend bundle operator --address <ip> --directory <where>` to get one
+that points at the new location.
 
 The certificate's Common Name *is* the Postgres role: `operator` locally,
 `ci` in the pipeline.

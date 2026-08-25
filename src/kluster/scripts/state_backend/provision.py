@@ -476,6 +476,30 @@ def find_instance(client: Oci) -> Any | None:
     return _find(_data(client.compute.list_instances(client.compartment_id)), _name('vm'))
 
 
+#: What the box was built from, carried on the box. Instance metadata rather
+#: than a freeform tag because a tag value stops at 256 characters and the
+#: per-component digest map does not fit; it rides beside `user_data`, which
+#: is the same fact in unreadable form.
+CONFIG_METADATA = 'kluster_config'
+DUMP_KEY_METADATA = 'kluster_dump_key_id'
+
+
+def instance_config(instance: Any) -> tuple[dict[str, str], str]:
+    """The digests and dump key id a running box was built with.
+
+    Absent or unparsable metadata answers empty, which every caller reads as
+    drift: a box that cannot say what it is gets rebuilt rather than assumed
+    current.
+    """
+    metadata: dict[str, Any] = dict(getattr(instance, 'metadata', None) or {})
+    raw = str(metadata.get(CONFIG_METADATA) or '')
+    try:
+        digests: dict[str, str] = {str(key): str(value) for key, value in json.loads(raw).items()}
+    except (json.JSONDecodeError, AttributeError):
+        digests = {}
+    return digests, str(metadata.get(DUMP_KEY_METADATA) or '')
+
+
 def terminate_instance(client: Oci, instance_id: str) -> None:
     """Terminate the box and wait for it to be gone.
 
@@ -492,7 +516,16 @@ def terminate_instance(client: Oci, instance_id: str) -> None:
     )
 
 
-def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, ignition: str) -> str:
+def ensure_instance(
+    client: Oci,
+    *,
+    subnet_id: str,
+    nsg_id: str,
+    image_id: str,
+    ignition: str,
+    digests: dict[str, str],
+    dump_key_id: str,
+) -> str:
     """Launch the box, or return the one already running."""
     compute = client.compute
     instance = find_instance(client)
@@ -517,7 +550,13 @@ def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, 
                     assign_public_ip=False,
                     display_name=_name('vnic'),
                 ),
-                metadata={'user_data': base64.b64encode(ignition.encode()).decode()},
+                metadata={
+                    'user_data': base64.b64encode(ignition.encode()).decode(),
+                    # What the next converge compares against, in the one
+                    # place that cannot drift from the box: the box.
+                    CONFIG_METADATA: json.dumps(digests, sort_keys=True),
+                    DUMP_KEY_METADATA: dump_key_id,
+                },
                 # Legacy IMDS serves the machine config without authentication.
                 instance_options=oci.core.models.InstanceOptions(are_legacy_imds_endpoints_disabled=True),
             )

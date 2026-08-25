@@ -37,25 +37,40 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     mise). The Butane file is reviewed like any code: renovate opens
     pin-bump PRs against it (§2), humans merge them.
 -   **The only apply path is re-provision.** No configuration agent,
-    no SSH mutation: any change = PR to the Butane file → hand-run
-    `state-backend provision --replace` (terminate + launch with the
-    new `user_data`;
-    minutes of 5432 downtime — CI retries, local ops re-run). SSH
-    exists (operator key in Ignition) for **diagnosis only** —
-    `state-backend ssh` looks the address up and logs in, so reading a
-    log does not start with finding an IP. Note the key set is
+    no SSH mutation: any change = PR to the Butane file → run
+    `state-backend provision`, which terminates and relaunches when the
+    running box no longer matches the commit (minutes of 5432 downtime
+    — CI retries, local ops re-run). SSH exists (operator key in
+    Ignition) for **diagnosis only** — `state-backend ssh` looks the
+    address up and logs in, so reading a log does not start with
+    finding an IP. Note the key set is
     `deploy/state-backend/operator-keys.txt`: a workstation whose key
     is not in it cannot reach the box at all, which is a re-provision
     to fix, not an `ssh-copy-id`. The
     no-drift rule is what makes "the repo describes the box" true;
     the quarterly drill (§7.3) is what keeps that claim tested.
-    Without `--replace`, provisioning converges everything *around* an
-    existing box and deliberately leaves the box alone — including its
-    B2 dump key. B2 returns an application key's secret once, so the
-    box's copy cannot be read back and minting a replacement revokes
-    what it is holding; a run that re-minted and then left the instance
-    untouched would break the nightly dump silently until it next
-    fired. **The dump key's lifetime is the instance's.**
+-   **The box decides that by carrying its own bill of materials.**
+    At launch, the instance's metadata records a digest per component
+    of what it was built from — the Butane file, the operator keys,
+    each pin, the certificate identities, the dump key's id — and a
+    converge run recomputes them and replaces the box when any differs,
+    naming the ones that did. Certificates are compared by subject,
+    public key and SANs rather than by bytes, because they are
+    re-issued on every render and would otherwise read as permanent
+    drift. A box with no such record (built before this existed) counts
+    as drifted: silence is not evidence that it matches.
+-   **The B2 dump key is one of those components, not a special case.**
+    B2 returns an application key's secret once, so the box's copy
+    cannot be read back and minting a replacement revokes what it is
+    holding — a run that re-minted and then left the instance untouched
+    broke the nightly dump silently until it next fired. So the key is
+    minted only on the branch that launches a box, and the converge
+    asks B2 whether the *recorded* key still exists with the scope
+    settings.py wants: if it does not, the box cannot be handed the
+    intended key without being rebuilt, which is the same replace as
+    any other drift. **The dump key's lifetime is the instance's.**
+    `--replace` remains for the case with no diff to find: rotating the
+    dump key, or discarding a box broken in a way metadata cannot show.
 -   **OS updates: Zincati `periodic` strategy** — reboots confined to
     a weekly maintenance window (exact window chosen at
     implementation), not finalized the moment a rollout arrives:
