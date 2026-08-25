@@ -25,9 +25,51 @@ from .kdbx import MASTER_PATH_ENV, PATH_ENV, KdbxError, KdbxStore
 
 log = logging.getLogger(__name__)
 
+#: Which command runs when. The tree says what exists; this says what to do
+#: with it, because "one subcommand per register row" answers neither "where
+#: do I start" nor "is this the one that destroys something".
+_ORDER = """when to run what (docs/credentials.md §4):
+
+  bring-up, from nothing
+    1. credentials bootstrap --master-kdbx <estate> --master-entry b2=<entry>
+         Fills a kit with every seed in §2, creating the kit if it is absent.
+         Stops at each credential no API can create and prints the console
+         steps. Re-run it to resume: it skips what is already there.
+    2. state-backend provision
+         The Pulumi state backend, which every stack needs before it can act.
+    3. eval "$(credentials derive env)"
+         PULUMI_CONFIG_PASSPHRASE (derived, stored nowhere) and
+         PULUMI_BACKEND_URL (from the bundle step 2 wrote).
+
+  day to day
+    Nothing. No runtime credential is in the kit, so no operation outside
+    bring-up, rotation and the yearly offline day opens it (§2.1).
+
+  when one seed is lost
+    credentials bootstrap --only <member>
+         Re-creates that row alone; the rest of the kit is untouched.
+
+  rotation (§4.2)
+    credentials rotate --into <new kit>
+         Writes a *new* database. Keep the retired one until the last secret
+         derived from it has expired -- backups encrypted under the old
+         derivation seed cannot be re-encrypted retroactively (§2.2).
+
+  looking without changing
+    credentials kdbx ls | show <entry>
+    credentials kdbx remember    stores the master password in the desktop
+                                 secret store, so a run that opens two
+                                 databases asks nothing
+"""
+
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog='credentials', description=__doc__)
+    parser = argparse.ArgumentParser(
+        prog='credentials',
+        description=__doc__,
+        epilog=_ORDER,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     _ = parser.add_argument(
         '--kdbx',
         type=Path,

@@ -63,3 +63,21 @@ def test_a_registered_but_unwritten_action_says_so(
 
     assert main(argv) == 1
     assert 'not yet implemented' in caplog.text
+
+
+def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> None:
+    """The tree says what exists; the epilog says what to do with it.
+
+    A register-shaped command list answers neither "where do I start" nor
+    "which of these destroys something", so the ordering is part of the help
+    rather than a document someone has to know exists.
+    """
+    with pytest.raises(SystemExit):
+        _ = main(['--help'])
+
+    printed = capsys.readouterr().out
+    for landmark in ('bring-up, from nothing', 'when one seed is lost', 'rotation', 'day to day'):
+        assert landmark in printed
+    # Each lifecycle verb appears in the ordering, not only in the tree.
+    for verb in ('bootstrap', 'rotate', 'derive env'):
+        assert verb in printed

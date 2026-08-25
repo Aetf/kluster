@@ -241,7 +241,21 @@ rotate with the resource that owns them.
 
 The register's executable form: `credentials`, a console script in
 this repo (`src/kluster/scripts/credentials/`), one subcommand per
-credential family plus the two lifecycle commands below. Every
+credential family plus the lifecycle commands below.
+
+| Command | When |
+| --- | --- |
+| `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
+| `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
+| `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
+| `eval "$(credentials derive env)"` | Whenever a shell needs to reach the backend. Derives the passphrase, reads the URL from the bundle. |
+| `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
+| `credentials kdbx ls` / `show` | Looking without changing. |
+| `credentials kdbx remember` | Once per machine, so a run opening two databases asks for nothing. |
+
+`credentials --help` carries the same ordering, because a command list
+shaped like the register answers neither "where do I start" nor "which
+of these destroys something". Every
 subcommand is **mint → push to every slot in the map → verify**, and
 therefore idempotent: rotation is a re-run, not a second procedure.
 
