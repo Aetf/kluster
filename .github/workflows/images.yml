@@ -1,0 +1,175 @@
+name: images
+
+# Builds (PRs) and publishes (main) the self-built images in docker/ — the CNPG
+# operands, emailproxy, golinks (framework/ci.md §4). The loop around it: a
+# `.conf` per image holds its build args and its tag, renovate bumps the
+# version in that file, noop-automerge merges the bump once the preview proves
+# a zero diff, this workflow publishes the ghcr tag, and renovate's image
+# manager then opens the *deploy* PR against the pin for human eyes. Publishing
+# is where this workflow stops — it never deploys.
+#
+# Multi-arch is mandatory (the cloud pool is arm64) and is done by building
+# each architecture on its own native runner and stitching a manifest, never by
+# qemu: the vchord operand compiles Rust, which emulation turns from minutes
+# into an unbounded wait. Free `ubuntu-24.04-arm` runners are a public-repo
+# feature, which this repo has been since 2026-08-25.
+
+on:
+  push:
+    branches: [main]
+    paths: &images
+      - 'docker/**'
+      - '.github/workflows/images.yml'
+      - '.github/actions/image-conf/**'
+  pull_request:
+    branches: [main]
+    paths: *images
+  workflow_dispatch:
+
+# Renovate rebases push in quick succession; don't stack stale runs. Pushes to
+# main are not cancelled — an interrupted publish would leave a manifest half
+# stitched.
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      # A JSON array of docker/*.Containerfile basenames, which is the shape
+      # the matrices below need: a job-level `if` cannot read the `matrix`
+      # context at all, so selecting images has to happen by building the
+      # matrix rather than by filtering it afterwards.
+      images: ${{ steps.select.outputs.images }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The selection diffs against the base commit, which a shallow clone
+          # does not have.
+          fetch-depth: 0
+
+      # Skipping an unchanged image is safe here in a way that skipping a
+      # preview is not: a published tag is a pure function of its `.conf`, so a
+      # tag that does not exist yet implies a change in `docker/<image>.*`,
+      # which is exactly what this selects on. Rebuilding it anyway would only
+      # re-push bytes that are already there — at vchord's build cost.
+      - name: Select the images to build
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          # push: the commit the branch moved from. PR: its base.
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          all=$(find docker -maxdepth 1 -name '*.Containerfile' -printf '%f\n' 2>/dev/null \
+            | sed 's/\.Containerfile$//' | sort || true)
+
+          # No base to diff against (a dispatch, or a freshly created branch)
+          # means build everything, as does a change to the build machinery
+          # itself: that one has to be proven against every image.
+          if [ "$EVENT" = workflow_dispatch ] || ! git cat-file -e "${BASE:-none}^{commit}" 2>/dev/null; then
+            picked=$all
+          else
+            changed=$(git diff --name-only "$BASE" HEAD)
+            if grep -qE '^\.github/(workflows/images\.yml|actions/image-conf/)' <<<"$changed"; then
+              picked=$all
+            else
+              picked=
+              for image in $all; do
+                if grep -q "^docker/$image\." <<<"$changed"; then
+                  picked=$(printf '%s\n%s' "$picked" "$image")
+                fi
+              done
+            fi
+          fi
+
+          echo "images=$(jq -cRn '[inputs | select(length > 0)]' <<<"$picked")" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    # An empty matrix is not an error but it is also not a job, and a matrix
+    # built from an empty array would be one — so the whole job stands down
+    # when nothing matched.
+    if: needs.changes.outputs.images != '[]'
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.changes.outputs.images) }}
+        platform:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/image-conf
+        id: conf
+        with:
+          image: ${{ matrix.image }}
+
+      - name: Build
+        env:
+          REF: ${{ steps.conf.outputs.ref }}
+          ARGS_FILE: ${{ steps.conf.outputs.args-file }}
+          ARCH: ${{ matrix.platform.arch }}
+        run: |
+          set -euo pipefail
+          # TARGETARCH comes last so it wins over any value the conf carries:
+          # the Containerfiles use it to pick an upstream .deb, and under
+          # native builds the runner decides the architecture, not the file.
+          buildah bud -f "docker/${{ matrix.image }}.Containerfile" \
+            --build-arg-file "$ARGS_FILE" \
+            --build-arg "TARGETARCH=$ARCH" \
+            --annotation org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }} \
+            -t "$REF-$ARCH"
+
+      # Per-architecture tags are published rather than kept as artifacts: the
+      # manifest job runs on a different machine and stitches from the
+      # registry. They stay visible next to the manifest, which is what makes a
+      # half-published image obvious.
+      - name: Publish the ${{ matrix.platform.arch }} image
+        if: github.event_name != 'pull_request'
+        env:
+          REF: ${{ steps.conf.outputs.ref }}
+          ARCH: ${{ matrix.platform.arch }}
+        run: |
+          set -euo pipefail
+          buildah login -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}' ghcr.io
+          buildah push "$REF-$ARCH"
+
+  manifest:
+    needs: [changes, build]
+    # PR builds publish nothing, so there is nothing to stitch.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.changes.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/image-conf
+        id: conf
+        with:
+          image: ${{ matrix.image }}
+
+      # The tag the cluster pins is this manifest, never one of the
+      # per-architecture tags it lists.
+      - name: Stitch the manifest
+        env:
+          REF: ${{ steps.conf.outputs.ref }}
+        run: |
+          set -euo pipefail
+          buildah login -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}' ghcr.io
+          buildah manifest create "$REF" \
+            "docker://$REF-amd64" \
+            "docker://$REF-arm64"
+          buildah manifest push --all "$REF" "docker://$REF"
