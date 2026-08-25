@@ -18,9 +18,10 @@ Add labels, never edit them.
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import secrets
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from . import entries
 from .kdbx import KdbxError, KdbxStore
@@ -29,24 +30,18 @@ from .kdbx import KdbxError, KdbxStore
 #: use of the same HKDF construction.
 _INFO_PREFIX = b'kluster/v1/'
 
-_HASH = hashlib.sha256
-_HASH_LEN = 32
+_HASH = hashes.SHA256()
+_HASH_LEN = _HASH.digest_size
 
 
 def hkdf(ikm: bytes, salt: bytes, info: bytes, length: int) -> bytes:
-    """HKDF-SHA256, RFC 5869 — extract then expand."""
-    if length > 255 * _HASH_LEN:
-        raise ValueError(f'cannot derive more than {255 * _HASH_LEN} bytes')
+    """HKDF-SHA256, RFC 5869 — `cryptography`'s, checked against the RFC's vectors.
 
-    prk = hmac.new(salt or bytes(_HASH_LEN), ikm, _HASH).digest()
-    okm = b''
-    block = b''
-    counter = 1
-    while len(okm) < length:
-        block = hmac.new(prk, block + info + bytes([counter]), _HASH).digest()
-        okm += block
-        counter += 1
-    return okm[:length]
+    Wrapped rather than called inline so the vector tests exercise the exact
+    construction the derivations use. An empty salt is the RFC's absent salt,
+    which is what `None` means here.
+    """
+    return HKDF(algorithm=_HASH, length=length, salt=salt or None, info=info).derive(ikm)
 
 
 def derive(seed: bytes, label: str, length: int = 32) -> bytes:
