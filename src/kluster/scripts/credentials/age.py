@@ -8,6 +8,16 @@ nothing to escrow, nothing to lose.
 
 age's X25519 identity is exactly a 32-byte scalar in Bech32 clothing, which is
 what makes the derivation possible: the derived bytes *are* the key.
+
+The Bech32 encoder below is the repo's one hand-written piece of what looks
+like cryptography, and is a deliberate exception. It is an *encoding*, not a
+primitive: it has no secret input and no security property to weaken, and a
+mistake in it produces a string age refuses rather than a key that silently
+opens to someone else. Two tests hold it: the BIP-173 vectors, and a
+round-trip against real `age-keygen`. The alternative -- a PyPI bech32
+package unmaintained since 2020 -- would trade forty tested lines for a
+supply-chain dependency. The X25519 half, where a mistake *would* be silent,
+comes from `cryptography`.
 """
 
 from __future__ import annotations
