@@ -301,6 +301,15 @@ rather than a rewrite:
 git filter-repo --invert-paths --path Pulumi.dev.yaml
 ```
 
+**Amended 2026-08-25**: this must not be read as "an encryption salt
+may never be public". `Pulumi.<stack>.yaml` files, salt and `secure:`
+ciphertexts included, are committed to this public repository on
+purpose — CI reads them, and the passphrase they are derived against is
+32 bytes of HKDF output from the derivation seed (credentials.md §2.2),
+which no offline attack on a KDF salt reaches. What made the scrubbed
+blobs a finding was whose secrets they were: the legacy cluster's, under
+a passphrase that was not derived and is live until Wave F.
+
 Post-conditions, verified on the rewritten history: no blob matches the
 ciphertext or salt markers, every other path keeps its exact blob hash,
 and the commit count is unchanged. Because the rewrite changed every

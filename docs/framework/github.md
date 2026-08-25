@@ -62,8 +62,9 @@ Two consequences, both load-bearing:
     `drill` Environment is deliberately ungated — its scope is the
     gate (credentials.md §4) — and the ops repo holds no stack.
 
-Nothing in §3 is blocked by the plan any more; what is missing there is
-missing because the stack is not written yet (kluster-ops#10).
+Nothing in §3 is blocked by the plan any more, and §3 has been applied
+(2026-08-25); what is still console state is there for the reasons §4
+gives, not because the plan forbids it.
 
 ## 3. What is declared
 

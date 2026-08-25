@@ -177,8 +177,9 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     visibility flip was a security milestone rather than a packaging
     one: it is what lets the zero-diff proof be a required check and
     `up-physical`'s approval door exist. The gates below are declared
-    by the `github` stack, which is not written yet
-    (kluster-ops#10) — until it runs they are designed, not applied.
+    by the `github` stack and applied 2026-08-25: `main` requires
+    `checks` and `changes` and an up-to-date branch, with
+    `enforce_admins` on, and `physical` is reviewer-gated.
 -   **Credential partitioning (2026-08-23, from the security audit;
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare
