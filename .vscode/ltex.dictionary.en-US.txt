@@ -38,6 +38,7 @@ Backblaze
 BadgerOps
 bt
 btrfs
+buildah
 Ceph
 cetools
 churny
@@ -51,6 +52,7 @@ ClusterIP
 CNAMEs
 CNPG-backed
 conf
+confs
 containerd
 ContextVar
 continuwuity
