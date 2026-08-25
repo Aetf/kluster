@@ -67,29 +67,79 @@ missing because the stack is not written yet (kluster-ops#10).
 
 ## 3. What is declared
 
--   **Repositories**: `kluster` (this one) and `kluster-ops` (private;
-    the notification and drill repo, ci.md §5) — visibility, merge
-    strategy, secret scanning and push protection, and the settings
-    that must not silently change.
--   **Environments and their gates**: `physical-plan` (ungated, plan
-    only), `physical` (reviewer-gated, applies), `dns`, `k8s-base`,
-    `apps`, and `drill` in the ops repo (ungated — its scope is the
-    gate). Which secrets each carries is the register's business
-    (credentials.md §3); which environments *exist*, and which have a
+-   **Repositories**: `kluster` (public) and `kluster-ops` (private;
+    the notification and drill repo, ci.md §5) — visibility, the merge
+    strategy, issue/wiki/project surface, vulnerability alerts, and
+    secret scanning with push protection on the public one. Secret
+    scanning is a public-or-paid feature, so asking for it on
+    `kluster-ops` would be an API error rather than a stricter setting.
+    Merges are **rebase only**: a squash rewrites authorship to the
+    merging identity, which for an unattended merge is
+    `noreply@github.com`, and a merge commit contradicts the linear
+    history the branch protection asks for. Both carry
+    `archive_on_destroy` and Pulumi's `protect`, so no run of this
+    stack can delete the repository that contains it.
+-   **Environments**: `dns`, `k8s-base` and `apps` (ungated, and
+    deliberately with **no** deployment branch policy — `preview.yml`
+    runs them from a pull request's own branch, so restricting them to
+    protected branches would fail every preview); `physical-plan` and
+    `physical` (protected branches only, since their credentials can
+    root the gateway and never run a pull request's code); and `drill`
+    in the ops repo (ungated — its scope is the gate,
+    credentials.md §4). Which secrets each carries is the register's
+    business (credentials.md §3); which exist, and which has a
     reviewer, is this stack's.
--   **Branch protection on `main`**: required checks and up-to-date
-    branch, which is what makes "the preview was empty" a statement
-    about the code that will be on `main` rather than about a stale
-    branch. Available since the repository went public (§2).
--   **App installations**: which repositories the dispatch and trigger
-    Apps are installed on, and with what repository selection.
+-   **The reviewer gate on `physical`**, with the operator as the
+    reviewer and self-review permitted: the estate has one person, so
+    self-review is the only review there is, and forbidding it would
+    make the door impassable rather than stricter. Admin bypass is
+    off for the same reason `enforce_admins` is on below.
+-   **Branch protection on `main`**: `checks` and `changes` as required
+    status checks, plus "branch must be up to date". Those two run on
+    every pull request regardless of paths, which is what a required
+    check has to do — one that only sometimes runs blocks a pull
+    request forever. The `preview` matrix is deliberately **not**
+    required: its check names carry the stack (`preview (dns)`), so
+    pinning them freezes the stack list into a setting that no longer
+    moves with the code, and its verdict is what noop-automerge reads
+    (ci.md §3). `enforce_admins` is on, including for the account
+    owner: a gate the only person who can open it walks around is a
+    suggestion, and this one is why a merge to `main` implies a
+    passing preview. Force pushes and deletion are off; history is
+    linear.
+
+### 3.1 The first apply
+
+Three of these exist already, so Pulumi has to adopt them rather than
+create them. Once, from the operator's machine, before the first `up`:
+
+```sh
+mise x -- pulumi import -s github github:index/repository:Repository kluster kluster
+mise x -- pulumi import -s github github:index/repository:Repository kluster-ops kluster-ops
+mise x -- pulumi import -s github github:index/repositoryEnvironment:RepositoryEnvironment \
+    physical-plan kluster:physical-plan
+```
+
+The generated code `import` prints is ignored — the resources are
+already declared here; what is wanted is the state entry. Everything
+else the stack declares does not exist yet and is created normally.
 
 ## 4. What is not declared
 
--   **The Apps themselves.** Creating an App and generating its
-    private key is console-only (credentials.md §2), which is why
-    those keys are seeds rather than derived credentials. The stack
-    declares where an existing App is installed, not that it exists.
+-   **The Apps themselves, and their installations.** Creating an App
+    and generating its private key is console-only (credentials.md
+    §2), which is why those keys are seeds rather than derived
+    credentials. Installation is console state too, for a measured
+    reason: the endpoints that manage which repositories an
+    installation covers (`/user/installations/…`) reject a personal
+    access token of either kind — they take only a user-to-server
+    token from that App's own OAuth flow, an 8-hour credential the
+    register has no tier for. Declaring one console page would cost a
+    browser round trip before every apply, or turning off token
+    expiry on both Apps (kluster-ops#11). Reading the state is cheap
+    by comparison — an App can list its own installations with a JWT
+    signed by the private key already in the kit — so an audit is the
+    open option, not enforcement.
 -   **Environment secret *values*.** Those are the `credentials`
     scripts' job, pushed into slots the register names. This stack
     creates the environment; the register fills it.
