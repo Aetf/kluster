@@ -9,6 +9,12 @@ from `deploy/state-backend/` in this repo. Design goal: a
 `pg_dump` + re-provision can't rebuild, and every operational path is
 either automated or a written playbook (§7).
 
+The availability domain is **chosen by asking which one offers the
+shape**, not taken as the first one listed: this shape is offered in
+exactly one of Phoenix's three ADs. Launching into either of the other
+two returns `404 NotAuthorizedOrNotFound`, an error naming neither the
+shape nor the domain, which reads like a permissions problem.
+
 > **Status**: designed 2026-08-24, extracting and completing the
 > appliance design begun in [framework/ci.md](../framework/ci.md) §1
 > (which keeps the *decision* — what the backend is and why it lives

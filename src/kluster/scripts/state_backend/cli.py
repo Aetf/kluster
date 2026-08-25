@@ -47,9 +47,14 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) -> int:
+    # Each stage says what it is starting, not only what it finished: the
+    # image import and the first boot are minutes-long, and a log that only
+    # speaks on success is indistinguishable from a hang while they run.
+    log.info('[1/6] reading the derivation seed and the B2 seed key')
     seed = seeds.load_seed(store)
 
     session = b2.Session.from_entry(store, seed_entry)
+    log.info('[2/6] bucket %s and its dump key', settings.B2_BUCKET)
     bucket_id = b2.ensure_bucket(
         session,
         settings.B2_BUCKET,
@@ -61,21 +66,26 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) ->
     )
 
     client = provision.Oci.load(compartment)
+    log.info('[3/6] OCI network: VCN, subnet, gateway, security group, reserved address')
     vcn_id, subnet_id = provision.ensure_network(client)
     nsg_id = provision.ensure_security_group(client, vcn_id)
     public_ip_id, address = provision.ensure_reserved_ip(client)
     log.info('appliance address: %s', address)
 
+    log.info('[4/6] rendering Ignition for %s', address)
     ignition = config.render_ignition(
         seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
     )
+    log.info('[5/6] custom image (imports on first run; several minutes)')
     image_id = provision.ensure_image(client)
+    log.info('[6/6] instance')
     instance_id = provision.ensure_instance(
         client, subnet_id=subnet_id, nsg_id=nsg_id, image_id=image_id, ignition=ignition
     )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 
     config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), DEFAULT_BUNDLE_DIR)
+    log.info('operator certificate bundle written to %s', DEFAULT_BUNDLE_DIR)
 
     if not provision.wait_for_backend(address):
         log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)

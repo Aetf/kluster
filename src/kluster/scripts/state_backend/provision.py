@@ -116,6 +116,11 @@ class Oci:
         return oci.object_storage.ObjectStorageClient(self.config, retry_strategy=self._retry)
 
 
+def _duration(seconds: float) -> str:
+    minutes, secs = divmod(int(seconds), 60)
+    return f'{minutes}m{secs:02d}s' if minutes else f'{secs}s'
+
+
 def _find(items: list[Any], display_name: str) -> Any | None:
     for item in items:
         if item.display_name == display_name and item.lifecycle_state not in ('TERMINATED', 'TERMINATING'):
@@ -129,8 +134,11 @@ def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> 
     The SDK's own waiter re-raises the transient 404s described on the client
     above, which on an hour-long image import means losing the wait to a blip.
     """
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     last = ''
+    announced = 0.0
+    log.info('waiting for %s to reach %s (up to %s)', what, target, _duration(timeout))
     while time.monotonic() < deadline:
         try:
             resource = _data(fetch())
@@ -140,15 +148,22 @@ def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> 
             time.sleep(15)
             continue
         state = str(resource.lifecycle_state)
+        elapsed = time.monotonic() - started
         if state != last:
-            log.info('%s: %s', what, state)
+            log.info('%s: %s (%s)', what, state, _duration(elapsed))
             last = state
+            announced = elapsed
+        elif elapsed - announced >= 60:
+            # An import runs for the better part of an hour; silence for that
+            # long is indistinguishable from a hang.
+            log.info('%s: still %s after %s', what, state, _duration(elapsed))
+            announced = elapsed
         if state == target:
             return resource
         if state in ('FAILED', 'TERMINATED', 'DELETED'):
             raise RuntimeError(f'{what} ended in {state}')
         time.sleep(15)
-    raise TimeoutError(f'{what} never reached {target}')
+    raise TimeoutError(f'{what} never reached {target} within {_duration(timeout)}')
 
 
 def ensure_network(client: Oci) -> tuple[str, str]:
@@ -352,7 +367,7 @@ def ensure_image(client: Oci) -> str:
     object_name = f'fedora-coreos-{release}.qcow2'
     with tempfile.TemporaryDirectory() as tmp:
         compressed = Path(tmp) / 'fcos.qcow2.xz'
-        log.info('downloading %s', url)
+        log.info('downloading the FCOS qcow2 (~1 GiB compressed): %s', url)
         with urllib.request.urlopen(url, timeout=600) as response, compressed.open('wb') as out:
             shutil.copyfileobj(response, out)
 
@@ -364,7 +379,7 @@ def ensure_image(client: Oci) -> str:
         digest = digest.hexdigest()
         if digest != sha256:
             raise RuntimeError(f'FCOS image digest mismatch: {digest} != {sha256}')
-        log.info('digest verified')
+        log.info('digest verified; decompressing')
 
         qcow = Path(tmp) / 'fcos.qcow2'
         with lzma.open(compressed) as src, qcow.open('wb') as out:
@@ -395,6 +410,27 @@ def ensure_image(client: Oci) -> str:
     return str(image.id)
 
 
+def _shape_domain(client: Oci, image_id: str) -> str:
+    """An availability domain that actually offers the shape.
+
+    Not `domains[0]`: a shape is offered per-AD, and this one is offered in
+    exactly one of Phoenix's three. Launching into an AD that does not have it
+    fails as `404 NotAuthorizedOrNotFound` -- an error that names neither the
+    shape nor the domain, and reads like a permissions problem.
+    """
+    domains = [str(domain.name) for domain in _data(client.identity.list_availability_domains(client.compartment_id))]
+    for domain in domains:
+        offered = oci.pagination.list_call_get_all_results(
+            client.compute.list_shapes,
+            client.compartment_id,
+            availability_domain=domain,
+            image_id=image_id,
+        ).data
+        if settings.SHAPE in {str(shape.shape) for shape in offered}:
+            return domain
+    raise RuntimeError(f'{settings.SHAPE} is offered in none of {", ".join(domains)} for this image')
+
+
 def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, ignition: str) -> str:
     """Launch the box, or return the one already running."""
     compute = client.compute
@@ -402,7 +438,8 @@ def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, 
     if instance is not None:
         return str(instance.id)
 
-    availability_domain = _data(client.identity.list_availability_domains(client.compartment_id))[0].name
+    availability_domain = _shape_domain(client, image_id)
+    log.info('launching %s (%s) in %s', _name('vm'), settings.SHAPE, availability_domain)
     launched = _data(
         compute.launch_instance(
             oci.core.models.LaunchInstanceDetails(
@@ -452,6 +489,14 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
     not seconds.
     """
     deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    announced = 0.0
+    log.info(
+        'waiting for %s:%d to answer — first boot pulls the Postgres image and fetches age (up to %s)',
+        address,
+        settings.PORT,
+        _duration(timeout),
+    )
     while time.monotonic() < deadline:
         probe = sp.run(
             ['openssl', 's_client', '-connect', f'{address}:{settings.PORT}', '-starttls', 'postgres', '-brief'],
@@ -461,6 +506,10 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
         )
         if probe.returncode == 0:
             return True
+        elapsed = time.monotonic() - started
+        if elapsed - announced >= 60:
+            log.info('still no answer on %s:%d after %s', address, settings.PORT, _duration(elapsed))
+            announced = elapsed
         time.sleep(15)
     return False
 
