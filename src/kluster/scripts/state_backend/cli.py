@@ -35,7 +35,15 @@ def _parser() -> argparse.ArgumentParser:
     render = actions.add_parser('render', help='render the Ignition config without touching the cloud')
     _ = render.add_argument('--address', default='192.0.2.10', help='address to issue the server certificate for')
 
-    _ = actions.add_parser('provision', help='create or converge the appliance')
+    provision_cmd = actions.add_parser('provision', help='create the appliance, or converge everything around it')
+    # Re-provision is the appliance's only apply path (state-backend.md §1),
+    # and it is destructive by construction: a new box, a new dump key, and
+    # whatever state was not in the last dump.
+    _ = provision_cmd.add_argument(
+        '--replace',
+        action='store_true',
+        help='terminate the existing box and build a new one (applies a changed Butane file)',
+    )
 
     # Diagnosis only: the box is never configured by hand (state-backend.md
     # §1). Needs no offline database, so it does not ask for one.
@@ -51,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) -> int:
+def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, replace: bool) -> int:
     # Each stage says what it is starting, not only what it finished: the
     # image import and the first boot are minutes-long, and a log that only
     # speaks on success is indistinguishable from a hang while they run.
@@ -59,15 +67,12 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) ->
     seed = seeds.load_seed(store)
 
     session = b2.Session.from_entry(store, seed_entry)
-    log.info('[2/6] bucket %s and its dump key', settings.B2_BUCKET)
+    log.info('[2/6] bucket %s', settings.B2_BUCKET)
     bucket_id = b2.ensure_bucket(
         session,
         settings.B2_BUCKET,
         prefix=settings.B2_PREFIX,
         retention_days=settings.B2_RETENTION_DAYS,
-    )
-    dump_key_id, dump_key = b2.mint_dump_key(
-        session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
     )
 
     client = provision.Oci.load(compartment)
@@ -77,16 +82,33 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None) ->
     public_ip_id, address = provision.ensure_reserved_ip(client)
     log.info('appliance address: %s', address)
 
-    log.info('[4/6] rendering Ignition for %s', address)
-    ignition = config.render_ignition(
-        seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
-    )
-    log.info('[5/6] custom image (imports on first run; several minutes)')
-    image_id = provision.ensure_image(client)
-    log.info('[6/6] instance')
-    instance_id = provision.ensure_instance(
-        client, subnet_id=subnet_id, nsg_id=nsg_id, image_id=image_id, ignition=ignition
-    )
+    existing = provision.find_instance(client)
+    if existing is not None and not replace:
+        # Minting a dump key revokes the one the box is running on -- B2
+        # returns an application key's secret once, so the box's copy cannot
+        # be read back and re-used. Doing it on a run that then leaves the
+        # instance alone would break the nightly dump silently, until 02:30
+        # the next day. The key's lifetime is the instance's.
+        log.info('[4/6] appliance %s already exists; leaving it and its dump key alone', existing.id)
+        log.info('       to apply a changed Butane file or rotate the dump key: --replace')
+        instance_id = str(existing.id)
+    else:
+        if existing is not None:
+            log.warning('[4/6] replacing %s — 5432 goes away until the new box answers', existing.id)
+            provision.terminate_instance(client, str(existing.id))
+        log.info('[4/6] minting the dump key and rendering Ignition for %s', address)
+        dump_key_id, dump_key = b2.mint_dump_key(
+            session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
+        )
+        ignition = config.render_ignition(
+            seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
+        )
+        log.info('[5/6] custom image (imports on first run; several minutes)')
+        image_id = provision.ensure_image(client)
+        log.info('[6/6] instance')
+        instance_id = provision.ensure_instance(
+            client, subnet_id=subnet_id, nsg_id=nsg_id, image_id=image_id, ignition=ignition
+        )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 
     config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), DEFAULT_BUNDLE_DIR)
@@ -122,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             case 'provision':
-                return _provision(store, seed_entry=args.seed_entry, compartment=args.compartment)
+                return _provision(store, seed_entry=args.seed_entry, compartment=args.compartment, replace=args.replace)
             case 'bundle':
                 config.write_client_bundle(
                     config.client_bundle(seeds.load_seed(store), name=args.name, address=args.address),

@@ -471,10 +471,31 @@ def _shape_domain(client: Oci, image_id: str) -> str:
     raise RuntimeError(f'{settings.SHAPE} is offered in none of {", ".join(domains)} for this image')
 
 
+def find_instance(client: Oci) -> Any | None:
+    """The appliance, if it exists. Creates nothing."""
+    return _find(_data(client.compute.list_instances(client.compartment_id)), _name('vm'))
+
+
+def terminate_instance(client: Oci, instance_id: str) -> None:
+    """Terminate the box and wait for it to be gone.
+
+    The boot volume goes with it: the appliance holds nothing a `pg_dump`
+    restore cannot rebuild (state-backend.md §1), and a preserved volume
+    would be a second copy of the state to keep track of.
+    """
+    log.info('terminating %s', instance_id)
+    _ = client.compute.terminate_instance(instance_id, preserve_boot_volume=False)
+    # `_await_state` checks the target before its failure states, so asking
+    # for TERMINATED here is not asking for the one it raises on.
+    _ = _await_state(
+        lambda: client.compute.get_instance(instance_id), 'TERMINATED', what='the old instance', timeout=900
+    )
+
+
 def ensure_instance(client: Oci, *, subnet_id: str, nsg_id: str, image_id: str, ignition: str) -> str:
     """Launch the box, or return the one already running."""
     compute = client.compute
-    instance = _find(_data(compute.list_instances(client.compartment_id)), _name('vm'))
+    instance = find_instance(client)
     if instance is not None:
         return str(instance.id)
 
