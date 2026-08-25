@@ -96,7 +96,7 @@ typeCheckingMode = "strict"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
-include = ["src", "tests", "__main__.py"]
+include = ["src", "tests", "deploy", "__main__.py"]
 # Generated CRD bindings are not ours to annotate; the three pre-Talos
 # leftovers are rewritten rather than retrofitted (AGENTS.md), and the
 # exclusion goes away with them.

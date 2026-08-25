@@ -22,15 +22,28 @@ import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 RECIPIENTS = Path('/etc/kluster/age-recipients.txt')
 CONTAINER = 'pgstate'
 
 
-def _request(url: str, *, headers: dict[str, str], data: bytes | None = None) -> dict[str, object]:
+def _request(
+    url: str,
+    *,
+    headers: dict[str, str],
+    data: bytes | None = None,
+    timeout: int = 120,
+) -> dict[str, Any]:
+    """Every B2 call goes through here.
+
+    All three of them are JSON-in/JSON-out over the same auth header, upload
+    included -- b2_upload_file differs only in carrying a raw body and needing
+    a longer deadline, both of which are arguments. There is no second style.
+    """
     request = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(request, timeout=120) as response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -64,29 +77,28 @@ def upload(path: Path, name: str) -> None:
 
     basic = base64.b64encode(f'{key_id}:{key}'.encode()).decode()
     account = _request(AUTHORIZE_URL, headers={'Authorization': f'Basic {basic}'})
-    api_url = account['apiInfo']['storageApi']['apiUrl']  # pyright: ignore[reportIndexIssue]
-    token = account['authorizationToken']
+    api_url: str = account['apiInfo']['storageApi']['apiUrl']
+    token: str = account['authorizationToken']
 
     upload_target = _request(
         f'{api_url}/b2api/v3/b2_get_upload_url',
-        headers={'Authorization': str(token), 'Content-Type': 'application/json'},
+        headers={'Authorization': token, 'Content-Type': 'application/json'},
         data=json.dumps({'bucketId': bucket_id}).encode(),
     )
 
     body = path.read_bytes()
-    request = urllib.request.Request(
-        str(upload_target['uploadUrl']),
-        data=body,
+    _ = _request(
+        upload_target['uploadUrl'],
         headers={
-            'Authorization': str(upload_target['authorizationToken']),
+            'Authorization': upload_target['authorizationToken'],
             'X-Bz-File-Name': urllib.parse.quote(name),
             'Content-Type': 'application/octet-stream',
             'Content-Length': str(len(body)),
             'X-Bz-Content-Sha1': hashlib.sha1(body).hexdigest(),
         },
+        data=body,
+        timeout=600,
     )
-    with urllib.request.urlopen(request, timeout=600) as response:
-        _ = response.read()
 
 
 def main() -> int:
