@@ -41,6 +41,12 @@ _ORDER = """when to run what (docs/credentials.md §4):
          PULUMI_CONFIG_PASSPHRASE (derived, stored nowhere) and
          PULUMI_BACKEND_URL (from the bundle step 2 wrote).
 
+  on a workstation that develops without the kit
+    credentials derive passphrase > .pulumi.secret
+         Caches the passphrase where mise.toml reads it, so a local
+         `pulumi preview` needs neither the kit nor an eval. The client
+         bundle has to be copied to that machine too.
+
   day to day
     Nothing. No runtime credential is in the kit, so no operation outside
     bring-up, rotation and the yearly offline day opens it (§2.1).
@@ -101,6 +107,10 @@ def _parser() -> argparse.ArgumentParser:
         default=Path.home() / '.config' / 'kluster' / 'state-backend',
         help='where `state-backend` wrote the client bundle',
     )
+    # `env` is for a shell; this is for a file. A workstation that develops
+    # against the backend needs the passphrase on every `pulumi preview`, and
+    # the kit is not on every workstation (§2.1).
+    _ = der_actions.add_parser('passphrase', help='the passphrase alone, for a workstation cache file')
 
     rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
     _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
@@ -212,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 for name, value in lifecycle.environment(store, args.bundle_dir).items():
                     print(f'export {name}={shlex.quote(value)}')
+            case ('derive', _, 'passphrase'):
+                if sys.stdout.isatty():
+                    log.error('this prints a passphrase; redirect it: credentials derive passphrase > .pulumi.secret')
+                    return 1
+                print(seeds.pulumi_passphrase(seeds.load_seed(store)))
             case ('bootstrap', _, _):
                 created = lifecycle.bootstrap(
                     store,

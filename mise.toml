@@ -1,3 +1,8 @@
+# Both are secrets in the sense that matters here -- the passphrase decrypts
+# every stack's config, the URL names a client key -- so mise does not echo
+# them back in `mise env` or a task's command line.
+redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL"]
+
 # Pinned, not `latest`: CI installs from this file, so a floating version is a
 # breaking upgrade that lands without a PR, a preview, or a way to bisect it.
 # Renovate maintains these -- it cannot bump `latest`, which is why they are
@@ -11,3 +16,31 @@ uv = "0.11.26"
 # cross-check exercises what actually runs there -- a test holds the two equal.
 age = "1.3.1"
 "aqua:coreos/butane" = "0.29.0"
+
+# A local `pulumi preview` needs both of these, and neither can be looked up:
+# the passphrase is derived from the derivation seed and stored in no slot
+# (docs/credentials.md §2.2), and the URL is written by `state-backend
+# provision` beside the client certificate it names. A workstation that does
+# not hold the offline kit therefore caches the passphrase in a git-ignored
+# file, which `credentials derive passphrase` writes.
+#
+# Both fall back to whatever is already in the environment rather than to an
+# empty string: CI passes them in as Environment secrets, and a blank value
+# here would overwrite them (framework/ci.md §2).
+[env]
+PULUMI_CONFIG_PASSPHRASE = """
+{%- set cached = [config_root, '.pulumi.secret'] | join_path -%}
+{%- if cached is file -%}
+{{- read_file(path=cached) | trim -}}
+{%- else -%}
+{{- env.PULUMI_CONFIG_PASSPHRASE | default(value="") -}}
+{%- endif -%}
+"""
+PULUMI_BACKEND_URL = """
+{%- set bundle = [env.HOME, '.config/kluster/state-backend/backend-url'] | join_path -%}
+{%- if bundle is file -%}
+{{- read_file(path=bundle) | trim -}}
+{%- else -%}
+{{- env.PULUMI_BACKEND_URL | default(value="") -}}
+{%- endif -%}
+"""

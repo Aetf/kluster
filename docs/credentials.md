@@ -249,6 +249,7 @@ credential family plus the lifecycle commands below.
 | `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
 | `eval "$(credentials derive env)"` | Whenever a shell needs to reach the backend. Derives the passphrase, reads the URL from the bundle. |
+| `credentials derive passphrase > .pulumi.secret` | Once per workstation that develops without the kit. Caches the passphrase for `mise.toml` to read, so a local preview does not need the offline database open. |
 | `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
 | `credentials kdbx remember` | Once per machine, so a run opening two databases asks for nothing. |
