@@ -1,43 +1,26 @@
-# Firewall actions are written ACCEPT/DROP, not the English verb.
+A_INFINITIVE
 ACCEPT_EXCEPT
-# "a reinstall", "a rebuild" -- nouns here.
-A_INSTALL
-# "does root-level writes": a noun after "does", not a second inflection.
-DOES_X_HAS
-# Mis-guesses the article before a code span it cannot pronounce.
-EN_A_VS_AN
-# Deliberate parallel lists ("No X. No Y. No Z.").
-ENGLISH_WORD_REPEAT_BEGINNING_RULE
-# Repeated cells in comparison tables ("included | included").
-ENGLISH_WORD_REPEAT_RULE
-# Technical compounds this repo writes hyphenated: inter-node, inter-VLAN.
-EN_COMPOUNDS_INTER_NODE
-# "key id", "commit id", "client id" -- the spelling every API here uses.
-ID_CASING
-# alice/bob are AdGuard instance names, not people.
-LOWERCASE_NAMES
-# Dots inside names: jiahui.love, A1.Flex, unlimited-code.works.
-LC_AFTER_PERIOD
-# Paths: /etc/boot.d and friends.
-NON_STANDARD_WORD
-# .phd is a TLD in this estate, not a degree.
-PH_D
-# "the apps environment" is the environment named apps.
-POSSESSIVE_APOSTROPHE
-# "the deploy PR", "the deploy workflow" -- attributive, not a verb.
-PREPOSITION_VERB
-# Product names carry dots: A1.Flex, E2.1.Micro.
-SENTENCE_WHITESPACE
-# Bold lead-ins ("**Attack.** storage.md ...") and list continuations.
-UPPERCASE_SENTENCE_START
-# "the next deploy's diff" -- possessive of a noun.
-VERB_APOSTROPHE_S
-# Workload names take singular verbs: "hath is", "two serve".
 AGREEMENT_SENT_START
+A_INSTALL
 CD_NN
+DOES_X_HAS
+EN_A_VS_AN
+EN_COMPOUNDS_INTER_NODE
+ENGLISH_WORD_REPEAT_BEGINNING_RULE
+ENGLISH_WORD_REPEAT_RULE
+GITHUB
+ID_CASING
+LC_AFTER_PERIOD
+LOWERCASE_NAMES
+NON_STANDARD_WORD
+NUMBERS_IN_WORDS
 PCT_SINGULAR_NOUN_PLURAL_VERB_AGREEMENT
+PH_D
+POSSESSIVE_APOSTROPHE
+PREPOSITION_VERB
+SENTENCE_WHITESPACE
 SINGULAR_VERB_AFTER_THESE_OR_THOSE
-# Empty leading cells in comparison tables.
-WHITESPACE_RULE
-# "the *how*" is the emphasis, not a typo for "how".
 THE_HOW
+UPPERCASE_SENTENCE_START
+VERB_APOSTROPHE_S
+WHITESPACE_RULE

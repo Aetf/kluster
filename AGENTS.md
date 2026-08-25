@@ -24,5 +24,21 @@
   `pyproject.toml` (`update_crds`, `credentials`), the same way for every
   script; `just` recipes or symlinks are for convenience on top, never the
   home of the logic.
-* Repo status and open design decisions are tracked in README "Status & open
-  decisions" — check it before starting infra work.
+* Implementation-period issues live in the `kluster-ops` repo, not in this
+  one and not in a checked-in list. What is unimplemented *here* announces
+  itself: an unwritten stack raises from its entrypoint, and a register row
+  with no implementation is a subcommand that refuses by name. Build order is
+  `docs/cluster/migration.md` §1.
+* **Prose is checked like code.** Every markdown file passes `ltex-cli-plus`
+  against `.vscode/ltex.dictionary.en-US.txt` and
+  `.vscode/ltex.disabledRules.en-US.txt`:
+  - Both files are one entry per line with **no comment syntax**, and the
+    dictionary is **case-sensitive** — `homelab` and `Homelab` are two
+    entries, so do not deduplicate them case-insensitively.
+  - Disable a rule only when it is systematically wrong for this repo (a
+    firewall `ACCEPT`, a `.phd` domain, `key id`, the dot in `A1.Flex`,
+    alice/bob as instance names). A one-off gets the prose fixed instead.
+  - Run it **one file at a time**: given many files at once it hangs rather
+    than finishing. It also mis-columns inside very long table rows and
+    reports a fragment of a word as a misspelling — those are artefacts, not
+    dictionary entries.

@@ -14,7 +14,7 @@ Project managed by [uv](https://github.com/astral-sh/uv) and mise.
 | --- | --- |
 | `__main__.py` | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
 | `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. Stable and fully tested. |
-| `src/kluster/` | The cluster program itself. `physical/` is currently the pre-GCP AWS leftover (see status below). |
+| `src/kluster/` | The cluster program itself. `physical/` is the OCI + Talos declaration; `physical/aws.py` beside it is a pre-Talos leftover, excluded from the checks until rewritten. |
 | `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (currently still the legacy cluster's chart set). |
 | `docs/` | Design docs — see index below. |
 | `tests/` | Unit tests for the framework layer (Pulumi mocks, no cloud access). |
@@ -93,63 +93,22 @@ registers at the docs root (credentials, operations).
 ## Status
 
 **Built.** The framework (putils RFC-001 Rev 3, `pulumi.run` entrypoint), the
-stack dispatch, `conventions.py`, the credential scripts
-(`credentials`: the offline store, the derivation seed and what it
-derives, the B2 seed key), the state-backend appliance's definition and
-provisioner
-(`state-backend`), the CI workflow set, and renovate. Ruff, `basedpyright`
-strict and the tests are clean across everything but the three pre-Talos
-leftovers named below.
+stack dispatch, `conventions.py`, the credential scripts (`credentials`: the
+offline store, the derivation seed and what it derives, the B2 seed key), the
+state-backend appliance's definition and provisioner (`state-backend`), the CI
+workflow set, and renovate. Ruff, `basedpyright` strict and the tests are clean
+across everything but the three pre-Talos leftovers (`kx.py`,
+`physical/aws.py`, `base_cluster/`), which are excluded until they are
+rewritten rather than retrofitted.
 
 **Standing in OCI**: the appliance's own VCN, subnet, gateway, security group
 and reserved public IP, plus the imported Fedora CoreOS image. The instance
 itself is one `state-backend provision` away — the command needs the offline
 database, so it runs on the workstation that holds it.
 
-Open items, roughly in order:
-
-1. **State backend**: launch the instance, then regenerate the stack configs
-   and passphrase from scratch (`Pulumi.dev.yaml` is a stale kluster-code copy,
-   and the history scrub removes it — cluster/security-audit.md L10) and create
-   the deployed stacks.
-2. **Repo plumbing**: GitHub rulesets (rebase-merge, up-to-date requirement),
-   the per-stack Environments and their secrets, the `kluster-ops` repo's scheduled
-   workflows, and the two GitHub Apps' installation wiring.
-3. **Physical-layer implementation**: `src/kluster/physical/aws.py` implements
-   the abandoned AWS plan and is reference-only; it is replaced by the OCI +
-   libvirt + UniFi/gw-config declaration of declarative/physical.md.
-4. **Legacy k3s residue**: `kx.py` (SealedSecret, chart pins from old config)
-   and `base_cluster/nodes.py` (k3s `svccontroller` labels) predate the
-   Talos/Cilium design; they are rewritten alongside the new base cluster, and
-   `packages/crds` is regenerated for the new chart set.
-5. **DNS absorption**: public records move into pulumi-cloudflare; the zones
-   are ported from the DNSControl repo (github.com/Aetf/dns), which then
-   retires. Its census is stale in three places (physical/gateway.md §2.1).
-6. **Storage residue** (docs/cluster/storage.md): JuiceFS CSI is not installed
-   (one quarantined per-app user), Longhorn is deferred with adoption criteria
-   on file, and the second homelab worker VM is deferred.
-
-## Working order
-
-The remaining build, in dependency order:
-
-1. **Launch the state-backend instance** (`state-backend provision`), then
-   regenerate stack configs and create the stacks.
-2. **Physical stack** per declarative/physical.md, gated by the bootstrap
-   verification checklist (§6) — every item verified before any app migrates.
-   Includes the homelab host-prep aconfmgr change-set (physical/homelab-host.md
-   §4).
-3. **The rest of CI**: the ported+upgraded **`images.yml`** (multi-arch via
-   native arm64 runners, CNPG images wired in — ci.md §4; **critical path**:
-   Wave A's splitpro needs this image, arm64 runners need the repo public, and
-   public needs the L10 history scrub first), `packages/crds` regen for the new
-   chart set, and the small runbooks as they come up.
-4. Then **migration.md** Phase 0 → Waves A–F.
-
-Deliberately *not* pre-decided (settle on first contact, in this
-order of appearance): exact Talos/Cilium/chart version pins (renovate
-takes over after the first pin; known floors: **Cilium ≥1.20** for the
-ExternalAuth route filter, ≥1.16 for tunnel-mode EGW, Longhorn ≥1.12
-if ever adopted), AdGuard static-config templating shape inside the
-gw-config estate, alertmanager routing details beyond "ported from
-legacy".
+What is *not* built announces itself rather than being listed here: an
+unimplemented stack raises from its entrypoint, and a seed the register names
+without an implementation is a subcommand that refuses with its own name. The
+build order is [cluster/migration.md](docs/cluster/migration.md) §1, which is
+the same order for a rebuild from nothing; implementation-period issues are
+tracked in the `kluster-ops` repo, not here.
