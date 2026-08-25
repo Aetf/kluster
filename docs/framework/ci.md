@@ -170,6 +170,14 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     and reconciling is exactly what its playbook demands. This
     closes the "hand edits never surface" gap that deleting the
     post-merge preview left open.
+-   **Not yet enforceable while the repo is private.** Branch
+    protection and rulesets return `403` on a private repository
+    under this account's plan, and an Environment's reviewer gate is
+    a public-repository feature too (framework/github.md §2). Every
+    gate below is therefore *designed and declared* but inert until
+    `kluster` goes public — the zero-diff proof cannot be a required
+    check, and `up-physical`'s approval door cannot be built. Treat
+    the visibility flip as a security milestone, not a packaging one.
 -   **Credential partitioning (2026-08-23, from the security audit;
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare

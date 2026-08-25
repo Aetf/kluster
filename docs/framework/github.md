@@ -33,7 +33,33 @@ The credential itself is an account-root-scoped token from the
 personal estate (credentials.md §2), used on the operator machine and
 pushed to no slot.
 
-## 2. What is declared
+## 2. What the plan permits today
+
+Measured against the account, not assumed: on **GitHub Free, a private
+repository cannot have branch protection or rulesets at all** — the API
+answers `403 Upgrade to GitHub Pro or make this repository public` for
+both. Environments and environment secrets do respond on the API for a
+private repository (one, `physical-plan`, exists), but the protection
+rules that make an environment a *gate* — required reviewers, wait
+timers — are documented as public-repository-or-paid-plan.
+
+Two consequences, both load-bearing:
+
+-   **`kluster` going public is a prerequisite for its own CI security
+    model**, not only for the arm64 runners images.yml needs (ci.md
+    §4). Until then "the preview was empty" cannot be enforced as a
+    required check, and the reviewer gate in front of `up-physical`
+    (ci.md §2) cannot exist. The history scrub that unblocks going
+    public is therefore on the critical path of more than it looked.
+-   **`kluster-ops` stays private, so it will never have branch
+    protection** on this plan. Nothing in the design asks it to: its
+    `drill` Environment is deliberately ungated — its scope is the
+    gate (credentials.md §4) — and the ops repo holds no stack.
+
+Until the flip, this stack declares what the plan allows, and the rest
+is written down here rather than silently missing.
+
+## 3. What is declared
 
 -   **Repositories**: `kluster` (this one) and `kluster-ops` (private;
     the notification and drill repo, ci.md §5) — visibility, merge
@@ -48,11 +74,12 @@ pushed to no slot.
 -   **Branch protection on `main`**: required checks and up-to-date
     branch, which is what makes "the preview was empty" a statement
     about the code that will be on `main` rather than about a stale
-    branch.
+    branch. **Blocked until the repository is public** (§2), and
+    declared so that the flip is the only remaining step.
 -   **App installations**: which repositories the dispatch and trigger
     Apps are installed on, and with what repository selection.
 
-## 3. What is not declared
+## 4. What is not declared
 
 -   **The Apps themselves.** Creating an App and generating its
     private key is console-only (credentials.md §2), which is why
