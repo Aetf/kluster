@@ -33,13 +33,14 @@ jobs:
             zerotier: true
           - stack: dns
             environment: dns
-            zerotier: false
+            # The AdGuard rewrites are on the UDM (declarative/dns.md §3).
+            zerotier: true
           - stack: k8s-base
             environment: k8s-base
             zerotier: false
           - stack: apps
             environment: apps
-            zerotier: true
+            zerotier: false
     environment: ${{ matrix.environment }}
     steps:
       - uses: actions/checkout@v5
@@ -57,3 +58,19 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
           PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --refresh --diff --expect-no-changes
+
+  # The same question asked of something Pulumi does not own: the vendored
+  # agent skills. Renovate cannot see them -- `skills-lock.json` pins by
+  # content hash, so there is no version for it to compare -- which left them
+  # drifting from upstream with nothing watching. No credentials, no stack, so
+  # it runs beside the matrix rather than in it.
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jdx/mise-action@v3
+        with:
+          experimental: true
+      - run: mise x uv -- uv sync --locked
+      - name: Compare the vendored skills against upstream
+        run: mise x uv -- uv run skills-drift

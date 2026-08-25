@@ -28,6 +28,7 @@ dependencies = [
 update_crds = 'kluster.scripts.update_crds:main'
 credentials = 'kluster.scripts.credentials.cli:main'
 state-backend = 'kluster.scripts.state_backend.cli:main'
+skills-drift = 'kluster.scripts.skills_drift:main'
 
 [dependency-groups]
 dev = [
