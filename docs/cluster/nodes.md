@@ -380,18 +380,40 @@ scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
     with VM growth — start at ~60 GB, grow after cutover. (No etcd on
     this VM; its disk constraint is ordinary workload I/O.)
 -   **Optional second worker VM** (2–4 vCPU / 8 GB): **not in the
-    initial build**; it is the only path to same-site storage replicas
-    and homelab drain-without-evict, and RAM is why it waits for the RAM
-    upgrade. The design must not assume it exists.
+    initial build**, deferred with criteria in §4.3. RAM is why it
+    waits: the end state above already spends ~20 of the ~21 GiB this
+    host can spare. The design must not assume it exists.
 
-### 4.3 One big VM, not several small ones
+### 4.3 One big VM, and the deferred second worker
 
 Decided 2026-08-22 (was an open question): a single large VM. On one
 physical host, multiple VMs add no real fault isolation, but each costs a
 fixed overhead (kubelet + Cilium + OS ≈ 1 GiB per node) from a 32 GB
-budget that has none to spare. The legitimate second-VM use cases
-(same-site storage replicas, maintenance drains) are exactly the deferred
-§4.2 option — one *more* VM later, not N small ones now.
+budget that has none to spare. That argument settles the shape of the
+initial build — one big VM, not N small ones — and it also sets the
+terms on which a second one could ever join, which is the question a
+reader arrives here with.
+
+**The second worker VM is deferred as of 2026-08-22**, at the §4.2
+sizing (2–4 vCPU / 8 GB):
+
+-   **Trigger**: the RAM upgrade lands (§4.2's relief valve — ROG
+    Maximus Z690 Hero, 4×DIMM DDR5, up to 128 GB) **and** one of the
+    two use cases below is real. Both, not either: at 32 GB the end-state
+    worker plus the host's own tenants spend the budget (§4.1, §4.2), so
+    a second VM has no memory to run in no matter how good the reason.
+-   **What it buys** — the two use cases that survive the
+    no-fault-isolation argument: **same-site storage replicas**, which
+    is the standing precondition for Longhorn replica=2
+    (storage.md §3.2), and **draining the homelab worker** without
+    evicting its workloads out of the site.
+-   **What it does not buy**: survival of the physical host. Two VMs
+    share one machine, one NVMe, one power feed — replicas across them
+    are availability during planned work, not durability. Durability is
+    Tier 0 either way: declarative rebuild plus backups (§5).
+-   **Consequence for the design**: nothing may assume it exists. A
+    feature that only works with two homelab workers is itself a
+    deferred item with criteria, not a plan.
 
 ### 4.4 Infrastructure tax, measured, and the economy program
 
