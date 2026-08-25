@@ -42,3 +42,41 @@
     than finishing. It also mis-columns inside very long table rows and
     reports a fragment of a word as a misspelling — those are artifacts, not
     dictionary entries.
+
+## How work is dispatched
+
+`main` is protected: everything lands through a pull request whose
+`checks` and `changes` are green on an up-to-date branch, the account
+owner included (`docs/framework/github.md` §3). Work that can run in
+parallel therefore runs as **one agent per issue, each in its own git
+worktree, each opening its own pull request**, with a reviewer merging.
+The dispatcher reviews and merges; it does not also implement the
+dispatched work.
+
+**Path ownership is what makes it parallel.** Two agents may not be able
+to edit the same file, so each brief names the paths its work owns, and
+an agent that finds it needs a path outside that list stops and reports
+rather than widening its own scope. Shared files (`AGENTS.md`,
+`docs/framework/ci.md`, `pyproject.toml`) are serialized: at most one
+open pull request may touch each.
+
+A brief carries, and an agent is finished only when it has all of them:
+
+1. **The issue**, by number in the ops repository, and what "done"
+   means in one sentence.
+2. **Owned paths**, exhaustively. Everything else is out of scope.
+3. **The gate**: `ruff check`, `ruff format --check`, `basedpyright`
+   (strict, clean) and `pytest` all pass; new behaviour has a test that
+   fails without it; `ltex-cli-plus` passes on every markdown file
+   touched, one file at a time.
+4. **Documentation is part of the change, not a follow-up.** Docs
+   describe what is, not what was done: no "verified on", no narrative
+   of attempts. The same holds for commit messages.
+5. **A pull request whose description is written for a stranger** —
+   this repository is public. What changed and why, what a reviewer
+   should check, what was deliberately left out. No internal
+   shorthand, no credentials, no host names that are not already in the
+   repository.
+
+An agent that finishes early does not pick up more work; it reports.
+Scope creep is the failure mode this structure exists to prevent.
