@@ -30,6 +30,7 @@ import shutil
 import subprocess as sp
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -464,13 +465,45 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
     return False
 
 
-def verify_pins() -> bool:
-    """Check the pinned artefacts still hash to what settings.py claims.
+def _image_digest(image: str) -> str:
+    """The digest `image`'s tag currently resolves to, via the registry API.
 
-    Renovate can bump a version but cannot compute the tarball's digest, so
-    this runs in CI on every PR: a bump that leaves AGE_SHA256 stale fails
-    here rather than at first boot, where it would strand the appliance
-    without an encryptor.
+    Anonymous pull scope is enough to read a manifest, so this needs no
+    credential -- which is the point: the check has to run on a PR from a
+    fork's CI as readily as on main.
+    """
+    repository, tag = image.rsplit(':', 1)
+    if repository.startswith('docker.io/'):
+        repository = repository.removeprefix('docker.io/')
+
+    token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
+    with urllib.request.urlopen(token_url, timeout=60) as response:
+        token = json.load(response)['token']
+
+    request = urllib.request.Request(
+        f'https://registry-1.docker.io/v2/{repository}/manifests/{tag}',
+        method='HEAD',
+        headers={
+            'Authorization': f'Bearer {token}',
+            'Accept': 'application/vnd.oci.image.index.v1+json,'
+            'application/vnd.docker.distribution.manifest.list.v2+json,'
+            'application/vnd.oci.image.manifest.v1+json,'
+            'application/vnd.docker.distribution.manifest.v2+json',
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.headers['Docker-Content-Digest'] or ''
+
+
+def verify_pins() -> bool:
+    """Check the pinned artefacts are what settings.py claims they are.
+
+    Renovate can bump a version but cannot compute the tarball's digest or
+    ask a registry whether a tag exists, so this runs in CI on every PR: a
+    bump that leaves AGE_SHA256 stale, or names a Postgres tag that was
+    never published, fails here rather than at first boot -- where the first
+    strands the appliance without an encryptor and the second leaves it
+    without a database.
     """
     ok = True
 
@@ -483,6 +516,17 @@ def verify_pins() -> bool:
         ok = False
     else:
         log.info('age %s matches its pin', settings.AGE_VERSION)
+
+    try:
+        digest = _image_digest(settings.POSTGRES_IMAGE)
+    except urllib.error.HTTPError as exc:
+        log.error('%s: registry says %s (does the tag exist?)', settings.POSTGRES_IMAGE, exc)
+        ok = False
+    else:
+        # Logged rather than pinned: the tag is the major line on purpose
+        # (podman-auto-update follows the minor stream, settings.py), so the
+        # digest moving is the design working, not a drift to fail on.
+        log.info('%s resolves to %s', settings.POSTGRES_IMAGE, digest)
 
     release, _, _ = fcos_artifact()
     log.info('FCOS %s stream is at %s (imported per release, no pin to drift)', settings.FCOS_STREAM, release)

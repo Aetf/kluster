@@ -1,7 +1,13 @@
+# Pinned, not `latest`: CI installs from this file, so a floating version is a
+# breaking upgrade that lands without a PR, a preview, or a way to bisect it.
+# Renovate maintains these -- it cannot bump `latest`, which is why they are
+# written out.
 [tools]
-pulumi = "latest"
-uv = "latest"
+pulumi = "3.257.0"
+uv = "0.11.26"
 # Deterministic age identities are cross-checked against the real tool, and
 # the box's dumps are age-encrypted; butane renders the appliance's Ignition.
-age = "latest"
-"aqua:coreos/butane" = "latest"
+# This version tracks the appliance's pin (state_backend/settings.py), so the
+# cross-check exercises what actually runs there -- a test holds the two equal.
+age = "1.3.1"
+"aqua:coreos/butane" = "0.29.0"

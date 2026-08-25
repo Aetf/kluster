@@ -61,3 +61,19 @@ def test_age_url_matches_the_pinned_version() -> None:
     assert settings.AGE_VERSION in settings.AGE_URL
     assert settings.AGE_URL.endswith('linux-amd64.tar.gz')
     assert len(settings.AGE_SHA256) == 64
+
+
+def test_local_age_matches_the_appliance_pin() -> None:
+    """The identity cross-check is only worth as much as the tool it runs.
+
+    `mise.toml`'s age is what `test_derived_public_key_matches_age_keygen`
+    exercises; the appliance runs the one `settings.AGE_VERSION` pins. Letting
+    them drift would leave the appliance's version untested.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from kluster.scripts.state_backend import settings
+
+    tools = tomllib.loads((Path(__file__).parent.parent / 'mise.toml').read_text())['tools']
+    assert f'v{tools["age"]}' == settings.AGE_VERSION
