@@ -8,6 +8,7 @@ written and is not.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -93,3 +94,59 @@ def test_wrong_password_is_reported_as_such(tmp_path: Path) -> None:
     # A rotation must fail before it mints anything, not halfway through.
     with pytest.raises(KdbxError, match='could not unlock'):
         KdbxStore(path=path).unlock_with('wrong')
+
+
+def test_a_remembered_password_skips_the_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / 'kit.kdbx'
+    _ = KdbxStore.create(path, PASSWORD)
+
+    store = KdbxStore(path=path)
+    monkeypatch.setattr(KdbxStore, '_remembered', _stored(PASSWORD))
+    monkeypatch.setattr('getpass.getpass', _refuse)
+
+    store.unlock()
+    assert store.entries() == []
+
+
+def test_a_stale_stored_password_falls_through_to_the_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / 'kit.kdbx'
+    _ = KdbxStore.create(path, PASSWORD)
+
+    store = KdbxStore(path=path)
+    # The database's password was changed since it was remembered: one typed
+    # password, not a failed run.
+    monkeypatch.setattr(KdbxStore, '_remembered', _stored('stale'))
+    monkeypatch.setattr('getpass.getpass', _types(PASSWORD))
+
+    store.unlock()
+    assert store.entries() == []
+
+
+def test_no_secret_store_is_not_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / 'kit.kdbx'
+    _ = KdbxStore.create(path, PASSWORD)
+
+    store = KdbxStore(path=path)
+
+    # A headless machine has no Secret Service at all; that is the case the
+    # prompt exists for, not a failure.
+    def explode(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError('no backend')
+
+    monkeypatch.setattr('keyring.get_password', explode)
+    monkeypatch.setattr('getpass.getpass', _types(PASSWORD))
+
+    store.unlock()
+    assert store.entries() == []
+
+
+def _refuse(_prompt: str) -> str:
+    raise AssertionError('the operator was prompted despite a stored password')
+
+
+def _stored(password: str | None) -> Callable[[KdbxStore], str | None]:
+    return lambda _self: password
+
+
+def _types(password: str) -> Callable[[str], str]:
+    return lambda _prompt: password

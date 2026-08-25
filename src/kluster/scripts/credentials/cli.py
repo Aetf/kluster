@@ -13,6 +13,7 @@ rotation is a re-run, not a second procedure.
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import sys
 from pathlib import Path
@@ -39,6 +40,10 @@ def _parser() -> argparse.ArgumentParser:
     _ = ls.add_argument('group', nargs='?', default='/')
     show = kdbx_actions.add_parser('show', help="an entry's non-secret attributes")
     _ = show.add_argument('entry')
+    # Bring-up opens the kit and the estate and then runs for minutes; being
+    # asked for both passwords at the start of that is what this avoids.
+    _ = kdbx_actions.add_parser('remember', help="store this database's master password in the desktop secret store")
+    _ = kdbx_actions.add_parser('forget', help='remove it from the secret store')
 
     # The tree is generated from §2's table rather than written out, so a
     # seed that exists in the register and nowhere in the code shows up as a
@@ -89,6 +94,14 @@ def main(argv: list[str] | None = None) -> int:
             case ('kdbx', _, 'show'):
                 for name, value in store.describe(args.entry).items():
                     print(f'{name}: {value}')
+            case ('kdbx', _, 'remember'):
+                # Prove it opens the database before storing it: a remembered
+                # password that does not work is worse than none.
+                password = getpass.getpass(f'master password for {store.path.name}: ')
+                store.unlock_with(password)
+                store.remember(password)
+            case ('kdbx', _, 'forget'):
+                store.forget()
             case ('seed', 'derivation', 'create'):
                 seeds.init_seed(store, args.entry)
             case ('seed', 'b2', 'create'):

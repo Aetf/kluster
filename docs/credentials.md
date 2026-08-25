@@ -262,7 +262,12 @@ therefore idempotent: rotation is a re-run, not a second procedure.
 ### 4.1 `credentials bringup`
 
 One command, one master-password prompt, and the cluster's entire
-credential estate exists. Stages run in dependency order, each pushing
+credential estate exists. The prompt is asked of the **desktop secret
+store** first (`credentials kdbx remember` puts it there; nothing else
+writes to it, and a machine without a Secret Service simply falls
+through to typing it). Bring-up holds two databases open — the kit and
+the estate, §2 — and then runs for minutes, so the alternative is two
+typed passwords guarding a process nobody is watching. Stages run in dependency order, each pushing
 into slots that exist by the time it runs:
 
 1.  **Local derivations** — passphrase, state-backend CA and certs,

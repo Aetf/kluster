@@ -15,6 +15,14 @@ have to *create* a database (§4), which the CLI can do only interactively; and
 a library call cannot leak a secret into an argv another process can read.
 `pykeepass` ships no type information, so this module is the whole of its
 untyped surface -- everything it exports is annotated.
+
+A master password is taken from the desktop secret store (the freedesktop
+Secret Service, or the platform equivalent) before anyone is prompted for it.
+Bring-up opens two databases -- the kit and the personal estate (§2) -- and
+`bootstrap` was going to mean typing two passwords into a script that then
+runs for minutes. Nothing is ever written to the store implicitly: `kdbx
+remember` is the only thing that puts one there, so a machine that has not
+opted in behaves exactly as before.
 """
 
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
@@ -41,6 +49,11 @@ log = logging.getLogger(__name__)
 #: The seed kit (credentials.md §2.1). Named by environment variable so the
 #: path is configurable and never hard-coded to one machine's layout.
 PATH_ENV = 'KLUSTER_KDBX'
+
+#: Secret Service collection entries are keyed by (service, account); the
+#: database's path is the account, so the kit and the estate never collide and
+#: a database moved to a new path simply stops matching.
+KEYRING_SERVICE = 'kluster-credentials'
 
 #: The operator's personal estate, which holds the account roots. Read at
 #: bring-up and at re-seeding, never otherwise: the two databases are separate
@@ -98,14 +111,60 @@ class KdbxStore:
         return cls(path=path, _db=create_database(str(path), password=password))
 
     def unlock(self) -> None:
-        """Ask for the master password and open the database.
+        """Open the database, asking the secret store before asking the operator.
 
         Opening up front means a wrong password fails before a rotation has
-        minted anything, not halfway through one.
+        minted anything, not halfway through one. A stored password that no
+        longer opens the database falls through to the prompt rather than
+        failing: a stale entry should cost one typed password, not a run.
         """
         if self._db is not None:
             return
+        stored = self._remembered()
+        if stored is not None:
+            try:
+                self.unlock_with(stored)
+            except KdbxError:
+                log.warning('the stored password for %s no longer opens it', self.path.name)
+            else:
+                return
         self.unlock_with(getpass.getpass(f'master password for {self.path.name}: '))
+
+    def _remembered(self) -> str | None:
+        """The stored master password, or None if there is no store at all.
+
+        A headless machine has no Secret Service, and that is not an error --
+        it is the case this falls back from.
+        """
+        try:
+            import keyring
+
+            return keyring.get_password(KEYRING_SERVICE, str(self.path))
+        except Exception as exc:  # noqa: BLE001 - any backend failure is a miss
+            log.debug('no secret store for %s: %s', self.path, exc)
+            return None
+
+    def remember(self, password: str) -> None:
+        """Put the master password in the desktop secret store.
+
+        Explicit by design: nothing else in this module writes to the store,
+        so a password is only there because someone asked for it to be.
+        """
+        import keyring
+
+        keyring.set_password(KEYRING_SERVICE, str(self.path), password)
+        log.info('stored the master password for %s in %s', self.path.name, keyring.get_keyring().name)
+
+    def forget(self) -> None:
+        """Remove it again."""
+        import keyring
+        import keyring.errors
+
+        try:
+            keyring.delete_password(KEYRING_SERVICE, str(self.path))
+        except keyring.errors.PasswordDeleteError as exc:
+            raise KdbxError(f'no stored password for {self.path}') from exc
+        log.info('removed the stored password for %s', self.path.name)
 
     def unlock_with(self, password: str) -> None:
         """Open with a password already in hand.
