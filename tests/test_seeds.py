@@ -1,6 +1,6 @@
-"""The derivation layer is load-bearing for recovery: a wrong byte here means an
-unopenable restic repository years later, so the primitive is checked against
-RFC 5869 and the labelled secrets against each other."""
+"""The derivation layer is load-bearing for recovery: a wrong byte here means a
+pg_dump nobody can open years later, so the primitive is checked against RFC
+5869 and the labelled secrets against each other."""
 
 import pytest
 
@@ -33,9 +33,8 @@ def test_derivation_is_deterministic() -> None:
 
 def test_labels_separate_secrets() -> None:
     assert seeds.derive(ROOT, 'a') != seeds.derive(ROOT, 'b')
-    assert seeds.restic_password(ROOT, 'ns', 'one') != seeds.restic_password(ROOT, 'ns', 'two')
-    assert seeds.restic_password(ROOT, 'ns', 'x') != seeds.restic_password(ROOT, 'other', 'x')
     assert seeds.age_seed(ROOT, 1) != seeds.age_seed(ROOT, 2)
+    assert seeds.cert_scalar(ROOT, 'ci') != seeds.cert_scalar(ROOT, 'operator')
 
 
 def test_roots_separate_secrets() -> None:
@@ -49,7 +48,7 @@ def test_short_root_is_rejected() -> None:
 
 
 def test_passwords_are_url_safe_and_unpadded() -> None:
-    password = seeds.restic_password(ROOT, 'ns', 'pvc')
+    password = seeds.pulumi_passphrase(ROOT)
     assert '=' not in password
     assert password.isascii()
 

@@ -1,15 +1,18 @@
 """Derivation of every locally-generated secret from the root seed.
 
-Storing a passphrase, a repo password, and a backup key each would turn the
-offline kit into the token drawer it is not (docs/credentials.md §2.2). One
-32-byte root seed is stored instead and each secret is an HKDF-SHA256
-derivation of it under a stable label — so a volume's restic password is a
-function of the volume's identity, and a restore re-derives it instead of
-looking it up.
+Storing a passphrase, a CA key, and a backup key each would turn the offline
+kit into the token drawer it is not (docs/credentials.md §2.2). One 32-byte
+root seed is stored instead and each secret is an HKDF-SHA256 derivation of it
+under a stable label.
 
-Labels are API: changing one changes the secret it names, which for a backup
-password means the old repository can no longer be opened. Add labels, never
-edit them.
+Every label here is consumed offline — at bring-up, at rotation, or while
+provisioning the appliance. Secrets a running program generates live in Pulumi
+state instead (credentials.md §1 rule 6), so no runtime process ever holds the
+root seed.
+
+Labels are API: changing one changes the secret it names, which for the age
+identity means the dumps encrypted under the old one can no longer be opened.
+Add labels, never edit them.
 """
 
 from __future__ import annotations
@@ -60,15 +63,6 @@ def _token(root: bytes, label: str, length: int = 32) -> str:
 def pulumi_passphrase(root: bytes) -> str:
     """`PULUMI_CONFIG_PASSPHRASE` for every stack."""
     return _token(root, 'pulumi/passphrase')
-
-
-def restic_password(root: bytes, namespace: str, pvc: str) -> str:
-    """The restic repository password for one backed volume.
-
-    Pure in the volume's identity: `backed_pvc` invents nothing, and a restore
-    needs only the root seed to open any repository.
-    """
-    return _token(root, f'restic/{namespace}/{pvc}')
 
 
 def alertmanager_read_token(root: bytes) -> str:
