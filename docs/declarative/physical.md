@@ -90,7 +90,7 @@ machine_secrets
   → cluster_health (gate before dependents read the kubeconfig)
 ```
 
--   **Patches are Python.** Per-node machine config is composed from
+-   **Patches are Python.** Per-node machine config is assembled from
     typed Python dicts (our framework's home turf), covering: KubeSpan
     on; KubePrism; dual-stack pod/service CIDRs **IPv4 first**
     (architecture.md §1.3); CP scheduling enabled
@@ -126,7 +126,7 @@ machine_secrets
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
     path under it is machine config).
 -   **Reboot-requiring config changes**: `apply_mode:
-    staged_if_needing_reboot`, and CI applies node-serially so the
+    staged_if_needing_reboot`, and CI applies node-serially, so the
     quorum never reboots together.
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying

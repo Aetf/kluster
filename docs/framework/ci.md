@@ -1,6 +1,8 @@
 # CI & State Backend
 
-Objective: how the four stacks ([pulumi.md](pulumi.md) §3) are driven —
+Objective: how the four deployed stacks ([pulumi.md](pulumi.md) §3) are
+driven — the forge they run on is itself declared, but applied by hand
+([github.md](github.md)) —
 where state lives, how CI reaches everything, and the pipeline shape.
 Decided 2026-08-22 (interactive review); ports the proven kluster-code CI
 mechanics (rebase-merge, zero-diff noop-automerge, HA failure push) onto

@@ -35,7 +35,7 @@ says so.
     Gist: one cloud node first as canary (health + workload
     settle), then the remaining nodes serially — never two quorum
     members at once (the CI-serialization rule, physical.md §5);
-    homelab worker last; `upgrade-k8s` afterwards as its own step.
+    homelab worker last; `upgrade-k8s` afterward as its own step.
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
     the bootstrap verifications on the preview environment of one

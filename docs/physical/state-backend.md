@@ -1,7 +1,7 @@
 # Physical Design: the State-Backend Appliance
 
 The OCI **VM.Standard.E2.1.Micro** (Always Free, x86, 1 GB) running the
-Pulumi `postgres://` state backend for all four stacks. It sits
+Pulumi `postgres://` state backend for every stack. It sits
 **beneath** Pulumi — a bootstrap dependency that must exist before any
 stack can act — so it is the one hand-created OCI resource, provisioned
 from `deploy/state-backend/` in this repo. Design goal: a

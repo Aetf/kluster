@@ -87,7 +87,7 @@ empty cluster:
     notification-failure metric.
 7.  **NFD + Intel GPU device plugin** — inert until the GPU cutover
     flips vfio on the homelab worker (physical/homelab-host.md §3), present from
-    day 0 so the cutover needs no k8s-base change.
+    day 0, so the cutover needs no k8s-base change.
 8.  **The small standing set the legacy cluster already proved**
     (nodes.md §4.4 counted them as "kept as-is" but this list never
     named them — explicit now so the closed list is honest):

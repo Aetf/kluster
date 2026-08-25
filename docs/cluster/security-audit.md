@@ -167,7 +167,7 @@ physical/gateway.md §4.
 ### M3 — No node-local firewall beneath the derived OCI rules
 
 **Attack.** The cloud nodes' primary IPs are public VIPs; the host
-netstack runs apid/kubelet/KubeSpan. OCI security rules are "derived,
+netstack runs apid, kubelet and KubeSpan. OCI security rules are "derived,
 not enumerated" (physical.md §1) — a mis-derived service rule silently
 widens exposure with no second layer.
 
@@ -202,7 +202,7 @@ risk).
 
 **Attack.** migration.md restores the legacy sealed-secrets key to
 reuse old ciphertext — correct for continuity, but that key exists in
-years of backups. sealed-secrets' auto-rotation only affects *new*
+years of backups. sealed-secrets' automatic rotation only affects *new*
 seals; the old key decrypts future secrets forever, so any old backup
 copy becomes a skeleton key.
 

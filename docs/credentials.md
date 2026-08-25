@@ -75,8 +75,14 @@ them, and every seed below is minted through a console exactly once
 and self-reproduces from then on. They live in the operator's personal
 estate — its own database, its own succession — and the seed kit
 borrows them at two moments only: first bring-up, and re-seeding after
-a total seed loss. Keeping them out is what makes §2.1's argument true
-rather than aspirational: every row below has a designed
+a total seed loss. The GitHub admin token the `github` stack applies
+with (framework/github.md §1) belongs to this class rather than to
+either tier below: it is an account root used from the workstation,
+never minted from a seed and never pushed to a slot, which is exactly
+why that stack is not something CI runs.
+
+Keeping them out is what makes §2.1's argument true rather than
+aspirational: every row below has a designed
 rotate-on-compromise path, so a compromised kit is answered by one
 full rotation, while an account root has no such path and would leave
 that rotation incomplete.

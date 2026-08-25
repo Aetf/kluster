@@ -916,7 +916,7 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
 -   **Why it was rejected** (2026-08-22): (a) home automation must keep
     working when the cluster is down or being rebuilt — HAOS on the host's
     libvirt has no cluster dependency; (b) the VM passes through a PCIe
-    USB3 controller, the WiFi/BT card, and a USB dongle — KubeVirt USB/PCI
+    USB3 controller, the Wi-Fi/BT card, and a USB dongle — KubeVirt USB/PCI
     passthrough has no hot-plug (dongle re-seat ⇒ VM restart) and pins the
     VM anyway, so cluster placement buys nothing; (c) the KubeVirt+CDI+
     Multus(bridge) stack plus Talos-specific friction (SELinux regression

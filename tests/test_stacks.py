@@ -6,8 +6,8 @@ import pytest
 from kluster import stacks
 
 
-def test_the_four_stacks_are_registered() -> None:
-    assert set(stacks.STACKS) == {'physical', 'dns', 'k8s-base', 'apps'}
+def test_every_stack_is_registered() -> None:
+    assert set(stacks.STACKS) == {'physical', 'dns', 'k8s-base', 'apps', 'github'}
 
 
 @pytest.mark.asyncio

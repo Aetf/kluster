@@ -200,7 +200,7 @@ The framework is implemented in the library `src/putils` (stable; verified by
 > change cadence, mutual references), while the apps/base split earned
 > its keep — see the frequency argument below.
 
-### 3.1 The four stacks
+### 3.1 The stacks
 
 | Stack | Contents | Change cadence |
 | --- | --- | --- |
@@ -208,6 +208,7 @@ The framework is implemented in the library `src/putils` (stable; verified by
 | `dns` | Zones + estate records that belong to no app (mail, ZT hosts, verifications, family/alias zones) + the anchors (declarative/dns.md) | low (rare, and independent of the cluster) |
 | `k8s-base` | Everything cluster-scoped speaking the k8s API: Cilium (LB pools, BGP peering, Gateway API, gateways), VolSync, cert-manager, CNPG operator, sealed-secrets controller, VictoriaMetrics + grafana | medium (renovate chart bumps) |
 | `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (CNAMEs to the dns stack's anchors, declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
+| `github` | The forge the other four are deployed by: both repositories, the Environments and their gates, branch protection, App installations ([github.md](github.md)) | lowest — and the only stack CI does not apply |
 
 Boundary rules:
 

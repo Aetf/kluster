@@ -335,7 +335,7 @@ JBOD — this host *is* the NAS.
 | What | Why it stays | RAM budget |
 | --- | --- | --- |
 | ZFS + NFS + Samba serving | the NAS role; the cluster consumes it | ZFS ARC (in-RAM read cache) ≥4 GiB (currently squeezed to ~2) |
-| HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + WiFi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
+| HAOS libvirt VM (2 vCPU / 4 GiB, PCIe USB3 + Wi-Fi/BT passthrough) | home automation must survive cluster outages; architecture.md §6.8 | 4 GiB |
 | AdGuard alice/bob run as nspawn containers **on the UDM**, not here; the host's adguardhome-sync **retires** once Pulumi dual-writes both instances (declarative/dns.md §3) | LAN DNS lives on the gateway and must survive cluster (and this host's) outages | ~0 |
 | The *legacy* Pulumi state-backend Postgres (podman) — serves kluster-code until decommission; the new cluster's backend lives on an OCI micro (framework/ci.md §1) | a state backend cannot live inside the cluster it manages | ~0.2 GiB (until Wave F) |
 | zerotier, sshd, apcupsd, smartd, syslog-ng, small relays (jellyfin-discovery, samsung-tv), Claude sessions | host plumbing / management path | ~1.5 GiB |
@@ -387,7 +387,7 @@ scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
 ### 4.3 One big VM, not several small ones
 
 Decided 2026-08-22 (was an open question): a single large VM. On one
-physical host, multiple VMs add no real fault isolation but each costs a
+physical host, multiple VMs add no real fault isolation, but each costs a
 fixed overhead (kubelet + Cilium + OS ≈ 1 GiB per node) from a 32 GB
 budget that has none to spare. The legitimate second-VM use cases
 (same-site storage replicas, maintenance drains) are exactly the deferred
@@ -424,7 +424,7 @@ size is set by the fixed floors, not by workloads**. Platform floor
 pod. This is what made 2–4 GB paid instances structurally cramped and
 what the 8 GB A1 nodes absorb for free: each still keeps ~4 GiB for
 hath (~0.3), syncthing/dav (~0.3), the JuiceFS sidecar at its honest
-0.5–1 GiB request, and Envoy. Meanwhile the homelab side, though
+0.5–1 GiB request, and Envoy. Meanwhile, the homelab side, though
 tighter on paper, is the flexible one: workloads can be trimmed, ARC
 squeezed, and RAM added (§4.2) — memory pressure there is real but
 manageable.
@@ -477,7 +477,7 @@ by construction; Tier 0 remains the foundation everything else sits on:
 -   **AWS Lightsail (dual-stack $5–12/mo, 1–3 TB bundled)**: best sticker
     price of any hyperscaler product, rejected because custom images cannot
     be booted — no Talos. Revisit only if the Talos requirement ever falls.
--   **GCP t2a (ARM Tau)**: no CUD pricing at all ($56/mo on-demand for
+-   **GCP t2a (ARM Tau)**: no CUD pricing at all ($56/month on-demand for
     2 vCPU/8 GB) and limited regions; strictly dominated by e2 + CUD.
 -   **GCP free-tier e2-micro**: free but 1 GB RAM — cannot host Cilium +
     Envoy + workloads. Usable later as a free external probe/uptime checker,

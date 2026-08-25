@@ -195,7 +195,7 @@ with `TypeError`s. Instead, `resolve` raises `UnknownValueException`, aborting
 the coroutine early. `async_output` catches it and resolves its Output as
 **unknown** (`is_known=False`) while still attaching all dependencies gathered
 so far. Unknowns are detected both as `UNKNOWN` sentinels in the values and
-via the outputs' own `is_known` flags. Outside of dry-run the exception is
+via the outputs' own `is_known` flags. Outside dry-run the exception is
 never raised by `resolve`; if it somehow escapes anyway, `async_output`
 re-raises it as a hard error rather than masking a real value loss.
 

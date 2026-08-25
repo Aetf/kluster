@@ -93,7 +93,7 @@ registers at the docs root (credentials, operations).
 ## Status
 
 **Built.** The framework (putils RFC-001 Rev 3, `pulumi.run` entrypoint), the
-four-stack dispatch, `conventions.py`, the credential scripts
+stack dispatch, `conventions.py`, the credential scripts
 (`credentials`: the offline store, the derivation seed and what it
 derives, the B2 seed key), the state-backend appliance's definition and
 provisioner
@@ -111,9 +111,9 @@ Open items, roughly in order:
 1. **State backend**: launch the instance, then regenerate the stack configs
    and passphrase from scratch (`Pulumi.dev.yaml` is a stale kluster-code copy,
    and the history scrub removes it — cluster/security-audit.md L10) and create
-   the four stacks.
+   the deployed stacks.
 2. **Repo plumbing**: GitHub rulesets (rebase-merge, up-to-date requirement),
-   the per-stack Environments and their secrets, `kluster-ops`' scheduled
+   the per-stack Environments and their secrets, the `kluster-ops` repo's scheduled
    workflows, and the two GitHub Apps' installation wiring.
 3. **Physical-layer implementation**: `src/kluster/physical/aws.py` implements
    the abandoned AWS plan and is reference-only; it is replaced by the OCI +
@@ -134,7 +134,7 @@ Open items, roughly in order:
 The remaining build, in dependency order:
 
 1. **Launch the state-backend instance** (`state-backend provision`), then
-   regenerate stack configs and create the four stacks.
+   regenerate stack configs and create the stacks.
 2. **Physical stack** per declarative/physical.md, gated by the bootstrap
    verification checklist (§6) — every item verified before any app migrates.
    Includes the homelab host-prep aconfmgr change-set (physical/homelab-host.md

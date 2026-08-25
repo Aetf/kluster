@@ -1,10 +1,12 @@
-"""The four stacks of one project (docs/framework/pulumi.md §3).
+"""The stacks of one project (docs/framework/pulumi.md §3).
 
-`physical` exists before the Kubernetes API does; `dns` owns zones and the
-estate records that belong to no app; `k8s-base` owns everything
-cluster-scoped; `apps` owns the applications, their namespaces, and their DNS
-records. Which one a program run declares is decided by the selected stack,
-not by configuration — a run of `pulumi up -s apps` cannot touch a node.
+`physical` exists before the Kubernetes API does; `dns` owns zones, the estate
+records that belong to no app, and the split-horizon rewrites; `k8s-base` owns
+everything cluster-scoped; `apps` owns the applications and their namespaces.
+`github` owns the forge the other four are deployed by, and is the one stack
+CI does not apply (github.md). Which one a program run declares is decided by
+the selected stack, not by configuration — a run of `pulumi up -s apps` cannot
+touch a node.
 
 Conventions travel as code (`kluster.conventions`); a StackReference carries
 only machine facts.
@@ -16,7 +18,7 @@ from collections.abc import Awaitable, Callable
 
 import pulumi
 
-from . import apps, dns, k8s_base, physical
+from . import apps, dns, github, k8s_base, physical
 
 __all__ = ('STACKS', 'run_selected')
 
@@ -27,6 +29,7 @@ STACKS: dict[str, Callable[[], Awaitable[None]]] = {
     'dns': dns.main,
     'k8s-base': k8s_base.main,
     'apps': apps.main,
+    'github': github.main,
 }
 
 
