@@ -8,8 +8,8 @@ resort, object storage used directly where an app supports it.
 
 > **Status**: Reviewed interactively 2026-08-21; decided: B2 as the backup
 > bucket (§4), JuiceFS CSI **not installed** (§6), second homelab VM
-> deferred, hath cache lives on a block volume on its pinned cloud
-> node (nodes.md
+> deferred with criteria (nodes.md §4.3), hath cache lives on a block
+> volume on its pinned cloud node (nodes.md
 > §2.1). 2026-08-22: JuiceFS root causes documented (§1), VPS
 > syncthing/dav disposition decided (§6), and — economy pass —
 > **Longhorn deferred out of the initial build** in favor of local-path +
@@ -55,7 +55,7 @@ resort, object storage used directly where an app supports it.
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
 | Cloud block volume | OCI block volume on a cloud node (200 GB boot+block free) | RWO, node-pinned | hath cache, cloud-pool local-path backing | homelab-pool workloads |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
-| JuiceFS (quarantined) | object storage + per-app metadata | RWX | last resort only (§6) | everything else |
+| JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
 
 Per-workload selection is a two-axis decision — (1) does the data need
 to persist at all, (2) what performance does it need — then the data's
@@ -104,19 +104,32 @@ volume snapshots — for a **standing** cost of 2–4 GiB RAM on the homelab
 VM + 0.5–1 GiB on the cloud node, a 12%-of-node instance-manager CPU
 request, ~256 MB RAM per TB of replica, and one more operator to run
 (nodes.md §4.4 is the measured argument for refusing standing infra
-costs that idle). It enters the cluster only when observed reality meets
-one of:
+costs that idle).
 
--   volume moves become frequent enough that VolSync downtime measurably
-    hurts (guideline: >~1 move/quarter on volumes where the downtime
-    matters), or
--   a workload genuinely needs in-cluster RWX that NAS cannot serve, or
--   same-site replica=2 becomes real (requires the second homelab VM,
-    nodes.md §4.2, which is itself deferred).
+**Adoption criteria.** It enters the cluster when any one of these is
+true. Each is a question with an answer on record, not a matter of
+taste; none of them is "Longhorn would be nicer":
 
-Adoption-day facts (verified 2026-08, so future-us doesn't re-research):
-pin **≥1.12** — dual-stack cluster support starts there and v1.11 shipped
-an instance-manager memory leak (#12668); Talos needs the
+-   **Move rate**: volume moves run above **~1 per quarter** on volumes
+    whose VolSync restore window is user-visible downtime. The count is
+    of moves actually performed; the legacy baseline is about one per
+    year (§3.1), so this is a factor-of-four change in behavior, not a
+    bad quarter.
+-   **In-cluster RWX**: an app needs RWX that the NAS cannot serve, by
+    the same test the JuiceFS gate applies (§6, clauses 1–2) and
+    answered the same way — in writing, per app, before the component
+    is added.
+-   **Same-site replica=2**: a second homelab worker VM exists
+    (nodes.md §4.3). Until it does, replica=2 has nowhere to put the
+    second replica, because cross-site replicas are prohibited outright
+    (principle 3). Note what it would buy even then: both VMs share one
+    physical host, so replica=2 is availability across VM restarts and
+    drains, not durability against host loss (nodes.md §4.3) —
+    durability stays Tier 0, rebuild plus backups (§5).
+
+**Adoption-day facts**, as of 2026-08: pin **≥1.12** — dual-stack
+cluster support starts there and v1.11 shipped an instance-manager
+memory leak (#12668); Talos needs the
 `siderolabs/iscsi-tools` + `util-linux-tools` extensions, a dedicated
 `/var/lib/longhorn` mount, and a privileged-PSS namespace (machine-config
 items in Pulumi, not a runbook); default `numberOfReplicas: 1` +
@@ -244,7 +257,17 @@ either site from Pulumi + backups in ~1–2 h hands-on.
 
 ## 6. JuiceFS containment policy
 
-JuiceFS is not banned; it is rationed. A workload may use it only if all of:
+JuiceFS is not banned; it is rationed. **The quarantine is the shape of
+the deployment, not a warning label**: no cluster-wide CSI driver is
+installed, so no `storageClassName` reaches JuiceFS and no app can adopt
+it by accident. Each admitted workload gets its own filesystem, its own
+metadata store on the same node as its mount, and its own object bucket,
+mounted in-pod as a sidecar with requests sized from load rather than
+from idle. A failure is therefore one app's failure, and the shared
+mega-filesystem of the legacy cluster cannot re-form. Admission is the
+gate; the containment is what admission buys you.
+
+A workload may use it only if all of:
 
 1.  It needs POSIX semantics over object-storage capacity (too big for
     local NVMe, not servable from NAS — e.g. cloud-pool workload needing
@@ -309,6 +332,29 @@ because ~110 GB doesn't fit a small instance disk:
     site, more cross-site traffic).
 
 The dav share serves the same dataset and follows the same mount.
+
+**Lifting the quarantine: the criterion is not on file.** Containment
+has two levers and only one of them has a written test. *Admitting
+another workload* is governed — the three clauses above, per app, in
+writing (declarative/workloads.md §2), and admitting a second one does
+not by itself change the deployment shape: it is a second sidecar with a
+second filesystem, which is what the per-app blast radius means.
+*Installing the CSI driver* is the lever with no test behind it. It is
+refused today because the census is one and a sidecar serves it, but
+nothing here says at what census, or under what guarantee, a driver
+would become the cheaper answer — so "should we install the CSI driver?"
+currently resolves to "no" by default rather than by argument.
+
+The criterion this needs is the §3.2 shape, and writing it is a decision
+someone still has to make: a **count** (at how many simultaneously
+qualifying filesystems do N sidecars cost more standing RAM than one CSI
+controller plus its per-node agents — the standing-rent test of
+nodes.md §4.4), and a **statement of what survives the change** (how
+per-app metadata isolation and per-app failure domains hold up once one
+driver mediates every mount, since that sharing is precisely what root
+cause (b) came from — §1). Until both exist, the census staying at one
+is the whole reason the driver stays out, and growing the census is a
+reason to write the criterion, not a license to skip it.
 
 ## 7. Alternatives Considered
 
