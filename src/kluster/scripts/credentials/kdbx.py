@@ -27,7 +27,13 @@ log = logging.getLogger(__name__)
 
 #: Environment variable naming the database, so the path is configurable and
 #: never hard-coded to one machine's layout.
+#: The seed kit (credentials.md §2.1).
 PATH_ENV = 'KLUSTER_KDBX'
+
+#: The operator's personal estate, which holds the account roots. Read at
+#: bring-up and at re-seeding, never otherwise: the two databases are separate
+#: so that everything in the kit is rotatable (§2).
+MASTER_PATH_ENV = 'KLUSTER_MASTER_KDBX'
 
 
 class KdbxError(RuntimeError):
@@ -46,11 +52,11 @@ class KdbxStore:
     _password: str | None = field(default=None, repr=False)
 
     @classmethod
-    def from_env(cls, path: Path | None = None) -> KdbxStore:
+    def from_env(cls, path: Path | None = None, *, env: str = PATH_ENV, flag: str = '--kdbx') -> KdbxStore:
         if path is None:
-            raw = os.environ.get(PATH_ENV)
+            raw = os.environ.get(env)
             if not raw:
-                raise KdbxError(f'pass --kdbx or set {PATH_ENV} to the cluster KeePassXC database')
+                raise KdbxError(f'pass {flag} or set {env} to the KeePassXC database')
             path = Path(raw).expanduser()
         if not path.is_file():
             raise KdbxError(f'no database at {path}')

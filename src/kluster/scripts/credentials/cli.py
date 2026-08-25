@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from . import b2, seeds
-from .kdbx import PATH_ENV, KdbxError, KdbxStore
+from .kdbx import MASTER_PATH_ENV, PATH_ENV, KdbxError, KdbxStore
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def _parser() -> argparse.ArgumentParser:
         '--kdbx',
         type=Path,
         default=None,
-        help=f'the cluster KeePassXC database (default: ${PATH_ENV})',
+        help=f'the seed kit (default: ${PATH_ENV})',
     )
     families = parser.add_subparsers(dest='family', required=True, metavar='<family>')
 
@@ -60,6 +60,14 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help='entry holding the account master key (id as username, key as password)',
     )
+    # The account roots live in the personal estate, not in the kit (§2), so
+    # this is the one action that opens two databases.
+    _ = create.add_argument(
+        '--master-kdbx',
+        type=Path,
+        default=None,
+        help=f'the database holding the account master key (default: ${MASTER_PATH_ENV})',
+    )
     _ = b2_actions.add_parser('rotate', help='have the seed mint and install its successor')
 
     return parser
@@ -82,7 +90,13 @@ def main(argv: list[str] | None = None) -> int:
             case ('seed', 'derivation', 'init'):
                 seeds.init_seed(store, args.entry)
             case ('seed', 'b2', 'create'):
-                _ = b2.create_seed(store, master_entry=args.master_entry, seed_entry=args.entry)
+                master = KdbxStore.from_env(args.master_kdbx, env=MASTER_PATH_ENV, flag='--master-kdbx')
+                _ = b2.create_seed(
+                    master=master,
+                    seeds=store,
+                    master_entry=args.master_entry,
+                    seed_entry=args.entry,
+                )
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
             case _:  # pragma: no cover - argparse rejects everything else

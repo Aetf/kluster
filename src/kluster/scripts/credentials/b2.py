@@ -136,15 +136,20 @@ def _mint_verified(session: Session, name: str) -> tuple[str, str]:
     return key_id, key
 
 
-def create_seed(store: KdbxStore, *, master_entry: str, seed_entry: str) -> str:
+def create_seed(*, master: KdbxStore, seeds: KdbxStore, master_entry: str, seed_entry: str) -> str:
     """Create the seed key from the account master key. Returns its key id.
+
+    Two stores, because the account master key is not part of the seed kit
+    (credentials.md §2): it is read from the personal estate and the seed it
+    mints is written to the kit. They are the same file only if the operator
+    points both at it.
 
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
     """
-    session = Session.from_entry(store, master_entry)
+    session = Session.from_entry(master, master_entry)
     key_id, key = _mint_verified(session, SEED_KEY_NAME)
-    store.put(seed_entry, key_id, key)
+    seeds.put(seed_entry, key_id, key)
     return key_id
 
 

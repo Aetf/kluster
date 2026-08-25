@@ -67,19 +67,35 @@ Automation never consumes these; it only *unseals* them, for the
 length of one bring-up or one rotation. The set is deliberately tiny —
 everything in §3 grows out of it.
 
+**Account roots are not in this set.** Console logins and their MFA
+recovery codes for the five provider accounts (OCI tenancy, GitHub,
+Cloudflare, Backblaze, ZeroTier Central) are a *precondition* of the
+system rather than a credential it manages: nothing scripted reads
+them, and every seed below is minted through a console exactly once
+and self-reproduces from then on. They live in the operator's personal
+estate — its own database, its own succession — and the seed kit
+borrows them at two moments only: first bring-up, and re-seeding after
+a total seed loss. Keeping them out is what makes §2.1's argument true
+rather than aspirational: every row below has a designed
+rotate-on-compromise path, so a compromised kit is answered by one
+full rotation, while an account root has no such path and would leave
+that rotation incomplete.
+
 | Seed | What it mints | Self-reproducing |
 | --- | --- | --- |
-| Account roots: OCI tenancy, GitHub, Cloudflare, Backblaze, ZeroTier Central (console access + MFA recovery/bypass codes) | The seeds below, through their consoles | Manual (they *are* the root) |
 | OCI seed API key (IAM-manage in tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
 | Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | **Yes** — `POST /user/tokens` mints a same-permission successor |
-| B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key stays an account root, used only to re-seed |
+| B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
 | **Derivation seed** (32 random bytes) | Every locally-generated secret, by derivation (§2.2) | Generated, not minted (§2.2) |
 
 The two "No" rows are the whole manual surface of a rotation: the
 rotation script stops, prints what to create in which console, and
-resumes when the new value is handed to it.
+resumes when the new value is handed to it. Both of those pauses need
+an account login, which is the one thing the kit deliberately does not
+carry — so a rotation run by a successor starts in the personal estate
+(§2.1), and the kit's README says so.
 
 ### 2.1 The offline kit: storage, backup, succession
 
@@ -89,14 +105,15 @@ resumes when the new value is handed to it.
     password, the few bootstrap facts, and the README. The dedicated
     database is not a copy of anything: it is the **canonical form of
     the seed set** — §2's rows live in it and only in it (key files as
-    attachments), and deliberately *not* in the daily-driver personal
-    KDBX. Two reasons: an envelope compromise then exposes only infra
-    seeds, every one of which has a designed rotate-on-compromise path
-    — not the personal estate, which has none — keeping the kit
-    locations' security requirements modest enough that an off-site
-    copy actually happens; and the repo's succession design stays
-    scoped to the system (the README notes that the personal estate is
-    arranged separately). The principle stands — a kit only the
+    attachments), and nothing else does. The split from the
+    daily-driver personal KDBX runs both ways and is the point: the
+    kit holds only credentials a single rotation can replace, so an
+    envelope compromise is answered by running that rotation, and the
+    kit locations' security requirements stay modest enough that an
+    off-site copy actually happens. Account roots stay in the personal
+    estate for the mirrored reason — they cannot be rotated, and the
+    repo's succession design stays scoped to the system. The principle
+    stands — a kit only the
     operator can decrypt fails succession by construction — and the
     paper satisfies it: the master password in the envelope opens the
     database for whoever holds the kit. Confidentiality still comes
@@ -111,10 +128,14 @@ resumes when the new value is handed to it.
     copy onto both sticks.
 -   **Contents = §2's rows plus a printed README**: the recovery entry
     points (this repo's URL, this document, the reverse-cold-standby
-    runbook, the account list) written for a **technical reader who
-    has never seen this system**. The account-root rows are what
-    bootstrap everything else: GitHub gets the repos, the registrar
-    gets the domains.
+    runbook) written for a **technical reader who has never seen this
+    system**. Because the account roots are not in the kit, the README
+    carries the one pointer that keeps succession unbroken: which
+    provider accounts exist, that their credentials live in the
+    personal estate, and that the estate's own succession is arranged
+    separately. Without it a successor can open every seed and still
+    not reach the two console-only rotations, or re-seed after a total
+    loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
     rotation (§4.2) — plus the yearly offline day, which opens one kit
     and verifies it against §2's table. It is emphatically **not** a
