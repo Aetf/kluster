@@ -26,15 +26,59 @@
   // whichever wins picks the merge strategy, and renovate's squash rewrites
   // the committer.
   packageRules: [
+    // The groups below are cut by *what an upgrade moves*, not by how big the
+    // version bump is. A single "non-major" group would put a Talos release
+    // that reimages three nodes in the same PR as a typing-stub bump, and the
+    // reviewer would have to take them or leave them together.
     {
-      matchUpdateTypes: [
-        'minor',
-        'patch',
-        'pin',
-        'digest',
+      // Library upgrades that should change no resource at all. This is the
+      // one group the zero-diff proof can wave through unattended
+      // (framework/ci.md §3), which is exactly why it must not carry anything
+      // that legitimately produces a diff.
+      matchManagers: [
+        'pep621',
+        'pip_requirements',
       ],
-      groupName: 'dependencies with non-major changes',
-      groupSlug: 'deps-non-major',
+      groupName: 'python dependencies',
+      groupSlug: 'python',
+    },
+    {
+      matchManagers: [
+        'github-actions',
+      ],
+      groupName: 'github actions',
+      groupSlug: 'actions',
+    },
+    {
+      // The toolchain CI installs from. A pulumi or uv bump changes how every
+      // other check runs, so it travels alone and is read.
+      matchManagers: [
+        'mise',
+      ],
+      groupName: 'toolchain',
+      groupSlug: 'toolchain',
+    },
+    {
+      // Inside the cluster: chart versions and container images, applied by a
+      // rollout. Blast radius is one workload.
+      matchFileNames: [
+        'Pulumi.k8s-base.yaml',
+        'Pulumi.apps.yaml',
+        'Pulumi.dns.yaml',
+      ],
+      groupName: 'in-cluster charts and images',
+      groupSlug: 'in-cluster',
+    },
+    {
+      // Outside the cluster: Talos, which reimages nodes. `physical` has no PR
+      // preview by design (framework/ci.md §3), so this one is read as code
+      // and approved before it is opened at all.
+      matchFileNames: [
+        'Pulumi.physical.yaml',
+      ],
+      groupName: 'talos and the node fleet',
+      groupSlug: 'physical',
+      dependencyDashboardApproval: true,
     },
     {
       // The appliance's pins are re-provision triggers rather than library
@@ -72,6 +116,21 @@
         "AGE_VERSION = '(?<currentValue>v[\\d.]+)'",
       ],
       depNameTemplate: 'FiloSottile/age',
+      datasourceTemplate: 'github-releases',
+    },
+    {
+      // The Talos version is stack config, which no manager reads. The file
+      // does not exist until the stack is created; renovate ignores a pattern
+      // that matches nothing, so this waits rather than needing to be
+      // remembered later.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.physical\\.yaml$/',
+      ],
+      matchStrings: [
+        'kluster:talosVersion:\\s*(?<currentValue>v[\\d.]+)',
+      ],
+      depNameTemplate: 'siderolabs/talos',
       datasourceTemplate: 'github-releases',
     },
   ],
