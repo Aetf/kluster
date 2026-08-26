@@ -42,7 +42,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from . import entries, masters
-from ...conventions import OCI_REGION
+from ...conventions import OCI_REGION, OCI_SEED_USER_EMAIL
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -218,6 +218,7 @@ class Iam:
                     compartment_id=self.tenancy,
                     name=SEED_NAME,
                     description='The kluster seed API key (credentials.md §2)',
+                    email=OCI_SEED_USER_EMAIL,
                 )
             )
         )

@@ -35,6 +35,11 @@ LABEL_DOMAIN = 'kluster.ucw.phd'
 #: (A1 OCPU-hours, the 200 GB boot+block allowance) is redeemable.
 OCI_REGION = 'us-phoenix-1'
 
+#: The seed user's primary email. An identity-domains tenancy converts every
+#: legacy-IAM user into a domain user, and the conversion refuses a user
+#: without one; the address must be unique within the domain.
+OCI_SEED_USER_EMAIL = 'pulumi@unlimited-code.works'
+
 #: The cloud fleet: three combined control-plane/ingress nodes, one of which
 #: additionally carries the block volume, the secondary private IP and the
 #: reserved public address (architecture.md §3.2).

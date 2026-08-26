@@ -66,6 +66,10 @@ class FakeIdentity:
         return Response([user for user in self.users.values() if name in (None, user.name)])
 
     def create_user(self, details: Any) -> Response:
+        # An identity-domains tenancy refuses a user without a primary email
+        # (IdcsConversionError), so the fake does too.
+        if not getattr(details, 'email', None):
+            raise RuntimeError('the primary email must be specified')
         user = Named(id=f'ocid1.user.oc1..{details.name}', name=details.name)
         self.users[user.id] = user
         return Response(user)
