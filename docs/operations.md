@@ -18,7 +18,7 @@ says so.
 
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
-| Talos version (machine-config pin + Image Factory schematic) | renovate (GitHub-releases datasource) | `just` task wrapping `talosctl upgrade`, serial, staged (physical.md §5) | Reviewed; §2.1 runbook |
+| Talos version (machine-config pin + Image Factory schematic) | renovate (GitHub-releases datasource) | `just` task wrapping `talosctl upgrade`, serial, staged (declarative/physical.md §2) | Reviewed; §2.1 runbook |
 | Kubernetes version | same PR family (Talos-coupled) | `talosctl upgrade-k8s` | Reviewed; after the Talos bump it belongs to |
 | Cilium chart | renovate | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth) |
 | k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) | renovate | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval |
@@ -34,7 +34,8 @@ says so.
 -   **§2.1 Talos node upgrade.** Trigger: version-pin PR merged.
     Gist: one cloud node first as canary (health + workload
     settle), then the remaining nodes serially — never two quorum
-    members at once (the CI-serialization rule, physical.md §5);
+    members at once (the CI-serialization rule,
+    declarative/physical.md §2);
     homelab worker last; `upgrade-k8s` afterward as its own step.
 -   **§2.2 Cilium upgrade.** Trigger: chart PR. Gist: the riskiest
     bump in the system — before merge, re-run the affected subset of
@@ -91,8 +92,16 @@ state-backend rebuild drill runs unattended end to end.
 | etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated (ops repo), alert on failure |
 | VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
 | Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
-| Credential expiry + destroy-date tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when a date approaches/passes |
+| Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
+
+**Destroy dates are not on that clock.** A retired derivation seed and
+a retired age generation each have an earliest-destroy date
+(credentials.md §2.2), but nothing records it: `credentials rotate`
+writes the successor kit and leaves the retired one byte-for-byte as it
+was, stamping no date, so a probe has no field to read. Honoring those
+dates is part of the yearly offline day until the register carries
+them.
 
 Every scheduled drill above runs in the **ops repo** (ci.md §3 —
 the deployment repo carries no scheduled workflows; the two
