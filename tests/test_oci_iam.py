@@ -374,3 +374,30 @@ def test_the_sweep_runs_as_the_seed_itself(kit: KdbxStore, root: masters.Credent
     _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
     assert tenancy.connections[-1] == (user_id, oci_iam.fingerprint(private_pem))
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+def test_a_refused_sweep_does_not_fail_rotation_either(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    tenancy = Tenancy(identity=RefusingIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The successor is minted and stored; the predecessor survives as a
+    # console errand rather than blocking the rotation.
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert oci_iam.fingerprint(private_pem) == current
+
+
+def test_rotation_sweeps_as_the_successor_not_the_predecessor(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential
+) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Deleting with the predecessor's own session would saw off the key it
+    # signs with mid-sweep; the deleting connection must be the successor.
+    assert tenancy.connections[-1] == (user_id, current)
+    assert tenancy.identity.keys[user_id] == [current]
