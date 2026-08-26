@@ -68,7 +68,10 @@ A brief carries, and an agent is finished only when it has all of them:
 3. **The gate**: `ruff check`, `ruff format --check`, `basedpyright`
    (strict, clean) and `pytest` all pass; new behaviour has a test that
    fails without it; `ltex-cli-plus` passes on every markdown file
-   touched, one file at a time.
+   touched, one file at a time. A change to provider-facing code also
+   ships with a live-drill transcript (`docs/framework/testing.md` §5)
+   or an explicit "unproven live" note in the pull request saying what
+   the first live run must confirm.
 4. **Documentation is part of the change, not a follow-up.** Docs
    describe what is, not what was done: no "verified on", no narrative
    of attempts. The same holds for commit messages.
