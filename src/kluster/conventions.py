@@ -205,6 +205,10 @@ ZONE_MIRRORS = ('unlimitedcodeworks.xyz', 'peifeng.phd', 'ucw.phd')
 #: Family zones — estate records only, never app fan-out targets.
 ZONE_FAMILY = ('jiahui.id', 'jiahui.love')
 
+#: Every zone an app may publish in without further thought. Membership is a
+#: promise that the zone is a *full* mirror: it carries the shared estate block
+#: (`dns.zones.MIRRORED_ESTATE`), so a name fanned out across the set resolves
+#: in all of it. Adding a zone here means making it a mirror first.
 PUBLIC_ALL = (ZONE_PRIMARY, *ZONE_MIRRORS)
 PRIMARY_ONLY = (ZONE_PRIMARY,)
 ALL_ZONES = (*PUBLIC_ALL, *ZONE_FAMILY)

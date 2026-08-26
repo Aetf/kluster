@@ -26,10 +26,11 @@ from kluster import conventions
 from kluster.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
 
 __all__ = (
+    'ALIAS_ZONES',
     'CLOUDFLARE_ISSUERS',
     'CLUSTER_ISSUERS',
     'ESTATE',
-    'MIRROR_ZONES',
+    'MIRRORED_ESTATE',
     'ZONE_ISSUERS',
     'ZT_ROSTER',
     'zt_label',
@@ -153,8 +154,11 @@ CLOUDFLARE_ISSUERS: tuple[str, ...] = (
 #: Let's Encrypt account (cluster-infra.md §1.1).
 CLUSTER_ISSUERS: tuple[str, ...] = ('letsencrypt.org',)
 
-#: The alias zones that mirror the primary record for record.
-MIRROR_ZONES: tuple[str, ...] = ('peifeng.phd', 'ucw.phd')
+#: The public zones whose estate is the mirrored block and nothing else. The
+#: other two members of `conventions.PUBLIC_ALL` -- the primary and
+#: unlimitedcodeworks.xyz -- carry the same block plus mail and their own site
+#: verifications, which is the only way any full mirror differs from another.
+ALIAS_ZONES: tuple[str, ...] = ('peifeng.phd', 'ucw.phd')
 
 #: Zone → the CA set its CAA names, keyed by who actually issues for names in
 #: it (dns.md §1). A zone absent from this table carries no CAA at all, which
@@ -195,23 +199,30 @@ def _web_origin() -> tuple[Record, ...]:
     )
 
 
-def _mirrored_estate() -> tuple[Record, ...]:
-    """What the primary zone and its mirrors carry identically."""
-    return (
-        a(
-            f'archvps.{conventions.ANCHOR_LABEL}',
-            IP_ARCHVPS,
-            ttl=conventions.ANCHOR_TTL,
-            comment='legacy VPS anchor; retires with the VPS',
-        ),
-        *zt_records(),
-        *_web_origin(),
-    )
+#: What every full-mirror public zone carries identically -- the anchor
+#: namespace, the ZeroTier host block, and the web origin.
+#:
+#: This block, not a zone-against-zone comparison, is the definition of the
+#: mirror: `conventions.PUBLIC_ALL` is exactly the set of zones that carry it,
+#: so a name added here reaches all of them and a name added to one zone's own
+#: function reaches only that zone. An app fanning a route across `PUBLIC_ALL`
+#: CNAMEs to an anchor in each zone it publishes in, which is why a member of
+#: the set missing this block would publish names that do not resolve.
+MIRRORED_ESTATE: tuple[Record, ...] = (
+    a(
+        f'archvps.{conventions.ANCHOR_LABEL}',
+        IP_ARCHVPS,
+        ttl=conventions.ANCHOR_TTL,
+        comment='legacy VPS anchor; retires with the VPS',
+    ),
+    *zt_records(),
+    *_web_origin(),
+)
 
 
 def _primary() -> tuple[Record, ...]:
     return (
-        *_mirrored_estate(),
+        *MIRRORED_ESTATE,
         *_mail_records(dkim_google=DKIM_GOOGLE_UCW),
         *_verifications(
             'u5QSDhgnrgdr-ojW6yDGKD9fM3jJIzFnYxElzH9DNDI',
@@ -221,10 +232,11 @@ def _primary() -> tuple[Record, ...]:
 
 
 def _unlimitedcodeworks_xyz() -> tuple[Record, ...]:
-    # A partial mirror: it carries mail and the web origin, never the host
-    # namespaces.
+    # A full mirror with mail of its own, the same shape as the primary: it is
+    # in `conventions.PUBLIC_ALL`, so every app fan-out lands a name in it and
+    # the anchors those names point at have to be here.
     return (
-        *_web_origin(),
+        *MIRRORED_ESTATE,
         *_mail_records(dkim_google=DKIM_GOOGLE_XYZ),
         *_verifications(
             'N74Krrj_GYGUYgHSXUBX735CRdKwNKw736bDUnE-V2U',
@@ -268,8 +280,8 @@ def _estate() -> Mapping[str, Sequence[Record]]:
         'jiahui.id': _jiahui_id(),
         'jiahui.love': _jiahui_love(),
     }
-    for zone in MIRROR_ZONES:
-        census[zone] = _mirrored_estate()
+    for zone in ALIAS_ZONES:
+        census[zone] = MIRRORED_ESTATE
     # CAA is appended per zone rather than built into the record blocks: the
     # policy is a property of the zone (who issues for its names), not of the
     # block, and the mirrors share a block with the primary.

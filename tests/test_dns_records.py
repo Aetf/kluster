@@ -12,7 +12,16 @@ from kluster import conventions
 from kluster.dns.legacy import LEGACY
 from kluster.dns.model import Record
 from kluster.dns.routes import Exposure, Rewrite, Route, rewrites
-from kluster.dns.zones import CLOUDFLARE_ISSUERS, CLUSTER_ISSUERS, ESTATE, ZONE_ISSUERS, ZT_ROSTER, zt_label
+from kluster.dns.zones import (
+    ALIAS_ZONES,
+    CLOUDFLARE_ISSUERS,
+    CLUSTER_ISSUERS,
+    ESTATE,
+    MIRRORED_ESTATE,
+    ZONE_ISSUERS,
+    ZT_ROSTER,
+    zt_label,
+)
 
 
 def _records(zone: str) -> tuple[Record, ...]:
@@ -150,11 +159,45 @@ def test_the_unproxied_records_stay_unproxied(label: str) -> None:
 
 
 def test_the_mirrors_carry_the_same_app_names_as_the_primary() -> None:
-    # The mirrors are mirrors: a name that resolves on one resolves on all.
+    # An alias zone publishes nothing of its own, so every name in it is a
+    # name the primary publishes too.
     primary = _labels(conventions.ZONE_PRIMARY)
 
-    for zone in ('peifeng.phd', 'ucw.phd'):
+    for zone in ALIAS_ZONES:
         assert _labels(zone) <= primary, zone
+
+
+def _estate_keys(zone: str) -> set[str]:
+    return {record.resource_key for record in ESTATE[zone]}
+
+
+def test_every_public_zone_carries_the_whole_mirrored_estate() -> None:
+    """`PUBLIC_ALL` membership is the claim that the zone is a full mirror.
+
+    An app fanning a route across the set CNAMEs to an anchor in each zone it
+    publishes in, so a member missing the shared block publishes names that
+    cannot resolve. The check is against the block itself rather than zone
+    against zone, because the zones legitimately differ elsewhere -- two of
+    them carry mail and site verifications of their own -- and because that
+    makes editing the block the only way to add a mirrored name.
+    """
+    mirrored = {record.resource_key for record in MIRRORED_ESTATE}
+
+    assert mirrored
+    for zone in conventions.PUBLIC_ALL:
+        assert mirrored <= _estate_keys(zone), zone
+
+
+def test_an_alias_zone_holds_the_mirrored_estate_and_its_own_caa() -> None:
+    """Nothing else may accumulate in a zone that exists only to alias.
+
+    CAA is the exception by construction: the policy is a property of the
+    zone, so it is appended per zone instead of living in the shared block.
+    """
+    mirrored = {record.resource_key for record in MIRRORED_ESTATE}
+
+    for zone in ALIAS_ZONES:
+        assert {record.resource_key for record in ESTATE[zone] if record.type != 'CAA'} == mirrored, zone
 
 
 def test_a_public_route_needs_no_rewrite() -> None:

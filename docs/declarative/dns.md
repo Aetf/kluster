@@ -24,8 +24,9 @@ The DNSControl census: ZeroTier host records, Google Workspace mail
 (MX/SPF/DKIM/DMARC per zone), site verifications, external hosts
 (abacus), two family zones (jiahui.id / jiahui.love), and two alias
 zones (peifeng.phd, ucw.phd) mirroring the primary
-(unlimited-code.works; unlimitedcodeworks.xyz partially). None of that
-has an app to co-locate with — so it gets its own stack with its own
+(unlimited-code.works). unlimitedcodeworks.xyz mirrors the primary as
+well, with mail and site verifications of its own on top (§2). None of
+that has an app to co-locate with — so it gets its own stack with its own
 (rare) change cadence, and non-cluster DNS edits never touch a cluster
 stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
 `dns` for zone IDs and `dns` references `physical` for anchor IPs.
@@ -99,11 +100,20 @@ Cloudflare set; jiahui.id takes none.
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
 -   **Alias zones via zone sets, not copy-paste**: the mirrors
-    (peifeng.phd, ucw.phd, …) are today maintained as duplicated record
-    blocks. `conventions.py` defines zone sets (e.g. `PUBLIC_ALL`,
-    `PRIMARY_ONLY`); an app declares `public_route(host=…,
+    (unlimitedcodeworks.xyz, peifeng.phd, ucw.phd) were maintained as
+    duplicated record blocks. `conventions.py` defines zone sets (e.g.
+    `PUBLIC_ALL`, `PRIMARY_ONLY`); an app declares `public_route(host=…,
     zones=PUBLIC_ALL)` once and the helper fans records out across the
     set.
+-   **`PUBLIC_ALL` membership means full mirror**: every zone in the
+    set carries one shared estate block — the anchor namespace, the
+    ZeroTier host records and the web origin
+    (`dns/zones.py`, `MIRRORED_ESTATE`) — so a name fanned across the
+    set resolves in all of it, the anchors its CNAMEs target included.
+    A zone joins the set by carrying the block, not by being listed;
+    the two facts are held together by a test. What a mirror may add on
+    top of the block is its own mail and site verifications, which are
+    per-domain by nature.
 -   **Cloudflare proxy is a helper parameter** (default on): the
     existing per-record reasons — large uploads (photos), non-HTTP
     ports (syncthing, matrix, minecraft) — become explicit
