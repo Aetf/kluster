@@ -104,6 +104,7 @@ class TCPRoute(dict):
         TCPRoute provides a way to route TCP requests. When combined with a Gateway
         listener, it can be used to forward connections on the port specified by the
         listener to a set of backends specified by the TCPRoute.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -184,6 +185,7 @@ class TCPRouteSpec(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TCPRoute.
+
         :param Sequence['TCPRouteSpecParentRefsArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -415,6 +417,7 @@ class TCPRouteSpecParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -711,6 +714,7 @@ class TCPRouteSpecParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -984,6 +988,7 @@ class TCPRouteSpecPatch(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TCPRoute.
+
         :param Sequence['TCPRouteSpecParentRefsPatchArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -1189,6 +1194,7 @@ class TCPRouteSpecRules(dict):
                  name: Optional[_builtins.str] = None):
         """
         TCPRouteRule is the configuration for a given rule.
+
         :param Sequence['TCPRouteSpecRulesBackendRefsArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -1197,15 +1203,7 @@ class TCPRouteSpecRules(dict):
                connections, then 80% of connections must be rejected instead.
                
                Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
         :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -1224,12 +1222,6 @@ class TCPRouteSpecRules(dict):
         connections, then 80% of connections must be rejected instead.
 
         Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -1238,8 +1230,6 @@ class TCPRouteSpecRules(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -1310,6 +1300,7 @@ class TCPRouteSpecRulesBackendRefs(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -1521,6 +1512,7 @@ class TCPRouteSpecRulesBackendRefsPatch(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -1693,6 +1685,7 @@ class TCPRouteSpecRulesPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         TCPRouteRule is the configuration for a given rule.
+
         :param Sequence['TCPRouteSpecRulesBackendRefsPatchArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -1701,15 +1694,7 @@ class TCPRouteSpecRulesPatch(dict):
                connections, then 80% of connections must be rejected instead.
                
                Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
         :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -1728,12 +1713,6 @@ class TCPRouteSpecRulesPatch(dict):
         connections, then 80% of connections must be rejected instead.
 
         Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -1742,8 +1721,6 @@ class TCPRouteSpecRulesPatch(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -1757,6 +1734,7 @@ class TCPRouteStatus(dict):
                  parents: Optional[Sequence['outputs.TCPRouteStatusParents']] = None):
         """
         Status defines the current state of TCPRoute.
+
         :param Sequence['TCPRouteStatusParentsArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -1829,6 +1807,7 @@ class TCPRouteStatusParents(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TCPRouteStatusParentsConditionsArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -1847,7 +1826,7 @@ class TCPRouteStatusParents(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -1891,7 +1870,7 @@ class TCPRouteStatusParents(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -1954,6 +1933,7 @@ class TCPRouteStatusParentsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -2072,6 +2052,7 @@ class TCPRouteStatusParentsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -2190,6 +2171,7 @@ class TCPRouteStatusParentsParentRef(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -2466,6 +2448,7 @@ class TCPRouteStatusParentsParentRefPatch(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -2741,6 +2724,7 @@ class TCPRouteStatusParentsPatch(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TCPRouteStatusParentsConditionsPatchArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -2759,7 +2743,7 @@ class TCPRouteStatusParentsPatch(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -2803,7 +2787,7 @@ class TCPRouteStatusParentsPatch(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -2842,6 +2826,7 @@ class TCPRouteStatusPatch(dict):
                  parents: Optional[Sequence['outputs.TCPRouteStatusParentsPatch']] = None):
         """
         Status defines the current state of TCPRoute.
+
         :param Sequence['TCPRouteStatusParentsPatchArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -2888,9 +2873,6 @@ class TLSRoute(dict):
     The TLSRoute resource is similar to TCPRoute, but can be configured
     to match against TLS-specific metadata. This allows more flexibility
     in matching streams for a given TLS listener.
-
-    If you need to forward traffic to a single target for a TLS listener, you
-    could choose to use a TCPRoute with a TLS listener.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -2920,8 +2902,6 @@ class TLSRoute(dict):
         to match against TLS-specific metadata. This allows more flexibility
         in matching streams for a given TLS listener.
 
-        If you need to forward traffic to a single target for a TLS listener, you
-        could choose to use a TCPRoute with a TLS listener.
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -3003,6 +2983,7 @@ class TLSRouteSpec(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of SNI names that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -3309,6 +3290,7 @@ class TLSRouteSpecParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3605,6 +3587,7 @@ class TLSRouteSpecParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3879,6 +3862,7 @@ class TLSRouteSpecPatch(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of SNI names that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -4159,15 +4143,18 @@ class TLSRouteSpecRules(dict):
                  name: Optional[_builtins.str] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param Sequence['TLSRouteSpecRulesBackendRefsArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -4176,9 +4163,9 @@ class TLSRouteSpecRules(dict):
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -4194,10 +4181,12 @@ class TLSRouteSpecRules(dict):
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -4206,6 +4195,8 @@ class TLSRouteSpecRules(dict):
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -4214,8 +4205,6 @@ class TLSRouteSpecRules(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -4286,6 +4275,7 @@ class TLSRouteSpecRulesBackendRefs(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4497,6 +4487,7 @@ class TLSRouteSpecRulesBackendRefsPatch(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4669,15 +4660,18 @@ class TLSRouteSpecRulesPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param Sequence['TLSRouteSpecRulesBackendRefsPatchArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -4686,9 +4680,9 @@ class TLSRouteSpecRulesPatch(dict):
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -4704,10 +4698,12 @@ class TLSRouteSpecRulesPatch(dict):
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -4716,6 +4712,8 @@ class TLSRouteSpecRulesPatch(dict):
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -4724,8 +4722,6 @@ class TLSRouteSpecRulesPatch(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -4739,6 +4735,7 @@ class TLSRouteStatus(dict):
                  parents: Optional[Sequence['outputs.TLSRouteStatusParents']] = None):
         """
         Status defines the current state of TLSRoute.
+
         :param Sequence['TLSRouteStatusParentsArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -4811,6 +4808,7 @@ class TLSRouteStatusParents(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TLSRouteStatusParentsConditionsArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -4829,7 +4827,7 @@ class TLSRouteStatusParents(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -4873,7 +4871,7 @@ class TLSRouteStatusParents(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -4936,6 +4934,7 @@ class TLSRouteStatusParentsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -5054,6 +5053,7 @@ class TLSRouteStatusParentsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -5172,6 +5172,7 @@ class TLSRouteStatusParentsParentRef(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -5448,6 +5449,7 @@ class TLSRouteStatusParentsParentRefPatch(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -5723,6 +5725,7 @@ class TLSRouteStatusParentsPatch(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TLSRouteStatusParentsConditionsPatchArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -5741,7 +5744,7 @@ class TLSRouteStatusParentsPatch(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -5785,7 +5788,7 @@ class TLSRouteStatusParentsPatch(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -5824,6 +5827,7 @@ class TLSRouteStatusPatch(dict):
                  parents: Optional[Sequence['outputs.TLSRouteStatusParentsPatch']] = None):
         """
         Status defines the current state of TLSRoute.
+
         :param Sequence['TLSRouteStatusParentsPatchArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -5898,6 +5902,7 @@ class UDPRoute(dict):
         UDPRoute provides a way to route UDP traffic. When combined with a Gateway
         listener, it can be used to forward traffic on the port specified by the
         listener to a set of backends specified by the UDPRoute.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -5978,6 +5983,7 @@ class UDPRouteSpec(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of UDPRoute.
+
         :param Sequence['UDPRouteSpecParentRefsArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -6209,6 +6215,7 @@ class UDPRouteSpecParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -6505,6 +6512,7 @@ class UDPRouteSpecParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -6778,6 +6786,7 @@ class UDPRouteSpecPatch(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of UDPRoute.
+
         :param Sequence['UDPRouteSpecParentRefsPatchArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -6983,6 +6992,7 @@ class UDPRouteSpecRules(dict):
                  name: Optional[_builtins.str] = None):
         """
         UDPRouteRule is the configuration for a given rule.
+
         :param Sequence['UDPRouteSpecRulesBackendRefsArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -6990,16 +7000,8 @@ class UDPRouteSpecRules(dict):
                respect weight; if an invalid backend is requested to have 80% of
                the packets, then 80% of packets must be dropped instead.
                
-               Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
+               Support: Extended for Kubernetes Service
         :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -7017,13 +7019,7 @@ class UDPRouteSpecRules(dict):
         respect weight; if an invalid backend is requested to have 80% of
         the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
+        Support: Extended for Kubernetes Service
         """
         return pulumi.get(self, "backend_refs")
 
@@ -7032,8 +7028,6 @@ class UDPRouteSpecRules(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -7104,6 +7098,7 @@ class UDPRouteSpecRulesBackendRefs(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -7315,6 +7310,7 @@ class UDPRouteSpecRulesBackendRefsPatch(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -7487,6 +7483,7 @@ class UDPRouteSpecRulesPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         UDPRouteRule is the configuration for a given rule.
+
         :param Sequence['UDPRouteSpecRulesBackendRefsPatchArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -7494,16 +7491,8 @@ class UDPRouteSpecRulesPatch(dict):
                respect weight; if an invalid backend is requested to have 80% of
                the packets, then 80% of packets must be dropped instead.
                
-               Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
+               Support: Extended for Kubernetes Service
         :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -7521,13 +7510,7 @@ class UDPRouteSpecRulesPatch(dict):
         respect weight; if an invalid backend is requested to have 80% of
         the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
+        Support: Extended for Kubernetes Service
         """
         return pulumi.get(self, "backend_refs")
 
@@ -7536,8 +7519,6 @@ class UDPRouteSpecRulesPatch(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -7551,6 +7532,7 @@ class UDPRouteStatus(dict):
                  parents: Optional[Sequence['outputs.UDPRouteStatusParents']] = None):
         """
         Status defines the current state of UDPRoute.
+
         :param Sequence['UDPRouteStatusParentsArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -7623,6 +7605,7 @@ class UDPRouteStatusParents(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['UDPRouteStatusParentsConditionsArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -7641,7 +7624,7 @@ class UDPRouteStatusParents(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -7685,7 +7668,7 @@ class UDPRouteStatusParents(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -7748,6 +7731,7 @@ class UDPRouteStatusParentsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -7866,6 +7850,7 @@ class UDPRouteStatusParentsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -7984,6 +7969,7 @@ class UDPRouteStatusParentsParentRef(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -8260,6 +8246,7 @@ class UDPRouteStatusParentsParentRefPatch(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -8535,6 +8522,7 @@ class UDPRouteStatusParentsPatch(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['UDPRouteStatusParentsConditionsPatchArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -8553,7 +8541,7 @@ class UDPRouteStatusParentsPatch(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -8597,7 +8585,7 @@ class UDPRouteStatusParentsPatch(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -8636,6 +8624,7 @@ class UDPRouteStatusPatch(dict):
                  parents: Optional[Sequence['outputs.UDPRouteStatusParentsPatch']] = None):
         """
         Status defines the current state of UDPRoute.
+
         :param Sequence['UDPRouteStatusParentsPatchArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that

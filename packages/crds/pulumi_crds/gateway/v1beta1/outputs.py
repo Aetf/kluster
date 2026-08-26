@@ -253,6 +253,7 @@ class Gateway(dict):
         """
         Gateway represents an instance of a service-traffic handling infrastructure
         by binding Listeners to a set of IP addresses.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -365,6 +366,7 @@ class GatewayClass(dict):
         Gateway is not deleted while in use.
 
         GatewayClass is a Cluster level resource.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -445,6 +447,7 @@ class GatewayClassSpec(dict):
                  parameters_ref: Optional['outputs.GatewayClassSpecParametersRef'] = None):
         """
         Spec defines the desired state of GatewayClass.
+
         :param _builtins.str controller_name: ControllerName is the name of the controller that is managing Gateways of
                this class. The value of this field MUST be a domain prefixed path.
                
@@ -537,6 +540,7 @@ class GatewayClassSpecParametersRef(dict):
         It is generally recommended that GatewayClass provides defaults that can be overridden by a Gateway.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent.
         :param _builtins.str kind: Kind is kind of the referent.
         :param _builtins.str name: Name is the name of the referent.
@@ -634,6 +638,7 @@ class GatewayClassSpecParametersRefPatch(dict):
         It is generally recommended that GatewayClass provides defaults that can be overridden by a Gateway.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent.
         :param _builtins.str kind: Kind is kind of the referent.
         :param _builtins.str name: Name is the name of the referent.
@@ -715,6 +720,7 @@ class GatewayClassSpecPatch(dict):
                  parameters_ref: Optional['outputs.GatewayClassSpecParametersRefPatch'] = None):
         """
         Spec defines the desired state of GatewayClass.
+
         :param _builtins.str controller_name: ControllerName is the name of the controller that is managing Gateways of
                this class. The value of this field MUST be a domain prefixed path.
                
@@ -794,6 +800,7 @@ class GatewayClassStatus(dict):
 
         Implementations MUST populate status on all GatewayClass resources which
         specify their controller name.
+
         :param Sequence['GatewayClassStatusConditionsArgs'] conditions: Conditions is the current status from the controller for
                this GatewayClass.
                
@@ -862,6 +869,7 @@ class GatewayClassStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -980,6 +988,7 @@ class GatewayClassStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -1098,6 +1107,7 @@ class GatewayClassStatusPatch(dict):
 
         Implementations MUST populate status on all GatewayClass resources which
         specify their controller name.
+
         :param Sequence['GatewayClassStatusConditionsPatchArgs'] conditions: Conditions is the current status from the controller for
                this GatewayClass.
                
@@ -1211,6 +1221,7 @@ class GatewaySpec(dict):
                  tls: Optional['outputs.GatewaySpecTls'] = None):
         """
         Spec defines the desired state of Gateway.
+
         :param Sequence['GatewaySpecAddressesArgs'] addresses: Addresses requested for this Gateway. This is optional and behavior can
                depend on the implementation. If a value is set in the spec and the
                requested address is invalid or unavailable, the implementation MUST
@@ -1378,6 +1389,12 @@ class GatewaySpec(dict):
                For example, if Listeners are defined for "foo.example.com" and "*.example.com", a
                request to "foo.example.com" SHOULD only be routed using routes attached
                to the "foo.example.com" Listener (and not the "*.example.com" Listener).
+               
+               If traffic to a Gateway does not match any Listener's hostname (or if
+               the Listener does not specify a hostname and the request does not match
+               any attached Route), the request MUST be rejected. The specific mechanism
+               for rejection depends on the protocol: HTTP returns a 404 status code,
+               while gRPC returns an Unimplemented status code.
                
                This concept is known as "Listener Isolation", and it is an Extended feature
                of Gateway API. Implementations that do not support Listener Isolation MUST
@@ -1630,6 +1647,12 @@ class GatewaySpec(dict):
         request to "foo.example.com" SHOULD only be routed using routes attached
         to the "foo.example.com" Listener (and not the "*.example.com" Listener).
 
+        If traffic to a Gateway does not match any Listener's hostname (or if
+        the Listener does not specify a hostname and the request does not match
+        any attached Route), the request MUST be rejected. The specific mechanism
+        for rejection depends on the protocol: HTTP returns a 404 status code,
+        while gRPC returns an Unimplemented status code.
+
         This concept is known as "Listener Isolation", and it is an Extended feature
         of Gateway API. Implementations that do not support Listener Isolation MUST
         clearly document this, and MUST NOT claim support for the
@@ -1681,6 +1704,7 @@ class GatewaySpecAddresses(dict):
                  value: Optional[_builtins.str] = None):
         """
         GatewaySpecAddress describes an address that can be bound to a Gateway.
+
         :param _builtins.str type: Type of the address.
         :param _builtins.str value: When a value is unspecified, an implementation SHOULD automatically
                assign an address matching the requested type if possible.
@@ -1728,6 +1752,7 @@ class GatewaySpecAddressesPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         GatewaySpecAddress describes an address that can be bound to a Gateway.
+
         :param _builtins.str type: Type of the address.
         :param _builtins.str value: When a value is unspecified, an implementation SHOULD automatically
                assign an address matching the requested type if possible.
@@ -1769,13 +1794,13 @@ class GatewaySpecAddressesPatch(dict):
 class GatewaySpecAllowedListeners(dict):
     """
     AllowedListeners defines which ListenerSets can be attached to this Gateway.
-    While this feature is experimental, the default value is to allow no ListenerSets.
+    The default value is to allow no ListenerSets.
     """
     def __init__(__self__, *,
                  namespaces: Optional['outputs.GatewaySpecAllowedListenersNamespaces'] = None):
         """
         AllowedListeners defines which ListenerSets can be attached to this Gateway.
-        While this feature is experimental, the default value is to allow no ListenerSets.
+        The default value is to allow no ListenerSets.
         """
         if namespaces is not None:
             pulumi.set(__self__, "namespaces", namespaces)
@@ -1790,7 +1815,7 @@ class GatewaySpecAllowedListeners(dict):
 class GatewaySpecAllowedListenersNamespaces(dict):
     """
     Namespaces defines which namespaces ListenerSets can be attached to this Gateway.
-    While this feature is experimental, the default value is to allow no ListenerSets.
+    The default value is to allow no ListenerSets.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -1814,7 +1839,8 @@ class GatewaySpecAllowedListenersNamespaces(dict):
                  selector: Optional['outputs.GatewaySpecAllowedListenersNamespacesSelector'] = None):
         """
         Namespaces defines which namespaces ListenerSets can be attached to this Gateway.
-        While this feature is experimental, the default value is to allow no ListenerSets.
+        The default value is to allow no ListenerSets.
+
         :param _builtins.str from_: From indicates where ListenerSets can attach to this Gateway. Possible
                values are:
                
@@ -1823,7 +1849,7 @@ class GatewaySpecAllowedListenersNamespaces(dict):
                * All: ListenerSets in all namespaces may be attached to this Gateway.
                * None: Only listeners defined in the Gateway's spec are allowed
                
-               While this feature is experimental, the default value None
+               The default value None
         """
         if from_ is not None:
             pulumi.set(__self__, "from_", from_)
@@ -1842,7 +1868,7 @@ class GatewaySpecAllowedListenersNamespaces(dict):
         * All: ListenerSets in all namespaces may be attached to this Gateway.
         * None: Only listeners defined in the Gateway's spec are allowed
 
-        While this feature is experimental, the default value None
+        The default value None
         """
         return pulumi.get(self, "from_")
 
@@ -1856,7 +1882,7 @@ class GatewaySpecAllowedListenersNamespaces(dict):
 class GatewaySpecAllowedListenersNamespacesPatch(dict):
     """
     Namespaces defines which namespaces ListenerSets can be attached to this Gateway.
-    While this feature is experimental, the default value is to allow no ListenerSets.
+    The default value is to allow no ListenerSets.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -1880,7 +1906,8 @@ class GatewaySpecAllowedListenersNamespacesPatch(dict):
                  selector: Optional['outputs.GatewaySpecAllowedListenersNamespacesSelectorPatch'] = None):
         """
         Namespaces defines which namespaces ListenerSets can be attached to this Gateway.
-        While this feature is experimental, the default value is to allow no ListenerSets.
+        The default value is to allow no ListenerSets.
+
         :param _builtins.str from_: From indicates where ListenerSets can attach to this Gateway. Possible
                values are:
                
@@ -1889,7 +1916,7 @@ class GatewaySpecAllowedListenersNamespacesPatch(dict):
                * All: ListenerSets in all namespaces may be attached to this Gateway.
                * None: Only listeners defined in the Gateway's spec are allowed
                
-               While this feature is experimental, the default value None
+               The default value None
         """
         if from_ is not None:
             pulumi.set(__self__, "from_", from_)
@@ -1908,7 +1935,7 @@ class GatewaySpecAllowedListenersNamespacesPatch(dict):
         * All: ListenerSets in all namespaces may be attached to this Gateway.
         * None: Only listeners defined in the Gateway's spec are allowed
 
-        While this feature is experimental, the default value None
+        The default value None
         """
         return pulumi.get(self, "from_")
 
@@ -1951,6 +1978,7 @@ class GatewaySpecAllowedListenersNamespacesSelector(dict):
         Selector must be specified when From is set to "Selector". In that case,
         only ListenerSets in Namespaces matching this Selector will be selected by this
         Gateway. This field is ignored for other values of "From".
+
         :param Sequence['GatewaySpecAllowedListenersNamespacesSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -1993,6 +2021,7 @@ class GatewaySpecAllowedListenersNamespacesSelectorMatchExpressions(dict):
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -2050,6 +2079,7 @@ class GatewaySpecAllowedListenersNamespacesSelectorMatchExpressionsPatch(dict):
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -2127,6 +2157,7 @@ class GatewaySpecAllowedListenersNamespacesSelectorPatch(dict):
         Selector must be specified when From is set to "Selector". In that case,
         only ListenerSets in Namespaces matching this Selector will be selected by this
         Gateway. This field is ignored for other values of "From".
+
         :param Sequence['GatewaySpecAllowedListenersNamespacesSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -2160,13 +2191,13 @@ class GatewaySpecAllowedListenersNamespacesSelectorPatch(dict):
 class GatewaySpecAllowedListenersPatch(dict):
     """
     AllowedListeners defines which ListenerSets can be attached to this Gateway.
-    While this feature is experimental, the default value is to allow no ListenerSets.
+    The default value is to allow no ListenerSets.
     """
     def __init__(__self__, *,
                  namespaces: Optional['outputs.GatewaySpecAllowedListenersNamespacesPatch'] = None):
         """
         AllowedListeners defines which ListenerSets can be attached to this Gateway.
-        While this feature is experimental, the default value is to allow no ListenerSets.
+        The default value is to allow no ListenerSets.
         """
         if namespaces is not None:
             pulumi.set(__self__, "namespaces", namespaces)
@@ -2209,6 +2240,7 @@ class GatewaySpecInfrastructure(dict):
         Infrastructure defines infrastructure level attributes about this Gateway instance.
 
         Support: Extended
+
         :param Mapping[str, _builtins.str] annotations: Annotations that SHOULD be applied to any resources created in response to this Gateway.
                
                For implementations creating other Kubernetes objects, this should be the `metadata.annotations` field on resources.
@@ -2316,6 +2348,7 @@ class GatewaySpecInfrastructureParametersRef(dict):
         "InvalidParameters" reason.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent.
         :param _builtins.str kind: Kind is kind of the referent.
         :param _builtins.str name: Name is the name of the referent.
@@ -2393,6 +2426,7 @@ class GatewaySpecInfrastructureParametersRefPatch(dict):
         "InvalidParameters" reason.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent.
         :param _builtins.str kind: Kind is kind of the referent.
         :param _builtins.str name: Name is the name of the referent.
@@ -2461,6 +2495,7 @@ class GatewaySpecInfrastructurePatch(dict):
         Infrastructure defines infrastructure level attributes about this Gateway instance.
 
         Support: Extended
+
         :param Mapping[str, _builtins.str] annotations: Annotations that SHOULD be applied to any resources created in response to this Gateway.
                
                For implementations creating other Kubernetes objects, this should be the `metadata.annotations` field on resources.
@@ -2560,6 +2595,7 @@ class GatewaySpecListeners(dict):
         """
         Listener embodies the concept of a logical endpoint where a Gateway accepts
         network connections.
+
         :param _builtins.str hostname: Hostname specifies the virtual hostname to match for protocol types that
                define this concept. When unspecified, all hostnames are matched. This
                field is ignored for protocols that don't require hostname based
@@ -2591,7 +2627,7 @@ class GatewaySpecListeners(dict):
                  the Gateway SHOULD return a 421.
                * If the current Listener (selected by SNI matching during ClientHello)
                  does not match the Host:
-                   * If another Listener does match the Host the Gateway SHOULD return a
+                   * If another Listener does match the Host, the Gateway SHOULD return a
                      421.
                    * If no other Listener matches the Host, the Gateway MUST return a
                      404.
@@ -2672,7 +2708,7 @@ class GatewaySpecListeners(dict):
           the Gateway SHOULD return a 421.
         * If the current Listener (selected by SNI matching during ClientHello)
           does not match the Host:
-            * If another Listener does match the Host the Gateway SHOULD return a
+            * If another Listener does match the Host, the Gateway SHOULD return a
               421.
             * If no other Listener matches the Host, the Gateway MUST return a
               404.
@@ -2785,6 +2821,7 @@ class GatewaySpecListenersAllowedRoutes(dict):
         of the rules within that Route should still be supported.
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersAllowedRoutesKindsArgs'] kinds: Kinds specifies the groups and kinds of Routes that are allowed to bind
                to this Gateway Listener. When unspecified or empty, the kinds of Routes
                selected are determined using the Listener protocol.
@@ -2836,6 +2873,7 @@ class GatewaySpecListenersAllowedRoutesKinds(dict):
                  kind: Optional[_builtins.str] = None):
         """
         RouteGroupKind indicates the group and kind of a Route resource.
+
         :param _builtins.str group: Group is the group of the Route.
         :param _builtins.str kind: Kind is the kind of the Route.
         """
@@ -2871,6 +2909,7 @@ class GatewaySpecListenersAllowedRoutesKindsPatch(dict):
                  kind: Optional[_builtins.str] = None):
         """
         RouteGroupKind indicates the group and kind of a Route resource.
+
         :param _builtins.str group: Group is the group of the Route.
         :param _builtins.str kind: Kind is the kind of the Route.
         """
@@ -2929,6 +2968,7 @@ class GatewaySpecListenersAllowedRoutesNamespaces(dict):
         Listener. This is restricted to the namespace of this Gateway by default.
 
         Support: Core
+
         :param _builtins.str from_: From indicates where Routes will be selected for this Gateway. Possible
                values are:
                
@@ -2999,6 +3039,7 @@ class GatewaySpecListenersAllowedRoutesNamespacesPatch(dict):
         Listener. This is restricted to the namespace of this Gateway by default.
 
         Support: Core
+
         :param _builtins.str from_: From indicates where Routes will be selected for this Gateway. Possible
                values are:
                
@@ -3073,6 +3114,7 @@ class GatewaySpecListenersAllowedRoutesNamespacesSelector(dict):
         Gateway. This field is ignored for other values of "From".
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersAllowedRoutesNamespacesSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -3115,6 +3157,7 @@ class GatewaySpecListenersAllowedRoutesNamespacesSelectorMatchExpressions(dict):
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -3172,6 +3215,7 @@ class GatewaySpecListenersAllowedRoutesNamespacesSelectorMatchExpressionsPatch(d
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -3253,6 +3297,7 @@ class GatewaySpecListenersAllowedRoutesNamespacesSelectorPatch(dict):
         Gateway. This field is ignored for other values of "From".
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersAllowedRoutesNamespacesSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -3338,6 +3383,7 @@ class GatewaySpecListenersAllowedRoutesPatch(dict):
         of the rules within that Route should still be supported.
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersAllowedRoutesKindsPatchArgs'] kinds: Kinds specifies the groups and kinds of Routes that are allowed to bind
                to this Gateway Listener. When unspecified or empty, the kinds of Routes
                selected are determined using the Listener protocol.
@@ -3412,6 +3458,7 @@ class GatewaySpecListenersPatch(dict):
         """
         Listener embodies the concept of a logical endpoint where a Gateway accepts
         network connections.
+
         :param _builtins.str hostname: Hostname specifies the virtual hostname to match for protocol types that
                define this concept. When unspecified, all hostnames are matched. This
                field is ignored for protocols that don't require hostname based
@@ -3443,7 +3490,7 @@ class GatewaySpecListenersPatch(dict):
                  the Gateway SHOULD return a 421.
                * If the current Listener (selected by SNI matching during ClientHello)
                  does not match the Host:
-                   * If another Listener does match the Host the Gateway SHOULD return a
+                   * If another Listener does match the Host, the Gateway SHOULD return a
                      421.
                    * If no other Listener matches the Host, the Gateway MUST return a
                      404.
@@ -3524,7 +3571,7 @@ class GatewaySpecListenersPatch(dict):
           the Gateway SHOULD return a 421.
         * If the current Listener (selected by SNI matching during ClientHello)
           does not match the Host:
-            * If another Listener does match the Host the Gateway SHOULD return a
+            * If another Listener does match the Host, the Gateway SHOULD return a
               421.
             * If no other Listener matches the Host, the Gateway MUST return a
               404.
@@ -3629,6 +3676,7 @@ class GatewaySpecListenersTls(dict):
         available certificates for any TLS handshake.
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersTlsCertificateRefsArgs'] certificate_refs: CertificateRefs contains a series of references to Kubernetes objects that
                contains TLS certificates and private keys. These certificates are used to
                establish a TLS handshake for requests that match the hostname of the
@@ -3781,6 +3829,7 @@ class GatewaySpecListenersTlsCertificateRefs(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "Secret".
@@ -3874,6 +3923,7 @@ class GatewaySpecListenersTlsCertificateRefsPatch(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "Secret".
@@ -3987,6 +4037,7 @@ class GatewaySpecListenersTlsPatch(dict):
         available certificates for any TLS handshake.
 
         Support: Core
+
         :param Sequence['GatewaySpecListenersTlsCertificateRefsPatchArgs'] certificate_refs: CertificateRefs contains a series of references to Kubernetes objects that
                contains TLS certificates and private keys. These certificates are used to
                establish a TLS handshake for requests that match the hostname of the
@@ -4147,6 +4198,7 @@ class GatewaySpecPatch(dict):
                  tls: Optional['outputs.GatewaySpecTlsPatch'] = None):
         """
         Spec defines the desired state of Gateway.
+
         :param Sequence['GatewaySpecAddressesPatchArgs'] addresses: Addresses requested for this Gateway. This is optional and behavior can
                depend on the implementation. If a value is set in the spec and the
                requested address is invalid or unavailable, the implementation MUST
@@ -4314,6 +4366,12 @@ class GatewaySpecPatch(dict):
                For example, if Listeners are defined for "foo.example.com" and "*.example.com", a
                request to "foo.example.com" SHOULD only be routed using routes attached
                to the "foo.example.com" Listener (and not the "*.example.com" Listener).
+               
+               If traffic to a Gateway does not match any Listener's hostname (or if
+               the Listener does not specify a hostname and the request does not match
+               any attached Route), the request MUST be rejected. The specific mechanism
+               for rejection depends on the protocol: HTTP returns a 404 status code,
+               while gRPC returns an Unimplemented status code.
                
                This concept is known as "Listener Isolation", and it is an Extended feature
                of Gateway API. Implementations that do not support Listener Isolation MUST
@@ -4566,6 +4624,12 @@ class GatewaySpecPatch(dict):
         request to "foo.example.com" SHOULD only be routed using routes attached
         to the "foo.example.com" Listener (and not the "*.example.com" Listener).
 
+        If traffic to a Gateway does not match any Listener's hostname (or if
+        the Listener does not specify a hostname and the request does not match
+        any attached Route), the request MUST be rejected. The specific mechanism
+        for rejection depends on the protocol: HTTP returns a 404 status code,
+        while gRPC returns an Unimplemented status code.
+
         This concept is known as "Listener Isolation", and it is an Extended feature
         of Gateway API. Implementations that do not support Listener Isolation MUST
         clearly document this, and MUST NOT claim support for the
@@ -4691,19 +4755,30 @@ class GatewaySpecTlsBackend(dict):
 @pulumi.output_type
 class GatewaySpecTlsBackendClientCertificateRef(dict):
     """
-    ClientCertificateRef is a reference to an object that contains a Client
-    Certificate and the associated private key.
+    ClientCertificateRef references an object that contains a client certificate
+    and its associated private key. It can reference standard Kubernetes resources,
+    i.e., Secret, or implementation-specific custom resources.
 
-    References to a resource in different namespace are invalid UNLESS there
-    is a ReferenceGrant in the target namespace that allows the certificate
-    to be attached. If a ReferenceGrant does not allow this reference, the
-    "ResolvedRefs" condition MUST be set to False for this listener with the
-    "RefNotPermitted" reason.
+    A ClientCertificateRef is considered invalid if:
 
-    ClientCertificateRef can reference to standard Kubernetes resources, i.e.
-    Secret, or implementation-specific custom resources.
+    * It refers to a resource that cannot be resolved (e.g., the referenced resource
+      does not exist) or is misconfigured (e.g., a Secret does not contain the keys
+      named `tls.crt` and `tls.key`). In this case, the `ResolvedRefs` condition
+      on the Gateway MUST be set to False with the Reason `InvalidClientCertificateRef`
+      and the Message of the Condition MUST indicate why the reference is invalid.
 
-    Support: Core
+    * It refers to a resource in another namespace UNLESS there is a ReferenceGrant
+      in the target namespace that allows the certificate to be attached.
+      If a ReferenceGrant does not allow this reference, the `ResolvedRefs` condition
+      on the Gateway MUST be set to False with the Reason `RefNotPermitted`.
+
+    Implementations MAY choose to perform further validation of the certificate
+    content (e.g., checking expiry or enforcing specific formats). In such cases,
+    an implementation-specific Reason and Message MUST be set.
+
+    Support: Core - Reference to a Kubernetes TLS Secret (with the type `kubernetes.io/tls`).
+    Support: Implementation-specific - Other resource kinds or Secrets with a
+    different type (e.g., `Opaque`).
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -4711,19 +4786,31 @@ class GatewaySpecTlsBackendClientCertificateRef(dict):
                  name: Optional[_builtins.str] = None,
                  namespace: Optional[_builtins.str] = None):
         """
-        ClientCertificateRef is a reference to an object that contains a Client
-        Certificate and the associated private key.
+        ClientCertificateRef references an object that contains a client certificate
+        and its associated private key. It can reference standard Kubernetes resources,
+        i.e., Secret, or implementation-specific custom resources.
 
-        References to a resource in different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        A ClientCertificateRef is considered invalid if:
 
-        ClientCertificateRef can reference to standard Kubernetes resources, i.e.
-        Secret, or implementation-specific custom resources.
+        * It refers to a resource that cannot be resolved (e.g., the referenced resource
+          does not exist) or is misconfigured (e.g., a Secret does not contain the keys
+          named `tls.crt` and `tls.key`). In this case, the `ResolvedRefs` condition
+          on the Gateway MUST be set to False with the Reason `InvalidClientCertificateRef`
+          and the Message of the Condition MUST indicate why the reference is invalid.
 
-        Support: Core
+        * It refers to a resource in another namespace UNLESS there is a ReferenceGrant
+          in the target namespace that allows the certificate to be attached.
+          If a ReferenceGrant does not allow this reference, the `ResolvedRefs` condition
+          on the Gateway MUST be set to False with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the certificate
+        content (e.g., checking expiry or enforcing specific formats). In such cases,
+        an implementation-specific Reason and Message MUST be set.
+
+        Support: Core - Reference to a Kubernetes TLS Secret (with the type `kubernetes.io/tls`).
+        Support: Implementation-specific - Other resource kinds or Secrets with a
+        different type (e.g., `Opaque`).
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "Secret".
@@ -4792,19 +4879,30 @@ class GatewaySpecTlsBackendClientCertificateRef(dict):
 @pulumi.output_type
 class GatewaySpecTlsBackendClientCertificateRefPatch(dict):
     """
-    ClientCertificateRef is a reference to an object that contains a Client
-    Certificate and the associated private key.
+    ClientCertificateRef references an object that contains a client certificate
+    and its associated private key. It can reference standard Kubernetes resources,
+    i.e., Secret, or implementation-specific custom resources.
 
-    References to a resource in different namespace are invalid UNLESS there
-    is a ReferenceGrant in the target namespace that allows the certificate
-    to be attached. If a ReferenceGrant does not allow this reference, the
-    "ResolvedRefs" condition MUST be set to False for this listener with the
-    "RefNotPermitted" reason.
+    A ClientCertificateRef is considered invalid if:
 
-    ClientCertificateRef can reference to standard Kubernetes resources, i.e.
-    Secret, or implementation-specific custom resources.
+    * It refers to a resource that cannot be resolved (e.g., the referenced resource
+      does not exist) or is misconfigured (e.g., a Secret does not contain the keys
+      named `tls.crt` and `tls.key`). In this case, the `ResolvedRefs` condition
+      on the Gateway MUST be set to False with the Reason `InvalidClientCertificateRef`
+      and the Message of the Condition MUST indicate why the reference is invalid.
 
-    Support: Core
+    * It refers to a resource in another namespace UNLESS there is a ReferenceGrant
+      in the target namespace that allows the certificate to be attached.
+      If a ReferenceGrant does not allow this reference, the `ResolvedRefs` condition
+      on the Gateway MUST be set to False with the Reason `RefNotPermitted`.
+
+    Implementations MAY choose to perform further validation of the certificate
+    content (e.g., checking expiry or enforcing specific formats). In such cases,
+    an implementation-specific Reason and Message MUST be set.
+
+    Support: Core - Reference to a Kubernetes TLS Secret (with the type `kubernetes.io/tls`).
+    Support: Implementation-specific - Other resource kinds or Secrets with a
+    different type (e.g., `Opaque`).
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -4812,19 +4910,31 @@ class GatewaySpecTlsBackendClientCertificateRefPatch(dict):
                  name: Optional[_builtins.str] = None,
                  namespace: Optional[_builtins.str] = None):
         """
-        ClientCertificateRef is a reference to an object that contains a Client
-        Certificate and the associated private key.
+        ClientCertificateRef references an object that contains a client certificate
+        and its associated private key. It can reference standard Kubernetes resources,
+        i.e., Secret, or implementation-specific custom resources.
 
-        References to a resource in different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        A ClientCertificateRef is considered invalid if:
 
-        ClientCertificateRef can reference to standard Kubernetes resources, i.e.
-        Secret, or implementation-specific custom resources.
+        * It refers to a resource that cannot be resolved (e.g., the referenced resource
+          does not exist) or is misconfigured (e.g., a Secret does not contain the keys
+          named `tls.crt` and `tls.key`). In this case, the `ResolvedRefs` condition
+          on the Gateway MUST be set to False with the Reason `InvalidClientCertificateRef`
+          and the Message of the Condition MUST indicate why the reference is invalid.
 
-        Support: Core
+        * It refers to a resource in another namespace UNLESS there is a ReferenceGrant
+          in the target namespace that allows the certificate to be attached.
+          If a ReferenceGrant does not allow this reference, the `ResolvedRefs` condition
+          on the Gateway MUST be set to False with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the certificate
+        content (e.g., checking expiry or enforcing specific formats). In such cases,
+        an implementation-specific Reason and Message MUST be set.
+
+        Support: Core - Reference to a Kubernetes TLS Secret (with the type `kubernetes.io/tls`).
+        Support: Implementation-specific - Other resource kinds or Secrets with a
+        different type (e.g., `Opaque`).
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "Secret".
@@ -4969,6 +5079,7 @@ class GatewaySpecTlsFrontend(dict):
         """
         Frontend describes TLS config when client connects to Gateway.
         Support: Core
+
         :param Sequence['GatewaySpecTlsFrontendPerPortArgs'] per_port: PerPort specifies tls configuration assigned per port.
                Per port configuration is optional. Once set this configuration overrides
                the default configuration for all Listeners handling HTTPS traffic
@@ -5095,27 +5206,50 @@ class GatewaySpecTlsFrontendDefaultValidation(dict):
         The maximum depth of a certificate chain accepted in verification is Implementation specific.
 
         Support: Core
-        :param Sequence['GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to
-               Kubernetes objects that contain TLS certificates of
-               the Certificate Authorities that can be used
-               as a trust anchor to validate the certificates presented by the client.
+
+        :param Sequence['GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes
+               objects that contain a PEM-encoded TLS CA certificate bundle, which
+               is used as a trust anchor to validate the certificates presented by
+               the client.
                
-               A single CA certificate reference to a Kubernetes ConfigMap
-               has "Core" support.
-               Implementations MAY choose to support attaching multiple CA certificates to
-               a Listener, but this behavior is implementation-specific.
+               A CACertificateRef is invalid if:
                
-               Support: Core - A single reference to a Kubernetes ConfigMap
-               with the CA certificate in a key named `ca.crt`.
+               * It refers to a resource that cannot be resolved (e.g., the
+                 referenced resource does not exist) or is misconfigured (e.g., a
+                 ConfigMap does not contain a key named `ca.crt`). In this case, the
+                 Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+                 and the Message of the Condition must indicate which reference is invalid and why.
                
-               Support: Implementation-specific (More than one certificate in a ConfigMap
-               with different keys or more than one reference, or other kinds of resources).
+               * It refers to an unknown or unsupported kind of resource. In this
+                 case, the Reason on all matching HTTPS listeners must be set to
+                 `InvalidCACertificateKind` and the Message of the Condition must explain
+                 which kind of resource is unknown or unsupported.
                
-               References to a resource in a different namespace are invalid UNLESS there
-               is a ReferenceGrant in the target namespace that allows the certificate
-               to be attached. If a ReferenceGrant does not allow this reference, the
-               "ResolvedRefs" condition MUST be set to False for this listener with the
-               "RefNotPermitted" reason.
+               * It refers to a resource in another namespace UNLESS there is a
+                 ReferenceGrant in the target namespace that allows the CA
+                 certificate to be attached. If a ReferenceGrant does not allow this
+                 reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+                 MUST be set with the Reason `RefNotPermitted`.
+               
+               Implementations MAY choose to perform further validation of the
+               certificate content (e.g., checking expiry or enforcing specific formats).
+               In such cases, an implementation-specific Reason and Message MUST be set.
+               
+               In all cases, the implementation MUST ensure that the `ResolvedRefs`
+               condition is set to `status: False` on all targeted listeners (i.e.,
+               listeners serving HTTPS on a matching port). The condition MUST
+               include a Reason and Message that indicate the cause of the error. If
+               ALL CACertificateRefs are invalid, the implementation MUST also ensure
+               the `Accepted` condition on the listener is set to `status: False`, with
+               the Reason `NoValidCACertificate`.
+               Implementations MAY choose to support attaching multiple CA certificates
+               to a listener, but this behavior is implementation-specific.
+               
+               Support: Core - A single reference to a Kubernetes ConfigMap, with the
+               CA certificate in a key named `ca.crt`.
+               
+               Support: Implementation-specific - More than one reference, other kinds
+               of resources, or a single reference that includes multiple certificates.
         :param _builtins.str mode: FrontendValidationMode defines the mode for validating the client certificate.
                There are two possible modes:
                
@@ -5142,27 +5276,49 @@ class GatewaySpecTlsFrontendDefaultValidation(dict):
     @pulumi.getter(name="caCertificateRefs")
     def ca_certificate_refs(self) -> Optional[Sequence['outputs.GatewaySpecTlsFrontendDefaultValidationCaCertificateRefs']]:
         """
-        CACertificateRefs contains one or more references to
-        Kubernetes objects that contain TLS certificates of
-        the Certificate Authorities that can be used
-        as a trust anchor to validate the certificates presented by the client.
+        CACertificateRefs contains one or more references to Kubernetes
+        objects that contain a PEM-encoded TLS CA certificate bundle, which
+        is used as a trust anchor to validate the certificates presented by
+        the client.
 
-        A single CA certificate reference to a Kubernetes ConfigMap
-        has "Core" support.
-        Implementations MAY choose to support attaching multiple CA certificates to
-        a Listener, but this behavior is implementation-specific.
+        A CACertificateRef is invalid if:
 
-        Support: Core - A single reference to a Kubernetes ConfigMap
-        with the CA certificate in a key named `ca.crt`.
+        * It refers to a resource that cannot be resolved (e.g., the
+          referenced resource does not exist) or is misconfigured (e.g., a
+          ConfigMap does not contain a key named `ca.crt`). In this case, the
+          Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+          and the Message of the Condition must indicate which reference is invalid and why.
 
-        Support: Implementation-specific (More than one certificate in a ConfigMap
-        with different keys or more than one reference, or other kinds of resources).
+        * It refers to an unknown or unsupported kind of resource. In this
+          case, the Reason on all matching HTTPS listeners must be set to
+          `InvalidCACertificateKind` and the Message of the Condition must explain
+          which kind of resource is unknown or unsupported.
 
-        References to a resource in a different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        * It refers to a resource in another namespace UNLESS there is a
+          ReferenceGrant in the target namespace that allows the CA
+          certificate to be attached. If a ReferenceGrant does not allow this
+          reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+          MUST be set with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the
+        certificate content (e.g., checking expiry or enforcing specific formats).
+        In such cases, an implementation-specific Reason and Message MUST be set.
+
+        In all cases, the implementation MUST ensure that the `ResolvedRefs`
+        condition is set to `status: False` on all targeted listeners (i.e.,
+        listeners serving HTTPS on a matching port). The condition MUST
+        include a Reason and Message that indicate the cause of the error. If
+        ALL CACertificateRefs are invalid, the implementation MUST also ensure
+        the `Accepted` condition on the listener is set to `status: False`, with
+        the Reason `NoValidCACertificate`.
+        Implementations MAY choose to support attaching multiple CA certificates
+        to a listener, but this behavior is implementation-specific.
+
+        Support: Core - A single reference to a Kubernetes ConfigMap, with the
+        CA certificate in a key named `ca.crt`.
+
+        Support: Implementation-specific - More than one reference, other kinds
+        of resources, or a single reference that includes multiple certificates.
         """
         return pulumi.get(self, "ca_certificate_refs")
 
@@ -5216,6 +5372,7 @@ class GatewaySpecTlsFrontendDefaultValidationCaCertificateRefs(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When set to the empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "ConfigMap" or "Service".
@@ -5307,6 +5464,7 @@ class GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsPatch(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When set to the empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "ConfigMap" or "Service".
@@ -5411,27 +5569,50 @@ class GatewaySpecTlsFrontendDefaultValidationPatch(dict):
         The maximum depth of a certificate chain accepted in verification is Implementation specific.
 
         Support: Core
-        :param Sequence['GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsPatchArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to
-               Kubernetes objects that contain TLS certificates of
-               the Certificate Authorities that can be used
-               as a trust anchor to validate the certificates presented by the client.
+
+        :param Sequence['GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsPatchArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes
+               objects that contain a PEM-encoded TLS CA certificate bundle, which
+               is used as a trust anchor to validate the certificates presented by
+               the client.
                
-               A single CA certificate reference to a Kubernetes ConfigMap
-               has "Core" support.
-               Implementations MAY choose to support attaching multiple CA certificates to
-               a Listener, but this behavior is implementation-specific.
+               A CACertificateRef is invalid if:
                
-               Support: Core - A single reference to a Kubernetes ConfigMap
-               with the CA certificate in a key named `ca.crt`.
+               * It refers to a resource that cannot be resolved (e.g., the
+                 referenced resource does not exist) or is misconfigured (e.g., a
+                 ConfigMap does not contain a key named `ca.crt`). In this case, the
+                 Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+                 and the Message of the Condition must indicate which reference is invalid and why.
                
-               Support: Implementation-specific (More than one certificate in a ConfigMap
-               with different keys or more than one reference, or other kinds of resources).
+               * It refers to an unknown or unsupported kind of resource. In this
+                 case, the Reason on all matching HTTPS listeners must be set to
+                 `InvalidCACertificateKind` and the Message of the Condition must explain
+                 which kind of resource is unknown or unsupported.
                
-               References to a resource in a different namespace are invalid UNLESS there
-               is a ReferenceGrant in the target namespace that allows the certificate
-               to be attached. If a ReferenceGrant does not allow this reference, the
-               "ResolvedRefs" condition MUST be set to False for this listener with the
-               "RefNotPermitted" reason.
+               * It refers to a resource in another namespace UNLESS there is a
+                 ReferenceGrant in the target namespace that allows the CA
+                 certificate to be attached. If a ReferenceGrant does not allow this
+                 reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+                 MUST be set with the Reason `RefNotPermitted`.
+               
+               Implementations MAY choose to perform further validation of the
+               certificate content (e.g., checking expiry or enforcing specific formats).
+               In such cases, an implementation-specific Reason and Message MUST be set.
+               
+               In all cases, the implementation MUST ensure that the `ResolvedRefs`
+               condition is set to `status: False` on all targeted listeners (i.e.,
+               listeners serving HTTPS on a matching port). The condition MUST
+               include a Reason and Message that indicate the cause of the error. If
+               ALL CACertificateRefs are invalid, the implementation MUST also ensure
+               the `Accepted` condition on the listener is set to `status: False`, with
+               the Reason `NoValidCACertificate`.
+               Implementations MAY choose to support attaching multiple CA certificates
+               to a listener, but this behavior is implementation-specific.
+               
+               Support: Core - A single reference to a Kubernetes ConfigMap, with the
+               CA certificate in a key named `ca.crt`.
+               
+               Support: Implementation-specific - More than one reference, other kinds
+               of resources, or a single reference that includes multiple certificates.
         :param _builtins.str mode: FrontendValidationMode defines the mode for validating the client certificate.
                There are two possible modes:
                
@@ -5458,27 +5639,49 @@ class GatewaySpecTlsFrontendDefaultValidationPatch(dict):
     @pulumi.getter(name="caCertificateRefs")
     def ca_certificate_refs(self) -> Optional[Sequence['outputs.GatewaySpecTlsFrontendDefaultValidationCaCertificateRefsPatch']]:
         """
-        CACertificateRefs contains one or more references to
-        Kubernetes objects that contain TLS certificates of
-        the Certificate Authorities that can be used
-        as a trust anchor to validate the certificates presented by the client.
+        CACertificateRefs contains one or more references to Kubernetes
+        objects that contain a PEM-encoded TLS CA certificate bundle, which
+        is used as a trust anchor to validate the certificates presented by
+        the client.
 
-        A single CA certificate reference to a Kubernetes ConfigMap
-        has "Core" support.
-        Implementations MAY choose to support attaching multiple CA certificates to
-        a Listener, but this behavior is implementation-specific.
+        A CACertificateRef is invalid if:
 
-        Support: Core - A single reference to a Kubernetes ConfigMap
-        with the CA certificate in a key named `ca.crt`.
+        * It refers to a resource that cannot be resolved (e.g., the
+          referenced resource does not exist) or is misconfigured (e.g., a
+          ConfigMap does not contain a key named `ca.crt`). In this case, the
+          Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+          and the Message of the Condition must indicate which reference is invalid and why.
 
-        Support: Implementation-specific (More than one certificate in a ConfigMap
-        with different keys or more than one reference, or other kinds of resources).
+        * It refers to an unknown or unsupported kind of resource. In this
+          case, the Reason on all matching HTTPS listeners must be set to
+          `InvalidCACertificateKind` and the Message of the Condition must explain
+          which kind of resource is unknown or unsupported.
 
-        References to a resource in a different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        * It refers to a resource in another namespace UNLESS there is a
+          ReferenceGrant in the target namespace that allows the CA
+          certificate to be attached. If a ReferenceGrant does not allow this
+          reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+          MUST be set with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the
+        certificate content (e.g., checking expiry or enforcing specific formats).
+        In such cases, an implementation-specific Reason and Message MUST be set.
+
+        In all cases, the implementation MUST ensure that the `ResolvedRefs`
+        condition is set to `status: False` on all targeted listeners (i.e.,
+        listeners serving HTTPS on a matching port). The condition MUST
+        include a Reason and Message that indicate the cause of the error. If
+        ALL CACertificateRefs are invalid, the implementation MUST also ensure
+        the `Accepted` condition on the listener is set to `status: False`, with
+        the Reason `NoValidCACertificate`.
+        Implementations MAY choose to support attaching multiple CA certificates
+        to a listener, but this behavior is implementation-specific.
+
+        Support: Core - A single reference to a Kubernetes ConfigMap, with the
+        CA certificate in a key named `ca.crt`.
+
+        Support: Implementation-specific - More than one reference, other kinds
+        of resources, or a single reference that includes multiple certificates.
         """
         return pulumi.get(self, "ca_certificate_refs")
 
@@ -5535,6 +5738,7 @@ class GatewaySpecTlsFrontendPatch(dict):
         """
         Frontend describes TLS config when client connects to Gateway.
         Support: Core
+
         :param Sequence['GatewaySpecTlsFrontendPerPortPatchArgs'] per_port: PerPort specifies tls configuration assigned per port.
                Per port configuration is optional. Once set this configuration overrides
                the default configuration for all Listeners handling HTTPS traffic
@@ -5727,27 +5931,50 @@ class GatewaySpecTlsFrontendPerPortTlsValidation(dict):
         The maximum depth of a certificate chain accepted in verification is Implementation specific.
 
         Support: Core
-        :param Sequence['GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to
-               Kubernetes objects that contain TLS certificates of
-               the Certificate Authorities that can be used
-               as a trust anchor to validate the certificates presented by the client.
+
+        :param Sequence['GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes
+               objects that contain a PEM-encoded TLS CA certificate bundle, which
+               is used as a trust anchor to validate the certificates presented by
+               the client.
                
-               A single CA certificate reference to a Kubernetes ConfigMap
-               has "Core" support.
-               Implementations MAY choose to support attaching multiple CA certificates to
-               a Listener, but this behavior is implementation-specific.
+               A CACertificateRef is invalid if:
                
-               Support: Core - A single reference to a Kubernetes ConfigMap
-               with the CA certificate in a key named `ca.crt`.
+               * It refers to a resource that cannot be resolved (e.g., the
+                 referenced resource does not exist) or is misconfigured (e.g., a
+                 ConfigMap does not contain a key named `ca.crt`). In this case, the
+                 Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+                 and the Message of the Condition must indicate which reference is invalid and why.
                
-               Support: Implementation-specific (More than one certificate in a ConfigMap
-               with different keys or more than one reference, or other kinds of resources).
+               * It refers to an unknown or unsupported kind of resource. In this
+                 case, the Reason on all matching HTTPS listeners must be set to
+                 `InvalidCACertificateKind` and the Message of the Condition must explain
+                 which kind of resource is unknown or unsupported.
                
-               References to a resource in a different namespace are invalid UNLESS there
-               is a ReferenceGrant in the target namespace that allows the certificate
-               to be attached. If a ReferenceGrant does not allow this reference, the
-               "ResolvedRefs" condition MUST be set to False for this listener with the
-               "RefNotPermitted" reason.
+               * It refers to a resource in another namespace UNLESS there is a
+                 ReferenceGrant in the target namespace that allows the CA
+                 certificate to be attached. If a ReferenceGrant does not allow this
+                 reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+                 MUST be set with the Reason `RefNotPermitted`.
+               
+               Implementations MAY choose to perform further validation of the
+               certificate content (e.g., checking expiry or enforcing specific formats).
+               In such cases, an implementation-specific Reason and Message MUST be set.
+               
+               In all cases, the implementation MUST ensure that the `ResolvedRefs`
+               condition is set to `status: False` on all targeted listeners (i.e.,
+               listeners serving HTTPS on a matching port). The condition MUST
+               include a Reason and Message that indicate the cause of the error. If
+               ALL CACertificateRefs are invalid, the implementation MUST also ensure
+               the `Accepted` condition on the listener is set to `status: False`, with
+               the Reason `NoValidCACertificate`.
+               Implementations MAY choose to support attaching multiple CA certificates
+               to a listener, but this behavior is implementation-specific.
+               
+               Support: Core - A single reference to a Kubernetes ConfigMap, with the
+               CA certificate in a key named `ca.crt`.
+               
+               Support: Implementation-specific - More than one reference, other kinds
+               of resources, or a single reference that includes multiple certificates.
         :param _builtins.str mode: FrontendValidationMode defines the mode for validating the client certificate.
                There are two possible modes:
                
@@ -5774,27 +6001,49 @@ class GatewaySpecTlsFrontendPerPortTlsValidation(dict):
     @pulumi.getter(name="caCertificateRefs")
     def ca_certificate_refs(self) -> Optional[Sequence['outputs.GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefs']]:
         """
-        CACertificateRefs contains one or more references to
-        Kubernetes objects that contain TLS certificates of
-        the Certificate Authorities that can be used
-        as a trust anchor to validate the certificates presented by the client.
+        CACertificateRefs contains one or more references to Kubernetes
+        objects that contain a PEM-encoded TLS CA certificate bundle, which
+        is used as a trust anchor to validate the certificates presented by
+        the client.
 
-        A single CA certificate reference to a Kubernetes ConfigMap
-        has "Core" support.
-        Implementations MAY choose to support attaching multiple CA certificates to
-        a Listener, but this behavior is implementation-specific.
+        A CACertificateRef is invalid if:
 
-        Support: Core - A single reference to a Kubernetes ConfigMap
-        with the CA certificate in a key named `ca.crt`.
+        * It refers to a resource that cannot be resolved (e.g., the
+          referenced resource does not exist) or is misconfigured (e.g., a
+          ConfigMap does not contain a key named `ca.crt`). In this case, the
+          Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+          and the Message of the Condition must indicate which reference is invalid and why.
 
-        Support: Implementation-specific (More than one certificate in a ConfigMap
-        with different keys or more than one reference, or other kinds of resources).
+        * It refers to an unknown or unsupported kind of resource. In this
+          case, the Reason on all matching HTTPS listeners must be set to
+          `InvalidCACertificateKind` and the Message of the Condition must explain
+          which kind of resource is unknown or unsupported.
 
-        References to a resource in a different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        * It refers to a resource in another namespace UNLESS there is a
+          ReferenceGrant in the target namespace that allows the CA
+          certificate to be attached. If a ReferenceGrant does not allow this
+          reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+          MUST be set with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the
+        certificate content (e.g., checking expiry or enforcing specific formats).
+        In such cases, an implementation-specific Reason and Message MUST be set.
+
+        In all cases, the implementation MUST ensure that the `ResolvedRefs`
+        condition is set to `status: False` on all targeted listeners (i.e.,
+        listeners serving HTTPS on a matching port). The condition MUST
+        include a Reason and Message that indicate the cause of the error. If
+        ALL CACertificateRefs are invalid, the implementation MUST also ensure
+        the `Accepted` condition on the listener is set to `status: False`, with
+        the Reason `NoValidCACertificate`.
+        Implementations MAY choose to support attaching multiple CA certificates
+        to a listener, but this behavior is implementation-specific.
+
+        Support: Core - A single reference to a Kubernetes ConfigMap, with the
+        CA certificate in a key named `ca.crt`.
+
+        Support: Implementation-specific - More than one reference, other kinds
+        of resources, or a single reference that includes multiple certificates.
         """
         return pulumi.get(self, "ca_certificate_refs")
 
@@ -5848,6 +6097,7 @@ class GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefs(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When set to the empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "ConfigMap" or "Service".
@@ -5939,6 +6189,7 @@ class GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsPatch(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When set to the empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "ConfigMap" or "Service".
@@ -6043,27 +6294,50 @@ class GatewaySpecTlsFrontendPerPortTlsValidationPatch(dict):
         The maximum depth of a certificate chain accepted in verification is Implementation specific.
 
         Support: Core
-        :param Sequence['GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsPatchArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to
-               Kubernetes objects that contain TLS certificates of
-               the Certificate Authorities that can be used
-               as a trust anchor to validate the certificates presented by the client.
+
+        :param Sequence['GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsPatchArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes
+               objects that contain a PEM-encoded TLS CA certificate bundle, which
+               is used as a trust anchor to validate the certificates presented by
+               the client.
                
-               A single CA certificate reference to a Kubernetes ConfigMap
-               has "Core" support.
-               Implementations MAY choose to support attaching multiple CA certificates to
-               a Listener, but this behavior is implementation-specific.
+               A CACertificateRef is invalid if:
                
-               Support: Core - A single reference to a Kubernetes ConfigMap
-               with the CA certificate in a key named `ca.crt`.
+               * It refers to a resource that cannot be resolved (e.g., the
+                 referenced resource does not exist) or is misconfigured (e.g., a
+                 ConfigMap does not contain a key named `ca.crt`). In this case, the
+                 Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+                 and the Message of the Condition must indicate which reference is invalid and why.
                
-               Support: Implementation-specific (More than one certificate in a ConfigMap
-               with different keys or more than one reference, or other kinds of resources).
+               * It refers to an unknown or unsupported kind of resource. In this
+                 case, the Reason on all matching HTTPS listeners must be set to
+                 `InvalidCACertificateKind` and the Message of the Condition must explain
+                 which kind of resource is unknown or unsupported.
                
-               References to a resource in a different namespace are invalid UNLESS there
-               is a ReferenceGrant in the target namespace that allows the certificate
-               to be attached. If a ReferenceGrant does not allow this reference, the
-               "ResolvedRefs" condition MUST be set to False for this listener with the
-               "RefNotPermitted" reason.
+               * It refers to a resource in another namespace UNLESS there is a
+                 ReferenceGrant in the target namespace that allows the CA
+                 certificate to be attached. If a ReferenceGrant does not allow this
+                 reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+                 MUST be set with the Reason `RefNotPermitted`.
+               
+               Implementations MAY choose to perform further validation of the
+               certificate content (e.g., checking expiry or enforcing specific formats).
+               In such cases, an implementation-specific Reason and Message MUST be set.
+               
+               In all cases, the implementation MUST ensure that the `ResolvedRefs`
+               condition is set to `status: False` on all targeted listeners (i.e.,
+               listeners serving HTTPS on a matching port). The condition MUST
+               include a Reason and Message that indicate the cause of the error. If
+               ALL CACertificateRefs are invalid, the implementation MUST also ensure
+               the `Accepted` condition on the listener is set to `status: False`, with
+               the Reason `NoValidCACertificate`.
+               Implementations MAY choose to support attaching multiple CA certificates
+               to a listener, but this behavior is implementation-specific.
+               
+               Support: Core - A single reference to a Kubernetes ConfigMap, with the
+               CA certificate in a key named `ca.crt`.
+               
+               Support: Implementation-specific - More than one reference, other kinds
+               of resources, or a single reference that includes multiple certificates.
         :param _builtins.str mode: FrontendValidationMode defines the mode for validating the client certificate.
                There are two possible modes:
                
@@ -6090,27 +6364,49 @@ class GatewaySpecTlsFrontendPerPortTlsValidationPatch(dict):
     @pulumi.getter(name="caCertificateRefs")
     def ca_certificate_refs(self) -> Optional[Sequence['outputs.GatewaySpecTlsFrontendPerPortTlsValidationCaCertificateRefsPatch']]:
         """
-        CACertificateRefs contains one or more references to
-        Kubernetes objects that contain TLS certificates of
-        the Certificate Authorities that can be used
-        as a trust anchor to validate the certificates presented by the client.
+        CACertificateRefs contains one or more references to Kubernetes
+        objects that contain a PEM-encoded TLS CA certificate bundle, which
+        is used as a trust anchor to validate the certificates presented by
+        the client.
 
-        A single CA certificate reference to a Kubernetes ConfigMap
-        has "Core" support.
-        Implementations MAY choose to support attaching multiple CA certificates to
-        a Listener, but this behavior is implementation-specific.
+        A CACertificateRef is invalid if:
 
-        Support: Core - A single reference to a Kubernetes ConfigMap
-        with the CA certificate in a key named `ca.crt`.
+        * It refers to a resource that cannot be resolved (e.g., the
+          referenced resource does not exist) or is misconfigured (e.g., a
+          ConfigMap does not contain a key named `ca.crt`). In this case, the
+          Reason on all matching HTTPS listeners must be set to `InvalidCACertificateRef`
+          and the Message of the Condition must indicate which reference is invalid and why.
 
-        Support: Implementation-specific (More than one certificate in a ConfigMap
-        with different keys or more than one reference, or other kinds of resources).
+        * It refers to an unknown or unsupported kind of resource. In this
+          case, the Reason on all matching HTTPS listeners must be set to
+          `InvalidCACertificateKind` and the Message of the Condition must explain
+          which kind of resource is unknown or unsupported.
 
-        References to a resource in a different namespace are invalid UNLESS there
-        is a ReferenceGrant in the target namespace that allows the certificate
-        to be attached. If a ReferenceGrant does not allow this reference, the
-        "ResolvedRefs" condition MUST be set to False for this listener with the
-        "RefNotPermitted" reason.
+        * It refers to a resource in another namespace UNLESS there is a
+          ReferenceGrant in the target namespace that allows the CA
+          certificate to be attached. If a ReferenceGrant does not allow this
+          reference, the `ResolvedRefs` on all matching HTTPS listeners condition
+          MUST be set with the Reason `RefNotPermitted`.
+
+        Implementations MAY choose to perform further validation of the
+        certificate content (e.g., checking expiry or enforcing specific formats).
+        In such cases, an implementation-specific Reason and Message MUST be set.
+
+        In all cases, the implementation MUST ensure that the `ResolvedRefs`
+        condition is set to `status: False` on all targeted listeners (i.e.,
+        listeners serving HTTPS on a matching port). The condition MUST
+        include a Reason and Message that indicate the cause of the error. If
+        ALL CACertificateRefs are invalid, the implementation MUST also ensure
+        the `Accepted` condition on the listener is set to `status: False`, with
+        the Reason `NoValidCACertificate`.
+        Implementations MAY choose to support attaching multiple CA certificates
+        to a listener, but this behavior is implementation-specific.
+
+        Support: Core - A single reference to a Kubernetes ConfigMap, with the
+        CA certificate in a key named `ca.crt`.
+
+        Support: Implementation-specific - More than one reference, other kinds
+        of resources, or a single reference that includes multiple certificates.
         """
         return pulumi.get(self, "ca_certificate_refs")
 
@@ -6174,12 +6470,31 @@ class GatewayStatus(dict):
     """
     Status defines the current state of Gateway.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "attachedListenerSets":
+            suggest = "attached_listener_sets"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in GatewayStatus. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        GatewayStatus.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        GatewayStatus.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  addresses: Optional[Sequence['outputs.GatewayStatusAddresses']] = None,
+                 attached_listener_sets: Optional[_builtins.int] = None,
                  conditions: Optional[Sequence['outputs.GatewayStatusConditions']] = None,
                  listeners: Optional[Sequence['outputs.GatewayStatusListeners']] = None):
         """
         Status defines the current state of Gateway.
+
         :param Sequence['GatewayStatusAddressesArgs'] addresses: Addresses lists the network addresses that have been bound to the
                Gateway.
                
@@ -6189,6 +6504,16 @@ class GatewayStatus(dict):
                  * no addresses are specified, all addresses are dynamically assigned
                  * a combination of specified and dynamic addresses are assigned
                  * a specified address was unusable (e.g. already in use)
+        :param _builtins.int attached_listener_sets: AttachedListenerSets represents the total number of ListenerSets that have been
+               successfully attached to this Gateway.
+               
+               A ListenerSet is successfully attached to a Gateway when all the following conditions are met:
+               - The ListenerSet is selected by the Gateway's AllowedListeners field
+               - The ListenerSet has a valid ParentRef selecting the Gateway
+               - The ListenerSet's status has the condition "Accepted: true"
+               
+               Uses for this field include troubleshooting AttachedListenerSets attachment and
+               measuring blast radius/impact of changes to a Gateway.
         :param Sequence['GatewayStatusConditionsArgs'] conditions: Conditions describe the current conditions of the Gateway.
                
                Implementations should prefer to express Gateway conditions
@@ -6205,6 +6530,8 @@ class GatewayStatus(dict):
         """
         if addresses is not None:
             pulumi.set(__self__, "addresses", addresses)
+        if attached_listener_sets is not None:
+            pulumi.set(__self__, "attached_listener_sets", attached_listener_sets)
         if conditions is not None:
             pulumi.set(__self__, "conditions", conditions)
         if listeners is not None:
@@ -6225,6 +6552,23 @@ class GatewayStatus(dict):
           * a specified address was unusable (e.g. already in use)
         """
         return pulumi.get(self, "addresses")
+
+    @_builtins.property
+    @pulumi.getter(name="attachedListenerSets")
+    def attached_listener_sets(self) -> Optional[_builtins.int]:
+        """
+        AttachedListenerSets represents the total number of ListenerSets that have been
+        successfully attached to this Gateway.
+
+        A ListenerSet is successfully attached to a Gateway when all the following conditions are met:
+        - The ListenerSet is selected by the Gateway's AllowedListeners field
+        - The ListenerSet has a valid ParentRef selecting the Gateway
+        - The ListenerSet's status has the condition "Accepted: true"
+
+        Uses for this field include troubleshooting AttachedListenerSets attachment and
+        measuring blast radius/impact of changes to a Gateway.
+        """
+        return pulumi.get(self, "attached_listener_sets")
 
     @_builtins.property
     @pulumi.getter
@@ -6264,6 +6608,7 @@ class GatewayStatusAddresses(dict):
                  value: Optional[_builtins.str] = None):
         """
         GatewayStatusAddress describes a network address that is bound to a Gateway.
+
         :param _builtins.str type: Type of the address.
         :param _builtins.str value: Value of the address. The validity of the values will depend
                on the type and support by the controller.
@@ -6305,6 +6650,7 @@ class GatewayStatusAddressesPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         GatewayStatusAddress describes a network address that is bound to a Gateway.
+
         :param _builtins.str type: Type of the address.
         :param _builtins.str value: Value of the address. The validity of the values will depend
                on the type and support by the controller.
@@ -6369,6 +6715,7 @@ class GatewayStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -6487,6 +6834,7 @@ class GatewayStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -6603,6 +6951,7 @@ class GatewayStatusListeners(dict):
                  supported_kinds: Optional[Sequence['outputs.GatewayStatusListenersSupportedKinds']] = None):
         """
         ListenerStatus is the status associated with a Listener.
+
         :param _builtins.int attached_routes: AttachedRoutes represents the total number of Routes that have been
                successfully attached to this Listener.
                
@@ -6615,15 +6964,18 @@ class GatewayStatusListeners(dict):
                attachment semantics can be found in the documentation on the various
                Route kinds ParentRefs fields). Listener or Route status does not impact
                successful attachment, i.e. the AttachedRoutes field count MUST be set
-               for Listeners with condition Accepted: false and MUST count successfully
-               attached Routes that may themselves have Accepted: false conditions.
+               for Listeners, even if the Accepted condition of an individual Listener is set
+               to "False". The AttachedRoutes number represents the number of Routes with
+               the Accepted condition set to "True" that have been attached to this Listener.
+               Routes with any other value for the Accepted condition MUST NOT be included
+               in this count.
                
                Uses for this field include troubleshooting Route attachment and
                measuring blast radius/impact of changes to a Listener.
         :param Sequence['GatewayStatusListenersConditionsArgs'] conditions: Conditions describe the current condition of this listener.
         :param _builtins.str name: Name is the name of the Listener that this status corresponds to.
         :param Sequence['GatewayStatusListenersSupportedKindsArgs'] supported_kinds: SupportedKinds is the list indicating the Kinds supported by this
-               listener. This MUST represent the kinds an implementation supports for
+               listener. This MUST represent the kinds supported by an implementation for
                that Listener configuration.
                
                If kinds are specified in Spec that are not supported, they MUST NOT
@@ -6657,8 +7009,11 @@ class GatewayStatusListeners(dict):
         attachment semantics can be found in the documentation on the various
         Route kinds ParentRefs fields). Listener or Route status does not impact
         successful attachment, i.e. the AttachedRoutes field count MUST be set
-        for Listeners with condition Accepted: false and MUST count successfully
-        attached Routes that may themselves have Accepted: false conditions.
+        for Listeners, even if the Accepted condition of an individual Listener is set
+        to "False". The AttachedRoutes number represents the number of Routes with
+        the Accepted condition set to "True" that have been attached to this Listener.
+        Routes with any other value for the Accepted condition MUST NOT be included
+        in this count.
 
         Uses for this field include troubleshooting Route attachment and
         measuring blast radius/impact of changes to a Listener.
@@ -6686,7 +7041,7 @@ class GatewayStatusListeners(dict):
     def supported_kinds(self) -> Optional[Sequence['outputs.GatewayStatusListenersSupportedKinds']]:
         """
         SupportedKinds is the list indicating the Kinds supported by this
-        listener. This MUST represent the kinds an implementation supports for
+        listener. This MUST represent the kinds supported by an implementation for
         that Listener configuration.
 
         If kinds are specified in Spec that are not supported, they MUST NOT
@@ -6731,6 +7086,7 @@ class GatewayStatusListenersConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -6849,6 +7205,7 @@ class GatewayStatusListenersConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -6965,6 +7322,7 @@ class GatewayStatusListenersPatch(dict):
                  supported_kinds: Optional[Sequence['outputs.GatewayStatusListenersSupportedKindsPatch']] = None):
         """
         ListenerStatus is the status associated with a Listener.
+
         :param _builtins.int attached_routes: AttachedRoutes represents the total number of Routes that have been
                successfully attached to this Listener.
                
@@ -6977,15 +7335,18 @@ class GatewayStatusListenersPatch(dict):
                attachment semantics can be found in the documentation on the various
                Route kinds ParentRefs fields). Listener or Route status does not impact
                successful attachment, i.e. the AttachedRoutes field count MUST be set
-               for Listeners with condition Accepted: false and MUST count successfully
-               attached Routes that may themselves have Accepted: false conditions.
+               for Listeners, even if the Accepted condition of an individual Listener is set
+               to "False". The AttachedRoutes number represents the number of Routes with
+               the Accepted condition set to "True" that have been attached to this Listener.
+               Routes with any other value for the Accepted condition MUST NOT be included
+               in this count.
                
                Uses for this field include troubleshooting Route attachment and
                measuring blast radius/impact of changes to a Listener.
         :param Sequence['GatewayStatusListenersConditionsPatchArgs'] conditions: Conditions describe the current condition of this listener.
         :param _builtins.str name: Name is the name of the Listener that this status corresponds to.
         :param Sequence['GatewayStatusListenersSupportedKindsPatchArgs'] supported_kinds: SupportedKinds is the list indicating the Kinds supported by this
-               listener. This MUST represent the kinds an implementation supports for
+               listener. This MUST represent the kinds supported by an implementation for
                that Listener configuration.
                
                If kinds are specified in Spec that are not supported, they MUST NOT
@@ -7019,8 +7380,11 @@ class GatewayStatusListenersPatch(dict):
         attachment semantics can be found in the documentation on the various
         Route kinds ParentRefs fields). Listener or Route status does not impact
         successful attachment, i.e. the AttachedRoutes field count MUST be set
-        for Listeners with condition Accepted: false and MUST count successfully
-        attached Routes that may themselves have Accepted: false conditions.
+        for Listeners, even if the Accepted condition of an individual Listener is set
+        to "False". The AttachedRoutes number represents the number of Routes with
+        the Accepted condition set to "True" that have been attached to this Listener.
+        Routes with any other value for the Accepted condition MUST NOT be included
+        in this count.
 
         Uses for this field include troubleshooting Route attachment and
         measuring blast radius/impact of changes to a Listener.
@@ -7048,7 +7412,7 @@ class GatewayStatusListenersPatch(dict):
     def supported_kinds(self) -> Optional[Sequence['outputs.GatewayStatusListenersSupportedKindsPatch']]:
         """
         SupportedKinds is the list indicating the Kinds supported by this
-        listener. This MUST represent the kinds an implementation supports for
+        listener. This MUST represent the kinds supported by an implementation for
         that Listener configuration.
 
         If kinds are specified in Spec that are not supported, they MUST NOT
@@ -7070,6 +7434,7 @@ class GatewayStatusListenersSupportedKinds(dict):
                  kind: Optional[_builtins.str] = None):
         """
         RouteGroupKind indicates the group and kind of a Route resource.
+
         :param _builtins.str group: Group is the group of the Route.
         :param _builtins.str kind: Kind is the kind of the Route.
         """
@@ -7105,6 +7470,7 @@ class GatewayStatusListenersSupportedKindsPatch(dict):
                  kind: Optional[_builtins.str] = None):
         """
         RouteGroupKind indicates the group and kind of a Route resource.
+
         :param _builtins.str group: Group is the group of the Route.
         :param _builtins.str kind: Kind is the kind of the Route.
         """
@@ -7135,12 +7501,31 @@ class GatewayStatusPatch(dict):
     """
     Status defines the current state of Gateway.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "attachedListenerSets":
+            suggest = "attached_listener_sets"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in GatewayStatusPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        GatewayStatusPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        GatewayStatusPatch.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  addresses: Optional[Sequence['outputs.GatewayStatusAddressesPatch']] = None,
+                 attached_listener_sets: Optional[_builtins.int] = None,
                  conditions: Optional[Sequence['outputs.GatewayStatusConditionsPatch']] = None,
                  listeners: Optional[Sequence['outputs.GatewayStatusListenersPatch']] = None):
         """
         Status defines the current state of Gateway.
+
         :param Sequence['GatewayStatusAddressesPatchArgs'] addresses: Addresses lists the network addresses that have been bound to the
                Gateway.
                
@@ -7150,6 +7535,16 @@ class GatewayStatusPatch(dict):
                  * no addresses are specified, all addresses are dynamically assigned
                  * a combination of specified and dynamic addresses are assigned
                  * a specified address was unusable (e.g. already in use)
+        :param _builtins.int attached_listener_sets: AttachedListenerSets represents the total number of ListenerSets that have been
+               successfully attached to this Gateway.
+               
+               A ListenerSet is successfully attached to a Gateway when all the following conditions are met:
+               - The ListenerSet is selected by the Gateway's AllowedListeners field
+               - The ListenerSet has a valid ParentRef selecting the Gateway
+               - The ListenerSet's status has the condition "Accepted: true"
+               
+               Uses for this field include troubleshooting AttachedListenerSets attachment and
+               measuring blast radius/impact of changes to a Gateway.
         :param Sequence['GatewayStatusConditionsPatchArgs'] conditions: Conditions describe the current conditions of the Gateway.
                
                Implementations should prefer to express Gateway conditions
@@ -7166,6 +7561,8 @@ class GatewayStatusPatch(dict):
         """
         if addresses is not None:
             pulumi.set(__self__, "addresses", addresses)
+        if attached_listener_sets is not None:
+            pulumi.set(__self__, "attached_listener_sets", attached_listener_sets)
         if conditions is not None:
             pulumi.set(__self__, "conditions", conditions)
         if listeners is not None:
@@ -7186,6 +7583,23 @@ class GatewayStatusPatch(dict):
           * a specified address was unusable (e.g. already in use)
         """
         return pulumi.get(self, "addresses")
+
+    @_builtins.property
+    @pulumi.getter(name="attachedListenerSets")
+    def attached_listener_sets(self) -> Optional[_builtins.int]:
+        """
+        AttachedListenerSets represents the total number of ListenerSets that have been
+        successfully attached to this Gateway.
+
+        A ListenerSet is successfully attached to a Gateway when all the following conditions are met:
+        - The ListenerSet is selected by the Gateway's AllowedListeners field
+        - The ListenerSet has a valid ParentRef selecting the Gateway
+        - The ListenerSet's status has the condition "Accepted: true"
+
+        Uses for this field include troubleshooting AttachedListenerSets attachment and
+        measuring blast radius/impact of changes to a Gateway.
+        """
+        return pulumi.get(self, "attached_listener_sets")
 
     @_builtins.property
     @pulumi.getter
@@ -7251,6 +7665,7 @@ class HTTPRoute(dict):
         to match requests by hostname, path, header, or query param. Filters can be
         used to specify additional processing steps. Backends specify where matching
         requests should be routed.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -7332,6 +7747,7 @@ class HTTPRouteSpec(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of HTTPRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of hostnames that should match against the HTTP Host
                header to select a HTTPRoute used to process the request. Implementations
                MUST ignore any port value specified in the HTTP Host header while
@@ -7678,6 +8094,7 @@ class HTTPRouteSpecParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -7974,6 +8391,7 @@ class HTTPRouteSpecParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -8248,6 +8666,7 @@ class HTTPRouteSpecPatch(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of HTTPRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of hostnames that should match against the HTTP Host
                header to select a HTTPRoute used to process the request. Implementations
                MUST ignore any port value specified in the HTTP Host header while
@@ -8579,6 +8998,7 @@ class HTTPRouteSpecRules(dict):
         HTTPRouteRule defines semantics for matching an HTTP request based on
         conditions (matches), processing it (filters), and forwarding the request to
         an API object (backendRefs).
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent.
                
@@ -8954,6 +9374,7 @@ class HTTPRouteSpecRulesBackendRefs(dict):
         If a Route is not able to send traffic to the backend using the specified
         protocol then the backend is considered invalid. Implementations MUST set the
         "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersArgs'] filters: Filters defined at this level should be executed if and only if the
                request is being forwarded to the backend defined here.
                
@@ -9174,6 +9595,7 @@ class HTTPRouteSpecRulesBackendRefsFilters(dict):
         examples include request or response modification, implementing
         authentication strategies, rate-limiting, and traffic shaping. API
         guarantee/conformance is defined based on the type of the filter.
+
         :param _builtins.str type: Type identifies the type of filter to apply. As with other API fields,
                types are classified into three conformance levels:
                
@@ -9353,6 +9775,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         cross-origin request based on HTTP response header.
 
         Support: Extended
+
         :param _builtins.bool allow_credentials: AllowCredentials indicates whether the actual cross-origin request allows
                to include credentials.
                
@@ -9367,14 +9790,14 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         :param Sequence[_builtins.str] allow_headers: AllowHeaders indicates which HTTP request headers are supported for
                accessing the requested resource.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Allow-Headers`
                response header are separated by a comma (",").
                
-               When the `AllowHeaders` field is configured with one or more headers, the
+               When the `allowHeaders` field is configured with one or more headers, the
                gateway must return the `Access-Control-Allow-Headers` response header
-               which value is present in the `AllowHeaders` field.
+               which value is present in the `allowHeaders` field.
                
                If any header name in the `Access-Control-Request-Headers` request header
                is not included in the list of header names specified by the response
@@ -9386,18 +9809,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                client side.
                
                A wildcard indicates that the requests with all HTTP headers are allowed.
-               The `Access-Control-Allow-Headers` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
                
-               When the `AllowCredentials` field is true and `AllowHeaders` field
-               specified with the `*` wildcard, the gateway must specify one or more
-               HTTP headers in the value of the `Access-Control-Allow-Headers` response
-               header. The value of the header `Access-Control-Allow-Headers` is same as
-               the `Access-Control-Request-Headers` header provided by the client. If
-               the header `Access-Control-Request-Headers` is not included in the
-               request, the gateway will omit the `Access-Control-Allow-Headers`
-               response header, instead of specifying the `*` wildcard. A Gateway
-               implementation may choose to add implementation-specific default headers.
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Headers` request header.
+               
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Headers` response header. Instead, it must
+               return one or more header names matching the value of the
+               `Access-Control-Request-Headers` request header.
+               If the `Access-Control-Request-Headers` header is not present in the
+               request, the gateway must omit the `Access-Control-Allow-Headers`
+               response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_methods: AllowMethods indicates which HTTP methods are supported for accessing the
@@ -9406,7 +9831,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                Valid values are any method defined by RFC9110, along with the special
                value `*`, which represents all HTTP methods are allowed.
                
-               Method names are case sensitive, so these values are also case-sensitive.
+               Method names are case-sensitive, so these values are also case-sensitive.
                (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
                
                Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -9415,29 +9840,29 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
                (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
                CORS-safelisted methods are always allowed, regardless of whether they
-               are specified in the `AllowMethods` field.
+               are specified in the `allowMethods` field.
                
-               When the `AllowMethods` field is configured with one or more methods, the
+               When the `allowMethods` field is configured with one or more methods, the
                gateway must return the `Access-Control-Allow-Methods` response header
-               which value is present in the `AllowMethods` field.
+               which value is present in the `allowMethods` field.
                
                If the HTTP method of the `Access-Control-Request-Method` request header
                is not included in the list of methods specified by the response header
                `Access-Control-Allow-Methods`, it will present an error on the client
                side.
                
-               The `Access-Control-Allow-Methods` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Method` request header.
                
-               When the `AllowCredentials` field is true and `AllowMethods` field
-               specified with the `*` wildcard, the gateway must specify one HTTP method
-               in the value of the Access-Control-Allow-Methods response header. The
-               value of the header `Access-Control-Allow-Methods` is same as the
-               `Access-Control-Request-Method` header provided by the client. If the
-               header `Access-Control-Request-Method` is not included in the request,
-               the gateway will omit the `Access-Control-Allow-Methods` response header,
-               instead of specifying the `*` wildcard. A Gateway implementation may
-               choose to add implementation-specific default methods.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Methods` response header. Instead, it must
+               return a single HTTP method matching the value of the
+               `Access-Control-Request-Method` request header.
+               If the `Access-Control-Request-Method` header is not present in the request,
+               the gateway must omit the `Access-Control-Allow-Methods` response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_origins: AllowOrigins indicates whether the response can be shared with requested
@@ -9465,7 +9890,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                An origin value that includes _only_ the `*` character indicates requests
                from all `Origin`s are allowed.
                
-               When the `AllowOrigins` field is configured with multiple origins, it
+               When the `allowOrigins` field is configured with multiple origins, it
                means the server supports clients from multiple origins. If the request
                `Origin` matches the configured allowed origins, the gateway must return
                the given `Origin` and sets value of the header
@@ -9482,15 +9907,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                the CORS headers. The cross-origin request fails on the client side.
                Therefore, the client doesn't attempt the actual cross-origin request.
                
-               The `Access-Control-Allow-Origin` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               Conversely, if the request `Origin` matches one of the configured
+               allowed origins, the gateway sets the response header
+               `Access-Control-Allow-Origin` to the same value as the `Origin`
+               header provided by the client.
                
-               When the `AllowCredentials` field is true and `AllowOrigins` field
-               specified with the `*` wildcard, the gateway must return a single origin
-               in the value of the `Access-Control-Allow-Origin` response header,
-               instead of specifying the `*` wildcard. The value of the header
-               `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-               the client.
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Origin` request header.
+               
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Origin` response header. Instead, it must
+               return a single origin matching the value of the `Origin` request header.
                
                Support: Extended
         :param Sequence[_builtins.str] expose_headers: ExposeHeaders indicates which HTTP response headers can be exposed
@@ -9509,18 +9939,25 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
                The CORS-safelisted response headers are exposed to client by default.
                
-               When an HTTP header name is specified using the `ExposeHeaders` field,
+               When an HTTP header name is specified using the `exposeHeaders` field,
                this additional header will be exposed as part of the response to the
                client.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Expose-Headers`
                response header are separated by a comma (",").
                
                A wildcard indicates that the responses with all HTTP headers are exposed
-               to clients. The `Access-Control-Expose-Headers` response header can only
-               use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+               to clients.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+               response header can contain the wildcard `*`.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `true`, the gateway cannot use the `*`
+               in the `Access-Control-Expose-Headers` response header.
                
                Support: Extended
         :param _builtins.int max_age: MaxAge indicates the duration (in seconds) for the client to cache the
@@ -9532,6 +9969,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
                
                The default value of `Access-Control-Max-Age` response header is 5
                (seconds).
+               
+               When the `MaxAge` field is unspecified, the gateway sets the response
+               header "Access-Control-Max-Age: 5" by default.
         """
         if allow_credentials is not None:
             pulumi.set(__self__, "allow_credentials", allow_credentials)
@@ -9571,14 +10011,14 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         AllowHeaders indicates which HTTP request headers are supported for
         accessing the requested resource.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Allow-Headers`
         response header are separated by a comma (",").
 
-        When the `AllowHeaders` field is configured with one or more headers, the
+        When the `allowHeaders` field is configured with one or more headers, the
         gateway must return the `Access-Control-Allow-Headers` response header
-        which value is present in the `AllowHeaders` field.
+        which value is present in the `allowHeaders` field.
 
         If any header name in the `Access-Control-Request-Headers` request header
         is not included in the list of header names specified by the response
@@ -9590,18 +10030,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         client side.
 
         A wildcard indicates that the requests with all HTTP headers are allowed.
-        The `Access-Control-Allow-Headers` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
 
-        When the `AllowCredentials` field is true and `AllowHeaders` field
-        specified with the `*` wildcard, the gateway must specify one or more
-        HTTP headers in the value of the `Access-Control-Allow-Headers` response
-        header. The value of the header `Access-Control-Allow-Headers` is same as
-        the `Access-Control-Request-Headers` header provided by the client. If
-        the header `Access-Control-Request-Headers` is not included in the
-        request, the gateway will omit the `Access-Control-Allow-Headers`
-        response header, instead of specifying the `*` wildcard. A Gateway
-        implementation may choose to add implementation-specific default headers.
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Headers` request header.
+
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Headers` response header. Instead, it must
+        return one or more header names matching the value of the
+        `Access-Control-Request-Headers` request header.
+        If the `Access-Control-Request-Headers` header is not present in the
+        request, the gateway must omit the `Access-Control-Allow-Headers`
+        response header.
 
         Support: Extended
         """
@@ -9617,7 +10059,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         Valid values are any method defined by RFC9110, along with the special
         value `*`, which represents all HTTP methods are allowed.
 
-        Method names are case sensitive, so these values are also case-sensitive.
+        Method names are case-sensitive, so these values are also case-sensitive.
         (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
 
         Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -9626,29 +10068,29 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
         (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
         CORS-safelisted methods are always allowed, regardless of whether they
-        are specified in the `AllowMethods` field.
+        are specified in the `allowMethods` field.
 
-        When the `AllowMethods` field is configured with one or more methods, the
+        When the `allowMethods` field is configured with one or more methods, the
         gateway must return the `Access-Control-Allow-Methods` response header
-        which value is present in the `AllowMethods` field.
+        which value is present in the `allowMethods` field.
 
         If the HTTP method of the `Access-Control-Request-Method` request header
         is not included in the list of methods specified by the response header
         `Access-Control-Allow-Methods`, it will present an error on the client
         side.
 
-        The `Access-Control-Allow-Methods` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Method` request header.
 
-        When the `AllowCredentials` field is true and `AllowMethods` field
-        specified with the `*` wildcard, the gateway must specify one HTTP method
-        in the value of the Access-Control-Allow-Methods response header. The
-        value of the header `Access-Control-Allow-Methods` is same as the
-        `Access-Control-Request-Method` header provided by the client. If the
-        header `Access-Control-Request-Method` is not included in the request,
-        the gateway will omit the `Access-Control-Allow-Methods` response header,
-        instead of specifying the `*` wildcard. A Gateway implementation may
-        choose to add implementation-specific default methods.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Methods` response header. Instead, it must
+        return a single HTTP method matching the value of the
+        `Access-Control-Request-Method` request header.
+        If the `Access-Control-Request-Method` header is not present in the request,
+        the gateway must omit the `Access-Control-Allow-Methods` response header.
 
         Support: Extended
         """
@@ -9683,7 +10125,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         An origin value that includes _only_ the `*` character indicates requests
         from all `Origin`s are allowed.
 
-        When the `AllowOrigins` field is configured with multiple origins, it
+        When the `allowOrigins` field is configured with multiple origins, it
         means the server supports clients from multiple origins. If the request
         `Origin` matches the configured allowed origins, the gateway must return
         the given `Origin` and sets value of the header
@@ -9700,15 +10142,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         the CORS headers. The cross-origin request fails on the client side.
         Therefore, the client doesn't attempt the actual cross-origin request.
 
-        The `Access-Control-Allow-Origin` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        Conversely, if the request `Origin` matches one of the configured
+        allowed origins, the gateway sets the response header
+        `Access-Control-Allow-Origin` to the same value as the `Origin`
+        header provided by the client.
 
-        When the `AllowCredentials` field is true and `AllowOrigins` field
-        specified with the `*` wildcard, the gateway must return a single origin
-        in the value of the `Access-Control-Allow-Origin` response header,
-        instead of specifying the `*` wildcard. The value of the header
-        `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-        the client.
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Origin` request header.
+
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Origin` response header. Instead, it must
+        return a single origin matching the value of the `Origin` request header.
 
         Support: Extended
         """
@@ -9734,18 +10181,25 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
         (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
         The CORS-safelisted response headers are exposed to client by default.
 
-        When an HTTP header name is specified using the `ExposeHeaders` field,
+        When an HTTP header name is specified using the `exposeHeaders` field,
         this additional header will be exposed as part of the response to the
         client.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Expose-Headers`
         response header are separated by a comma (",").
 
         A wildcard indicates that the responses with all HTTP headers are exposed
-        to clients. The `Access-Control-Expose-Headers` response header can only
-        use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+        to clients.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+        response header can contain the wildcard `*`.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `true`, the gateway cannot use the `*`
+        in the `Access-Control-Expose-Headers` response header.
 
         Support: Extended
         """
@@ -9764,6 +10218,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersCors(dict):
 
         The default value of `Access-Control-Max-Age` response header is 5
         (seconds).
+
+        When the `MaxAge` field is unspecified, the gateway sets the response
+        header "Access-Control-Max-Age: 5" by default.
         """
         return pulumi.get(self, "max_age")
 
@@ -9815,6 +10272,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         cross-origin request based on HTTP response header.
 
         Support: Extended
+
         :param _builtins.bool allow_credentials: AllowCredentials indicates whether the actual cross-origin request allows
                to include credentials.
                
@@ -9829,14 +10287,14 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         :param Sequence[_builtins.str] allow_headers: AllowHeaders indicates which HTTP request headers are supported for
                accessing the requested resource.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Allow-Headers`
                response header are separated by a comma (",").
                
-               When the `AllowHeaders` field is configured with one or more headers, the
+               When the `allowHeaders` field is configured with one or more headers, the
                gateway must return the `Access-Control-Allow-Headers` response header
-               which value is present in the `AllowHeaders` field.
+               which value is present in the `allowHeaders` field.
                
                If any header name in the `Access-Control-Request-Headers` request header
                is not included in the list of header names specified by the response
@@ -9848,18 +10306,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                client side.
                
                A wildcard indicates that the requests with all HTTP headers are allowed.
-               The `Access-Control-Allow-Headers` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
                
-               When the `AllowCredentials` field is true and `AllowHeaders` field
-               specified with the `*` wildcard, the gateway must specify one or more
-               HTTP headers in the value of the `Access-Control-Allow-Headers` response
-               header. The value of the header `Access-Control-Allow-Headers` is same as
-               the `Access-Control-Request-Headers` header provided by the client. If
-               the header `Access-Control-Request-Headers` is not included in the
-               request, the gateway will omit the `Access-Control-Allow-Headers`
-               response header, instead of specifying the `*` wildcard. A Gateway
-               implementation may choose to add implementation-specific default headers.
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Headers` request header.
+               
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Headers` response header. Instead, it must
+               return one or more header names matching the value of the
+               `Access-Control-Request-Headers` request header.
+               If the `Access-Control-Request-Headers` header is not present in the
+               request, the gateway must omit the `Access-Control-Allow-Headers`
+               response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_methods: AllowMethods indicates which HTTP methods are supported for accessing the
@@ -9868,7 +10328,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                Valid values are any method defined by RFC9110, along with the special
                value `*`, which represents all HTTP methods are allowed.
                
-               Method names are case sensitive, so these values are also case-sensitive.
+               Method names are case-sensitive, so these values are also case-sensitive.
                (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
                
                Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -9877,29 +10337,29 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
                (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
                CORS-safelisted methods are always allowed, regardless of whether they
-               are specified in the `AllowMethods` field.
+               are specified in the `allowMethods` field.
                
-               When the `AllowMethods` field is configured with one or more methods, the
+               When the `allowMethods` field is configured with one or more methods, the
                gateway must return the `Access-Control-Allow-Methods` response header
-               which value is present in the `AllowMethods` field.
+               which value is present in the `allowMethods` field.
                
                If the HTTP method of the `Access-Control-Request-Method` request header
                is not included in the list of methods specified by the response header
                `Access-Control-Allow-Methods`, it will present an error on the client
                side.
                
-               The `Access-Control-Allow-Methods` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Method` request header.
                
-               When the `AllowCredentials` field is true and `AllowMethods` field
-               specified with the `*` wildcard, the gateway must specify one HTTP method
-               in the value of the Access-Control-Allow-Methods response header. The
-               value of the header `Access-Control-Allow-Methods` is same as the
-               `Access-Control-Request-Method` header provided by the client. If the
-               header `Access-Control-Request-Method` is not included in the request,
-               the gateway will omit the `Access-Control-Allow-Methods` response header,
-               instead of specifying the `*` wildcard. A Gateway implementation may
-               choose to add implementation-specific default methods.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Methods` response header. Instead, it must
+               return a single HTTP method matching the value of the
+               `Access-Control-Request-Method` request header.
+               If the `Access-Control-Request-Method` header is not present in the request,
+               the gateway must omit the `Access-Control-Allow-Methods` response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_origins: AllowOrigins indicates whether the response can be shared with requested
@@ -9927,7 +10387,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                An origin value that includes _only_ the `*` character indicates requests
                from all `Origin`s are allowed.
                
-               When the `AllowOrigins` field is configured with multiple origins, it
+               When the `allowOrigins` field is configured with multiple origins, it
                means the server supports clients from multiple origins. If the request
                `Origin` matches the configured allowed origins, the gateway must return
                the given `Origin` and sets value of the header
@@ -9944,15 +10404,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                the CORS headers. The cross-origin request fails on the client side.
                Therefore, the client doesn't attempt the actual cross-origin request.
                
-               The `Access-Control-Allow-Origin` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               Conversely, if the request `Origin` matches one of the configured
+               allowed origins, the gateway sets the response header
+               `Access-Control-Allow-Origin` to the same value as the `Origin`
+               header provided by the client.
                
-               When the `AllowCredentials` field is true and `AllowOrigins` field
-               specified with the `*` wildcard, the gateway must return a single origin
-               in the value of the `Access-Control-Allow-Origin` response header,
-               instead of specifying the `*` wildcard. The value of the header
-               `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-               the client.
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Origin` request header.
+               
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Origin` response header. Instead, it must
+               return a single origin matching the value of the `Origin` request header.
                
                Support: Extended
         :param Sequence[_builtins.str] expose_headers: ExposeHeaders indicates which HTTP response headers can be exposed
@@ -9971,18 +10436,25 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
                The CORS-safelisted response headers are exposed to client by default.
                
-               When an HTTP header name is specified using the `ExposeHeaders` field,
+               When an HTTP header name is specified using the `exposeHeaders` field,
                this additional header will be exposed as part of the response to the
                client.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Expose-Headers`
                response header are separated by a comma (",").
                
                A wildcard indicates that the responses with all HTTP headers are exposed
-               to clients. The `Access-Control-Expose-Headers` response header can only
-               use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+               to clients.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+               response header can contain the wildcard `*`.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `true`, the gateway cannot use the `*`
+               in the `Access-Control-Expose-Headers` response header.
                
                Support: Extended
         :param _builtins.int max_age: MaxAge indicates the duration (in seconds) for the client to cache the
@@ -9994,6 +10466,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
                
                The default value of `Access-Control-Max-Age` response header is 5
                (seconds).
+               
+               When the `MaxAge` field is unspecified, the gateway sets the response
+               header "Access-Control-Max-Age: 5" by default.
         """
         if allow_credentials is not None:
             pulumi.set(__self__, "allow_credentials", allow_credentials)
@@ -10033,14 +10508,14 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         AllowHeaders indicates which HTTP request headers are supported for
         accessing the requested resource.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Allow-Headers`
         response header are separated by a comma (",").
 
-        When the `AllowHeaders` field is configured with one or more headers, the
+        When the `allowHeaders` field is configured with one or more headers, the
         gateway must return the `Access-Control-Allow-Headers` response header
-        which value is present in the `AllowHeaders` field.
+        which value is present in the `allowHeaders` field.
 
         If any header name in the `Access-Control-Request-Headers` request header
         is not included in the list of header names specified by the response
@@ -10052,18 +10527,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         client side.
 
         A wildcard indicates that the requests with all HTTP headers are allowed.
-        The `Access-Control-Allow-Headers` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
 
-        When the `AllowCredentials` field is true and `AllowHeaders` field
-        specified with the `*` wildcard, the gateway must specify one or more
-        HTTP headers in the value of the `Access-Control-Allow-Headers` response
-        header. The value of the header `Access-Control-Allow-Headers` is same as
-        the `Access-Control-Request-Headers` header provided by the client. If
-        the header `Access-Control-Request-Headers` is not included in the
-        request, the gateway will omit the `Access-Control-Allow-Headers`
-        response header, instead of specifying the `*` wildcard. A Gateway
-        implementation may choose to add implementation-specific default headers.
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Headers` request header.
+
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Headers` response header. Instead, it must
+        return one or more header names matching the value of the
+        `Access-Control-Request-Headers` request header.
+        If the `Access-Control-Request-Headers` header is not present in the
+        request, the gateway must omit the `Access-Control-Allow-Headers`
+        response header.
 
         Support: Extended
         """
@@ -10079,7 +10556,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         Valid values are any method defined by RFC9110, along with the special
         value `*`, which represents all HTTP methods are allowed.
 
-        Method names are case sensitive, so these values are also case-sensitive.
+        Method names are case-sensitive, so these values are also case-sensitive.
         (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
 
         Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -10088,29 +10565,29 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
         (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
         CORS-safelisted methods are always allowed, regardless of whether they
-        are specified in the `AllowMethods` field.
+        are specified in the `allowMethods` field.
 
-        When the `AllowMethods` field is configured with one or more methods, the
+        When the `allowMethods` field is configured with one or more methods, the
         gateway must return the `Access-Control-Allow-Methods` response header
-        which value is present in the `AllowMethods` field.
+        which value is present in the `allowMethods` field.
 
         If the HTTP method of the `Access-Control-Request-Method` request header
         is not included in the list of methods specified by the response header
         `Access-Control-Allow-Methods`, it will present an error on the client
         side.
 
-        The `Access-Control-Allow-Methods` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Method` request header.
 
-        When the `AllowCredentials` field is true and `AllowMethods` field
-        specified with the `*` wildcard, the gateway must specify one HTTP method
-        in the value of the Access-Control-Allow-Methods response header. The
-        value of the header `Access-Control-Allow-Methods` is same as the
-        `Access-Control-Request-Method` header provided by the client. If the
-        header `Access-Control-Request-Method` is not included in the request,
-        the gateway will omit the `Access-Control-Allow-Methods` response header,
-        instead of specifying the `*` wildcard. A Gateway implementation may
-        choose to add implementation-specific default methods.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Methods` response header. Instead, it must
+        return a single HTTP method matching the value of the
+        `Access-Control-Request-Method` request header.
+        If the `Access-Control-Request-Method` header is not present in the request,
+        the gateway must omit the `Access-Control-Allow-Methods` response header.
 
         Support: Extended
         """
@@ -10145,7 +10622,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         An origin value that includes _only_ the `*` character indicates requests
         from all `Origin`s are allowed.
 
-        When the `AllowOrigins` field is configured with multiple origins, it
+        When the `allowOrigins` field is configured with multiple origins, it
         means the server supports clients from multiple origins. If the request
         `Origin` matches the configured allowed origins, the gateway must return
         the given `Origin` and sets value of the header
@@ -10162,15 +10639,20 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         the CORS headers. The cross-origin request fails on the client side.
         Therefore, the client doesn't attempt the actual cross-origin request.
 
-        The `Access-Control-Allow-Origin` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        Conversely, if the request `Origin` matches one of the configured
+        allowed origins, the gateway sets the response header
+        `Access-Control-Allow-Origin` to the same value as the `Origin`
+        header provided by the client.
 
-        When the `AllowCredentials` field is true and `AllowOrigins` field
-        specified with the `*` wildcard, the gateway must return a single origin
-        in the value of the `Access-Control-Allow-Origin` response header,
-        instead of specifying the `*` wildcard. The value of the header
-        `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-        the client.
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Origin` request header.
+
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Origin` response header. Instead, it must
+        return a single origin matching the value of the `Origin` request header.
 
         Support: Extended
         """
@@ -10196,18 +10678,25 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
         (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
         The CORS-safelisted response headers are exposed to client by default.
 
-        When an HTTP header name is specified using the `ExposeHeaders` field,
+        When an HTTP header name is specified using the `exposeHeaders` field,
         this additional header will be exposed as part of the response to the
         client.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Expose-Headers`
         response header are separated by a comma (",").
 
         A wildcard indicates that the responses with all HTTP headers are exposed
-        to clients. The `Access-Control-Expose-Headers` response header can only
-        use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+        to clients.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+        response header can contain the wildcard `*`.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `true`, the gateway cannot use the `*`
+        in the `Access-Control-Expose-Headers` response header.
 
         Support: Extended
         """
@@ -10226,6 +10715,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersCorsPatch(dict):
 
         The default value of `Access-Control-Max-Age` response header is 5
         (seconds).
+
+        When the `MaxAge` field is unspecified, the gateway sets the response
+        header "Access-Control-Max-Age: 5" by default.
         """
         return pulumi.get(self, "max_age")
 
@@ -10255,6 +10747,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExtensionRef(dict):
         This filter can be used multiple times within the same rule.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -10318,6 +10811,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExtensionRefPatch(dict):
         This filter can be used multiple times within the same rule.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -10402,6 +10896,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuth(dict):
         this filter MUST fail closed.
 
         Support: Extended
+
         :param _builtins.str protocol: ExternalAuthProtocol describes which protocol to use when communicating with an
                ext_authz authorization server.
                
@@ -10501,6 +10996,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthBackendRef(dict):
         If the backend service requires TLS, use BackendTLSPolicy to tell the
         implementation to supply the TLS details to be used to connect to that
         backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -10640,6 +11136,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthBackendRefPatch(dict):
         If the backend service requires TLS, use BackendTLSPolicy to tell the
         implementation to supply the TLS details to be used to connect to that
         backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -10800,6 +11297,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthForwardBody(dict):
         be forwarded.
 
         Feature Name: HTTPRouteExternalAuthForwardBody
+
         :param _builtins.int max_size: MaxSize specifies how large in bytes the largest body that will be buffered
                and sent to the authorization server. If the body size is larger than
                `maxSize`, then the body sent to the authorization server must be
@@ -10884,6 +11382,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthForwardBodyPatch(dict):
         be forwarded.
 
         Feature Name: HTTPRouteExternalAuthForwardBody
+
         :param _builtins.int max_size: MaxSize specifies how large in bytes the largest body that will be buffered
                and sent to the authorization server. If the body size is larger than
                `maxSize`, then the body sent to the authorization server must be
@@ -10952,6 +11451,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthGrpc(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what headers from the client request
                will be sent to the authorization server.
                
@@ -11010,6 +11510,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthGrpcPatch(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what headers from the client request
                will be sent to the authorization server.
                
@@ -11072,6 +11573,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthHttp(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what additional headers from the client request
                will be sent to the authorization server.
                
@@ -11214,6 +11716,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthHttpPatch(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what additional headers from the client request
                will be sent to the authorization server.
                
@@ -11364,6 +11867,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersExternalAuthPatch(dict):
         this filter MUST fail closed.
 
         Support: Extended
+
         :param _builtins.str protocol: ExternalAuthProtocol describes which protocol to use when communicating with an
                ext_authz authorization server.
                
@@ -11490,6 +11994,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersPatch(dict):
         examples include request or response modification, implementing
         authentication strategies, rate-limiting, and traffic shaping. API
         guarantee/conformance is defined based on the type of the filter.
+
         :param _builtins.str type: Type identifies the type of filter to apply. As with other API fields,
                types are classified into three conformance levels:
                
@@ -11639,6 +12144,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifier(dict):
         headers.
 
         Support: Core
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAddArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -11775,6 +12281,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAdd(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -11784,6 +12291,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAdd(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -11810,6 +12320,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAdd(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -11824,6 +12337,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAddPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -11833,6 +12347,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAddPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -11859,6 +12376,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAddPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -11880,6 +12400,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierPatch(dict):
         headers.
 
         Support: Core
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierAddPatchArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -12016,6 +12537,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSet(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -12025,6 +12547,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSet(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -12051,6 +12576,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSet(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -12065,6 +12593,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSetPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -12074,6 +12603,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSetPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -12100,6 +12632,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestHeaderModifierSetPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -12148,6 +12683,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirror(dict):
         backends.
 
         Support: Extended
+
         :param _builtins.int percent: Percent represents the percentage of requests that should be
                mirrored to BackendRef. Its minimum value is 0 (indicating 0% of
                requests) and its maximum value is 100 (indicating 100% of requests).
@@ -12212,6 +12748,10 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirrorBackendRef(dict):
     Support: Extended for Kubernetes Service
 
     Support: Implementation-specific for any other resource
+
+    If the backend service requires TLS, use BackendTLSPolicy to tell the
+    implementation to supply the TLS details to be used to connect to that
+    backend.
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -12243,6 +12783,11 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirrorBackendRef(dict):
         Support: Extended for Kubernetes Service
 
         Support: Implementation-specific for any other resource
+
+        If the backend service requires TLS, use BackendTLSPolicy to tell the
+        implementation to supply the TLS details to be used to connect to that
+        backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -12379,6 +12924,10 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirrorBackendRefPatch(dict):
     Support: Extended for Kubernetes Service
 
     Support: Implementation-specific for any other resource
+
+    If the backend service requires TLS, use BackendTLSPolicy to tell the
+    implementation to supply the TLS details to be used to connect to that
+    backend.
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -12410,6 +12959,11 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirrorBackendRefPatch(dict):
         Support: Extended for Kubernetes Service
 
         Support: Implementation-specific for any other resource
+
+        If the backend service requires TLS, use BackendTLSPolicy to tell the
+        implementation to supply the TLS details to be used to connect to that
+        backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -12634,6 +13188,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestMirrorPatch(dict):
         backends.
 
         Support: Extended
+
         :param _builtins.int percent: Percent represents the percentage of requests that should be
                mirrored to BackendRef. Its minimum value is 0 (indicating 0% of
                requests) and its maximum value is 100 (indicating 100% of requests).
@@ -12708,6 +13263,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestRedirect(dict):
         request with an HTTP redirection.
 
         Support: Core
+
         :param _builtins.str hostname: Hostname is the hostname to be used in the value of the `Location`
                header in the response.
                When empty, the hostname in the `Host` header of the request is used.
@@ -12892,6 +13448,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestRedirectPatch(dict):
         request with an HTTP redirection.
 
         Support: Core
+
         :param _builtins.str hostname: Hostname is the hostname to be used in the value of the `Location`
                header in the response.
                When empty, the hostname in the `Host` header of the request is used.
@@ -13078,6 +13635,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestRedirectPath(dict):
         empty, the request path is used as-is.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -13200,6 +13758,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersRequestRedirectPathPatch(dict):
         empty, the request path is used as-is.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -13301,6 +13860,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifier(dict):
         headers.
 
         Support: Extended
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAddArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -13437,6 +13997,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAdd(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -13446,6 +14007,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAdd(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -13472,6 +14036,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAdd(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -13486,6 +14053,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAddPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -13495,6 +14063,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAddPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -13521,6 +14092,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAddPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -13542,6 +14116,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierPatch(dict):
         headers.
 
         Support: Extended
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierAddPatchArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -13678,6 +14253,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSet(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -13687,6 +14263,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSet(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -13713,6 +14292,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSet(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -13727,6 +14309,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSetPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -13736,6 +14319,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSetPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -13762,6 +14348,9 @@ class HTTPRouteSpecRulesBackendRefsFiltersResponseHeaderModifierSetPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -13780,6 +14369,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersUrlRewrite(dict):
         URLRewrite defines a schema for a filter that modifies a request during forwarding.
 
         Support: Extended
+
         :param _builtins.str hostname: Hostname is the value to be used to replace the Host header value during
                forwarding.
                
@@ -13821,6 +14411,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersUrlRewritePatch(dict):
         URLRewrite defines a schema for a filter that modifies a request during forwarding.
 
         Support: Extended
+
         :param _builtins.str hostname: Hostname is the value to be used to replace the Host header value during
                forwarding.
                
@@ -13882,6 +14473,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersUrlRewritePath(dict):
         Path defines a path rewrite.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -14000,6 +14592,7 @@ class HTTPRouteSpecRulesBackendRefsFiltersUrlRewritePathPatch(dict):
         Path defines a path rewrite.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -14139,6 +14732,7 @@ class HTTPRouteSpecRulesBackendRefsPatch(dict):
         If a Route is not able to send traffic to the backend using the specified
         protocol then the backend is considered invalid. Implementations MUST set the
         "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsFiltersPatchArgs'] filters: Filters defined at this level should be executed if and only if the
                request is being forwarded to the backend defined here.
                
@@ -14359,6 +14953,7 @@ class HTTPRouteSpecRulesFilters(dict):
         examples include request or response modification, implementing
         authentication strategies, rate-limiting, and traffic shaping. API
         guarantee/conformance is defined based on the type of the filter.
+
         :param _builtins.str type: Type identifies the type of filter to apply. As with other API fields,
                types are classified into three conformance levels:
                
@@ -14538,6 +15133,7 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         cross-origin request based on HTTP response header.
 
         Support: Extended
+
         :param _builtins.bool allow_credentials: AllowCredentials indicates whether the actual cross-origin request allows
                to include credentials.
                
@@ -14552,14 +15148,14 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         :param Sequence[_builtins.str] allow_headers: AllowHeaders indicates which HTTP request headers are supported for
                accessing the requested resource.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Allow-Headers`
                response header are separated by a comma (",").
                
-               When the `AllowHeaders` field is configured with one or more headers, the
+               When the `allowHeaders` field is configured with one or more headers, the
                gateway must return the `Access-Control-Allow-Headers` response header
-               which value is present in the `AllowHeaders` field.
+               which value is present in the `allowHeaders` field.
                
                If any header name in the `Access-Control-Request-Headers` request header
                is not included in the list of header names specified by the response
@@ -14571,18 +15167,20 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                client side.
                
                A wildcard indicates that the requests with all HTTP headers are allowed.
-               The `Access-Control-Allow-Headers` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
                
-               When the `AllowCredentials` field is true and `AllowHeaders` field
-               specified with the `*` wildcard, the gateway must specify one or more
-               HTTP headers in the value of the `Access-Control-Allow-Headers` response
-               header. The value of the header `Access-Control-Allow-Headers` is same as
-               the `Access-Control-Request-Headers` header provided by the client. If
-               the header `Access-Control-Request-Headers` is not included in the
-               request, the gateway will omit the `Access-Control-Allow-Headers`
-               response header, instead of specifying the `*` wildcard. A Gateway
-               implementation may choose to add implementation-specific default headers.
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Headers` request header.
+               
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Headers` response header. Instead, it must
+               return one or more header names matching the value of the
+               `Access-Control-Request-Headers` request header.
+               If the `Access-Control-Request-Headers` header is not present in the
+               request, the gateway must omit the `Access-Control-Allow-Headers`
+               response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_methods: AllowMethods indicates which HTTP methods are supported for accessing the
@@ -14591,7 +15189,7 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                Valid values are any method defined by RFC9110, along with the special
                value `*`, which represents all HTTP methods are allowed.
                
-               Method names are case sensitive, so these values are also case-sensitive.
+               Method names are case-sensitive, so these values are also case-sensitive.
                (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
                
                Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -14600,29 +15198,29 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
                (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
                CORS-safelisted methods are always allowed, regardless of whether they
-               are specified in the `AllowMethods` field.
+               are specified in the `allowMethods` field.
                
-               When the `AllowMethods` field is configured with one or more methods, the
+               When the `allowMethods` field is configured with one or more methods, the
                gateway must return the `Access-Control-Allow-Methods` response header
-               which value is present in the `AllowMethods` field.
+               which value is present in the `allowMethods` field.
                
                If the HTTP method of the `Access-Control-Request-Method` request header
                is not included in the list of methods specified by the response header
                `Access-Control-Allow-Methods`, it will present an error on the client
                side.
                
-               The `Access-Control-Allow-Methods` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Method` request header.
                
-               When the `AllowCredentials` field is true and `AllowMethods` field
-               specified with the `*` wildcard, the gateway must specify one HTTP method
-               in the value of the Access-Control-Allow-Methods response header. The
-               value of the header `Access-Control-Allow-Methods` is same as the
-               `Access-Control-Request-Method` header provided by the client. If the
-               header `Access-Control-Request-Method` is not included in the request,
-               the gateway will omit the `Access-Control-Allow-Methods` response header,
-               instead of specifying the `*` wildcard. A Gateway implementation may
-               choose to add implementation-specific default methods.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Methods` response header. Instead, it must
+               return a single HTTP method matching the value of the
+               `Access-Control-Request-Method` request header.
+               If the `Access-Control-Request-Method` header is not present in the request,
+               the gateway must omit the `Access-Control-Allow-Methods` response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_origins: AllowOrigins indicates whether the response can be shared with requested
@@ -14650,7 +15248,7 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                An origin value that includes _only_ the `*` character indicates requests
                from all `Origin`s are allowed.
                
-               When the `AllowOrigins` field is configured with multiple origins, it
+               When the `allowOrigins` field is configured with multiple origins, it
                means the server supports clients from multiple origins. If the request
                `Origin` matches the configured allowed origins, the gateway must return
                the given `Origin` and sets value of the header
@@ -14667,15 +15265,20 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                the CORS headers. The cross-origin request fails on the client side.
                Therefore, the client doesn't attempt the actual cross-origin request.
                
-               The `Access-Control-Allow-Origin` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               Conversely, if the request `Origin` matches one of the configured
+               allowed origins, the gateway sets the response header
+               `Access-Control-Allow-Origin` to the same value as the `Origin`
+               header provided by the client.
                
-               When the `AllowCredentials` field is true and `AllowOrigins` field
-               specified with the `*` wildcard, the gateway must return a single origin
-               in the value of the `Access-Control-Allow-Origin` response header,
-               instead of specifying the `*` wildcard. The value of the header
-               `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-               the client.
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Origin` request header.
+               
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Origin` response header. Instead, it must
+               return a single origin matching the value of the `Origin` request header.
                
                Support: Extended
         :param Sequence[_builtins.str] expose_headers: ExposeHeaders indicates which HTTP response headers can be exposed
@@ -14694,18 +15297,25 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
                The CORS-safelisted response headers are exposed to client by default.
                
-               When an HTTP header name is specified using the `ExposeHeaders` field,
+               When an HTTP header name is specified using the `exposeHeaders` field,
                this additional header will be exposed as part of the response to the
                client.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Expose-Headers`
                response header are separated by a comma (",").
                
                A wildcard indicates that the responses with all HTTP headers are exposed
-               to clients. The `Access-Control-Expose-Headers` response header can only
-               use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+               to clients.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+               response header can contain the wildcard `*`.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `true`, the gateway cannot use the `*`
+               in the `Access-Control-Expose-Headers` response header.
                
                Support: Extended
         :param _builtins.int max_age: MaxAge indicates the duration (in seconds) for the client to cache the
@@ -14717,6 +15327,9 @@ class HTTPRouteSpecRulesFiltersCors(dict):
                
                The default value of `Access-Control-Max-Age` response header is 5
                (seconds).
+               
+               When the `MaxAge` field is unspecified, the gateway sets the response
+               header "Access-Control-Max-Age: 5" by default.
         """
         if allow_credentials is not None:
             pulumi.set(__self__, "allow_credentials", allow_credentials)
@@ -14756,14 +15369,14 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         AllowHeaders indicates which HTTP request headers are supported for
         accessing the requested resource.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Allow-Headers`
         response header are separated by a comma (",").
 
-        When the `AllowHeaders` field is configured with one or more headers, the
+        When the `allowHeaders` field is configured with one or more headers, the
         gateway must return the `Access-Control-Allow-Headers` response header
-        which value is present in the `AllowHeaders` field.
+        which value is present in the `allowHeaders` field.
 
         If any header name in the `Access-Control-Request-Headers` request header
         is not included in the list of header names specified by the response
@@ -14775,18 +15388,20 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         client side.
 
         A wildcard indicates that the requests with all HTTP headers are allowed.
-        The `Access-Control-Allow-Headers` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
 
-        When the `AllowCredentials` field is true and `AllowHeaders` field
-        specified with the `*` wildcard, the gateway must specify one or more
-        HTTP headers in the value of the `Access-Control-Allow-Headers` response
-        header. The value of the header `Access-Control-Allow-Headers` is same as
-        the `Access-Control-Request-Headers` header provided by the client. If
-        the header `Access-Control-Request-Headers` is not included in the
-        request, the gateway will omit the `Access-Control-Allow-Headers`
-        response header, instead of specifying the `*` wildcard. A Gateway
-        implementation may choose to add implementation-specific default headers.
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Headers` request header.
+
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Headers` response header. Instead, it must
+        return one or more header names matching the value of the
+        `Access-Control-Request-Headers` request header.
+        If the `Access-Control-Request-Headers` header is not present in the
+        request, the gateway must omit the `Access-Control-Allow-Headers`
+        response header.
 
         Support: Extended
         """
@@ -14802,7 +15417,7 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         Valid values are any method defined by RFC9110, along with the special
         value `*`, which represents all HTTP methods are allowed.
 
-        Method names are case sensitive, so these values are also case-sensitive.
+        Method names are case-sensitive, so these values are also case-sensitive.
         (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
 
         Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -14811,29 +15426,29 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
         (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
         CORS-safelisted methods are always allowed, regardless of whether they
-        are specified in the `AllowMethods` field.
+        are specified in the `allowMethods` field.
 
-        When the `AllowMethods` field is configured with one or more methods, the
+        When the `allowMethods` field is configured with one or more methods, the
         gateway must return the `Access-Control-Allow-Methods` response header
-        which value is present in the `AllowMethods` field.
+        which value is present in the `allowMethods` field.
 
         If the HTTP method of the `Access-Control-Request-Method` request header
         is not included in the list of methods specified by the response header
         `Access-Control-Allow-Methods`, it will present an error on the client
         side.
 
-        The `Access-Control-Allow-Methods` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Method` request header.
 
-        When the `AllowCredentials` field is true and `AllowMethods` field
-        specified with the `*` wildcard, the gateway must specify one HTTP method
-        in the value of the Access-Control-Allow-Methods response header. The
-        value of the header `Access-Control-Allow-Methods` is same as the
-        `Access-Control-Request-Method` header provided by the client. If the
-        header `Access-Control-Request-Method` is not included in the request,
-        the gateway will omit the `Access-Control-Allow-Methods` response header,
-        instead of specifying the `*` wildcard. A Gateway implementation may
-        choose to add implementation-specific default methods.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Methods` response header. Instead, it must
+        return a single HTTP method matching the value of the
+        `Access-Control-Request-Method` request header.
+        If the `Access-Control-Request-Method` header is not present in the request,
+        the gateway must omit the `Access-Control-Allow-Methods` response header.
 
         Support: Extended
         """
@@ -14868,7 +15483,7 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         An origin value that includes _only_ the `*` character indicates requests
         from all `Origin`s are allowed.
 
-        When the `AllowOrigins` field is configured with multiple origins, it
+        When the `allowOrigins` field is configured with multiple origins, it
         means the server supports clients from multiple origins. If the request
         `Origin` matches the configured allowed origins, the gateway must return
         the given `Origin` and sets value of the header
@@ -14885,15 +15500,20 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         the CORS headers. The cross-origin request fails on the client side.
         Therefore, the client doesn't attempt the actual cross-origin request.
 
-        The `Access-Control-Allow-Origin` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        Conversely, if the request `Origin` matches one of the configured
+        allowed origins, the gateway sets the response header
+        `Access-Control-Allow-Origin` to the same value as the `Origin`
+        header provided by the client.
 
-        When the `AllowCredentials` field is true and `AllowOrigins` field
-        specified with the `*` wildcard, the gateway must return a single origin
-        in the value of the `Access-Control-Allow-Origin` response header,
-        instead of specifying the `*` wildcard. The value of the header
-        `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-        the client.
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Origin` request header.
+
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Origin` response header. Instead, it must
+        return a single origin matching the value of the `Origin` request header.
 
         Support: Extended
         """
@@ -14919,18 +15539,25 @@ class HTTPRouteSpecRulesFiltersCors(dict):
         (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
         The CORS-safelisted response headers are exposed to client by default.
 
-        When an HTTP header name is specified using the `ExposeHeaders` field,
+        When an HTTP header name is specified using the `exposeHeaders` field,
         this additional header will be exposed as part of the response to the
         client.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Expose-Headers`
         response header are separated by a comma (",").
 
         A wildcard indicates that the responses with all HTTP headers are exposed
-        to clients. The `Access-Control-Expose-Headers` response header can only
-        use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+        to clients.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+        response header can contain the wildcard `*`.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `true`, the gateway cannot use the `*`
+        in the `Access-Control-Expose-Headers` response header.
 
         Support: Extended
         """
@@ -14949,6 +15576,9 @@ class HTTPRouteSpecRulesFiltersCors(dict):
 
         The default value of `Access-Control-Max-Age` response header is 5
         (seconds).
+
+        When the `MaxAge` field is unspecified, the gateway sets the response
+        header "Access-Control-Max-Age: 5" by default.
         """
         return pulumi.get(self, "max_age")
 
@@ -15000,6 +15630,7 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         cross-origin request based on HTTP response header.
 
         Support: Extended
+
         :param _builtins.bool allow_credentials: AllowCredentials indicates whether the actual cross-origin request allows
                to include credentials.
                
@@ -15014,14 +15645,14 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         :param Sequence[_builtins.str] allow_headers: AllowHeaders indicates which HTTP request headers are supported for
                accessing the requested resource.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Allow-Headers`
                response header are separated by a comma (",").
                
-               When the `AllowHeaders` field is configured with one or more headers, the
+               When the `allowHeaders` field is configured with one or more headers, the
                gateway must return the `Access-Control-Allow-Headers` response header
-               which value is present in the `AllowHeaders` field.
+               which value is present in the `allowHeaders` field.
                
                If any header name in the `Access-Control-Request-Headers` request header
                is not included in the list of header names specified by the response
@@ -15033,18 +15664,20 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                client side.
                
                A wildcard indicates that the requests with all HTTP headers are allowed.
-               The `Access-Control-Allow-Headers` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
                
-               When the `AllowCredentials` field is true and `AllowHeaders` field
-               specified with the `*` wildcard, the gateway must specify one or more
-               HTTP headers in the value of the `Access-Control-Allow-Headers` response
-               header. The value of the header `Access-Control-Allow-Headers` is same as
-               the `Access-Control-Request-Headers` header provided by the client. If
-               the header `Access-Control-Request-Headers` is not included in the
-               request, the gateway will omit the `Access-Control-Allow-Headers`
-               response header, instead of specifying the `*` wildcard. A Gateway
-               implementation may choose to add implementation-specific default headers.
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Headers` request header.
+               
+               If the configuration contains the wildcard `*` in `allowHeaders` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Headers` response header. Instead, it must
+               return one or more header names matching the value of the
+               `Access-Control-Request-Headers` request header.
+               If the `Access-Control-Request-Headers` header is not present in the
+               request, the gateway must omit the `Access-Control-Allow-Headers`
+               response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_methods: AllowMethods indicates which HTTP methods are supported for accessing the
@@ -15053,7 +15686,7 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                Valid values are any method defined by RFC9110, along with the special
                value `*`, which represents all HTTP methods are allowed.
                
-               Method names are case sensitive, so these values are also case-sensitive.
+               Method names are case-sensitive, so these values are also case-sensitive.
                (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
                
                Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -15062,29 +15695,29 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
                (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
                CORS-safelisted methods are always allowed, regardless of whether they
-               are specified in the `AllowMethods` field.
+               are specified in the `allowMethods` field.
                
-               When the `AllowMethods` field is configured with one or more methods, the
+               When the `allowMethods` field is configured with one or more methods, the
                gateway must return the `Access-Control-Allow-Methods` response header
-               which value is present in the `AllowMethods` field.
+               which value is present in the `allowMethods` field.
                
                If the HTTP method of the `Access-Control-Request-Method` request header
                is not included in the list of methods specified by the response header
                `Access-Control-Allow-Methods`, it will present an error on the client
                side.
                
-               The `Access-Control-Allow-Methods` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Access-Control-Request-Method` request header.
                
-               When the `AllowCredentials` field is true and `AllowMethods` field
-               specified with the `*` wildcard, the gateway must specify one HTTP method
-               in the value of the Access-Control-Allow-Methods response header. The
-               value of the header `Access-Control-Allow-Methods` is same as the
-               `Access-Control-Request-Method` header provided by the client. If the
-               header `Access-Control-Request-Method` is not included in the request,
-               the gateway will omit the `Access-Control-Allow-Methods` response header,
-               instead of specifying the `*` wildcard. A Gateway implementation may
-               choose to add implementation-specific default methods.
+               If the configuration contains the wildcard `*` in `allowMethods` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Methods` response header. Instead, it must
+               return a single HTTP method matching the value of the
+               `Access-Control-Request-Method` request header.
+               If the `Access-Control-Request-Method` header is not present in the request,
+               the gateway must omit the `Access-Control-Allow-Methods` response header.
                
                Support: Extended
         :param Sequence[_builtins.str] allow_origins: AllowOrigins indicates whether the response can be shared with requested
@@ -15112,7 +15745,7 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                An origin value that includes _only_ the `*` character indicates requests
                from all `Origin`s are allowed.
                
-               When the `AllowOrigins` field is configured with multiple origins, it
+               When the `allowOrigins` field is configured with multiple origins, it
                means the server supports clients from multiple origins. If the request
                `Origin` matches the configured allowed origins, the gateway must return
                the given `Origin` and sets value of the header
@@ -15129,15 +15762,20 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                the CORS headers. The cross-origin request fails on the client side.
                Therefore, the client doesn't attempt the actual cross-origin request.
                
-               The `Access-Control-Allow-Origin` response header can only use `*`
-               wildcard as value when the `AllowCredentials` field is false or omitted.
+               Conversely, if the request `Origin` matches one of the configured
+               allowed origins, the gateway sets the response header
+               `Access-Control-Allow-Origin` to the same value as the `Origin`
+               header provided by the client.
                
-               When the `AllowCredentials` field is true and `AllowOrigins` field
-               specified with the `*` wildcard, the gateway must return a single origin
-               in the value of the `Access-Control-Allow-Origin` response header,
-               instead of specifying the `*` wildcard. The value of the header
-               `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-               the client.
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+               response header may either contain the wildcard `*` or echo the value
+               of the `Origin` request header.
+               
+               If the configuration contains the wildcard `*` in `allowOrigins` and
+               `allowCredentials` is set to `true`, the gateway must not return `*`
+               in the `Access-Control-Allow-Origin` response header. Instead, it must
+               return a single origin matching the value of the `Origin` request header.
                
                Support: Extended
         :param Sequence[_builtins.str] expose_headers: ExposeHeaders indicates which HTTP response headers can be exposed
@@ -15156,18 +15794,25 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
                The CORS-safelisted response headers are exposed to client by default.
                
-               When an HTTP header name is specified using the `ExposeHeaders` field,
+               When an HTTP header name is specified using the `exposeHeaders` field,
                this additional header will be exposed as part of the response to the
                client.
                
-               Header names are not case sensitive.
+               Header names are not case-sensitive.
                
                Multiple header names in the value of the `Access-Control-Expose-Headers`
                response header are separated by a comma (",").
                
                A wildcard indicates that the responses with all HTTP headers are exposed
-               to clients. The `Access-Control-Expose-Headers` response header can only
-               use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+               to clients.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+               response header can contain the wildcard `*`.
+               
+               If the configuration contains the wildcard `*` in `exposeHeaders` and
+               `allowCredentials` is set to `true`, the gateway cannot use the `*`
+               in the `Access-Control-Expose-Headers` response header.
                
                Support: Extended
         :param _builtins.int max_age: MaxAge indicates the duration (in seconds) for the client to cache the
@@ -15179,6 +15824,9 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
                
                The default value of `Access-Control-Max-Age` response header is 5
                (seconds).
+               
+               When the `MaxAge` field is unspecified, the gateway sets the response
+               header "Access-Control-Max-Age: 5" by default.
         """
         if allow_credentials is not None:
             pulumi.set(__self__, "allow_credentials", allow_credentials)
@@ -15218,14 +15866,14 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         AllowHeaders indicates which HTTP request headers are supported for
         accessing the requested resource.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Allow-Headers`
         response header are separated by a comma (",").
 
-        When the `AllowHeaders` field is configured with one or more headers, the
+        When the `allowHeaders` field is configured with one or more headers, the
         gateway must return the `Access-Control-Allow-Headers` response header
-        which value is present in the `AllowHeaders` field.
+        which value is present in the `allowHeaders` field.
 
         If any header name in the `Access-Control-Request-Headers` request header
         is not included in the list of header names specified by the response
@@ -15237,18 +15885,20 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         client side.
 
         A wildcard indicates that the requests with all HTTP headers are allowed.
-        The `Access-Control-Allow-Headers` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
 
-        When the `AllowCredentials` field is true and `AllowHeaders` field
-        specified with the `*` wildcard, the gateway must specify one or more
-        HTTP headers in the value of the `Access-Control-Allow-Headers` response
-        header. The value of the header `Access-Control-Allow-Headers` is same as
-        the `Access-Control-Request-Headers` header provided by the client. If
-        the header `Access-Control-Request-Headers` is not included in the
-        request, the gateway will omit the `Access-Control-Allow-Headers`
-        response header, instead of specifying the `*` wildcard. A Gateway
-        implementation may choose to add implementation-specific default headers.
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Headers`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Headers` request header.
+
+        If the configuration contains the wildcard `*` in `allowHeaders` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Headers` response header. Instead, it must
+        return one or more header names matching the value of the
+        `Access-Control-Request-Headers` request header.
+        If the `Access-Control-Request-Headers` header is not present in the
+        request, the gateway must omit the `Access-Control-Allow-Headers`
+        response header.
 
         Support: Extended
         """
@@ -15264,7 +15914,7 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         Valid values are any method defined by RFC9110, along with the special
         value `*`, which represents all HTTP methods are allowed.
 
-        Method names are case sensitive, so these values are also case-sensitive.
+        Method names are case-sensitive, so these values are also case-sensitive.
         (See https://www.rfc-editor.org/rfc/rfc2616#section-5.1.1)
 
         Multiple method names in the value of the `Access-Control-Allow-Methods`
@@ -15273,29 +15923,29 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         A CORS-safelisted method is a method that is `GET`, `HEAD`, or `POST`.
         (See https://fetch.spec.whatwg.org/#cors-safelisted-method) The
         CORS-safelisted methods are always allowed, regardless of whether they
-        are specified in the `AllowMethods` field.
+        are specified in the `allowMethods` field.
 
-        When the `AllowMethods` field is configured with one or more methods, the
+        When the `allowMethods` field is configured with one or more methods, the
         gateway must return the `Access-Control-Allow-Methods` response header
-        which value is present in the `AllowMethods` field.
+        which value is present in the `allowMethods` field.
 
         If the HTTP method of the `Access-Control-Request-Method` request header
         is not included in the list of methods specified by the response header
         `Access-Control-Allow-Methods`, it will present an error on the client
         side.
 
-        The `Access-Control-Allow-Methods` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Methods`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Access-Control-Request-Method` request header.
 
-        When the `AllowCredentials` field is true and `AllowMethods` field
-        specified with the `*` wildcard, the gateway must specify one HTTP method
-        in the value of the Access-Control-Allow-Methods response header. The
-        value of the header `Access-Control-Allow-Methods` is same as the
-        `Access-Control-Request-Method` header provided by the client. If the
-        header `Access-Control-Request-Method` is not included in the request,
-        the gateway will omit the `Access-Control-Allow-Methods` response header,
-        instead of specifying the `*` wildcard. A Gateway implementation may
-        choose to add implementation-specific default methods.
+        If the configuration contains the wildcard `*` in `allowMethods` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Methods` response header. Instead, it must
+        return a single HTTP method matching the value of the
+        `Access-Control-Request-Method` request header.
+        If the `Access-Control-Request-Method` header is not present in the request,
+        the gateway must omit the `Access-Control-Allow-Methods` response header.
 
         Support: Extended
         """
@@ -15330,7 +15980,7 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         An origin value that includes _only_ the `*` character indicates requests
         from all `Origin`s are allowed.
 
-        When the `AllowOrigins` field is configured with multiple origins, it
+        When the `allowOrigins` field is configured with multiple origins, it
         means the server supports clients from multiple origins. If the request
         `Origin` matches the configured allowed origins, the gateway must return
         the given `Origin` and sets value of the header
@@ -15347,15 +15997,20 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         the CORS headers. The cross-origin request fails on the client side.
         Therefore, the client doesn't attempt the actual cross-origin request.
 
-        The `Access-Control-Allow-Origin` response header can only use `*`
-        wildcard as value when the `AllowCredentials` field is false or omitted.
+        Conversely, if the request `Origin` matches one of the configured
+        allowed origins, the gateway sets the response header
+        `Access-Control-Allow-Origin` to the same value as the `Origin`
+        header provided by the client.
 
-        When the `AllowCredentials` field is true and `AllowOrigins` field
-        specified with the `*` wildcard, the gateway must return a single origin
-        in the value of the `Access-Control-Allow-Origin` response header,
-        instead of specifying the `*` wildcard. The value of the header
-        `Access-Control-Allow-Origin` is same as the `Origin` header provided by
-        the client.
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `false`, the `Access-Control-Allow-Origin`
+        response header may either contain the wildcard `*` or echo the value
+        of the `Origin` request header.
+
+        If the configuration contains the wildcard `*` in `allowOrigins` and
+        `allowCredentials` is set to `true`, the gateway must not return `*`
+        in the `Access-Control-Allow-Origin` response header. Instead, it must
+        return a single origin matching the value of the `Origin` request header.
 
         Support: Extended
         """
@@ -15381,18 +16036,25 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
         (See https://fetch.spec.whatwg.org/#cors-safelisted-response-header-name)
         The CORS-safelisted response headers are exposed to client by default.
 
-        When an HTTP header name is specified using the `ExposeHeaders` field,
+        When an HTTP header name is specified using the `exposeHeaders` field,
         this additional header will be exposed as part of the response to the
         client.
 
-        Header names are not case sensitive.
+        Header names are not case-sensitive.
 
         Multiple header names in the value of the `Access-Control-Expose-Headers`
         response header are separated by a comma (",").
 
         A wildcard indicates that the responses with all HTTP headers are exposed
-        to clients. The `Access-Control-Expose-Headers` response header can only
-        use `*` wildcard as value when the `AllowCredentials` field is false or omitted.
+        to clients.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `false`, the `Access-Control-Expose-Headers`
+        response header can contain the wildcard `*`.
+
+        If the configuration contains the wildcard `*` in `exposeHeaders` and
+        `allowCredentials` is set to `true`, the gateway cannot use the `*`
+        in the `Access-Control-Expose-Headers` response header.
 
         Support: Extended
         """
@@ -15411,6 +16073,9 @@ class HTTPRouteSpecRulesFiltersCorsPatch(dict):
 
         The default value of `Access-Control-Max-Age` response header is 5
         (seconds).
+
+        When the `MaxAge` field is unspecified, the gateway sets the response
+        header "Access-Control-Max-Age: 5" by default.
         """
         return pulumi.get(self, "max_age")
 
@@ -15440,6 +16105,7 @@ class HTTPRouteSpecRulesFiltersExtensionRef(dict):
         This filter can be used multiple times within the same rule.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -15503,6 +16169,7 @@ class HTTPRouteSpecRulesFiltersExtensionRefPatch(dict):
         This filter can be used multiple times within the same rule.
 
         Support: Implementation-specific
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -15587,6 +16254,7 @@ class HTTPRouteSpecRulesFiltersExternalAuth(dict):
         this filter MUST fail closed.
 
         Support: Extended
+
         :param _builtins.str protocol: ExternalAuthProtocol describes which protocol to use when communicating with an
                ext_authz authorization server.
                
@@ -15686,6 +16354,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthBackendRef(dict):
         If the backend service requires TLS, use BackendTLSPolicy to tell the
         implementation to supply the TLS details to be used to connect to that
         backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -15825,6 +16494,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthBackendRefPatch(dict):
         If the backend service requires TLS, use BackendTLSPolicy to tell the
         implementation to supply the TLS details to be used to connect to that
         backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -15985,6 +16655,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthForwardBody(dict):
         be forwarded.
 
         Feature Name: HTTPRouteExternalAuthForwardBody
+
         :param _builtins.int max_size: MaxSize specifies how large in bytes the largest body that will be buffered
                and sent to the authorization server. If the body size is larger than
                `maxSize`, then the body sent to the authorization server must be
@@ -16069,6 +16740,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthForwardBodyPatch(dict):
         be forwarded.
 
         Feature Name: HTTPRouteExternalAuthForwardBody
+
         :param _builtins.int max_size: MaxSize specifies how large in bytes the largest body that will be buffered
                and sent to the authorization server. If the body size is larger than
                `maxSize`, then the body sent to the authorization server must be
@@ -16137,6 +16809,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthGrpc(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what headers from the client request
                will be sent to the authorization server.
                
@@ -16195,6 +16868,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthGrpcPatch(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what headers from the client request
                will be sent to the authorization server.
                
@@ -16257,6 +16931,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthHttp(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what additional headers from the client request
                will be sent to the authorization server.
                
@@ -16399,6 +17074,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthHttpPatch(dict):
 
         If unset, implementations must assume the default behavior for each
         included field is intended.
+
         :param Sequence[_builtins.str] allowed_headers: AllowedRequestHeaders specifies what additional headers from the client request
                will be sent to the authorization server.
                
@@ -16549,6 +17225,7 @@ class HTTPRouteSpecRulesFiltersExternalAuthPatch(dict):
         this filter MUST fail closed.
 
         Support: Extended
+
         :param _builtins.str protocol: ExternalAuthProtocol describes which protocol to use when communicating with an
                ext_authz authorization server.
                
@@ -16675,6 +17352,7 @@ class HTTPRouteSpecRulesFiltersPatch(dict):
         examples include request or response modification, implementing
         authentication strategies, rate-limiting, and traffic shaping. API
         guarantee/conformance is defined based on the type of the filter.
+
         :param _builtins.str type: Type identifies the type of filter to apply. As with other API fields,
                types are classified into three conformance levels:
                
@@ -16824,6 +17502,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifier(dict):
         headers.
 
         Support: Core
+
         :param Sequence['HTTPRouteSpecRulesFiltersRequestHeaderModifierAddArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -16960,6 +17639,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAdd(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -16969,6 +17649,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAdd(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -16995,6 +17678,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAdd(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -17009,6 +17695,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAddPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -17018,6 +17705,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAddPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -17044,6 +17734,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierAddPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -17065,6 +17758,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierPatch(dict):
         headers.
 
         Support: Core
+
         :param Sequence['HTTPRouteSpecRulesFiltersRequestHeaderModifierAddPatchArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -17201,6 +17895,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSet(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -17210,6 +17905,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSet(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -17236,6 +17934,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSet(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -17250,6 +17951,7 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSetPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -17259,6 +17961,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSetPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -17285,6 +17990,9 @@ class HTTPRouteSpecRulesFiltersRequestHeaderModifierSetPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -17333,6 +18041,7 @@ class HTTPRouteSpecRulesFiltersRequestMirror(dict):
         backends.
 
         Support: Extended
+
         :param _builtins.int percent: Percent represents the percentage of requests that should be
                mirrored to BackendRef. Its minimum value is 0 (indicating 0% of
                requests) and its maximum value is 100 (indicating 100% of requests).
@@ -17397,6 +18106,10 @@ class HTTPRouteSpecRulesFiltersRequestMirrorBackendRef(dict):
     Support: Extended for Kubernetes Service
 
     Support: Implementation-specific for any other resource
+
+    If the backend service requires TLS, use BackendTLSPolicy to tell the
+    implementation to supply the TLS details to be used to connect to that
+    backend.
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -17428,6 +18141,11 @@ class HTTPRouteSpecRulesFiltersRequestMirrorBackendRef(dict):
         Support: Extended for Kubernetes Service
 
         Support: Implementation-specific for any other resource
+
+        If the backend service requires TLS, use BackendTLSPolicy to tell the
+        implementation to supply the TLS details to be used to connect to that
+        backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -17564,6 +18282,10 @@ class HTTPRouteSpecRulesFiltersRequestMirrorBackendRefPatch(dict):
     Support: Extended for Kubernetes Service
 
     Support: Implementation-specific for any other resource
+
+    If the backend service requires TLS, use BackendTLSPolicy to tell the
+    implementation to supply the TLS details to be used to connect to that
+    backend.
     """
     def __init__(__self__, *,
                  group: Optional[_builtins.str] = None,
@@ -17595,6 +18317,11 @@ class HTTPRouteSpecRulesFiltersRequestMirrorBackendRefPatch(dict):
         Support: Extended for Kubernetes Service
 
         Support: Implementation-specific for any other resource
+
+        If the backend service requires TLS, use BackendTLSPolicy to tell the
+        implementation to supply the TLS details to be used to connect to that
+        backend.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -17819,6 +18546,7 @@ class HTTPRouteSpecRulesFiltersRequestMirrorPatch(dict):
         backends.
 
         Support: Extended
+
         :param _builtins.int percent: Percent represents the percentage of requests that should be
                mirrored to BackendRef. Its minimum value is 0 (indicating 0% of
                requests) and its maximum value is 100 (indicating 100% of requests).
@@ -17893,6 +18621,7 @@ class HTTPRouteSpecRulesFiltersRequestRedirect(dict):
         request with an HTTP redirection.
 
         Support: Core
+
         :param _builtins.str hostname: Hostname is the hostname to be used in the value of the `Location`
                header in the response.
                When empty, the hostname in the `Host` header of the request is used.
@@ -18077,6 +18806,7 @@ class HTTPRouteSpecRulesFiltersRequestRedirectPatch(dict):
         request with an HTTP redirection.
 
         Support: Core
+
         :param _builtins.str hostname: Hostname is the hostname to be used in the value of the `Location`
                header in the response.
                When empty, the hostname in the `Host` header of the request is used.
@@ -18263,6 +18993,7 @@ class HTTPRouteSpecRulesFiltersRequestRedirectPath(dict):
         empty, the request path is used as-is.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -18385,6 +19116,7 @@ class HTTPRouteSpecRulesFiltersRequestRedirectPathPatch(dict):
         empty, the request path is used as-is.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -18486,6 +19218,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifier(dict):
         headers.
 
         Support: Extended
+
         :param Sequence['HTTPRouteSpecRulesFiltersResponseHeaderModifierAddArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -18622,6 +19355,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAdd(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -18631,6 +19365,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAdd(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -18657,6 +19394,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAdd(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -18671,6 +19411,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAddPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -18680,6 +19421,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAddPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -18706,6 +19450,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierAddPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -18727,6 +19474,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierPatch(dict):
         headers.
 
         Support: Extended
+
         :param Sequence['HTTPRouteSpecRulesFiltersResponseHeaderModifierAddPatchArgs'] add: Add adds the given header(s) (name, value) to the request
                before the action. It appends to any existing values associated
                with the header name.
@@ -18863,6 +19611,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSet(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -18872,6 +19621,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSet(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -18898,6 +19650,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSet(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -18912,6 +19667,7 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSetPatch(dict):
                  value: Optional[_builtins.str] = None):
         """
         HTTPHeader represents an HTTP Header name and value as defined by RFC 7230.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -18921,6 +19677,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSetPatch(dict):
                case-insensitivity of header names, "foo" and "Foo" are considered
                equivalent.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -18947,6 +19706,9 @@ class HTTPRouteSpecRulesFiltersResponseHeaderModifierSetPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -18965,6 +19727,7 @@ class HTTPRouteSpecRulesFiltersUrlRewrite(dict):
         URLRewrite defines a schema for a filter that modifies a request during forwarding.
 
         Support: Extended
+
         :param _builtins.str hostname: Hostname is the value to be used to replace the Host header value during
                forwarding.
                
@@ -19006,6 +19769,7 @@ class HTTPRouteSpecRulesFiltersUrlRewritePatch(dict):
         URLRewrite defines a schema for a filter that modifies a request during forwarding.
 
         Support: Extended
+
         :param _builtins.str hostname: Hostname is the value to be used to replace the Host header value during
                forwarding.
                
@@ -19067,6 +19831,7 @@ class HTTPRouteSpecRulesFiltersUrlRewritePath(dict):
         Path defines a path rewrite.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -19185,6 +19950,7 @@ class HTTPRouteSpecRulesFiltersUrlRewritePathPatch(dict):
         Path defines a path rewrite.
 
         Support: Extended
+
         :param _builtins.str replace_full_path: ReplaceFullPath specifies the value with which to replace the full path
                of a request during a rewrite or redirect.
         :param _builtins.str replace_prefix_match: ReplacePrefixMatch specifies the value with which to replace the prefix
@@ -19330,6 +20096,7 @@ class HTTPRouteSpecRulesMatches(dict):
         	  value "v1"
 
         ```
+
         :param Sequence['HTTPRouteSpecRulesMatchesHeadersArgs'] headers: Headers specifies HTTP request header matchers. Multiple match values are
                ANDed together, meaning, a request must match all the specified headers
                to select the route.
@@ -19406,6 +20173,7 @@ class HTTPRouteSpecRulesMatchesHeaders(dict):
         """
         HTTPHeaderMatch describes how to select a HTTP route by matching HTTP request
         headers.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -19431,6 +20199,9 @@ class HTTPRouteSpecRulesMatchesHeaders(dict):
                of regular expressions. Please read the implementation's documentation to
                determine the supported dialect.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -19482,6 +20253,9 @@ class HTTPRouteSpecRulesMatchesHeaders(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -19499,6 +20273,7 @@ class HTTPRouteSpecRulesMatchesHeadersPatch(dict):
         """
         HTTPHeaderMatch describes how to select a HTTP route by matching HTTP request
         headers.
+
         :param _builtins.str name: Name is the name of the HTTP Header to be matched. Name matching MUST be
                case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                
@@ -19524,6 +20299,9 @@ class HTTPRouteSpecRulesMatchesHeadersPatch(dict):
                of regular expressions. Please read the implementation's documentation to
                determine the supported dialect.
         :param _builtins.str value: Value is the value of HTTP Header to be matched.
+               
+               Must consist of printable US-ASCII characters, optionally separated
+               by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         if name is not None:
             pulumi.set(__self__, "name", name)
@@ -19575,6 +20353,9 @@ class HTTPRouteSpecRulesMatchesHeadersPatch(dict):
     def value(self) -> Optional[_builtins.str]:
         """
         Value is the value of HTTP Header to be matched.
+
+        Must consist of printable US-ASCII characters, optionally separated
+        by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
         """
         return pulumi.get(self, "value")
 
@@ -19640,6 +20421,7 @@ class HTTPRouteSpecRulesMatchesPatch(dict):
         	  value "v1"
 
         ```
+
         :param Sequence['HTTPRouteSpecRulesMatchesHeadersPatchArgs'] headers: Headers specifies HTTP request header matchers. Multiple match values are
                ANDed together, meaning, a request must match all the specified headers
                to select the route.
@@ -19715,6 +20497,7 @@ class HTTPRouteSpecRulesMatchesPath(dict):
         """
         Path specifies a HTTP request path matcher. If this field is not
         specified, a default prefix match on the "/" path is provided.
+
         :param _builtins.str type: Type specifies how to match against the path Value.
                
                Support: Core (Exact, PathPrefix)
@@ -19760,6 +20543,7 @@ class HTTPRouteSpecRulesMatchesPathPatch(dict):
         """
         Path specifies a HTTP request path matcher. If this field is not
         specified, a default prefix match on the "/" path is provided.
+
         :param _builtins.str type: Type specifies how to match against the path Value.
                
                Support: Core (Exact, PathPrefix)
@@ -19806,6 +20590,7 @@ class HTTPRouteSpecRulesMatchesQueryParams(dict):
         """
         HTTPQueryParamMatch describes how to select a HTTP route by matching HTTP
         query parameters.
+
         :param _builtins.str name: Name is the name of the HTTP query param to be matched. This must be an
                exact string match. (See
                https://tools.ietf.org/html/rfc7230#section-2.7.3).
@@ -19905,6 +20690,7 @@ class HTTPRouteSpecRulesMatchesQueryParamsPatch(dict):
         """
         HTTPQueryParamMatch describes how to select a HTTP route by matching HTTP
         query parameters.
+
         :param _builtins.str name: Name is the name of the HTTP query param to be matched. This must be an
                exact string match. (See
                https://tools.ietf.org/html/rfc7230#section-2.7.3).
@@ -20029,6 +20815,7 @@ class HTTPRouteSpecRulesPatch(dict):
         HTTPRouteRule defines semantics for matching an HTTP request based on
         conditions (matches), processing it (filters), and forwarding the request to
         an API object (backendRefs).
+
         :param Sequence['HTTPRouteSpecRulesBackendRefsPatchArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent.
                
@@ -20364,6 +21151,7 @@ class HTTPRouteSpecRulesRetry(dict):
         Retry defines the configuration for when to retry an HTTP request.
 
         Support: Extended
+
         :param _builtins.int attempts: Attempts specifies the maximum number of times an individual request
                from the gateway to a backend should be retried.
                
@@ -20380,7 +21168,7 @@ class HTTPRouteSpecRulesRetry(dict):
                For example, setting the `rules[].retry.backoff` field to the value
                `100ms` will cause a backend request to first be retried approximately
                100 milliseconds after timing out or receiving a response code configured
-               to be retryable.
+               to be retriable.
                
                An implementation MAY use an exponential or alternative backoff strategy
                for subsequent retry attempts, MAY cap the maximum backoff duration to
@@ -20449,7 +21237,7 @@ class HTTPRouteSpecRulesRetry(dict):
         For example, setting the `rules[].retry.backoff` field to the value
         `100ms` will cause a backend request to first be retried approximately
         100 milliseconds after timing out or receiving a response code configured
-        to be retryable.
+        to be retriable.
 
         An implementation MAY use an exponential or alternative backoff strategy
         for subsequent retry attempts, MAY cap the maximum backoff duration to
@@ -20509,6 +21297,7 @@ class HTTPRouteSpecRulesRetryPatch(dict):
         Retry defines the configuration for when to retry an HTTP request.
 
         Support: Extended
+
         :param _builtins.int attempts: Attempts specifies the maximum number of times an individual request
                from the gateway to a backend should be retried.
                
@@ -20525,7 +21314,7 @@ class HTTPRouteSpecRulesRetryPatch(dict):
                For example, setting the `rules[].retry.backoff` field to the value
                `100ms` will cause a backend request to first be retried approximately
                100 milliseconds after timing out or receiving a response code configured
-               to be retryable.
+               to be retriable.
                
                An implementation MAY use an exponential or alternative backoff strategy
                for subsequent retry attempts, MAY cap the maximum backoff duration to
@@ -20594,7 +21383,7 @@ class HTTPRouteSpecRulesRetryPatch(dict):
         For example, setting the `rules[].retry.backoff` field to the value
         `100ms` will cause a backend request to first be retried approximately
         100 milliseconds after timing out or receiving a response code configured
-        to be retryable.
+        to be retriable.
 
         An implementation MAY use an exponential or alternative backoff strategy
         for subsequent retry attempts, MAY cap the maximum backoff duration to
@@ -20654,8 +21443,6 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
             suggest = "absolute_timeout"
         elif key == "cookieConfig":
             suggest = "cookie_config"
-        elif key == "idleTimeout":
-            suggest = "idle_timeout"
         elif key == "sessionName":
             suggest = "session_name"
 
@@ -20673,7 +21460,6 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
     def __init__(__self__, *,
                  absolute_timeout: Optional[_builtins.str] = None,
                  cookie_config: Optional['outputs.HTTPRouteSpecRulesSessionPersistenceCookieConfig'] = None,
-                 idle_timeout: Optional[_builtins.str] = None,
                  session_name: Optional[_builtins.str] = None,
                  type: Optional[_builtins.str] = None):
         """
@@ -20681,14 +21467,10 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
         for the route rule.
 
         Support: Extended
+
         :param _builtins.str absolute_timeout: AbsoluteTimeout defines the absolute timeout of the persistent
                session. Once the AbsoluteTimeout duration has elapsed, the
                session becomes invalid.
-               
-               Support: Extended
-        :param _builtins.str idle_timeout: IdleTimeout defines the idle timeout of the persistent session.
-               Once the session has been idle for more than the specified
-               IdleTimeout duration, the session becomes invalid.
                
                Support: Extended
         :param _builtins.str session_name: SessionName defines the name of the persistent session token
@@ -20698,7 +21480,7 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
                
                Support: Implementation-specific
         :param _builtins.str type: Type defines the type of session persistence such as through
-               the use a header or cookie. Defaults to cookie based session
+               the use of a header or cookie. Defaults to cookie based session
                persistence.
                
                Support: Core for "Cookie" type
@@ -20709,8 +21491,6 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
             pulumi.set(__self__, "absolute_timeout", absolute_timeout)
         if cookie_config is not None:
             pulumi.set(__self__, "cookie_config", cookie_config)
-        if idle_timeout is not None:
-            pulumi.set(__self__, "idle_timeout", idle_timeout)
         if session_name is not None:
             pulumi.set(__self__, "session_name", session_name)
         if type is not None:
@@ -20734,18 +21514,6 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
         return pulumi.get(self, "cookie_config")
 
     @_builtins.property
-    @pulumi.getter(name="idleTimeout")
-    def idle_timeout(self) -> Optional[_builtins.str]:
-        """
-        IdleTimeout defines the idle timeout of the persistent session.
-        Once the session has been idle for more than the specified
-        IdleTimeout duration, the session becomes invalid.
-
-        Support: Extended
-        """
-        return pulumi.get(self, "idle_timeout")
-
-    @_builtins.property
     @pulumi.getter(name="sessionName")
     def session_name(self) -> Optional[_builtins.str]:
         """
@@ -20763,7 +21531,7 @@ class HTTPRouteSpecRulesSessionPersistence(dict):
     def type(self) -> Optional[_builtins.str]:
         """
         Type defines the type of session persistence such as through
-        the use a header or cookie. Defaults to cookie based session
+        the use of a header or cookie. Defaults to cookie based session
         persistence.
 
         Support: Core for "Cookie" type
@@ -20805,6 +21573,7 @@ class HTTPRouteSpecRulesSessionPersistenceCookieConfig(dict):
         to cookie-based session persistence.
 
         Support: Core
+
         :param _builtins.str lifetime_type: LifetimeType specifies whether the cookie has a permanent or
                session-based lifetime. A permanent cookie persists until its
                specified expiry time, defined by the Expires or Max-Age cookie
@@ -20887,6 +21656,7 @@ class HTTPRouteSpecRulesSessionPersistenceCookieConfigPatch(dict):
         to cookie-based session persistence.
 
         Support: Core
+
         :param _builtins.str lifetime_type: LifetimeType specifies whether the cookie has a permanent or
                session-based lifetime. A permanent cookie persists until its
                specified expiry time, defined by the Expires or Max-Age cookie
@@ -20952,8 +21722,6 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
             suggest = "absolute_timeout"
         elif key == "cookieConfig":
             suggest = "cookie_config"
-        elif key == "idleTimeout":
-            suggest = "idle_timeout"
         elif key == "sessionName":
             suggest = "session_name"
 
@@ -20971,7 +21739,6 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
     def __init__(__self__, *,
                  absolute_timeout: Optional[_builtins.str] = None,
                  cookie_config: Optional['outputs.HTTPRouteSpecRulesSessionPersistenceCookieConfigPatch'] = None,
-                 idle_timeout: Optional[_builtins.str] = None,
                  session_name: Optional[_builtins.str] = None,
                  type: Optional[_builtins.str] = None):
         """
@@ -20979,14 +21746,10 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
         for the route rule.
 
         Support: Extended
+
         :param _builtins.str absolute_timeout: AbsoluteTimeout defines the absolute timeout of the persistent
                session. Once the AbsoluteTimeout duration has elapsed, the
                session becomes invalid.
-               
-               Support: Extended
-        :param _builtins.str idle_timeout: IdleTimeout defines the idle timeout of the persistent session.
-               Once the session has been idle for more than the specified
-               IdleTimeout duration, the session becomes invalid.
                
                Support: Extended
         :param _builtins.str session_name: SessionName defines the name of the persistent session token
@@ -20996,7 +21759,7 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
                
                Support: Implementation-specific
         :param _builtins.str type: Type defines the type of session persistence such as through
-               the use a header or cookie. Defaults to cookie based session
+               the use of a header or cookie. Defaults to cookie based session
                persistence.
                
                Support: Core for "Cookie" type
@@ -21007,8 +21770,6 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
             pulumi.set(__self__, "absolute_timeout", absolute_timeout)
         if cookie_config is not None:
             pulumi.set(__self__, "cookie_config", cookie_config)
-        if idle_timeout is not None:
-            pulumi.set(__self__, "idle_timeout", idle_timeout)
         if session_name is not None:
             pulumi.set(__self__, "session_name", session_name)
         if type is not None:
@@ -21032,18 +21793,6 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
         return pulumi.get(self, "cookie_config")
 
     @_builtins.property
-    @pulumi.getter(name="idleTimeout")
-    def idle_timeout(self) -> Optional[_builtins.str]:
-        """
-        IdleTimeout defines the idle timeout of the persistent session.
-        Once the session has been idle for more than the specified
-        IdleTimeout duration, the session becomes invalid.
-
-        Support: Extended
-        """
-        return pulumi.get(self, "idle_timeout")
-
-    @_builtins.property
     @pulumi.getter(name="sessionName")
     def session_name(self) -> Optional[_builtins.str]:
         """
@@ -21061,7 +21810,7 @@ class HTTPRouteSpecRulesSessionPersistencePatch(dict):
     def type(self) -> Optional[_builtins.str]:
         """
         Type defines the type of session persistence such as through
-        the use a header or cookie. Defaults to cookie based session
+        the use of a header or cookie. Defaults to cookie based session
         persistence.
 
         Support: Core for "Cookie" type
@@ -21102,6 +21851,7 @@ class HTTPRouteSpecRulesTimeouts(dict):
         Timeouts defines the timeouts that can be configured for an HTTP request.
 
         Support: Extended
+
         :param _builtins.str backend_request: BackendRequest specifies a timeout for an individual request from the gateway
                to a backend. This covers the time from when the request first starts being
                sent from the gateway to when the full response has been received from the backend.
@@ -21236,6 +21986,7 @@ class HTTPRouteSpecRulesTimeoutsPatch(dict):
         Timeouts defines the timeouts that can be configured for an HTTP request.
 
         Support: Extended
+
         :param _builtins.str backend_request: BackendRequest specifies a timeout for an individual request from the gateway
                to a backend. This covers the time from when the request first starts being
                sent from the gateway to when the full response has been received from the backend.
@@ -21348,6 +22099,7 @@ class HTTPRouteStatus(dict):
                  parents: Optional[Sequence['outputs.HTTPRouteStatusParents']] = None):
         """
         Status defines the current state of HTTPRoute.
+
         :param Sequence['HTTPRouteStatusParentsArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -21420,6 +22172,7 @@ class HTTPRouteStatusParents(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['HTTPRouteStatusParentsConditionsArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -21438,7 +22191,7 @@ class HTTPRouteStatusParents(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -21482,7 +22235,7 @@ class HTTPRouteStatusParents(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -21545,6 +22298,7 @@ class HTTPRouteStatusParentsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -21663,6 +22417,7 @@ class HTTPRouteStatusParentsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -21781,6 +22536,7 @@ class HTTPRouteStatusParentsParentRef(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -22057,6 +22813,7 @@ class HTTPRouteStatusParentsParentRefPatch(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -22332,6 +23089,7 @@ class HTTPRouteStatusParentsPatch(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['HTTPRouteStatusParentsConditionsPatchArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -22350,7 +23108,7 @@ class HTTPRouteStatusParentsPatch(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -22394,7 +23152,7 @@ class HTTPRouteStatusParentsPatch(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -22433,6 +23191,7 @@ class HTTPRouteStatusPatch(dict):
                  parents: Optional[Sequence['outputs.HTTPRouteStatusParentsPatch']] = None):
         """
         Status defines the current state of HTTPRoute.
+
         :param Sequence['HTTPRouteStatusParentsPatchArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -22532,6 +23291,7 @@ class ReferenceGrant(dict):
         support ReferenceGrant MUST NOT permit cross-namespace references which have
         no grant, and MUST respond to the removal of a grant by revoking the access
         that the grant allowed.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -22602,6 +23362,7 @@ class ReferenceGrantSpec(dict):
                  to: Optional[Sequence['outputs.ReferenceGrantSpecTo']] = None):
         """
         Spec defines the desired state of ReferenceGrant.
+
         :param Sequence['ReferenceGrantSpecFromArgs'] from_: From describes the trusted namespaces and kinds that can reference the
                resources described in "To". Each entry in this list MUST be considered
                to be an additional place that references can be valid from, or to put
@@ -22658,6 +23419,7 @@ class ReferenceGrantSpecFrom(dict):
                  namespace: Optional[_builtins.str] = None):
         """
         ReferenceGrantFrom describes trusted namespaces and kinds.
+
         :param _builtins.str group: Group is the group of the referent.
                When empty, the Kubernetes core API group is inferred.
                
@@ -22743,6 +23505,7 @@ class ReferenceGrantSpecFromPatch(dict):
                  namespace: Optional[_builtins.str] = None):
         """
         ReferenceGrantFrom describes trusted namespaces and kinds.
+
         :param _builtins.str group: Group is the group of the referent.
                When empty, the Kubernetes core API group is inferred.
                
@@ -22844,6 +23607,7 @@ class ReferenceGrantSpecPatch(dict):
                  to: Optional[Sequence['outputs.ReferenceGrantSpecToPatch']] = None):
         """
         Spec defines the desired state of ReferenceGrant.
+
         :param Sequence['ReferenceGrantSpecFromPatchArgs'] from_: From describes the trusted namespaces and kinds that can reference the
                resources described in "To". Each entry in this list MUST be considered
                to be an additional place that references can be valid from, or to put
@@ -22902,6 +23666,7 @@ class ReferenceGrantSpecTo(dict):
         """
         ReferenceGrantTo describes what Kinds are allowed as targets of the
         references.
+
         :param _builtins.str group: Group is the group of the referent.
                When empty, the Kubernetes core API group is inferred.
                
@@ -22971,6 +23736,7 @@ class ReferenceGrantSpecToPatch(dict):
         """
         ReferenceGrantTo describes what Kinds are allowed as targets of the
         references.
+
         :param _builtins.str group: Group is the group of the referent.
                When empty, the Kubernetes core API group is inferred.
                

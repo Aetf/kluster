@@ -62,6 +62,7 @@ class SealedSecret(dict):
         SealedSecret is the K8s representation of a "sealed Secret" - a
         regular k8s Secret that has been sealed (encrypted) using the
         controller's key.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -140,6 +141,7 @@ class SealedSecretSpec(dict):
                  template: Optional['outputs.SealedSecretSpecTemplate'] = None):
         """
         SealedSecretSpec is the specification of a SealedSecret.
+
         :param _builtins.str data: Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         if data is not None:
@@ -196,6 +198,7 @@ class SealedSecretSpecPatch(dict):
                  template: Optional['outputs.SealedSecretSpecTemplatePatch'] = None):
         """
         SealedSecretSpec is the specification of a SealedSecret.
+
         :param _builtins.str data: Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         if data is not None:
@@ -238,6 +241,7 @@ class SealedSecretSpecTemplate(dict):
         """
         Template defines the structure of the Secret that will be
         created from this sealed secret.
+
         :param Mapping[str, _builtins.str] data: Keys that should be templated using decrypted data.
         :param _builtins.bool immutable: Immutable, if set to true, ensures that data stored in the Secret cannot
                be updated (only object metadata can be modified).
@@ -307,6 +311,7 @@ class SealedSecretSpecTemplatePatch(dict):
         """
         Template defines the structure of the Secret that will be
         created from this sealed secret.
+
         :param Mapping[str, _builtins.str] data: Keys that should be templated using decrypted data.
         :param _builtins.bool immutable: Immutable, if set to true, ensures that data stored in the Secret cannot
                be updated (only object metadata can be modified).
@@ -389,6 +394,7 @@ class SealedSecretStatus(dict):
                  observed_generation: Optional[_builtins.int] = None):
         """
         SealedSecretStatus is the most recently observed status of the SealedSecret.
+
         :param Sequence['SealedSecretStatusConditionsArgs'] conditions: Represents the latest available observations of a sealed secret's current state.
         :param _builtins.int observed_generation: ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
         """
@@ -447,6 +453,7 @@ class SealedSecretStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         SealedSecretCondition describes the state of a sealed secret at a certain point.
+
         :param _builtins.str last_transition_time: Last time the condition transitioned from one status to another.
         :param _builtins.str last_update_time: The last time this condition was updated.
         :param _builtins.str message: A human readable message indicating details about the transition.
@@ -553,6 +560,7 @@ class SealedSecretStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         SealedSecretCondition describes the state of a sealed secret at a certain point.
+
         :param _builtins.str last_transition_time: Last time the condition transitioned from one status to another.
         :param _builtins.str last_update_time: The last time this condition was updated.
         :param _builtins.str message: A human readable message indicating details about the transition.
@@ -653,6 +661,7 @@ class SealedSecretStatusPatch(dict):
                  observed_generation: Optional[_builtins.int] = None):
         """
         SealedSecretStatus is the most recently observed status of the SealedSecret.
+
         :param Sequence['SealedSecretStatusConditionsPatchArgs'] conditions: Represents the latest available observations of a sealed secret's current state.
         :param _builtins.int observed_generation: ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
         """

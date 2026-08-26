@@ -12,47 +12,41 @@ from .provider import *
 if typing.TYPE_CHECKING:
     import pulumi_crds.acme as __acme
     acme = __acme
+    import pulumi_crds.barmancloud as __barmancloud
+    barmancloud = __barmancloud
     import pulumi_crds.bitnami as __bitnami
     bitnami = __bitnami
     import pulumi_crds.cert_manager as __cert_manager
     cert_manager = __cert_manager
+    import pulumi_crds.cilium as __cilium
+    cilium = __cilium
     import pulumi_crds.deviceplugin as __deviceplugin
     deviceplugin = __deviceplugin
-    import pulumi_crds.fpga as __fpga
-    fpga = __fpga
     import pulumi_crds.gateway as __gateway
     gateway = __gateway
-    import pulumi_crds.helm as __helm
-    helm = __helm
-    import pulumi_crds.hub as __hub
-    hub = __hub
-    import pulumi_crds.k3s as __k3s
-    k3s = __k3s
     import pulumi_crds.meta as __meta
     meta = __meta
-    import pulumi_crds.monitoring as __monitoring
-    monitoring = __monitoring
     import pulumi_crds.nfd as __nfd
     nfd = __nfd
+    import pulumi_crds.operator as __operator
+    operator = __operator
     import pulumi_crds.postgresql as __postgresql
     postgresql = __postgresql
-    import pulumi_crds.traefik as __traefik
-    traefik = __traefik
+    import pulumi_crds.volsync as __volsync
+    volsync = __volsync
 else:
     acme = _utilities.lazy_import('pulumi_crds.acme')
+    barmancloud = _utilities.lazy_import('pulumi_crds.barmancloud')
     bitnami = _utilities.lazy_import('pulumi_crds.bitnami')
     cert_manager = _utilities.lazy_import('pulumi_crds.cert_manager')
+    cilium = _utilities.lazy_import('pulumi_crds.cilium')
     deviceplugin = _utilities.lazy_import('pulumi_crds.deviceplugin')
-    fpga = _utilities.lazy_import('pulumi_crds.fpga')
     gateway = _utilities.lazy_import('pulumi_crds.gateway')
-    helm = _utilities.lazy_import('pulumi_crds.helm')
-    hub = _utilities.lazy_import('pulumi_crds.hub')
-    k3s = _utilities.lazy_import('pulumi_crds.k3s')
     meta = _utilities.lazy_import('pulumi_crds.meta')
-    monitoring = _utilities.lazy_import('pulumi_crds.monitoring')
     nfd = _utilities.lazy_import('pulumi_crds.nfd')
+    operator = _utilities.lazy_import('pulumi_crds.operator')
     postgresql = _utilities.lazy_import('pulumi_crds.postgresql')
-    traefik = _utilities.lazy_import('pulumi_crds.traefik')
+    volsync = _utilities.lazy_import('pulumi_crds.volsync')
 
 _utilities.register(
     resource_modules="""
@@ -68,6 +62,16 @@ _utilities.register(
    "kubernetes:acme.cert-manager.io/v1:Order": "Order",
    "kubernetes:acme.cert-manager.io/v1:OrderList": "OrderList",
    "kubernetes:acme.cert-manager.io/v1:OrderPatch": "OrderPatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "barmancloud.cnpg.io/v1",
+  "fqn": "pulumi_crds.barmancloud.v1",
+  "classes": {
+   "kubernetes:barmancloud.cnpg.io/v1:ObjectStore": "ObjectStore",
+   "kubernetes:barmancloud.cnpg.io/v1:ObjectStoreList": "ObjectStoreList",
+   "kubernetes:barmancloud.cnpg.io/v1:ObjectStorePatch": "ObjectStorePatch"
   }
  },
  {
@@ -97,6 +101,107 @@ _utilities.register(
    "kubernetes:cert-manager.io/v1:Issuer": "Issuer",
    "kubernetes:cert-manager.io/v1:IssuerList": "IssuerList",
    "kubernetes:cert-manager.io/v1:IssuerPatch": "IssuerPatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "cilium.io/v2",
+  "fqn": "pulumi_crds.cilium.v2",
+  "classes": {
+   "kubernetes:cilium.io/v2:CiliumBGPAdvertisement": "CiliumBGPAdvertisement",
+   "kubernetes:cilium.io/v2:CiliumBGPAdvertisementList": "CiliumBGPAdvertisementList",
+   "kubernetes:cilium.io/v2:CiliumBGPAdvertisementPatch": "CiliumBGPAdvertisementPatch",
+   "kubernetes:cilium.io/v2:CiliumBGPClusterConfig": "CiliumBGPClusterConfig",
+   "kubernetes:cilium.io/v2:CiliumBGPClusterConfigList": "CiliumBGPClusterConfigList",
+   "kubernetes:cilium.io/v2:CiliumBGPClusterConfigPatch": "CiliumBGPClusterConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfig": "CiliumBGPNodeConfig",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfigList": "CiliumBGPNodeConfigList",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfigOverride": "CiliumBGPNodeConfigOverride",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfigOverrideList": "CiliumBGPNodeConfigOverrideList",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfigOverridePatch": "CiliumBGPNodeConfigOverridePatch",
+   "kubernetes:cilium.io/v2:CiliumBGPNodeConfigPatch": "CiliumBGPNodeConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumBGPPeerConfig": "CiliumBGPPeerConfig",
+   "kubernetes:cilium.io/v2:CiliumBGPPeerConfigList": "CiliumBGPPeerConfigList",
+   "kubernetes:cilium.io/v2:CiliumBGPPeerConfigPatch": "CiliumBGPPeerConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumCIDRGroup": "CiliumCIDRGroup",
+   "kubernetes:cilium.io/v2:CiliumCIDRGroupList": "CiliumCIDRGroupList",
+   "kubernetes:cilium.io/v2:CiliumCIDRGroupPatch": "CiliumCIDRGroupPatch",
+   "kubernetes:cilium.io/v2:CiliumClusterwideEnvoyConfig": "CiliumClusterwideEnvoyConfig",
+   "kubernetes:cilium.io/v2:CiliumClusterwideEnvoyConfigList": "CiliumClusterwideEnvoyConfigList",
+   "kubernetes:cilium.io/v2:CiliumClusterwideEnvoyConfigPatch": "CiliumClusterwideEnvoyConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumClusterwideNetworkPolicy": "CiliumClusterwideNetworkPolicy",
+   "kubernetes:cilium.io/v2:CiliumClusterwideNetworkPolicyList": "CiliumClusterwideNetworkPolicyList",
+   "kubernetes:cilium.io/v2:CiliumClusterwideNetworkPolicyPatch": "CiliumClusterwideNetworkPolicyPatch",
+   "kubernetes:cilium.io/v2:CiliumEgressGatewayPolicy": "CiliumEgressGatewayPolicy",
+   "kubernetes:cilium.io/v2:CiliumEgressGatewayPolicyList": "CiliumEgressGatewayPolicyList",
+   "kubernetes:cilium.io/v2:CiliumEgressGatewayPolicyPatch": "CiliumEgressGatewayPolicyPatch",
+   "kubernetes:cilium.io/v2:CiliumEndpoint": "CiliumEndpoint",
+   "kubernetes:cilium.io/v2:CiliumEndpointList": "CiliumEndpointList",
+   "kubernetes:cilium.io/v2:CiliumEndpointPatch": "CiliumEndpointPatch",
+   "kubernetes:cilium.io/v2:CiliumEnvoyConfig": "CiliumEnvoyConfig",
+   "kubernetes:cilium.io/v2:CiliumEnvoyConfigList": "CiliumEnvoyConfigList",
+   "kubernetes:cilium.io/v2:CiliumEnvoyConfigPatch": "CiliumEnvoyConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumIdentity": "CiliumIdentity",
+   "kubernetes:cilium.io/v2:CiliumIdentityList": "CiliumIdentityList",
+   "kubernetes:cilium.io/v2:CiliumIdentityPatch": "CiliumIdentityPatch",
+   "kubernetes:cilium.io/v2:CiliumLoadBalancerIPPool": "CiliumLoadBalancerIPPool",
+   "kubernetes:cilium.io/v2:CiliumLoadBalancerIPPoolList": "CiliumLoadBalancerIPPoolList",
+   "kubernetes:cilium.io/v2:CiliumLoadBalancerIPPoolPatch": "CiliumLoadBalancerIPPoolPatch",
+   "kubernetes:cilium.io/v2:CiliumLocalRedirectPolicy": "CiliumLocalRedirectPolicy",
+   "kubernetes:cilium.io/v2:CiliumLocalRedirectPolicyList": "CiliumLocalRedirectPolicyList",
+   "kubernetes:cilium.io/v2:CiliumLocalRedirectPolicyPatch": "CiliumLocalRedirectPolicyPatch",
+   "kubernetes:cilium.io/v2:CiliumNetworkPolicy": "CiliumNetworkPolicy",
+   "kubernetes:cilium.io/v2:CiliumNetworkPolicyList": "CiliumNetworkPolicyList",
+   "kubernetes:cilium.io/v2:CiliumNetworkPolicyPatch": "CiliumNetworkPolicyPatch",
+   "kubernetes:cilium.io/v2:CiliumNode": "CiliumNode",
+   "kubernetes:cilium.io/v2:CiliumNodeConfig": "CiliumNodeConfig",
+   "kubernetes:cilium.io/v2:CiliumNodeConfigList": "CiliumNodeConfigList",
+   "kubernetes:cilium.io/v2:CiliumNodeConfigPatch": "CiliumNodeConfigPatch",
+   "kubernetes:cilium.io/v2:CiliumNodeList": "CiliumNodeList",
+   "kubernetes:cilium.io/v2:CiliumNodePatch": "CiliumNodePatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "cilium.io/v2alpha1",
+  "fqn": "pulumi_crds.cilium.v2alpha1",
+  "classes": {
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPAdvertisement": "CiliumBGPAdvertisement",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPAdvertisementList": "CiliumBGPAdvertisementList",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPAdvertisementPatch": "CiliumBGPAdvertisementPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPClusterConfig": "CiliumBGPClusterConfig",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPClusterConfigList": "CiliumBGPClusterConfigList",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPClusterConfigPatch": "CiliumBGPClusterConfigPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfig": "CiliumBGPNodeConfig",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfigList": "CiliumBGPNodeConfigList",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfigOverride": "CiliumBGPNodeConfigOverride",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfigOverrideList": "CiliumBGPNodeConfigOverrideList",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfigOverridePatch": "CiliumBGPNodeConfigOverridePatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPNodeConfigPatch": "CiliumBGPNodeConfigPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPPeerConfig": "CiliumBGPPeerConfig",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPPeerConfigList": "CiliumBGPPeerConfigList",
+   "kubernetes:cilium.io/v2alpha1:CiliumBGPPeerConfigPatch": "CiliumBGPPeerConfigPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumCIDRGroup": "CiliumCIDRGroup",
+   "kubernetes:cilium.io/v2alpha1:CiliumCIDRGroupList": "CiliumCIDRGroupList",
+   "kubernetes:cilium.io/v2alpha1:CiliumCIDRGroupPatch": "CiliumCIDRGroupPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumDatapathPlugin": "CiliumDatapathPlugin",
+   "kubernetes:cilium.io/v2alpha1:CiliumDatapathPluginList": "CiliumDatapathPluginList",
+   "kubernetes:cilium.io/v2alpha1:CiliumDatapathPluginPatch": "CiliumDatapathPluginPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumEndpointSlice": "CiliumEndpointSlice",
+   "kubernetes:cilium.io/v2alpha1:CiliumEndpointSliceList": "CiliumEndpointSliceList",
+   "kubernetes:cilium.io/v2alpha1:CiliumEndpointSlicePatch": "CiliumEndpointSlicePatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumGatewayClassConfig": "CiliumGatewayClassConfig",
+   "kubernetes:cilium.io/v2alpha1:CiliumGatewayClassConfigList": "CiliumGatewayClassConfigList",
+   "kubernetes:cilium.io/v2alpha1:CiliumGatewayClassConfigPatch": "CiliumGatewayClassConfigPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumL2AnnouncementPolicy": "CiliumL2AnnouncementPolicy",
+   "kubernetes:cilium.io/v2alpha1:CiliumL2AnnouncementPolicyList": "CiliumL2AnnouncementPolicyList",
+   "kubernetes:cilium.io/v2alpha1:CiliumL2AnnouncementPolicyPatch": "CiliumL2AnnouncementPolicyPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumLoadBalancerIPPool": "CiliumLoadBalancerIPPool",
+   "kubernetes:cilium.io/v2alpha1:CiliumLoadBalancerIPPoolList": "CiliumLoadBalancerIPPoolList",
+   "kubernetes:cilium.io/v2alpha1:CiliumLoadBalancerIPPoolPatch": "CiliumLoadBalancerIPPoolPatch",
+   "kubernetes:cilium.io/v2alpha1:CiliumPodIPPool": "CiliumPodIPPool",
+   "kubernetes:cilium.io/v2alpha1:CiliumPodIPPoolList": "CiliumPodIPPoolList",
+   "kubernetes:cilium.io/v2alpha1:CiliumPodIPPoolPatch": "CiliumPodIPPoolPatch"
   }
  },
  {
@@ -132,19 +237,6 @@ _utilities.register(
  },
  {
   "pkg": "crds",
-  "mod": "fpga.intel.com/v2",
-  "fqn": "pulumi_crds.fpga.v2",
-  "classes": {
-   "kubernetes:fpga.intel.com/v2:AcceleratorFunction": "AcceleratorFunction",
-   "kubernetes:fpga.intel.com/v2:AcceleratorFunctionList": "AcceleratorFunctionList",
-   "kubernetes:fpga.intel.com/v2:AcceleratorFunctionPatch": "AcceleratorFunctionPatch",
-   "kubernetes:fpga.intel.com/v2:FpgaRegion": "FpgaRegion",
-   "kubernetes:fpga.intel.com/v2:FpgaRegionList": "FpgaRegionList",
-   "kubernetes:fpga.intel.com/v2:FpgaRegionPatch": "FpgaRegionPatch"
-  }
- },
- {
-  "pkg": "crds",
   "mod": "gateway.networking.k8s.io/v1",
   "fqn": "pulumi_crds.gateway.v1",
   "classes": {
@@ -162,7 +254,22 @@ _utilities.register(
    "kubernetes:gateway.networking.k8s.io/v1:GatewayPatch": "GatewayPatch",
    "kubernetes:gateway.networking.k8s.io/v1:HTTPRoute": "HTTPRoute",
    "kubernetes:gateway.networking.k8s.io/v1:HTTPRouteList": "HTTPRouteList",
-   "kubernetes:gateway.networking.k8s.io/v1:HTTPRoutePatch": "HTTPRoutePatch"
+   "kubernetes:gateway.networking.k8s.io/v1:HTTPRoutePatch": "HTTPRoutePatch",
+   "kubernetes:gateway.networking.k8s.io/v1:ListenerSet": "ListenerSet",
+   "kubernetes:gateway.networking.k8s.io/v1:ListenerSetList": "ListenerSetList",
+   "kubernetes:gateway.networking.k8s.io/v1:ListenerSetPatch": "ListenerSetPatch",
+   "kubernetes:gateway.networking.k8s.io/v1:ReferenceGrant": "ReferenceGrant",
+   "kubernetes:gateway.networking.k8s.io/v1:ReferenceGrantList": "ReferenceGrantList",
+   "kubernetes:gateway.networking.k8s.io/v1:ReferenceGrantPatch": "ReferenceGrantPatch",
+   "kubernetes:gateway.networking.k8s.io/v1:TCPRoute": "TCPRoute",
+   "kubernetes:gateway.networking.k8s.io/v1:TCPRouteList": "TCPRouteList",
+   "kubernetes:gateway.networking.k8s.io/v1:TCPRoutePatch": "TCPRoutePatch",
+   "kubernetes:gateway.networking.k8s.io/v1:TLSRoute": "TLSRoute",
+   "kubernetes:gateway.networking.k8s.io/v1:TLSRouteList": "TLSRouteList",
+   "kubernetes:gateway.networking.k8s.io/v1:TLSRoutePatch": "TLSRoutePatch",
+   "kubernetes:gateway.networking.k8s.io/v1:UDPRoute": "UDPRoute",
+   "kubernetes:gateway.networking.k8s.io/v1:UDPRouteList": "UDPRouteList",
+   "kubernetes:gateway.networking.k8s.io/v1:UDPRoutePatch": "UDPRoutePatch"
   }
  },
  {
@@ -215,132 +322,6 @@ _utilities.register(
  },
  {
   "pkg": "crds",
-  "mod": "gateway.networking.x-k8s.io/v1alpha1",
-  "fqn": "pulumi_crds.gateway.v1alpha1",
-  "classes": {
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XBackendTrafficPolicy": "XBackendTrafficPolicy",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XBackendTrafficPolicyList": "XBackendTrafficPolicyList",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XBackendTrafficPolicyPatch": "XBackendTrafficPolicyPatch",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XListenerSet": "XListenerSet",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XListenerSetList": "XListenerSetList",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XListenerSetPatch": "XListenerSetPatch",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XMesh": "XMesh",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XMeshList": "XMeshList",
-   "kubernetes:gateway.networking.x-k8s.io/v1alpha1:XMeshPatch": "XMeshPatch"
-  }
- },
- {
-  "pkg": "crds",
-  "mod": "helm.cattle.io/v1",
-  "fqn": "pulumi_crds.helm.v1",
-  "classes": {
-   "kubernetes:helm.cattle.io/v1:HelmChart": "HelmChart",
-   "kubernetes:helm.cattle.io/v1:HelmChartConfig": "HelmChartConfig",
-   "kubernetes:helm.cattle.io/v1:HelmChartConfigList": "HelmChartConfigList",
-   "kubernetes:helm.cattle.io/v1:HelmChartConfigPatch": "HelmChartConfigPatch",
-   "kubernetes:helm.cattle.io/v1:HelmChartList": "HelmChartList",
-   "kubernetes:helm.cattle.io/v1:HelmChartPatch": "HelmChartPatch"
-  }
- },
- {
-  "pkg": "crds",
-  "mod": "hub.traefik.io/v1alpha1",
-  "fqn": "pulumi_crds.hub.v1alpha1",
-  "classes": {
-   "kubernetes:hub.traefik.io/v1alpha1:AIService": "AIService",
-   "kubernetes:hub.traefik.io/v1alpha1:AIServiceList": "AIServiceList",
-   "kubernetes:hub.traefik.io/v1alpha1:AIServicePatch": "AIServicePatch",
-   "kubernetes:hub.traefik.io/v1alpha1:API": "API",
-   "kubernetes:hub.traefik.io/v1alpha1:APIAccess": "APIAccess",
-   "kubernetes:hub.traefik.io/v1alpha1:APIAccessList": "APIAccessList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIAccessPatch": "APIAccessPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIBundle": "APIBundle",
-   "kubernetes:hub.traefik.io/v1alpha1:APIBundleList": "APIBundleList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIBundlePatch": "APIBundlePatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APICatalogItem": "APICatalogItem",
-   "kubernetes:hub.traefik.io/v1alpha1:APICatalogItemList": "APICatalogItemList",
-   "kubernetes:hub.traefik.io/v1alpha1:APICatalogItemPatch": "APICatalogItemPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIList": "APIList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPatch": "APIPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPlan": "APIPlan",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPlanList": "APIPlanList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPlanPatch": "APIPlanPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPortal": "APIPortal",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPortalList": "APIPortalList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIPortalPatch": "APIPortalPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIRateLimit": "APIRateLimit",
-   "kubernetes:hub.traefik.io/v1alpha1:APIRateLimitList": "APIRateLimitList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIRateLimitPatch": "APIRateLimitPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:APIVersion": "APIVersion",
-   "kubernetes:hub.traefik.io/v1alpha1:APIVersionList": "APIVersionList",
-   "kubernetes:hub.traefik.io/v1alpha1:APIVersionPatch": "APIVersionPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:AccessControlPolicy": "AccessControlPolicy",
-   "kubernetes:hub.traefik.io/v1alpha1:AccessControlPolicyList": "AccessControlPolicyList",
-   "kubernetes:hub.traefik.io/v1alpha1:AccessControlPolicyPatch": "AccessControlPolicyPatch",
-   "kubernetes:hub.traefik.io/v1alpha1:ManagedSubscription": "ManagedSubscription",
-   "kubernetes:hub.traefik.io/v1alpha1:ManagedSubscriptionList": "ManagedSubscriptionList",
-   "kubernetes:hub.traefik.io/v1alpha1:ManagedSubscriptionPatch": "ManagedSubscriptionPatch"
-  }
- },
- {
-  "pkg": "crds",
-  "mod": "k3s.cattle.io/v1",
-  "fqn": "pulumi_crds.k3s.v1",
-  "classes": {
-   "kubernetes:k3s.cattle.io/v1:Addon": "Addon",
-   "kubernetes:k3s.cattle.io/v1:AddonList": "AddonList",
-   "kubernetes:k3s.cattle.io/v1:AddonPatch": "AddonPatch",
-   "kubernetes:k3s.cattle.io/v1:ETCDSnapshotFile": "ETCDSnapshotFile",
-   "kubernetes:k3s.cattle.io/v1:ETCDSnapshotFileList": "ETCDSnapshotFileList",
-   "kubernetes:k3s.cattle.io/v1:ETCDSnapshotFilePatch": "ETCDSnapshotFilePatch"
-  }
- },
- {
-  "pkg": "crds",
-  "mod": "monitoring.coreos.com/v1",
-  "fqn": "pulumi_crds.monitoring.v1",
-  "classes": {
-   "kubernetes:monitoring.coreos.com/v1:Alertmanager": "Alertmanager",
-   "kubernetes:monitoring.coreos.com/v1:AlertmanagerList": "AlertmanagerList",
-   "kubernetes:monitoring.coreos.com/v1:AlertmanagerPatch": "AlertmanagerPatch",
-   "kubernetes:monitoring.coreos.com/v1:PodMonitor": "PodMonitor",
-   "kubernetes:monitoring.coreos.com/v1:PodMonitorList": "PodMonitorList",
-   "kubernetes:monitoring.coreos.com/v1:PodMonitorPatch": "PodMonitorPatch",
-   "kubernetes:monitoring.coreos.com/v1:Probe": "Probe",
-   "kubernetes:monitoring.coreos.com/v1:ProbeList": "ProbeList",
-   "kubernetes:monitoring.coreos.com/v1:ProbePatch": "ProbePatch",
-   "kubernetes:monitoring.coreos.com/v1:Prometheus": "Prometheus",
-   "kubernetes:monitoring.coreos.com/v1:PrometheusList": "PrometheusList",
-   "kubernetes:monitoring.coreos.com/v1:PrometheusPatch": "PrometheusPatch",
-   "kubernetes:monitoring.coreos.com/v1:PrometheusRule": "PrometheusRule",
-   "kubernetes:monitoring.coreos.com/v1:PrometheusRuleList": "PrometheusRuleList",
-   "kubernetes:monitoring.coreos.com/v1:PrometheusRulePatch": "PrometheusRulePatch",
-   "kubernetes:monitoring.coreos.com/v1:ServiceMonitor": "ServiceMonitor",
-   "kubernetes:monitoring.coreos.com/v1:ServiceMonitorList": "ServiceMonitorList",
-   "kubernetes:monitoring.coreos.com/v1:ServiceMonitorPatch": "ServiceMonitorPatch",
-   "kubernetes:monitoring.coreos.com/v1:ThanosRuler": "ThanosRuler",
-   "kubernetes:monitoring.coreos.com/v1:ThanosRulerList": "ThanosRulerList",
-   "kubernetes:monitoring.coreos.com/v1:ThanosRulerPatch": "ThanosRulerPatch"
-  }
- },
- {
-  "pkg": "crds",
-  "mod": "monitoring.coreos.com/v1alpha1",
-  "fqn": "pulumi_crds.monitoring.v1alpha1",
-  "classes": {
-   "kubernetes:monitoring.coreos.com/v1alpha1:AlertmanagerConfig": "AlertmanagerConfig",
-   "kubernetes:monitoring.coreos.com/v1alpha1:AlertmanagerConfigList": "AlertmanagerConfigList",
-   "kubernetes:monitoring.coreos.com/v1alpha1:AlertmanagerConfigPatch": "AlertmanagerConfigPatch",
-   "kubernetes:monitoring.coreos.com/v1alpha1:PrometheusAgent": "PrometheusAgent",
-   "kubernetes:monitoring.coreos.com/v1alpha1:PrometheusAgentList": "PrometheusAgentList",
-   "kubernetes:monitoring.coreos.com/v1alpha1:PrometheusAgentPatch": "PrometheusAgentPatch",
-   "kubernetes:monitoring.coreos.com/v1alpha1:ScrapeConfig": "ScrapeConfig",
-   "kubernetes:monitoring.coreos.com/v1alpha1:ScrapeConfigList": "ScrapeConfigList",
-   "kubernetes:monitoring.coreos.com/v1alpha1:ScrapeConfigPatch": "ScrapeConfigPatch"
-  }
- },
- {
-  "pkg": "crds",
   "mod": "nfd.k8s-sigs.io/v1alpha1",
   "fqn": "pulumi_crds.nfd.v1alpha1",
   "classes": {
@@ -353,6 +334,102 @@ _utilities.register(
    "kubernetes:nfd.k8s-sigs.io/v1alpha1:NodeFeatureRule": "NodeFeatureRule",
    "kubernetes:nfd.k8s-sigs.io/v1alpha1:NodeFeatureRuleList": "NodeFeatureRuleList",
    "kubernetes:nfd.k8s-sigs.io/v1alpha1:NodeFeatureRulePatch": "NodeFeatureRulePatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "operator.victoriametrics.com/v1",
+  "fqn": "pulumi_crds.operator.v1",
+  "classes": {
+   "kubernetes:operator.victoriametrics.com/v1:VLAgent": "VLAgent",
+   "kubernetes:operator.victoriametrics.com/v1:VLAgentList": "VLAgentList",
+   "kubernetes:operator.victoriametrics.com/v1:VLAgentPatch": "VLAgentPatch",
+   "kubernetes:operator.victoriametrics.com/v1:VLCluster": "VLCluster",
+   "kubernetes:operator.victoriametrics.com/v1:VLClusterList": "VLClusterList",
+   "kubernetes:operator.victoriametrics.com/v1:VLClusterPatch": "VLClusterPatch",
+   "kubernetes:operator.victoriametrics.com/v1:VLSingle": "VLSingle",
+   "kubernetes:operator.victoriametrics.com/v1:VLSingleList": "VLSingleList",
+   "kubernetes:operator.victoriametrics.com/v1:VLSinglePatch": "VLSinglePatch",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomaly": "VMAnomaly",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomalyConfig": "VMAnomalyConfig",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomalyConfigList": "VMAnomalyConfigList",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomalyConfigPatch": "VMAnomalyConfigPatch",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomalyList": "VMAnomalyList",
+   "kubernetes:operator.victoriametrics.com/v1:VMAnomalyPatch": "VMAnomalyPatch",
+   "kubernetes:operator.victoriametrics.com/v1:VTCluster": "VTCluster",
+   "kubernetes:operator.victoriametrics.com/v1:VTClusterList": "VTClusterList",
+   "kubernetes:operator.victoriametrics.com/v1:VTClusterPatch": "VTClusterPatch",
+   "kubernetes:operator.victoriametrics.com/v1:VTSingle": "VTSingle",
+   "kubernetes:operator.victoriametrics.com/v1:VTSingleList": "VTSingleList",
+   "kubernetes:operator.victoriametrics.com/v1:VTSinglePatch": "VTSinglePatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "operator.victoriametrics.com/v1alpha1",
+  "fqn": "pulumi_crds.operator.v1alpha1",
+  "classes": {
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VLDistributed": "VLDistributed",
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VLDistributedList": "VLDistributedList",
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VLDistributedPatch": "VLDistributedPatch",
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VMDistributed": "VMDistributed",
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VMDistributedList": "VMDistributedList",
+   "kubernetes:operator.victoriametrics.com/v1alpha1:VMDistributedPatch": "VMDistributedPatch"
+  }
+ },
+ {
+  "pkg": "crds",
+  "mod": "operator.victoriametrics.com/v1beta1",
+  "fqn": "pulumi_crds.operator.v1beta1",
+  "classes": {
+   "kubernetes:operator.victoriametrics.com/v1beta1:VLogs": "VLogs",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VLogsList": "VLogsList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VLogsPatch": "VLogsPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAgent": "VMAgent",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAgentList": "VMAgentList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAgentPatch": "VMAgentPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlert": "VMAlert",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertList": "VMAlertList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertPatch": "VMAlertPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanager": "VMAlertmanager",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanagerConfig": "VMAlertmanagerConfig",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanagerConfigList": "VMAlertmanagerConfigList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanagerConfigPatch": "VMAlertmanagerConfigPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanagerList": "VMAlertmanagerList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAlertmanagerPatch": "VMAlertmanagerPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAuth": "VMAuth",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAuthList": "VMAuthList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMAuthPatch": "VMAuthPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMCluster": "VMCluster",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMClusterList": "VMClusterList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMClusterPatch": "VMClusterPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMNodeScrape": "VMNodeScrape",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMNodeScrapeList": "VMNodeScrapeList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMNodeScrapePatch": "VMNodeScrapePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMPodScrape": "VMPodScrape",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMPodScrapeList": "VMPodScrapeList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMPodScrapePatch": "VMPodScrapePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMProbe": "VMProbe",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMProbeList": "VMProbeList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMProbePatch": "VMProbePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMRule": "VMRule",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMRuleList": "VMRuleList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMRulePatch": "VMRulePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMScrapeConfig": "VMScrapeConfig",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMScrapeConfigList": "VMScrapeConfigList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMScrapeConfigPatch": "VMScrapeConfigPatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMServiceScrape": "VMServiceScrape",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMServiceScrapeList": "VMServiceScrapeList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMServiceScrapePatch": "VMServiceScrapePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMSingle": "VMSingle",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMSingleList": "VMSingleList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMSinglePatch": "VMSinglePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMStaticScrape": "VMStaticScrape",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMStaticScrapeList": "VMStaticScrapeList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMStaticScrapePatch": "VMStaticScrapePatch",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMUser": "VMUser",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMUserList": "VMUserList",
+   "kubernetes:operator.victoriametrics.com/v1beta1:VMUserPatch": "VMUserPatch"
   }
  },
  {
@@ -372,6 +449,9 @@ _utilities.register(
    "kubernetes:postgresql.cnpg.io/v1:Database": "Database",
    "kubernetes:postgresql.cnpg.io/v1:DatabaseList": "DatabaseList",
    "kubernetes:postgresql.cnpg.io/v1:DatabasePatch": "DatabasePatch",
+   "kubernetes:postgresql.cnpg.io/v1:DatabaseRole": "DatabaseRole",
+   "kubernetes:postgresql.cnpg.io/v1:DatabaseRoleList": "DatabaseRoleList",
+   "kubernetes:postgresql.cnpg.io/v1:DatabaseRolePatch": "DatabaseRolePatch",
    "kubernetes:postgresql.cnpg.io/v1:FailoverQuorum": "FailoverQuorum",
    "kubernetes:postgresql.cnpg.io/v1:FailoverQuorumList": "FailoverQuorumList",
    "kubernetes:postgresql.cnpg.io/v1:FailoverQuorumPatch": "FailoverQuorumPatch",
@@ -394,39 +474,15 @@ _utilities.register(
  },
  {
   "pkg": "crds",
-  "mod": "traefik.io/v1alpha1",
-  "fqn": "pulumi_crds.traefik.v1alpha1",
+  "mod": "volsync.backube/v1alpha1",
+  "fqn": "pulumi_crds.volsync.v1alpha1",
   "classes": {
-   "kubernetes:traefik.io/v1alpha1:IngressRoute": "IngressRoute",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteList": "IngressRouteList",
-   "kubernetes:traefik.io/v1alpha1:IngressRoutePatch": "IngressRoutePatch",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteTCP": "IngressRouteTCP",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteTCPList": "IngressRouteTCPList",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteTCPPatch": "IngressRouteTCPPatch",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteUDP": "IngressRouteUDP",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteUDPList": "IngressRouteUDPList",
-   "kubernetes:traefik.io/v1alpha1:IngressRouteUDPPatch": "IngressRouteUDPPatch",
-   "kubernetes:traefik.io/v1alpha1:Middleware": "Middleware",
-   "kubernetes:traefik.io/v1alpha1:MiddlewareList": "MiddlewareList",
-   "kubernetes:traefik.io/v1alpha1:MiddlewarePatch": "MiddlewarePatch",
-   "kubernetes:traefik.io/v1alpha1:MiddlewareTCP": "MiddlewareTCP",
-   "kubernetes:traefik.io/v1alpha1:MiddlewareTCPList": "MiddlewareTCPList",
-   "kubernetes:traefik.io/v1alpha1:MiddlewareTCPPatch": "MiddlewareTCPPatch",
-   "kubernetes:traefik.io/v1alpha1:ServersTransport": "ServersTransport",
-   "kubernetes:traefik.io/v1alpha1:ServersTransportList": "ServersTransportList",
-   "kubernetes:traefik.io/v1alpha1:ServersTransportPatch": "ServersTransportPatch",
-   "kubernetes:traefik.io/v1alpha1:ServersTransportTCP": "ServersTransportTCP",
-   "kubernetes:traefik.io/v1alpha1:ServersTransportTCPList": "ServersTransportTCPList",
-   "kubernetes:traefik.io/v1alpha1:ServersTransportTCPPatch": "ServersTransportTCPPatch",
-   "kubernetes:traefik.io/v1alpha1:TLSOption": "TLSOption",
-   "kubernetes:traefik.io/v1alpha1:TLSOptionList": "TLSOptionList",
-   "kubernetes:traefik.io/v1alpha1:TLSOptionPatch": "TLSOptionPatch",
-   "kubernetes:traefik.io/v1alpha1:TLSStore": "TLSStore",
-   "kubernetes:traefik.io/v1alpha1:TLSStoreList": "TLSStoreList",
-   "kubernetes:traefik.io/v1alpha1:TLSStorePatch": "TLSStorePatch",
-   "kubernetes:traefik.io/v1alpha1:TraefikService": "TraefikService",
-   "kubernetes:traefik.io/v1alpha1:TraefikServiceList": "TraefikServiceList",
-   "kubernetes:traefik.io/v1alpha1:TraefikServicePatch": "TraefikServicePatch"
+   "kubernetes:volsync.backube/v1alpha1:ReplicationDestination": "ReplicationDestination",
+   "kubernetes:volsync.backube/v1alpha1:ReplicationDestinationList": "ReplicationDestinationList",
+   "kubernetes:volsync.backube/v1alpha1:ReplicationDestinationPatch": "ReplicationDestinationPatch",
+   "kubernetes:volsync.backube/v1alpha1:ReplicationSource": "ReplicationSource",
+   "kubernetes:volsync.backube/v1alpha1:ReplicationSourceList": "ReplicationSourceList",
+   "kubernetes:volsync.backube/v1alpha1:ReplicationSourcePatch": "ReplicationSourcePatch"
   }
  }
 ]

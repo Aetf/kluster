@@ -91,6 +91,7 @@ class NodeFeature(dict):
         """
         NodeFeature resource holds the features discovered for one node in the
         cluster.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -164,6 +165,7 @@ class NodeFeatureGroup(dict):
                  status: Optional['outputs.NodeFeatureGroupStatus'] = None):
         """
         NodeFeatureGroup resource holds Node pools by featureGroup
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -240,6 +242,7 @@ class NodeFeatureGroupSpec(dict):
                  feature_group_rules: Optional[Sequence['outputs.NodeFeatureGroupSpecFeatureGroupRules']] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesArgs'] feature_group_rules: List of rules to evaluate to determine nodes that belong in this group.
         """
         if feature_group_rules is not None:
@@ -288,6 +291,7 @@ class NodeFeatureGroupSpecFeatureGroupRules(dict):
                  vars_template: Optional[_builtins.str] = None):
         """
         GroupRule defines a rule for nodegroup filtering.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs'] match_any: MatchAny specifies a list of matchers one of which must match.
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         :param _builtins.str name: Name of the rule.
@@ -378,6 +382,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAny(dict):
                  match_features: Optional[Sequence['outputs.NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeatures']] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -426,6 +431,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeatures(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -473,6 +479,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchName(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -532,6 +539,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatch(d
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -612,6 +620,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatch(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -672,6 +681,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatch(dict):
                  match_features: Optional[Sequence['outputs.NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatch']] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -720,6 +730,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeatures(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -767,6 +778,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchName(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -826,6 +838,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatch(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -906,6 +919,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatch(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -974,6 +988,7 @@ class NodeFeatureGroupSpecFeatureGroupRulesPatch(dict):
                  vars_template: Optional[_builtins.str] = None):
         """
         GroupRule defines a rule for nodegroup filtering.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs'] match_any: MatchAny specifies a list of matchers one of which must match.
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         :param _builtins.str name: Name of the rule.
@@ -1064,6 +1079,7 @@ class NodeFeatureGroupSpecPatch(dict):
                  feature_group_rules: Optional[Sequence['outputs.NodeFeatureGroupSpecFeatureGroupRulesPatch']] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param Sequence['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs'] feature_group_rules: List of rules to evaluate to determine nodes that belong in this group.
         """
         if feature_group_rules is not None:
@@ -1089,6 +1105,7 @@ class NodeFeatureGroupStatus(dict):
         """
         Status of the NodeFeatureGroup after the most recent evaluation of the
         specification.
+
         :param Sequence['NodeFeatureGroupStatusNodesArgs'] nodes: Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
         """
         if nodes is not None:
@@ -1152,6 +1169,7 @@ class NodeFeatureGroupStatusPatch(dict):
         """
         Status of the NodeFeatureGroup after the most recent evaluation of the
         specification.
+
         :param Sequence['NodeFeatureGroupStatusNodesPatchArgs'] nodes: Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
         """
         if nodes is not None:
@@ -1197,6 +1215,7 @@ class NodeFeatureRule(dict):
         """
         NodeFeatureRule resource specifies a configuration for feature-based
         customization of node objects, such as node labeling.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -1249,6 +1268,7 @@ class NodeFeatureRuleSpec(dict):
                  rules: Optional[Sequence['outputs.NodeFeatureRuleSpecRules']] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param Sequence['NodeFeatureRuleSpecRulesArgs'] rules: Rules is a list of node customization rules.
         """
         if rules is not None:
@@ -1272,6 +1292,7 @@ class NodeFeatureRuleSpecPatch(dict):
                  rules: Optional[Sequence['outputs.NodeFeatureRuleSpecRulesPatch']] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param Sequence['NodeFeatureRuleSpecRulesPatchArgs'] rules: Rules is a list of node customization rules.
         """
         if rules is not None:
@@ -1329,6 +1350,7 @@ class NodeFeatureRuleSpecRules(dict):
                  vars_template: Optional[_builtins.str] = None):
         """
         Rule defines a rule for node customization such as labeling.
+
         :param Mapping[str, _builtins.str] annotations: Annotations to create if the rule matches.
         :param Mapping[str, _builtins.str] extended_resources: ExtendedResources to create if the rule matches.
         :param Mapping[str, _builtins.str] labels: Labels to create if the rule matches.
@@ -1482,6 +1504,7 @@ class NodeFeatureRuleSpecRulesMatchAny(dict):
                  match_features: Optional[Sequence['outputs.NodeFeatureRuleSpecRulesMatchAnyMatchFeatures']] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param Sequence['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -1530,6 +1553,7 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeatures(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -1577,6 +1601,7 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchName(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1636,6 +1661,7 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatch(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1716,6 +1742,7 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatch(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -1776,6 +1803,7 @@ class NodeFeatureRuleSpecRulesMatchAnyPatch(dict):
                  match_features: Optional[Sequence['outputs.NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatch']] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param Sequence['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs'] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -1824,6 +1852,7 @@ class NodeFeatureRuleSpecRulesMatchFeatures(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -1871,6 +1900,7 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchName(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1930,6 +1960,7 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatch(dict):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param _builtins.str op: Op is the operator to be applied.
         :param _builtins.str type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -2010,6 +2041,7 @@ class NodeFeatureRuleSpecRulesMatchFeaturesPatch(dict):
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param _builtins.str feature: Feature is the name of the feature set to match against.
         :param Mapping[str, Mapping[str, _builtins.str]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -2087,6 +2119,7 @@ class NodeFeatureRuleSpecRulesPatch(dict):
                  vars_template: Optional[_builtins.str] = None):
         """
         Rule defines a rule for node customization such as labeling.
+
         :param Mapping[str, _builtins.str] annotations: Annotations to create if the rule matches.
         :param Mapping[str, _builtins.str] extended_resources: ExtendedResources to create if the rule matches.
         :param Mapping[str, _builtins.str] labels: Labels to create if the rule matches.
@@ -2245,6 +2278,7 @@ class NodeFeatureRuleSpecRulesTaints(dict):
         """
         The node this Taint is attached to has the "effect" on
         any pod that does not tolerate the Taint.
+
         :param _builtins.str effect: Required. The effect of the taint on pods
                that do not tolerate the taint.
                Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2329,6 +2363,7 @@ class NodeFeatureRuleSpecRulesTaintsPatch(dict):
         """
         The node this Taint is attached to has the "effect" on
         any pod that does not tolerate the Taint.
+
         :param _builtins.str effect: Required. The effect of the taint on pods
                that do not tolerate the taint.
                Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2392,6 +2427,7 @@ class NodeFeatureSpec(dict):
                  labels: Optional[Mapping[str, _builtins.str]] = None):
         """
         Specification of the NodeFeature, containing features discovered for a node.
+
         :param Mapping[str, _builtins.str] labels: Labels is the set of node labels that are requested to be created.
         """
         if features is not None:
@@ -2424,6 +2460,7 @@ class NodeFeatureSpecFeatures(dict):
                  instances: Optional[Mapping[str, Mapping[str, _builtins.str]]] = None):
         """
         Features is the full "raw" features data that has been discovered.
+
         :param Mapping[str, Mapping[str, _builtins.str]] attributes: Attributes contains all the attribute-type features of the node.
         :param Mapping[str, Mapping[str, _builtins.str]] flags: Flags contains all the flag-type features of the node.
         :param Mapping[str, Mapping[str, _builtins.str]] instances: Instances contains all the instance-type features of the node.
@@ -2471,6 +2508,7 @@ class NodeFeatureSpecFeaturesPatch(dict):
                  instances: Optional[Mapping[str, Mapping[str, _builtins.str]]] = None):
         """
         Features is the full "raw" features data that has been discovered.
+
         :param Mapping[str, Mapping[str, _builtins.str]] attributes: Attributes contains all the attribute-type features of the node.
         :param Mapping[str, Mapping[str, _builtins.str]] flags: Flags contains all the flag-type features of the node.
         :param Mapping[str, Mapping[str, _builtins.str]] instances: Instances contains all the instance-type features of the node.
@@ -2517,6 +2555,7 @@ class NodeFeatureSpecPatch(dict):
                  labels: Optional[Mapping[str, _builtins.str]] = None):
         """
         Specification of the NodeFeature, containing features discovered for a node.
+
         :param Mapping[str, _builtins.str] labels: Labels is the set of node labels that are requested to be created.
         """
         if features is not None:

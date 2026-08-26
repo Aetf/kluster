@@ -32,30 +32,26 @@ __all__ = [
     'SealedSecretArgsDict',
 ]
 
-MYPY = False
-
-if not MYPY:
-    class SealedSecretSpecPatchArgsDict(TypedDict):
-        """
-        SealedSecretSpec is the specification of a SealedSecret.
-        """
-        data: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
-        """
-        encrypted_data: NotRequired[pulumi.Input[Mapping[str, Any]]]
-        template: NotRequired[pulumi.Input['SealedSecretSpecTemplatePatchArgsDict']]
-elif False:
-    SealedSecretSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretSpecPatchArgsDict(TypedDict):
+    """
+    SealedSecretSpec is the specification of a SealedSecret.
+    """
+    data: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
+    """
+    encrypted_data: NotRequired[pulumi.Input[Optional[Mapping[str, Any]]]]
+    template: NotRequired[pulumi.Input[Optional['SealedSecretSpecTemplatePatchArgs']]]
 
 @pulumi.input_type
 class SealedSecretSpecPatchArgs:
     def __init__(__self__, *,
-                 data: Optional[pulumi.Input[_builtins.str]] = None,
-                 encrypted_data: Optional[pulumi.Input[Mapping[str, Any]]] = None,
-                 template: Optional[pulumi.Input['SealedSecretSpecTemplatePatchArgs']] = None):
+                 data: pulumi.Input[Optional[_builtins.str]] = None,
+                 encrypted_data: pulumi.Input[Optional[Mapping[str, Any]]] = None,
+                 template: pulumi.Input[Optional['SealedSecretSpecTemplatePatchArgs']] = None):
         """
         SealedSecretSpec is the specification of a SealedSecret.
+
         :param pulumi.Input[_builtins.str] data: Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         if data is not None:
@@ -67,74 +63,72 @@ class SealedSecretSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def data(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def data(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         return pulumi.get(self, "data")
 
     @data.setter
-    def data(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def data(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "data", value)
 
     @_builtins.property
     @pulumi.getter(name="encryptedData")
-    def encrypted_data(self) -> Optional[pulumi.Input[Mapping[str, Any]]]:
+    def encrypted_data(self) -> pulumi.Input[Optional[Mapping[str, Any]]]:
         return pulumi.get(self, "encrypted_data")
 
     @encrypted_data.setter
-    def encrypted_data(self, value: Optional[pulumi.Input[Mapping[str, Any]]]):
+    def encrypted_data(self, value: pulumi.Input[Optional[Mapping[str, Any]]]):
         pulumi.set(self, "encrypted_data", value)
 
     @_builtins.property
     @pulumi.getter
-    def template(self) -> Optional[pulumi.Input['SealedSecretSpecTemplatePatchArgs']]:
+    def template(self) -> pulumi.Input[Optional['SealedSecretSpecTemplatePatchArgs']]:
         return pulumi.get(self, "template")
 
     @template.setter
-    def template(self, value: Optional[pulumi.Input['SealedSecretSpecTemplatePatchArgs']]):
+    def template(self, value: pulumi.Input[Optional['SealedSecretSpecTemplatePatchArgs']]):
         pulumi.set(self, "template", value)
 
 
-if not MYPY:
-    class SealedSecretSpecTemplatePatchArgsDict(TypedDict):
-        """
-        Template defines the structure of the Secret that will be
-        created from this sealed secret.
-        """
-        data: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Keys that should be templated using decrypted data.
-        """
-        immutable: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        Immutable, if set to true, ensures that data stored in the Secret cannot
-        be updated (only object metadata can be modified).
-        If not set to true, the field can be modified at any time.
-        Defaulted to nil.
-        """
-        metadata: NotRequired[pulumi.Input[Mapping[str, Any]]]
-        """
-        Standard object's metadata.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Used to facilitate programmatic handling of secret data.
-        """
-elif False:
-    SealedSecretSpecTemplatePatchArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretSpecTemplatePatchArgsDict(TypedDict):
+    """
+    Template defines the structure of the Secret that will be
+    created from this sealed secret.
+    """
+    data: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Keys that should be templated using decrypted data.
+    """
+    immutable: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    Immutable, if set to true, ensures that data stored in the Secret cannot
+    be updated (only object metadata can be modified).
+    If not set to true, the field can be modified at any time.
+    Defaulted to nil.
+    """
+    metadata: NotRequired[pulumi.Input[Optional[Mapping[str, Any]]]]
+    """
+    Standard object's metadata.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Used to facilitate programmatic handling of secret data.
+    """
 
 @pulumi.input_type
 class SealedSecretSpecTemplatePatchArgs:
     def __init__(__self__, *,
-                 data: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 immutable: Optional[pulumi.Input[_builtins.bool]] = None,
-                 metadata: Optional[pulumi.Input[Mapping[str, Any]]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 data: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 immutable: pulumi.Input[Optional[_builtins.bool]] = None,
+                 metadata: pulumi.Input[Optional[Mapping[str, Any]]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Template defines the structure of the Secret that will be
         created from this sealed secret.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] data: Keys that should be templated using decrypted data.
         :param pulumi.Input[_builtins.bool] immutable: Immutable, if set to true, ensures that data stored in the Secret cannot
                be updated (only object metadata can be modified).
@@ -155,19 +149,19 @@ class SealedSecretSpecTemplatePatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def data(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def data(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Keys that should be templated using decrypted data.
         """
         return pulumi.get(self, "data")
 
     @data.setter
-    def data(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def data(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "data", value)
 
     @_builtins.property
     @pulumi.getter
-    def immutable(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def immutable(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
         Immutable, if set to true, ensures that data stored in the Secret cannot
         be updated (only object metadata can be modified).
@@ -177,12 +171,12 @@ class SealedSecretSpecTemplatePatchArgs:
         return pulumi.get(self, "immutable")
 
     @immutable.setter
-    def immutable(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def immutable(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "immutable", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input[Mapping[str, Any]]]:
+    def metadata(self) -> pulumi.Input[Optional[Mapping[str, Any]]]:
         """
         Standard object's metadata.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -190,61 +184,59 @@ class SealedSecretSpecTemplatePatchArgs:
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input[Mapping[str, Any]]]):
+    def metadata(self, value: pulumi.Input[Optional[Mapping[str, Any]]]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Used to facilitate programmatic handling of secret data.
         """
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class SealedSecretSpecTemplateArgsDict(TypedDict):
-        """
-        Template defines the structure of the Secret that will be
-        created from this sealed secret.
-        """
-        data: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Keys that should be templated using decrypted data.
-        """
-        immutable: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        Immutable, if set to true, ensures that data stored in the Secret cannot
-        be updated (only object metadata can be modified).
-        If not set to true, the field can be modified at any time.
-        Defaulted to nil.
-        """
-        metadata: NotRequired[pulumi.Input[Mapping[str, Any]]]
-        """
-        Standard object's metadata.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Used to facilitate programmatic handling of secret data.
-        """
-elif False:
-    SealedSecretSpecTemplateArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretSpecTemplateArgsDict(TypedDict):
+    """
+    Template defines the structure of the Secret that will be
+    created from this sealed secret.
+    """
+    data: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Keys that should be templated using decrypted data.
+    """
+    immutable: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    Immutable, if set to true, ensures that data stored in the Secret cannot
+    be updated (only object metadata can be modified).
+    If not set to true, the field can be modified at any time.
+    Defaulted to nil.
+    """
+    metadata: NotRequired[pulumi.Input[Optional[Mapping[str, Any]]]]
+    """
+    Standard object's metadata.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Used to facilitate programmatic handling of secret data.
+    """
 
 @pulumi.input_type
 class SealedSecretSpecTemplateArgs:
     def __init__(__self__, *,
-                 data: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 immutable: Optional[pulumi.Input[_builtins.bool]] = None,
-                 metadata: Optional[pulumi.Input[Mapping[str, Any]]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 data: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 immutable: pulumi.Input[Optional[_builtins.bool]] = None,
+                 metadata: pulumi.Input[Optional[Mapping[str, Any]]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Template defines the structure of the Secret that will be
         created from this sealed secret.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] data: Keys that should be templated using decrypted data.
         :param pulumi.Input[_builtins.bool] immutable: Immutable, if set to true, ensures that data stored in the Secret cannot
                be updated (only object metadata can be modified).
@@ -265,19 +257,19 @@ class SealedSecretSpecTemplateArgs:
 
     @_builtins.property
     @pulumi.getter
-    def data(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def data(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Keys that should be templated using decrypted data.
         """
         return pulumi.get(self, "data")
 
     @data.setter
-    def data(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def data(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "data", value)
 
     @_builtins.property
     @pulumi.getter
-    def immutable(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def immutable(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
         Immutable, if set to true, ensures that data stored in the Secret cannot
         be updated (only object metadata can be modified).
@@ -287,12 +279,12 @@ class SealedSecretSpecTemplateArgs:
         return pulumi.get(self, "immutable")
 
     @immutable.setter
-    def immutable(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def immutable(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "immutable", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input[Mapping[str, Any]]]:
+    def metadata(self) -> pulumi.Input[Optional[Mapping[str, Any]]]:
         """
         Standard object's metadata.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -300,44 +292,42 @@ class SealedSecretSpecTemplateArgs:
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input[Mapping[str, Any]]]):
+    def metadata(self, value: pulumi.Input[Optional[Mapping[str, Any]]]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Used to facilitate programmatic handling of secret data.
         """
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class SealedSecretSpecArgsDict(TypedDict):
-        """
-        SealedSecretSpec is the specification of a SealedSecret.
-        """
-        data: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
-        """
-        encrypted_data: NotRequired[pulumi.Input[Mapping[str, Any]]]
-        template: NotRequired[pulumi.Input['SealedSecretSpecTemplateArgsDict']]
-elif False:
-    SealedSecretSpecArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretSpecArgsDict(TypedDict):
+    """
+    SealedSecretSpec is the specification of a SealedSecret.
+    """
+    data: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
+    """
+    encrypted_data: NotRequired[pulumi.Input[Optional[Mapping[str, Any]]]]
+    template: NotRequired[pulumi.Input[Optional['SealedSecretSpecTemplateArgs']]]
 
 @pulumi.input_type
 class SealedSecretSpecArgs:
     def __init__(__self__, *,
-                 data: Optional[pulumi.Input[_builtins.str]] = None,
-                 encrypted_data: Optional[pulumi.Input[Mapping[str, Any]]] = None,
-                 template: Optional[pulumi.Input['SealedSecretSpecTemplateArgs']] = None):
+                 data: pulumi.Input[Optional[_builtins.str]] = None,
+                 encrypted_data: pulumi.Input[Optional[Mapping[str, Any]]] = None,
+                 template: pulumi.Input[Optional['SealedSecretSpecTemplateArgs']] = None):
         """
         SealedSecretSpec is the specification of a SealedSecret.
+
         :param pulumi.Input[_builtins.str] data: Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         if data is not None:
@@ -349,80 +339,78 @@ class SealedSecretSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def data(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def data(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Data is deprecated and will be removed eventually. Use per-value EncryptedData instead.
         """
         return pulumi.get(self, "data")
 
     @data.setter
-    def data(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def data(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "data", value)
 
     @_builtins.property
     @pulumi.getter(name="encryptedData")
-    def encrypted_data(self) -> Optional[pulumi.Input[Mapping[str, Any]]]:
+    def encrypted_data(self) -> pulumi.Input[Optional[Mapping[str, Any]]]:
         return pulumi.get(self, "encrypted_data")
 
     @encrypted_data.setter
-    def encrypted_data(self, value: Optional[pulumi.Input[Mapping[str, Any]]]):
+    def encrypted_data(self, value: pulumi.Input[Optional[Mapping[str, Any]]]):
         pulumi.set(self, "encrypted_data", value)
 
     @_builtins.property
     @pulumi.getter
-    def template(self) -> Optional[pulumi.Input['SealedSecretSpecTemplateArgs']]:
+    def template(self) -> pulumi.Input[Optional['SealedSecretSpecTemplateArgs']]:
         return pulumi.get(self, "template")
 
     @template.setter
-    def template(self, value: Optional[pulumi.Input['SealedSecretSpecTemplateArgs']]):
+    def template(self, value: pulumi.Input[Optional['SealedSecretSpecTemplateArgs']]):
         pulumi.set(self, "template", value)
 
 
-if not MYPY:
-    class SealedSecretStatusConditionsArgsDict(TypedDict):
-        """
-        SealedSecretCondition describes the state of a sealed secret at a certain point.
-        """
-        last_transition_time: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Last time the condition transitioned from one status to another.
-        """
-        last_update_time: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        The last time this condition was updated.
-        """
-        message: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        A human readable message indicating details about the transition.
-        """
-        reason: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        The reason for the condition's last transition.
-        """
-        status: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Status of the condition for a sealed secret.
-        Valid values for "Synced": "True", "False", or "Unknown".
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type of condition for a sealed secret.
-        Valid value: "Synced"
-        """
-elif False:
-    SealedSecretStatusConditionsArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretStatusConditionsArgsDict(TypedDict):
+    """
+    SealedSecretCondition describes the state of a sealed secret at a certain point.
+    """
+    last_transition_time: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Last time the condition transitioned from one status to another.
+    """
+    last_update_time: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    The last time this condition was updated.
+    """
+    message: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    A human readable message indicating details about the transition.
+    """
+    reason: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    The reason for the condition's last transition.
+    """
+    status: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Status of the condition for a sealed secret.
+    Valid values for "Synced": "True", "False", or "Unknown".
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type of condition for a sealed secret.
+    Valid value: "Synced"
+    """
 
 @pulumi.input_type
 class SealedSecretStatusConditionsArgs:
     def __init__(__self__, *,
-                 last_transition_time: Optional[pulumi.Input[_builtins.str]] = None,
-                 last_update_time: Optional[pulumi.Input[_builtins.str]] = None,
-                 message: Optional[pulumi.Input[_builtins.str]] = None,
-                 reason: Optional[pulumi.Input[_builtins.str]] = None,
-                 status: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 last_transition_time: pulumi.Input[Optional[_builtins.str]] = None,
+                 last_update_time: pulumi.Input[Optional[_builtins.str]] = None,
+                 message: pulumi.Input[Optional[_builtins.str]] = None,
+                 reason: pulumi.Input[Optional[_builtins.str]] = None,
+                 status: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         SealedSecretCondition describes the state of a sealed secret at a certain point.
+
         :param pulumi.Input[_builtins.str] last_transition_time: Last time the condition transitioned from one status to another.
         :param pulumi.Input[_builtins.str] last_update_time: The last time this condition was updated.
         :param pulumi.Input[_builtins.str] message: A human readable message indicating details about the transition.
@@ -447,55 +435,55 @@ class SealedSecretStatusConditionsArgs:
 
     @_builtins.property
     @pulumi.getter(name="lastTransitionTime")
-    def last_transition_time(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def last_transition_time(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Last time the condition transitioned from one status to another.
         """
         return pulumi.get(self, "last_transition_time")
 
     @last_transition_time.setter
-    def last_transition_time(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def last_transition_time(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "last_transition_time", value)
 
     @_builtins.property
     @pulumi.getter(name="lastUpdateTime")
-    def last_update_time(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def last_update_time(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         The last time this condition was updated.
         """
         return pulumi.get(self, "last_update_time")
 
     @last_update_time.setter
-    def last_update_time(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def last_update_time(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "last_update_time", value)
 
     @_builtins.property
     @pulumi.getter
-    def message(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def message(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         A human readable message indicating details about the transition.
         """
         return pulumi.get(self, "message")
 
     @message.setter
-    def message(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def message(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "message", value)
 
     @_builtins.property
     @pulumi.getter
-    def reason(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def reason(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         The reason for the condition's last transition.
         """
         return pulumi.get(self, "reason")
 
     @reason.setter
-    def reason(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def reason(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "reason", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def status(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Status of the condition for a sealed secret.
         Valid values for "Synced": "True", "False", or "Unknown".
@@ -503,12 +491,12 @@ class SealedSecretStatusConditionsArgs:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def status(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "status", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type of condition for a sealed secret.
         Valid value: "Synced"
@@ -516,33 +504,31 @@ class SealedSecretStatusConditionsArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class SealedSecretStatusArgsDict(TypedDict):
-        """
-        SealedSecretStatus is the most recently observed status of the SealedSecret.
-        """
-        conditions: NotRequired[pulumi.Input[Sequence[pulumi.Input['SealedSecretStatusConditionsArgsDict']]]]
-        """
-        Represents the latest available observations of a sealed secret's current state.
-        """
-        observed_generation: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
-        """
-elif False:
-    SealedSecretStatusArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretStatusArgsDict(TypedDict):
+    """
+    SealedSecretStatus is the most recently observed status of the SealedSecret.
+    """
+    conditions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]]]
+    """
+    Represents the latest available observations of a sealed secret's current state.
+    """
+    observed_generation: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
+    """
 
 @pulumi.input_type
 class SealedSecretStatusArgs:
     def __init__(__self__, *,
-                 conditions: Optional[pulumi.Input[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]] = None,
-                 observed_generation: Optional[pulumi.Input[_builtins.int]] = None):
+                 conditions: pulumi.Input[Optional[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]] = None,
+                 observed_generation: pulumi.Input[Optional[_builtins.int]] = None):
         """
         SealedSecretStatus is the most recently observed status of the SealedSecret.
+
         :param pulumi.Input[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]] conditions: Represents the latest available observations of a sealed secret's current state.
         :param pulumi.Input[_builtins.int] observed_generation: ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
         """
@@ -553,65 +539,63 @@ class SealedSecretStatusArgs:
 
     @_builtins.property
     @pulumi.getter
-    def conditions(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]]:
+    def conditions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]]:
         """
         Represents the latest available observations of a sealed secret's current state.
         """
         return pulumi.get(self, "conditions")
 
     @conditions.setter
-    def conditions(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]]):
+    def conditions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['SealedSecretStatusConditionsArgs']]]]):
         pulumi.set(self, "conditions", value)
 
     @_builtins.property
     @pulumi.getter(name="observedGeneration")
-    def observed_generation(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def observed_generation(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         ObservedGeneration reflects the generation most recently observed by the sealed-secrets controller.
         """
         return pulumi.get(self, "observed_generation")
 
     @observed_generation.setter
-    def observed_generation(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def observed_generation(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "observed_generation", value)
 
 
-if not MYPY:
-    class SealedSecretArgsDict(TypedDict):
-        """
-        SealedSecret is the K8s representation of a "sealed Secret" - a
-        regular k8s Secret that has been sealed (encrypted) using the
-        controller's key.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['SealedSecretSpecArgsDict']]
-        status: NotRequired[pulumi.Input['SealedSecretStatusArgsDict']]
-elif False:
-    SealedSecretArgsDict: TypeAlias = Mapping[str, Any]
+class SealedSecretArgsDict(TypedDict):
+    """
+    SealedSecret is the K8s representation of a "sealed Secret" - a
+    regular k8s Secret that has been sealed (encrypted) using the
+    controller's key.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['SealedSecretSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['SealedSecretStatusArgs']]]
 
 @pulumi.input_type
 class SealedSecretArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['SealedSecretSpecArgs']] = None,
-                 status: Optional[pulumi.Input['SealedSecretStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['SealedSecretSpecArgs']] = None,
+                 status: pulumi.Input[Optional['SealedSecretStatusArgs']] = None):
         """
         SealedSecret is the K8s representation of a "sealed Secret" - a
         regular k8s Secret that has been sealed (encrypted) using the
         controller's key.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -629,56 +613,56 @@ class SealedSecretArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['SealedSecretSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['SealedSecretSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['SealedSecretSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['SealedSecretSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['SealedSecretStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['SealedSecretStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['SealedSecretStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['SealedSecretStatusArgs']]):
         pulumi.set(self, "status", value)
 
 

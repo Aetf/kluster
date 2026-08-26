@@ -96,43 +96,39 @@ __all__ = [
     'NodeFeatureArgsDict',
 ]
 
-MYPY = False
-
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -151,19 +147,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchAr
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -171,12 +167,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchAr
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -187,45 +183,43 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchAr
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -244,19 +238,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -264,12 +258,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -280,40 +274,38 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict']]
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]]
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -327,19 +319,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -347,49 +339,47 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgsDict']]
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']]]
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -403,19 +393,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -423,37 +413,35 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesMatchNameArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgsDict(TypedDict):
-        """
-        MatchAnyElem specifies one sub-matcher of MatchAny.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgsDict(TypedDict):
+    """
+    MatchAnyElem specifies one sub-matcher of MatchAny.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs:
     def __init__(__self__, *,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]] = None):
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -461,35 +449,33 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesPatchArgs']]]]):
         pulumi.set(self, "match_features", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgsDict(TypedDict):
-        """
-        MatchAnyElem specifies one sub-matcher of MatchAny.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgsDict(TypedDict):
+    """
+    MatchAnyElem specifies one sub-matcher of MatchAny.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs:
     def __init__(__self__, *,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]] = None):
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -497,52 +483,50 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyMatchFeaturesArgs']]]]):
         pulumi.set(self, "match_features", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -561,19 +545,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -581,12 +565,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -597,45 +581,43 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -654,19 +636,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -674,12 +656,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -690,40 +672,38 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgsDict']]
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']]]
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -737,19 +717,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -757,49 +737,47 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNamePatchArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgsDict']]
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']]]
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -813,19 +791,19 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -833,60 +811,58 @@ class NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesMatchNameArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesPatchArgsDict(TypedDict):
-        """
-        GroupRule defines a rule for nodegroup filtering.
-        """
-        match_any: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgsDict']]]]
-        """
-        MatchAny specifies a list of matchers one of which must match.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the rule.
-        """
-        vars: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Vars is the variables to store if the rule matches. Variables can be
-        referenced from other rules enabling more complex rule hierarchies.
-        """
-        vars_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        VarsTemplate specifies a template to expand for dynamically generating
-        multiple variables. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesPatchArgsDict(TypedDict):
+    """
+    GroupRule defines a rule for nodegroup filtering.
+    """
+    match_any: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]]]
+    """
+    MatchAny specifies a list of matchers one of which must match.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the rule.
+    """
+    vars: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Vars is the variables to store if the rule matches. Variables can be
+    referenced from other rules enabling more complex rule hierarchies.
+    """
+    vars_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    VarsTemplate specifies a template to expand for dynamically generating
+    multiple variables. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesPatchArgs:
     def __init__(__self__, *,
-                 match_any: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]] = None,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 vars: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 vars_template: Optional[pulumi.Input[_builtins.str]] = None):
+                 match_any: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]] = None,
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 vars: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 vars_template: pulumi.Input[Optional[_builtins.str]] = None):
         """
         GroupRule defines a rule for nodegroup filtering.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]] match_any: MatchAny specifies a list of matchers one of which must match.
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         :param pulumi.Input[_builtins.str] name: Name of the rule.
@@ -909,43 +885,43 @@ class NodeFeatureGroupSpecFeatureGroupRulesPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchAny")
-    def match_any(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]]:
+    def match_any(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]]:
         """
         MatchAny specifies a list of matchers one of which must match.
         """
         return pulumi.get(self, "match_any")
 
     @match_any.setter
-    def match_any(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]]):
+    def match_any(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyPatchArgs']]]]):
         pulumi.set(self, "match_any", value)
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesPatchArgs']]]]):
         pulumi.set(self, "match_features", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the rule.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def vars(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def vars(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Vars is the variables to store if the rule matches. Variables can be
         referenced from other rules enabling more complex rule hierarchies.
@@ -953,12 +929,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesPatchArgs:
         return pulumi.get(self, "vars")
 
     @vars.setter
-    def vars(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def vars(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "vars", value)
 
     @_builtins.property
     @pulumi.getter(name="varsTemplate")
-    def vars_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def vars_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         VarsTemplate specifies a template to expand for dynamically generating
         multiple variables. Data (after template expansion) must be keys with an
@@ -967,51 +943,49 @@ class NodeFeatureGroupSpecFeatureGroupRulesPatchArgs:
         return pulumi.get(self, "vars_template")
 
     @vars_template.setter
-    def vars_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def vars_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "vars_template", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecFeatureGroupRulesArgsDict(TypedDict):
-        """
-        GroupRule defines a rule for nodegroup filtering.
-        """
-        match_any: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgsDict']]]]
-        """
-        MatchAny specifies a list of matchers one of which must match.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the rule.
-        """
-        vars: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Vars is the variables to store if the rule matches. Variables can be
-        referenced from other rules enabling more complex rule hierarchies.
-        """
-        vars_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        VarsTemplate specifies a template to expand for dynamically generating
-        multiple variables. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-elif False:
-    NodeFeatureGroupSpecFeatureGroupRulesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecFeatureGroupRulesArgsDict(TypedDict):
+    """
+    GroupRule defines a rule for nodegroup filtering.
+    """
+    match_any: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]]]
+    """
+    MatchAny specifies a list of matchers one of which must match.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the rule.
+    """
+    vars: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Vars is the variables to store if the rule matches. Variables can be
+    referenced from other rules enabling more complex rule hierarchies.
+    """
+    vars_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    VarsTemplate specifies a template to expand for dynamically generating
+    multiple variables. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecFeatureGroupRulesArgs:
     def __init__(__self__, *,
-                 match_any: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]] = None,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 vars: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 vars_template: Optional[pulumi.Input[_builtins.str]] = None):
+                 match_any: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]] = None,
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 vars: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 vars_template: pulumi.Input[Optional[_builtins.str]] = None):
         """
         GroupRule defines a rule for nodegroup filtering.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]] match_any: MatchAny specifies a list of matchers one of which must match.
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         :param pulumi.Input[_builtins.str] name: Name of the rule.
@@ -1034,43 +1008,43 @@ class NodeFeatureGroupSpecFeatureGroupRulesArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchAny")
-    def match_any(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]]:
+    def match_any(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]]:
         """
         MatchAny specifies a list of matchers one of which must match.
         """
         return pulumi.get(self, "match_any")
 
     @match_any.setter
-    def match_any(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]]):
+    def match_any(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchAnyArgs']]]]):
         pulumi.set(self, "match_any", value)
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesMatchFeaturesArgs']]]]):
         pulumi.set(self, "match_features", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the rule.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def vars(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def vars(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Vars is the variables to store if the rule matches. Variables can be
         referenced from other rules enabling more complex rule hierarchies.
@@ -1078,12 +1052,12 @@ class NodeFeatureGroupSpecFeatureGroupRulesArgs:
         return pulumi.get(self, "vars")
 
     @vars.setter
-    def vars(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def vars(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "vars", value)
 
     @_builtins.property
     @pulumi.getter(name="varsTemplate")
-    def vars_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def vars_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         VarsTemplate specifies a template to expand for dynamically generating
         multiple variables. Data (after template expansion) must be keys with an
@@ -1092,28 +1066,26 @@ class NodeFeatureGroupSpecFeatureGroupRulesArgs:
         return pulumi.get(self, "vars_template")
 
     @vars_template.setter
-    def vars_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def vars_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "vars_template", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecPatchArgsDict(TypedDict):
-        """
-        Spec defines the rules to be evaluated.
-        """
-        feature_group_rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgsDict']]]]
-        """
-        List of rules to evaluate to determine nodes that belong in this group.
-        """
-elif False:
-    NodeFeatureGroupSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecPatchArgsDict(TypedDict):
+    """
+    Spec defines the rules to be evaluated.
+    """
+    feature_group_rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]]]
+    """
+    List of rules to evaluate to determine nodes that belong in this group.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecPatchArgs:
     def __init__(__self__, *,
-                 feature_group_rules: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]] = None):
+                 feature_group_rules: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]] feature_group_rules: List of rules to evaluate to determine nodes that belong in this group.
         """
         if feature_group_rules is not None:
@@ -1121,35 +1093,33 @@ class NodeFeatureGroupSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="featureGroupRules")
-    def feature_group_rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]]:
+    def feature_group_rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]]:
         """
         List of rules to evaluate to determine nodes that belong in this group.
         """
         return pulumi.get(self, "feature_group_rules")
 
     @feature_group_rules.setter
-    def feature_group_rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]]):
+    def feature_group_rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesPatchArgs']]]]):
         pulumi.set(self, "feature_group_rules", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupSpecArgsDict(TypedDict):
-        """
-        Spec defines the rules to be evaluated.
-        """
-        feature_group_rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgsDict']]]]
-        """
-        List of rules to evaluate to determine nodes that belong in this group.
-        """
-elif False:
-    NodeFeatureGroupSpecArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupSpecArgsDict(TypedDict):
+    """
+    Spec defines the rules to be evaluated.
+    """
+    feature_group_rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]]]
+    """
+    List of rules to evaluate to determine nodes that belong in this group.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupSpecArgs:
     def __init__(__self__, *,
-                 feature_group_rules: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]] = None):
+                 feature_group_rules: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]] feature_group_rules: List of rules to evaluate to determine nodes that belong in this group.
         """
         if feature_group_rules is not None:
@@ -1157,30 +1127,27 @@ class NodeFeatureGroupSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="featureGroupRules")
-    def feature_group_rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]]:
+    def feature_group_rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]]:
         """
         List of rules to evaluate to determine nodes that belong in this group.
         """
         return pulumi.get(self, "feature_group_rules")
 
     @feature_group_rules.setter
-    def feature_group_rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]]):
+    def feature_group_rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupSpecFeatureGroupRulesArgs']]]]):
         pulumi.set(self, "feature_group_rules", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupStatusNodesArgsDict(TypedDict):
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the node.
-        """
-elif False:
-    NodeFeatureGroupStatusNodesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupStatusNodesArgsDict(TypedDict):
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the node.
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupStatusNodesArgs:
     def __init__(__self__, *,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         :param pulumi.Input[_builtins.str] name: Name of the node.
         """
@@ -1189,37 +1156,35 @@ class NodeFeatureGroupStatusNodesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the node.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupStatusArgsDict(TypedDict):
-        """
-        Status of the NodeFeatureGroup after the most recent evaluation of the
-        specification.
-        """
-        nodes: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgsDict']]]]
-        """
-        Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
-        """
-elif False:
-    NodeFeatureGroupStatusArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupStatusArgsDict(TypedDict):
+    """
+    Status of the NodeFeatureGroup after the most recent evaluation of the
+    specification.
+    """
+    nodes: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]]]
+    """
+    Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
+    """
 
 @pulumi.input_type
 class NodeFeatureGroupStatusArgs:
     def __init__(__self__, *,
-                 nodes: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]] = None):
+                 nodes: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]] = None):
         """
         Status of the NodeFeatureGroup after the most recent evaluation of the
         specification.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]] nodes: Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
         """
         if nodes is not None:
@@ -1227,49 +1192,47 @@ class NodeFeatureGroupStatusArgs:
 
     @_builtins.property
     @pulumi.getter
-    def nodes(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]]:
+    def nodes(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]]:
         """
         Nodes is a list of FeatureGroupNode in the cluster that match the featureGroupRules
         """
         return pulumi.get(self, "nodes")
 
     @nodes.setter
-    def nodes(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]]):
+    def nodes(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureGroupStatusNodesArgs']]]]):
         pulumi.set(self, "nodes", value)
 
 
-if not MYPY:
-    class NodeFeatureGroupArgsDict(TypedDict):
-        """
-        NodeFeatureGroup resource holds Node pools by featureGroup
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['NodeFeatureGroupSpecArgsDict']]
-        status: NotRequired[pulumi.Input['NodeFeatureGroupStatusArgsDict']]
-elif False:
-    NodeFeatureGroupArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureGroupArgsDict(TypedDict):
+    """
+    NodeFeatureGroup resource holds Node pools by featureGroup
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['NodeFeatureGroupSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['NodeFeatureGroupStatusArgs']]]
 
 @pulumi.input_type
 class NodeFeatureGroupArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['NodeFeatureGroupSpecArgs']] = None,
-                 status: Optional[pulumi.Input['NodeFeatureGroupStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['NodeFeatureGroupSpecArgs']] = None,
+                 status: pulumi.Input[Optional['NodeFeatureGroupStatusArgs']] = None):
         """
         NodeFeatureGroup resource holds Node pools by featureGroup
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -1287,77 +1250,75 @@ class NodeFeatureGroupArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['NodeFeatureGroupSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['NodeFeatureGroupSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['NodeFeatureGroupSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['NodeFeatureGroupSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['NodeFeatureGroupStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['NodeFeatureGroupStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['NodeFeatureGroupStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['NodeFeatureGroupStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecPatchArgsDict(TypedDict):
-        """
-        Spec defines the rules to be evaluated.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgsDict']]]]
-        """
-        Rules is a list of node customization rules.
-        """
-elif False:
-    NodeFeatureRuleSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecPatchArgsDict(TypedDict):
+    """
+    Spec defines the rules to be evaluated.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]]]
+    """
+    Rules is a list of node customization rules.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecPatchArgs:
     def __init__(__self__, *,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]] = None):
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]] rules: Rules is a list of node customization rules.
         """
         if rules is not None:
@@ -1365,52 +1326,50 @@ class NodeFeatureRuleSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]]:
         """
         Rules is a list of node customization rules.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesPatchArgs']]]]):
         pulumi.set(self, "rules", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1429,19 +1388,19 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1449,12 +1408,12 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -1465,45 +1424,43 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1522,19 +1479,19 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1542,12 +1499,12 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -1558,40 +1515,38 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgsDict']]
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]]
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -1605,19 +1560,19 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -1625,49 +1580,47 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNamePatchArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgsDict']]
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']]]
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -1681,19 +1634,19 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -1701,37 +1654,35 @@ class NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesMatchNameArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyPatchArgsDict(TypedDict):
-        """
-        MatchAnyElem specifies one sub-matcher of MatchAny.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyPatchArgsDict(TypedDict):
+    """
+    MatchAnyElem specifies one sub-matcher of MatchAny.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyPatchArgs:
     def __init__(__self__, *,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]] = None):
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -1739,35 +1690,33 @@ class NodeFeatureRuleSpecRulesMatchAnyPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesPatchArgs']]]]):
         pulumi.set(self, "match_features", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchAnyArgsDict(TypedDict):
-        """
-        MatchAnyElem specifies one sub-matcher of MatchAny.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchAnyArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchAnyArgsDict(TypedDict):
+    """
+    MatchAnyElem specifies one sub-matcher of MatchAny.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchAnyArgs:
     def __init__(__self__, *,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]] = None):
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]] = None):
         """
         MatchAnyElem specifies one sub-matcher of MatchAny.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]] match_features: MatchFeatures specifies a set of matcher terms all of which must match.
         """
         if match_features is not None:
@@ -1775,52 +1724,50 @@ class NodeFeatureRuleSpecRulesMatchAnyArgs:
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyMatchFeaturesArgs']]]]):
         pulumi.set(self, "match_features", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1839,19 +1786,19 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1859,12 +1806,12 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -1875,45 +1822,43 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgsDict(TypedDict):
-        """
-        MatchName in an expression that is matched against the name of each
-        element in the feature set.
-        """
-        op: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Op is the operator to be applied.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Type defines the value type for specific operators.
-        The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
-        """
-        value: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Value is the list of values that the operand evaluates the input
-        against. Value should be empty if the operator is Exists, DoesNotExist,
-        IsTrue or IsFalse. Value should contain exactly one element if the
-        operator is Gt or Lt and exactly two elements if the operator is GtLt.
-        In other cases Value should contain at least one element.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgsDict(TypedDict):
+    """
+    MatchName in an expression that is matched against the name of each
+    element in the feature set.
+    """
+    op: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Op is the operator to be applied.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Type defines the value type for specific operators.
+    The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
+    """
+    value: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Value is the list of values that the operand evaluates the input
+    against. Value should be empty if the operator is Exists, DoesNotExist,
+    IsTrue or IsFalse. Value should contain exactly one element if the
+    operator is Gt or Lt and exactly two elements if the operator is GtLt.
+    In other cases Value should contain at least one element.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs:
     def __init__(__self__, *,
-                 op: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None):
+                 op: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None):
         """
         MatchName in an expression that is matched against the name of each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] op: Op is the operator to be applied.
         :param pulumi.Input[_builtins.str] type: Type defines the value type for specific operators.
                The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1932,19 +1877,19 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs:
 
     @_builtins.property
     @pulumi.getter
-    def op(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def op(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Op is the operator to be applied.
         """
         return pulumi.get(self, "op")
 
     @op.setter
-    def op(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def op(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "op", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Type defines the value type for specific operators.
         The currently supported type is 'version' for Gt,Ge,Lt,Le,GtLt,GeLe operators.
@@ -1952,12 +1897,12 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def value(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Value is the list of values that the operand evaluates the input
         against. Value should be empty if the operator is Exists, DoesNotExist,
@@ -1968,40 +1913,38 @@ class NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def value(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchFeaturesPatchArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgsDict']]
-elif False:
-    NodeFeatureRuleSpecRulesMatchFeaturesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchFeaturesPatchArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']]]
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -2015,19 +1958,19 @@ class NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -2035,49 +1978,47 @@ class NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNamePatchArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesMatchFeaturesArgsDict(TypedDict):
-        """
-        FeatureMatcherTerm defines requirements against one feature set. All
-        requirements (specified as MatchExpressions) are evaluated against each
-        element in the feature set.
-        """
-        feature: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Feature is the name of the feature set to match against.
-        """
-        match_expressions: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        MatchExpressions is the set of per-element expressions evaluated. These
-        match against the value of the specified elements.
-        """
-        match_name: NotRequired[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgsDict']]
-elif False:
-    NodeFeatureRuleSpecRulesMatchFeaturesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesMatchFeaturesArgsDict(TypedDict):
+    """
+    FeatureMatcherTerm defines requirements against one feature set. All
+    requirements (specified as MatchExpressions) are evaluated against each
+    element in the feature set.
+    """
+    feature: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Feature is the name of the feature set to match against.
+    """
+    match_expressions: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    MatchExpressions is the set of per-element expressions evaluated. These
+    match against the value of the specified elements.
+    """
+    match_name: NotRequired[pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']]]
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesMatchFeaturesArgs:
     def __init__(__self__, *,
-                 feature: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_expressions: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 match_name: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']] = None):
+                 feature: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_expressions: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 match_name: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']] = None):
         """
         FeatureMatcherTerm defines requirements against one feature set. All
         requirements (specified as MatchExpressions) are evaluated against each
         element in the feature set.
+
         :param pulumi.Input[_builtins.str] feature: Feature is the name of the feature set to match against.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] match_expressions: MatchExpressions is the set of per-element expressions evaluated. These
                match against the value of the specified elements.
@@ -2091,19 +2032,19 @@ class NodeFeatureRuleSpecRulesMatchFeaturesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def feature(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def feature(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Feature is the name of the feature set to match against.
         """
         return pulumi.get(self, "feature")
 
     @feature.setter
-    def feature(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def feature(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "feature", value)
 
     @_builtins.property
     @pulumi.getter(name="matchExpressions")
-    def match_expressions(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def match_expressions(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         MatchExpressions is the set of per-element expressions evaluated. These
         match against the value of the specified elements.
@@ -2111,89 +2052,87 @@ class NodeFeatureRuleSpecRulesMatchFeaturesArgs:
         return pulumi.get(self, "match_expressions")
 
     @match_expressions.setter
-    def match_expressions(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def match_expressions(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "match_expressions", value)
 
     @_builtins.property
     @pulumi.getter(name="matchName")
-    def match_name(self) -> Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']]:
+    def match_name(self) -> pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']]:
         return pulumi.get(self, "match_name")
 
     @match_name.setter
-    def match_name(self, value: Optional[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']]):
+    def match_name(self, value: pulumi.Input[Optional['NodeFeatureRuleSpecRulesMatchFeaturesMatchNameArgs']]):
         pulumi.set(self, "match_name", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesPatchArgsDict(TypedDict):
-        """
-        Rule defines a rule for node customization such as labeling.
-        """
-        annotations: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Annotations to create if the rule matches.
-        """
-        extended_resources: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        ExtendedResources to create if the rule matches.
-        """
-        labels: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Labels to create if the rule matches.
-        """
-        labels_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        LabelsTemplate specifies a template to expand for dynamically generating
-        multiple labels. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-        match_any: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgsDict']]]]
-        """
-        MatchAny specifies a list of matchers one of which must match.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the rule.
-        """
-        taints: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgsDict']]]]
-        """
-        Taints to create if the rule matches.
-        """
-        vars: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Vars is the variables to store if the rule matches. Variables do not
-        directly inflict any changes in the node object. However, they can be
-        referenced from other rules enabling more complex rule hierarchies,
-        without exposing intermediary output values as labels.
-        """
-        vars_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        VarsTemplate specifies a template to expand for dynamically generating
-        multiple variables. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesPatchArgsDict(TypedDict):
+    """
+    Rule defines a rule for node customization such as labeling.
+    """
+    annotations: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Annotations to create if the rule matches.
+    """
+    extended_resources: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    ExtendedResources to create if the rule matches.
+    """
+    labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Labels to create if the rule matches.
+    """
+    labels_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    LabelsTemplate specifies a template to expand for dynamically generating
+    multiple labels. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
+    match_any: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]]]
+    """
+    MatchAny specifies a list of matchers one of which must match.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the rule.
+    """
+    taints: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]]]
+    """
+    Taints to create if the rule matches.
+    """
+    vars: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Vars is the variables to store if the rule matches. Variables do not
+    directly inflict any changes in the node object. However, they can be
+    referenced from other rules enabling more complex rule hierarchies,
+    without exposing intermediary output values as labels.
+    """
+    vars_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    VarsTemplate specifies a template to expand for dynamically generating
+    multiple variables. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesPatchArgs:
     def __init__(__self__, *,
-                 annotations: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 extended_resources: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 labels: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 labels_template: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_any: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]] = None,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 taints: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]] = None,
-                 vars: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 vars_template: Optional[pulumi.Input[_builtins.str]] = None):
+                 annotations: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 extended_resources: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 labels_template: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_any: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]] = None,
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 taints: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]] = None,
+                 vars: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 vars_template: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Rule defines a rule for node customization such as labeling.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] annotations: Annotations to create if the rule matches.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] extended_resources: ExtendedResources to create if the rule matches.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] labels: Labels to create if the rule matches.
@@ -2235,43 +2174,43 @@ class NodeFeatureRuleSpecRulesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def annotations(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def annotations(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Annotations to create if the rule matches.
         """
         return pulumi.get(self, "annotations")
 
     @annotations.setter
-    def annotations(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def annotations(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "annotations", value)
 
     @_builtins.property
     @pulumi.getter(name="extendedResources")
-    def extended_resources(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def extended_resources(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         ExtendedResources to create if the rule matches.
         """
         return pulumi.get(self, "extended_resources")
 
     @extended_resources.setter
-    def extended_resources(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def extended_resources(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "extended_resources", value)
 
     @_builtins.property
     @pulumi.getter
-    def labels(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Labels to create if the rule matches.
         """
         return pulumi.get(self, "labels")
 
     @labels.setter
-    def labels(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "labels", value)
 
     @_builtins.property
     @pulumi.getter(name="labelsTemplate")
-    def labels_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def labels_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         LabelsTemplate specifies a template to expand for dynamically generating
         multiple labels. Data (after template expansion) must be keys with an
@@ -2280,60 +2219,60 @@ class NodeFeatureRuleSpecRulesPatchArgs:
         return pulumi.get(self, "labels_template")
 
     @labels_template.setter
-    def labels_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def labels_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "labels_template", value)
 
     @_builtins.property
     @pulumi.getter(name="matchAny")
-    def match_any(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]]:
+    def match_any(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]]:
         """
         MatchAny specifies a list of matchers one of which must match.
         """
         return pulumi.get(self, "match_any")
 
     @match_any.setter
-    def match_any(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]]):
+    def match_any(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyPatchArgs']]]]):
         pulumi.set(self, "match_any", value)
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesPatchArgs']]]]):
         pulumi.set(self, "match_features", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the rule.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def taints(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]]:
+    def taints(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]]:
         """
         Taints to create if the rule matches.
         """
         return pulumi.get(self, "taints")
 
     @taints.setter
-    def taints(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]]):
+    def taints(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsPatchArgs']]]]):
         pulumi.set(self, "taints", value)
 
     @_builtins.property
     @pulumi.getter
-    def vars(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def vars(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Vars is the variables to store if the rule matches. Variables do not
         directly inflict any changes in the node object. However, they can be
@@ -2343,12 +2282,12 @@ class NodeFeatureRuleSpecRulesPatchArgs:
         return pulumi.get(self, "vars")
 
     @vars.setter
-    def vars(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def vars(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "vars", value)
 
     @_builtins.property
     @pulumi.getter(name="varsTemplate")
-    def vars_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def vars_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         VarsTemplate specifies a template to expand for dynamically generating
         multiple variables. Data (after template expansion) must be keys with an
@@ -2357,48 +2296,46 @@ class NodeFeatureRuleSpecRulesPatchArgs:
         return pulumi.get(self, "vars_template")
 
     @vars_template.setter
-    def vars_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def vars_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "vars_template", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesTaintsPatchArgsDict(TypedDict):
-        """
-        The node this Taint is attached to has the "effect" on
-        any pod that does not tolerate the Taint.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Required. The effect of the taint on pods
-        that do not tolerate the taint.
-        Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Required. The taint key to be applied to a node.
-        """
-        time_added: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        TimeAdded represents the time at which the taint was added.
-        It is only written for NoExecute taints.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        The taint value corresponding to the taint key.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesTaintsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesTaintsPatchArgsDict(TypedDict):
+    """
+    The node this Taint is attached to has the "effect" on
+    any pod that does not tolerate the Taint.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Required. The effect of the taint on pods
+    that do not tolerate the taint.
+    Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Required. The taint key to be applied to a node.
+    """
+    time_added: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    TimeAdded represents the time at which the taint was added.
+    It is only written for NoExecute taints.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    The taint value corresponding to the taint key.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesTaintsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 time_added: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 time_added: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The node this Taint is attached to has the "effect" on
         any pod that does not tolerate the Taint.
+
         :param pulumi.Input[_builtins.str] effect: Required. The effect of the taint on pods
                that do not tolerate the taint.
                Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2418,7 +2355,7 @@ class NodeFeatureRuleSpecRulesTaintsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Required. The effect of the taint on pods
         that do not tolerate the taint.
@@ -2427,24 +2364,24 @@ class NodeFeatureRuleSpecRulesTaintsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Required. The taint key to be applied to a node.
         """
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter(name="timeAdded")
-    def time_added(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def time_added(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         TimeAdded represents the time at which the taint was added.
         It is only written for NoExecute taints.
@@ -2452,60 +2389,58 @@ class NodeFeatureRuleSpecRulesTaintsPatchArgs:
         return pulumi.get(self, "time_added")
 
     @time_added.setter
-    def time_added(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def time_added(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "time_added", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         The taint value corresponding to the taint key.
         """
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesTaintsArgsDict(TypedDict):
-        """
-        The node this Taint is attached to has the "effect" on
-        any pod that does not tolerate the Taint.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Required. The effect of the taint on pods
-        that do not tolerate the taint.
-        Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Required. The taint key to be applied to a node.
-        """
-        time_added: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        TimeAdded represents the time at which the taint was added.
-        It is only written for NoExecute taints.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        The taint value corresponding to the taint key.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesTaintsArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesTaintsArgsDict(TypedDict):
+    """
+    The node this Taint is attached to has the "effect" on
+    any pod that does not tolerate the Taint.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Required. The effect of the taint on pods
+    that do not tolerate the taint.
+    Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Required. The taint key to be applied to a node.
+    """
+    time_added: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    TimeAdded represents the time at which the taint was added.
+    It is only written for NoExecute taints.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    The taint value corresponding to the taint key.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesTaintsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 time_added: Optional[pulumi.Input[_builtins.str]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 time_added: pulumi.Input[Optional[_builtins.str]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The node this Taint is attached to has the "effect" on
         any pod that does not tolerate the Taint.
+
         :param pulumi.Input[_builtins.str] effect: Required. The effect of the taint on pods
                that do not tolerate the taint.
                Valid effects are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2525,7 +2460,7 @@ class NodeFeatureRuleSpecRulesTaintsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Required. The effect of the taint on pods
         that do not tolerate the taint.
@@ -2534,24 +2469,24 @@ class NodeFeatureRuleSpecRulesTaintsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Required. The taint key to be applied to a node.
         """
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter(name="timeAdded")
-    def time_added(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def time_added(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         TimeAdded represents the time at which the taint was added.
         It is only written for NoExecute taints.
@@ -2559,92 +2494,90 @@ class NodeFeatureRuleSpecRulesTaintsArgs:
         return pulumi.get(self, "time_added")
 
     @time_added.setter
-    def time_added(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def time_added(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "time_added", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         The taint value corresponding to the taint key.
         """
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecRulesArgsDict(TypedDict):
-        """
-        Rule defines a rule for node customization such as labeling.
-        """
-        annotations: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Annotations to create if the rule matches.
-        """
-        extended_resources: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        ExtendedResources to create if the rule matches.
-        """
-        labels: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Labels to create if the rule matches.
-        """
-        labels_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        LabelsTemplate specifies a template to expand for dynamically generating
-        multiple labels. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-        match_any: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgsDict']]]]
-        """
-        MatchAny specifies a list of matchers one of which must match.
-        """
-        match_features: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgsDict']]]]
-        """
-        MatchFeatures specifies a set of matcher terms all of which must match.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the rule.
-        """
-        taints: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgsDict']]]]
-        """
-        Taints to create if the rule matches.
-        """
-        vars: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Vars is the variables to store if the rule matches. Variables do not
-        directly inflict any changes in the node object. However, they can be
-        referenced from other rules enabling more complex rule hierarchies,
-        without exposing intermediary output values as labels.
-        """
-        vars_template: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        VarsTemplate specifies a template to expand for dynamically generating
-        multiple variables. Data (after template expansion) must be keys with an
-        optional value (<key>[=<value>]) separated by newlines.
-        """
-elif False:
-    NodeFeatureRuleSpecRulesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecRulesArgsDict(TypedDict):
+    """
+    Rule defines a rule for node customization such as labeling.
+    """
+    annotations: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Annotations to create if the rule matches.
+    """
+    extended_resources: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    ExtendedResources to create if the rule matches.
+    """
+    labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Labels to create if the rule matches.
+    """
+    labels_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    LabelsTemplate specifies a template to expand for dynamically generating
+    multiple labels. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
+    match_any: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]]]
+    """
+    MatchAny specifies a list of matchers one of which must match.
+    """
+    match_features: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]]]
+    """
+    MatchFeatures specifies a set of matcher terms all of which must match.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the rule.
+    """
+    taints: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]]]
+    """
+    Taints to create if the rule matches.
+    """
+    vars: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Vars is the variables to store if the rule matches. Variables do not
+    directly inflict any changes in the node object. However, they can be
+    referenced from other rules enabling more complex rule hierarchies,
+    without exposing intermediary output values as labels.
+    """
+    vars_template: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    VarsTemplate specifies a template to expand for dynamically generating
+    multiple variables. Data (after template expansion) must be keys with an
+    optional value (<key>[=<value>]) separated by newlines.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecRulesArgs:
     def __init__(__self__, *,
-                 annotations: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 extended_resources: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 labels: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 labels_template: Optional[pulumi.Input[_builtins.str]] = None,
-                 match_any: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]] = None,
-                 match_features: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 taints: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]] = None,
-                 vars: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 vars_template: Optional[pulumi.Input[_builtins.str]] = None):
+                 annotations: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 extended_resources: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 labels_template: pulumi.Input[Optional[_builtins.str]] = None,
+                 match_any: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]] = None,
+                 match_features: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 taints: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]] = None,
+                 vars: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 vars_template: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Rule defines a rule for node customization such as labeling.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] annotations: Annotations to create if the rule matches.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] extended_resources: ExtendedResources to create if the rule matches.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] labels: Labels to create if the rule matches.
@@ -2686,43 +2619,43 @@ class NodeFeatureRuleSpecRulesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def annotations(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def annotations(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Annotations to create if the rule matches.
         """
         return pulumi.get(self, "annotations")
 
     @annotations.setter
-    def annotations(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def annotations(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "annotations", value)
 
     @_builtins.property
     @pulumi.getter(name="extendedResources")
-    def extended_resources(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def extended_resources(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         ExtendedResources to create if the rule matches.
         """
         return pulumi.get(self, "extended_resources")
 
     @extended_resources.setter
-    def extended_resources(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def extended_resources(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "extended_resources", value)
 
     @_builtins.property
     @pulumi.getter
-    def labels(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Labels to create if the rule matches.
         """
         return pulumi.get(self, "labels")
 
     @labels.setter
-    def labels(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "labels", value)
 
     @_builtins.property
     @pulumi.getter(name="labelsTemplate")
-    def labels_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def labels_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         LabelsTemplate specifies a template to expand for dynamically generating
         multiple labels. Data (after template expansion) must be keys with an
@@ -2731,60 +2664,60 @@ class NodeFeatureRuleSpecRulesArgs:
         return pulumi.get(self, "labels_template")
 
     @labels_template.setter
-    def labels_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def labels_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "labels_template", value)
 
     @_builtins.property
     @pulumi.getter(name="matchAny")
-    def match_any(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]]:
+    def match_any(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]]:
         """
         MatchAny specifies a list of matchers one of which must match.
         """
         return pulumi.get(self, "match_any")
 
     @match_any.setter
-    def match_any(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]]):
+    def match_any(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchAnyArgs']]]]):
         pulumi.set(self, "match_any", value)
 
     @_builtins.property
     @pulumi.getter(name="matchFeatures")
-    def match_features(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]]:
+    def match_features(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]]:
         """
         MatchFeatures specifies a set of matcher terms all of which must match.
         """
         return pulumi.get(self, "match_features")
 
     @match_features.setter
-    def match_features(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]]):
+    def match_features(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesMatchFeaturesArgs']]]]):
         pulumi.set(self, "match_features", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the rule.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def taints(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]]:
+    def taints(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]]:
         """
         Taints to create if the rule matches.
         """
         return pulumi.get(self, "taints")
 
     @taints.setter
-    def taints(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]]):
+    def taints(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesTaintsArgs']]]]):
         pulumi.set(self, "taints", value)
 
     @_builtins.property
     @pulumi.getter
-    def vars(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def vars(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Vars is the variables to store if the rule matches. Variables do not
         directly inflict any changes in the node object. However, they can be
@@ -2794,12 +2727,12 @@ class NodeFeatureRuleSpecRulesArgs:
         return pulumi.get(self, "vars")
 
     @vars.setter
-    def vars(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def vars(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "vars", value)
 
     @_builtins.property
     @pulumi.getter(name="varsTemplate")
-    def vars_template(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def vars_template(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         VarsTemplate specifies a template to expand for dynamically generating
         multiple variables. Data (after template expansion) must be keys with an
@@ -2808,28 +2741,26 @@ class NodeFeatureRuleSpecRulesArgs:
         return pulumi.get(self, "vars_template")
 
     @vars_template.setter
-    def vars_template(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def vars_template(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "vars_template", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleSpecArgsDict(TypedDict):
-        """
-        Spec defines the rules to be evaluated.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgsDict']]]]
-        """
-        Rules is a list of node customization rules.
-        """
-elif False:
-    NodeFeatureRuleSpecArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleSpecArgsDict(TypedDict):
+    """
+    Spec defines the rules to be evaluated.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]]]
+    """
+    Rules is a list of node customization rules.
+    """
 
 @pulumi.input_type
 class NodeFeatureRuleSpecArgs:
     def __init__(__self__, *,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]] = None):
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]] = None):
         """
         Spec defines the rules to be evaluated.
+
         :param pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]] rules: Rules is a list of node customization rules.
         """
         if rules is not None:
@@ -2837,49 +2768,47 @@ class NodeFeatureRuleSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]]:
         """
         Rules is a list of node customization rules.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NodeFeatureRuleSpecRulesArgs']]]]):
         pulumi.set(self, "rules", value)
 
 
-if not MYPY:
-    class NodeFeatureRuleArgsDict(TypedDict):
-        """
-        NodeFeatureRule resource specifies a configuration for feature-based
-        customization of node objects, such as node labeling.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['NodeFeatureRuleSpecArgsDict']]
-elif False:
-    NodeFeatureRuleArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureRuleArgsDict(TypedDict):
+    """
+    NodeFeatureRule resource specifies a configuration for feature-based
+    customization of node objects, such as node labeling.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['NodeFeatureRuleSpecArgs']]]
 
 @pulumi.input_type
 class NodeFeatureRuleArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['NodeFeatureRuleSpecArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['NodeFeatureRuleSpecArgs']] = None):
         """
         NodeFeatureRule resource specifies a configuration for feature-based
         customization of node objects, such as node labeling.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -2895,78 +2824,76 @@ class NodeFeatureRuleArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['NodeFeatureRuleSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['NodeFeatureRuleSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['NodeFeatureRuleSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['NodeFeatureRuleSpecArgs']]):
         pulumi.set(self, "spec", value)
 
 
-if not MYPY:
-    class NodeFeatureSpecFeaturesPatchArgsDict(TypedDict):
-        """
-        Features is the full "raw" features data that has been discovered.
-        """
-        attributes: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Attributes contains all the attribute-type features of the node.
-        """
-        flags: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Flags contains all the flag-type features of the node.
-        """
-        instances: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Instances contains all the instance-type features of the node.
-        """
-elif False:
-    NodeFeatureSpecFeaturesPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureSpecFeaturesPatchArgsDict(TypedDict):
+    """
+    Features is the full "raw" features data that has been discovered.
+    """
+    attributes: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Attributes contains all the attribute-type features of the node.
+    """
+    flags: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Flags contains all the flag-type features of the node.
+    """
+    instances: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Instances contains all the instance-type features of the node.
+    """
 
 @pulumi.input_type
 class NodeFeatureSpecFeaturesPatchArgs:
     def __init__(__self__, *,
-                 attributes: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 flags: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 instances: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None):
+                 attributes: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 flags: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 instances: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None):
         """
         Features is the full "raw" features data that has been discovered.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] attributes: Attributes contains all the attribute-type features of the node.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] flags: Flags contains all the flag-type features of the node.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] instances: Instances contains all the instance-type features of the node.
@@ -2980,69 +2907,67 @@ class NodeFeatureSpecFeaturesPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def attributes(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def attributes(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Attributes contains all the attribute-type features of the node.
         """
         return pulumi.get(self, "attributes")
 
     @attributes.setter
-    def attributes(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def attributes(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "attributes", value)
 
     @_builtins.property
     @pulumi.getter
-    def flags(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def flags(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Flags contains all the flag-type features of the node.
         """
         return pulumi.get(self, "flags")
 
     @flags.setter
-    def flags(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def flags(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "flags", value)
 
     @_builtins.property
     @pulumi.getter
-    def instances(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def instances(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Instances contains all the instance-type features of the node.
         """
         return pulumi.get(self, "instances")
 
     @instances.setter
-    def instances(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def instances(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "instances", value)
 
 
-if not MYPY:
-    class NodeFeatureSpecFeaturesArgsDict(TypedDict):
-        """
-        Features is the full "raw" features data that has been discovered.
-        """
-        attributes: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Attributes contains all the attribute-type features of the node.
-        """
-        flags: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Flags contains all the flag-type features of the node.
-        """
-        instances: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]
-        """
-        Instances contains all the instance-type features of the node.
-        """
-elif False:
-    NodeFeatureSpecFeaturesArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureSpecFeaturesArgsDict(TypedDict):
+    """
+    Features is the full "raw" features data that has been discovered.
+    """
+    attributes: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Attributes contains all the attribute-type features of the node.
+    """
+    flags: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Flags contains all the flag-type features of the node.
+    """
+    instances: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]]
+    """
+    Instances contains all the instance-type features of the node.
+    """
 
 @pulumi.input_type
 class NodeFeatureSpecFeaturesArgs:
     def __init__(__self__, *,
-                 attributes: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 flags: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
-                 instances: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None):
+                 attributes: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 flags: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None,
+                 instances: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]] = None):
         """
         Features is the full "raw" features data that has been discovered.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] attributes: Attributes contains all the attribute-type features of the node.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] flags: Flags contains all the flag-type features of the node.
         :param pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]] instances: Instances contains all the instance-type features of the node.
@@ -3056,61 +2981,59 @@ class NodeFeatureSpecFeaturesArgs:
 
     @_builtins.property
     @pulumi.getter
-    def attributes(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def attributes(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Attributes contains all the attribute-type features of the node.
         """
         return pulumi.get(self, "attributes")
 
     @attributes.setter
-    def attributes(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def attributes(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "attributes", value)
 
     @_builtins.property
     @pulumi.getter
-    def flags(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def flags(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Flags contains all the flag-type features of the node.
         """
         return pulumi.get(self, "flags")
 
     @flags.setter
-    def flags(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def flags(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "flags", value)
 
     @_builtins.property
     @pulumi.getter
-    def instances(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
+    def instances(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]:
         """
         Instances contains all the instance-type features of the node.
         """
         return pulumi.get(self, "instances")
 
     @instances.setter
-    def instances(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
+    def instances(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]]]):
         pulumi.set(self, "instances", value)
 
 
-if not MYPY:
-    class NodeFeatureSpecPatchArgsDict(TypedDict):
-        """
-        Specification of the NodeFeature, containing features discovered for a node.
-        """
-        features: NotRequired[pulumi.Input['NodeFeatureSpecFeaturesPatchArgsDict']]
-        labels: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Labels is the set of node labels that are requested to be created.
-        """
-elif False:
-    NodeFeatureSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureSpecPatchArgsDict(TypedDict):
+    """
+    Specification of the NodeFeature, containing features discovered for a node.
+    """
+    features: NotRequired[pulumi.Input[Optional['NodeFeatureSpecFeaturesPatchArgs']]]
+    labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Labels is the set of node labels that are requested to be created.
+    """
 
 @pulumi.input_type
 class NodeFeatureSpecPatchArgs:
     def __init__(__self__, *,
-                 features: Optional[pulumi.Input['NodeFeatureSpecFeaturesPatchArgs']] = None,
-                 labels: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
+                 features: pulumi.Input[Optional['NodeFeatureSpecFeaturesPatchArgs']] = None,
+                 labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
         """
         Specification of the NodeFeature, containing features discovered for a node.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] labels: Labels is the set of node labels that are requested to be created.
         """
         if features is not None:
@@ -3120,46 +3043,44 @@ class NodeFeatureSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def features(self) -> Optional[pulumi.Input['NodeFeatureSpecFeaturesPatchArgs']]:
+    def features(self) -> pulumi.Input[Optional['NodeFeatureSpecFeaturesPatchArgs']]:
         return pulumi.get(self, "features")
 
     @features.setter
-    def features(self, value: Optional[pulumi.Input['NodeFeatureSpecFeaturesPatchArgs']]):
+    def features(self, value: pulumi.Input[Optional['NodeFeatureSpecFeaturesPatchArgs']]):
         pulumi.set(self, "features", value)
 
     @_builtins.property
     @pulumi.getter
-    def labels(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Labels is the set of node labels that are requested to be created.
         """
         return pulumi.get(self, "labels")
 
     @labels.setter
-    def labels(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "labels", value)
 
 
-if not MYPY:
-    class NodeFeatureSpecArgsDict(TypedDict):
-        """
-        Specification of the NodeFeature, containing features discovered for a node.
-        """
-        features: NotRequired[pulumi.Input['NodeFeatureSpecFeaturesArgsDict']]
-        labels: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        Labels is the set of node labels that are requested to be created.
-        """
-elif False:
-    NodeFeatureSpecArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureSpecArgsDict(TypedDict):
+    """
+    Specification of the NodeFeature, containing features discovered for a node.
+    """
+    features: NotRequired[pulumi.Input[Optional['NodeFeatureSpecFeaturesArgs']]]
+    labels: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    Labels is the set of node labels that are requested to be created.
+    """
 
 @pulumi.input_type
 class NodeFeatureSpecArgs:
     def __init__(__self__, *,
-                 features: Optional[pulumi.Input['NodeFeatureSpecFeaturesArgs']] = None,
-                 labels: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
+                 features: pulumi.Input[Optional['NodeFeatureSpecFeaturesArgs']] = None,
+                 labels: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None):
         """
         Specification of the NodeFeature, containing features discovered for a node.
+
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] labels: Labels is the set of node labels that are requested to be created.
         """
         if features is not None:
@@ -3169,58 +3090,56 @@ class NodeFeatureSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def features(self) -> Optional[pulumi.Input['NodeFeatureSpecFeaturesArgs']]:
+    def features(self) -> pulumi.Input[Optional['NodeFeatureSpecFeaturesArgs']]:
         return pulumi.get(self, "features")
 
     @features.setter
-    def features(self, value: Optional[pulumi.Input['NodeFeatureSpecFeaturesArgs']]):
+    def features(self, value: pulumi.Input[Optional['NodeFeatureSpecFeaturesArgs']]):
         pulumi.set(self, "features", value)
 
     @_builtins.property
     @pulumi.getter
-    def labels(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def labels(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         Labels is the set of node labels that are requested to be created.
         """
         return pulumi.get(self, "labels")
 
     @labels.setter
-    def labels(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def labels(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "labels", value)
 
 
-if not MYPY:
-    class NodeFeatureArgsDict(TypedDict):
-        """
-        NodeFeature resource holds the features discovered for one node in the
-        cluster.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['NodeFeatureSpecArgsDict']]
-elif False:
-    NodeFeatureArgsDict: TypeAlias = Mapping[str, Any]
+class NodeFeatureArgsDict(TypedDict):
+    """
+    NodeFeature resource holds the features discovered for one node in the
+    cluster.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['NodeFeatureSpecArgs']]]
 
 @pulumi.input_type
 class NodeFeatureArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['NodeFeatureSpecArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['NodeFeatureSpecArgs']] = None):
         """
         NodeFeature resource holds the features discovered for one node in the
         cluster.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -3236,47 +3155,47 @@ class NodeFeatureArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['NodeFeatureSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['NodeFeatureSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['NodeFeatureSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['NodeFeatureSpecArgs']]):
         pulumi.set(self, "spec", value)
 
 

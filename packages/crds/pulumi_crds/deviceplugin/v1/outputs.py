@@ -125,6 +125,7 @@ class DlbDevicePlugin(dict):
         DEPRECATED: DlbDevicePlugin is the Schema for the dlbdeviceplugins API. It represents
         the DLB device plugin responsible for advertising Intel DLB hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -209,6 +210,7 @@ class DlbDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.DlbDevicePluginSpecTolerations']] = None):
         """
         DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+
         :param _builtins.str image: Image is a container image with DLB device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with a script that initializes devices.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -301,6 +303,7 @@ class DlbDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.DlbDevicePluginSpecTolerationsPatch']] = None):
         """
         DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+
         :param _builtins.str image: Image is a container image with DLB device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with a script that initializes devices.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -391,6 +394,7 @@ class DlbDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -499,6 +503,7 @@ class DlbDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -610,6 +615,7 @@ class DlbDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         DlbDevicePluginStatus defines the observed state of DlbDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -693,6 +699,7 @@ class DlbDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -831,6 +838,7 @@ class DlbDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -968,6 +976,7 @@ class DlbDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         DlbDevicePluginStatus defines the observed state of DlbDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -1049,6 +1058,7 @@ class DsaDevicePlugin(dict):
         DsaDevicePlugin is the Schema for the dsadeviceplugins API. It represents
         the DSA device plugin responsible for advertising Intel DSA hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -1130,6 +1140,7 @@ class DsaDevicePluginSpec(dict):
         return super().get(key, default)
 
     def __init__(__self__, *,
+                 driver: Optional[_builtins.str] = None,
                  image: Optional[_builtins.str] = None,
                  init_image: Optional[_builtins.str] = None,
                  log_level: Optional[_builtins.int] = None,
@@ -1139,6 +1150,8 @@ class DsaDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.DsaDevicePluginSpecTolerations']] = None):
         """
         DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+
+        :param _builtins.str driver: Driver name used for the DSA devices.
         :param _builtins.str image: Image is a container image with DSA device plugin executable.
         :param _builtins.str init_image: InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -1147,6 +1160,8 @@ class DsaDevicePluginSpec(dict):
         :param _builtins.int shared_dev_num: SharedDevNum is a number of containers that can share the same DSA device.
         :param Sequence['DsaDevicePluginSpecTolerationsArgs'] tolerations: Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
+        if driver is not None:
+            pulumi.set(__self__, "driver", driver)
         if image is not None:
             pulumi.set(__self__, "image", image)
         if init_image is not None:
@@ -1161,6 +1176,14 @@ class DsaDevicePluginSpec(dict):
             pulumi.set(__self__, "shared_dev_num", shared_dev_num)
         if tolerations is not None:
             pulumi.set(__self__, "tolerations", tolerations)
+
+    @_builtins.property
+    @pulumi.getter
+    def driver(self) -> Optional[_builtins.str]:
+        """
+        Driver name used for the DSA devices.
+        """
+        return pulumi.get(self, "driver")
 
     @_builtins.property
     @pulumi.getter
@@ -1250,6 +1273,7 @@ class DsaDevicePluginSpecPatch(dict):
         return super().get(key, default)
 
     def __init__(__self__, *,
+                 driver: Optional[_builtins.str] = None,
                  image: Optional[_builtins.str] = None,
                  init_image: Optional[_builtins.str] = None,
                  log_level: Optional[_builtins.int] = None,
@@ -1259,6 +1283,8 @@ class DsaDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.DsaDevicePluginSpecTolerationsPatch']] = None):
         """
         DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+
+        :param _builtins.str driver: Driver name used for the DSA devices.
         :param _builtins.str image: Image is a container image with DSA device plugin executable.
         :param _builtins.str init_image: InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -1267,6 +1293,8 @@ class DsaDevicePluginSpecPatch(dict):
         :param _builtins.int shared_dev_num: SharedDevNum is a number of containers that can share the same DSA device.
         :param Sequence['DsaDevicePluginSpecTolerationsPatchArgs'] tolerations: Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
+        if driver is not None:
+            pulumi.set(__self__, "driver", driver)
         if image is not None:
             pulumi.set(__self__, "image", image)
         if init_image is not None:
@@ -1281,6 +1309,14 @@ class DsaDevicePluginSpecPatch(dict):
             pulumi.set(__self__, "shared_dev_num", shared_dev_num)
         if tolerations is not None:
             pulumi.set(__self__, "tolerations", tolerations)
+
+    @_builtins.property
+    @pulumi.getter
+    def driver(self) -> Optional[_builtins.str]:
+        """
+        Driver name used for the DSA devices.
+        """
+        return pulumi.get(self, "driver")
 
     @_builtins.property
     @pulumi.getter
@@ -1371,6 +1407,7 @@ class DsaDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -1479,6 +1516,7 @@ class DsaDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -1590,6 +1628,7 @@ class DsaDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         DsaDevicePluginStatus defines the observed state of DsaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -1673,6 +1712,7 @@ class DsaDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -1811,6 +1851,7 @@ class DsaDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -1948,6 +1989,7 @@ class DsaDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         DsaDevicePluginStatus defines the observed state of DsaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -2029,6 +2071,7 @@ class FpgaDevicePlugin(dict):
         DEPRECATED: FpgaDevicePlugin is the Schema for the fpgadeviceplugins API. It represents
         the FPGA device plugin responsible for advertising Intel FPGA hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -2114,6 +2157,7 @@ class FpgaDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.FpgaDevicePluginSpecTolerations']] = None):
         """
         FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+
         :param _builtins.str image: Image is a container image with FPGA device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -2218,6 +2262,7 @@ class FpgaDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.FpgaDevicePluginSpecTolerationsPatch']] = None):
         """
         FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+
         :param _builtins.str image: Image is a container image with FPGA device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -2319,6 +2364,7 @@ class FpgaDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -2427,6 +2473,7 @@ class FpgaDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -2538,6 +2585,7 @@ class FpgaDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         FpgaDevicePluginStatus defines the observed state of FpgaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -2621,6 +2669,7 @@ class FpgaDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -2759,6 +2808,7 @@ class FpgaDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -2896,6 +2946,7 @@ class FpgaDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         FpgaDevicePluginStatus defines the observed state of FpgaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -2977,6 +3028,7 @@ class GpuDevicePlugin(dict):
         GpuDevicePlugin is the Schema for the gpudeviceplugins API. It represents
         the GPU device plugin responsible for advertising Intel GPU hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -3047,6 +3099,8 @@ class GpuDevicePluginSpec(dict):
             suggest = "init_image"
         elif key == "logLevel":
             suggest = "log_level"
+        elif key == "monitoringMode":
+            suggest = "monitoring_mode"
         elif key == "nodeSelector":
             suggest = "node_selector"
         elif key == "preferredAllocationPolicy":
@@ -3073,28 +3127,33 @@ class GpuDevicePluginSpec(dict):
                  image: Optional[_builtins.str] = None,
                  init_image: Optional[_builtins.str] = None,
                  log_level: Optional[_builtins.int] = None,
+                 monitoring_mode: Optional[_builtins.str] = None,
                  node_selector: Optional[Mapping[str, _builtins.str]] = None,
                  preferred_allocation_policy: Optional[_builtins.str] = None,
                  shared_dev_num: Optional[_builtins.int] = None,
                  tolerations: Optional[Sequence['outputs.GpuDevicePluginSpecTolerations']] = None):
         """
         GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+
         :param _builtins.str allow_ids: AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with DenyIDs.
-        :param _builtins.str bypath_mode: ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        :param _builtins.str bypath_mode: ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
                See GPU plugin documentation for detailed description of the modes.
                If left empty, it defaults to 'single'.
         :param _builtins.str deny_ids: DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with AllowIDs.
-        :param _builtins.bool enable_monitoring: EnableMonitoring enables the monitoring resource ('i915_monitoring')
-               which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        :param _builtins.bool enable_monitoring: EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+               on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         :param _builtins.str image: Image is a container image with GPU device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
+        :param _builtins.str monitoring_mode: MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+               single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+               split: per-driver resources (i915_monitoring, xe_monitoring).
         :param Mapping[str, _builtins.str] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         :param _builtins.str preferred_allocation_policy: PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
                See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3115,6 +3174,8 @@ class GpuDevicePluginSpec(dict):
             pulumi.set(__self__, "init_image", init_image)
         if log_level is not None:
             pulumi.set(__self__, "log_level", log_level)
+        if monitoring_mode is not None:
+            pulumi.set(__self__, "monitoring_mode", monitoring_mode)
         if node_selector is not None:
             pulumi.set(__self__, "node_selector", node_selector)
         if preferred_allocation_policy is not None:
@@ -3139,7 +3200,7 @@ class GpuDevicePluginSpec(dict):
     @pulumi.getter(name="bypathMode")
     def bypath_mode(self) -> Optional[_builtins.str]:
         """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
         See GPU plugin documentation for detailed description of the modes.
         If left empty, it defaults to 'single'.
         """
@@ -3160,8 +3221,8 @@ class GpuDevicePluginSpec(dict):
     @pulumi.getter(name="enableMonitoring")
     def enable_monitoring(self) -> Optional[_builtins.bool]:
         """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+        on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         """
         return pulumi.get(self, "enable_monitoring")
 
@@ -3188,6 +3249,16 @@ class GpuDevicePluginSpec(dict):
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
+
+    @_builtins.property
+    @pulumi.getter(name="monitoringMode")
+    def monitoring_mode(self) -> Optional[_builtins.str]:
+        """
+        MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+        single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+        split: per-driver resources (i915_monitoring, xe_monitoring).
+        """
+        return pulumi.get(self, "monitoring_mode")
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
@@ -3243,6 +3314,8 @@ class GpuDevicePluginSpecPatch(dict):
             suggest = "init_image"
         elif key == "logLevel":
             suggest = "log_level"
+        elif key == "monitoringMode":
+            suggest = "monitoring_mode"
         elif key == "nodeSelector":
             suggest = "node_selector"
         elif key == "preferredAllocationPolicy":
@@ -3269,28 +3342,33 @@ class GpuDevicePluginSpecPatch(dict):
                  image: Optional[_builtins.str] = None,
                  init_image: Optional[_builtins.str] = None,
                  log_level: Optional[_builtins.int] = None,
+                 monitoring_mode: Optional[_builtins.str] = None,
                  node_selector: Optional[Mapping[str, _builtins.str]] = None,
                  preferred_allocation_policy: Optional[_builtins.str] = None,
                  shared_dev_num: Optional[_builtins.int] = None,
                  tolerations: Optional[Sequence['outputs.GpuDevicePluginSpecTolerationsPatch']] = None):
         """
         GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+
         :param _builtins.str allow_ids: AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with DenyIDs.
-        :param _builtins.str bypath_mode: ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        :param _builtins.str bypath_mode: ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
                See GPU plugin documentation for detailed description of the modes.
                If left empty, it defaults to 'single'.
         :param _builtins.str deny_ids: DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with AllowIDs.
-        :param _builtins.bool enable_monitoring: EnableMonitoring enables the monitoring resource ('i915_monitoring')
-               which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        :param _builtins.bool enable_monitoring: EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+               on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         :param _builtins.str image: Image is a container image with GPU device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
+        :param _builtins.str monitoring_mode: MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+               single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+               split: per-driver resources (i915_monitoring, xe_monitoring).
         :param Mapping[str, _builtins.str] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         :param _builtins.str preferred_allocation_policy: PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
                See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3311,6 +3389,8 @@ class GpuDevicePluginSpecPatch(dict):
             pulumi.set(__self__, "init_image", init_image)
         if log_level is not None:
             pulumi.set(__self__, "log_level", log_level)
+        if monitoring_mode is not None:
+            pulumi.set(__self__, "monitoring_mode", monitoring_mode)
         if node_selector is not None:
             pulumi.set(__self__, "node_selector", node_selector)
         if preferred_allocation_policy is not None:
@@ -3335,7 +3415,7 @@ class GpuDevicePluginSpecPatch(dict):
     @pulumi.getter(name="bypathMode")
     def bypath_mode(self) -> Optional[_builtins.str]:
         """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
         See GPU plugin documentation for detailed description of the modes.
         If left empty, it defaults to 'single'.
         """
@@ -3356,8 +3436,8 @@ class GpuDevicePluginSpecPatch(dict):
     @pulumi.getter(name="enableMonitoring")
     def enable_monitoring(self) -> Optional[_builtins.bool]:
         """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+        on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         """
         return pulumi.get(self, "enable_monitoring")
 
@@ -3384,6 +3464,16 @@ class GpuDevicePluginSpecPatch(dict):
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
+
+    @_builtins.property
+    @pulumi.getter(name="monitoringMode")
+    def monitoring_mode(self) -> Optional[_builtins.str]:
+        """
+        MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+        single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+        split: per-driver resources (i915_monitoring, xe_monitoring).
+        """
+        return pulumi.get(self, "monitoring_mode")
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
@@ -3451,6 +3541,7 @@ class GpuDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -3559,6 +3650,7 @@ class GpuDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -3670,6 +3762,7 @@ class GpuDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         GpuDevicePluginStatus defines the observed state of GpuDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -3753,6 +3846,7 @@ class GpuDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -3891,6 +3985,7 @@ class GpuDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -4028,6 +4123,7 @@ class GpuDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         GpuDevicePluginStatus defines the observed state of GpuDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -4109,6 +4205,7 @@ class IaaDevicePlugin(dict):
         IaaDevicePlugin is the Schema for the iaadeviceplugins API. It represents
         the IAA device plugin responsible for advertising Intel IAA hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -4199,6 +4296,7 @@ class IaaDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.IaaDevicePluginSpecTolerations']] = None):
         """
         IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+
         :param _builtins.str image: Image is a container image with IAA device plugin executable.
         :param _builtins.str init_image: InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -4319,6 +4417,7 @@ class IaaDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.IaaDevicePluginSpecTolerationsPatch']] = None):
         """
         IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+
         :param _builtins.str image: Image is a container image with IAA device plugin executable.
         :param _builtins.str init_image: InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
@@ -4431,6 +4530,7 @@ class IaaDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -4539,6 +4639,7 @@ class IaaDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -4650,6 +4751,7 @@ class IaaDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         IaaDevicePluginStatus defines the observed state of IaaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -4733,6 +4835,7 @@ class IaaDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -4871,6 +4974,7 @@ class IaaDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -5008,6 +5112,7 @@ class IaaDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         IaaDevicePluginStatus defines the observed state of IaaDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -5089,6 +5194,7 @@ class NpuDevicePlugin(dict):
         NpuDevicePlugin is the Schema for the npudeviceplugins API. It represents
         the NPU device plugin responsible for advertising Intel NPU hardware resources to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -5173,6 +5279,7 @@ class NpuDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.NpuDevicePluginSpecTolerations']] = None):
         """
         NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+
         :param _builtins.str image: Image is a container image with NPU device plugin executable.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
         :param Mapping[str, _builtins.str] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
@@ -5265,6 +5372,7 @@ class NpuDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.NpuDevicePluginSpecTolerationsPatch']] = None):
         """
         NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+
         :param _builtins.str image: Image is a container image with NPU device plugin executable.
         :param _builtins.int log_level: LogLevel sets the plugin's log level.
         :param Mapping[str, _builtins.str] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
@@ -5355,6 +5463,7 @@ class NpuDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -5463,6 +5572,7 @@ class NpuDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -5574,6 +5684,7 @@ class NpuDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         NpuDevicePluginStatus defines the observed state of NpuDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -5657,6 +5768,7 @@ class NpuDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -5795,6 +5907,7 @@ class NpuDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -5932,6 +6045,7 @@ class NpuDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         NpuDevicePluginStatus defines the observed state of NpuDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -6013,6 +6127,7 @@ class QatDevicePlugin(dict):
         QatDevicePlugin is the Schema for the qatdeviceplugins API. It represents the QAT device
         plugin responsible for advertising Intel QuickAssist Technology hardware resources
         to the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -6112,6 +6227,7 @@ class QatDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.QatDevicePluginSpecTolerations']] = None):
         """
         QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+
         :param _builtins.str dpdk_driver: DpdkDriver is a DPDK device driver for configuring the QAT device.
         :param _builtins.str image: Image is a container image with QAT device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with a script that initialize devices.
@@ -6276,6 +6392,7 @@ class QatDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.QatDevicePluginSpecTolerationsPatch']] = None):
         """
         QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+
         :param _builtins.str dpdk_driver: DpdkDriver is a DPDK device driver for configuring the QAT device.
         :param _builtins.str image: Image is a container image with QAT device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with a script that initialize devices.
@@ -6423,6 +6540,7 @@ class QatDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -6531,6 +6649,7 @@ class QatDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -6642,6 +6761,7 @@ class QatDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         QatDevicePluginStatus defines the observed state of QatDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -6725,6 +6845,7 @@ class QatDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -6863,6 +6984,7 @@ class QatDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -7000,6 +7122,7 @@ class QatDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         QatDevicePluginStatus defines the observed state of QatDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -7081,6 +7204,7 @@ class SgxDevicePlugin(dict):
         SgxDevicePlugin is the Schema for the sgxdeviceplugins API. It represents
         the SGX device plugin responsible for advertising SGX device nodes to
         the kubelet.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -7174,7 +7298,9 @@ class SgxDevicePluginSpec(dict):
                  tolerations: Optional[Sequence['outputs.SgxDevicePluginSpecTolerations']] = None):
         """
         SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        :param _builtins.bool dcap_infra_resources: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+
+        :param _builtins.bool dcap_infra_resources: Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+               This is will be removed/modified in the future.
         :param _builtins.int enclave_limit: EnclaveLimit is a number of containers that can share the same SGX enclave device.
         :param _builtins.str image: Image is a container image with SGX device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
@@ -7205,7 +7331,8 @@ class SgxDevicePluginSpec(dict):
     @pulumi.getter(name="dcapInfraResources")
     def dcap_infra_resources(self) -> Optional[_builtins.bool]:
         """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        This is will be removed/modified in the future.
         """
         return pulumi.get(self, "dcap_infra_resources")
 
@@ -7310,7 +7437,9 @@ class SgxDevicePluginSpecPatch(dict):
                  tolerations: Optional[Sequence['outputs.SgxDevicePluginSpecTolerationsPatch']] = None):
         """
         SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        :param _builtins.bool dcap_infra_resources: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+
+        :param _builtins.bool dcap_infra_resources: Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+               This is will be removed/modified in the future.
         :param _builtins.int enclave_limit: EnclaveLimit is a number of containers that can share the same SGX enclave device.
         :param _builtins.str image: Image is a container image with SGX device plugin executable.
         :param _builtins.str init_image: InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
@@ -7341,7 +7470,8 @@ class SgxDevicePluginSpecPatch(dict):
     @pulumi.getter(name="dcapInfraResources")
     def dcap_infra_resources(self) -> Optional[_builtins.bool]:
         """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        This is will be removed/modified in the future.
         """
         return pulumi.get(self, "dcap_infra_resources")
 
@@ -7435,6 +7565,7 @@ class SgxDevicePluginSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -7543,6 +7674,7 @@ class SgxDevicePluginSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -7654,6 +7786,7 @@ class SgxDevicePluginStatus(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         SgxDevicePluginStatus defines the observed state of SgxDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.
@@ -7737,6 +7870,7 @@ class SgxDevicePluginStatusControlledDaemonSet(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -7875,6 +8009,7 @@ class SgxDevicePluginStatusControlledDaemonSetPatch(dict):
                  uid: Optional[_builtins.str] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param _builtins.str api_version: API version of the referent.
         :param _builtins.str field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -8012,6 +8147,7 @@ class SgxDevicePluginStatusPatch(dict):
                  number_ready: Optional[_builtins.int] = None):
         """
         SgxDevicePluginStatus defines the observed state of SgxDevicePlugin.
+
         :param _builtins.int desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param Sequence[_builtins.str] node_names: The list of Node names where the device plugin pods are running.

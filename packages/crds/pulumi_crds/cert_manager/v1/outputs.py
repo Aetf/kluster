@@ -53,11 +53,21 @@ __all__ = [
     'CertificateSpecPatch',
     'CertificateSpecPrivateKey',
     'CertificateSpecPrivateKeyPatch',
+    'CertificateSpecRenewal',
+    'CertificateSpecRenewalPatch',
+    'CertificateSpecRenewalWindows',
+    'CertificateSpecRenewalWindowsPatch',
     'CertificateSpecSecretTemplate',
     'CertificateSpecSecretTemplatePatch',
     'CertificateSpecSubject',
     'CertificateSpecSubjectPatch',
     'CertificateStatus',
+    'CertificateStatusAcme',
+    'CertificateStatusAcmeAri',
+    'CertificateStatusAcmeAriPatch',
+    'CertificateStatusAcmeAriSuggestedWindow',
+    'CertificateStatusAcmeAriSuggestedWindowPatch',
+    'CertificateStatusAcmePatch',
     'CertificateStatusConditions',
     'CertificateStatusConditionsPatch',
     'CertificateStatusPatch',
@@ -326,6 +336,10 @@ __all__ = [
     'ClusterIssuerSpecVaultAuthAppRolePatch',
     'ClusterIssuerSpecVaultAuthAppRoleSecretRef',
     'ClusterIssuerSpecVaultAuthAppRoleSecretRefPatch',
+    'ClusterIssuerSpecVaultAuthAws',
+    'ClusterIssuerSpecVaultAuthAwsPatch',
+    'ClusterIssuerSpecVaultAuthAwsServiceAccountRef',
+    'ClusterIssuerSpecVaultAuthAwsServiceAccountRefPatch',
     'ClusterIssuerSpecVaultAuthClientCertificate',
     'ClusterIssuerSpecVaultAuthClientCertificatePatch',
     'ClusterIssuerSpecVaultAuthKubernetes',
@@ -349,6 +363,10 @@ __all__ = [
     'ClusterIssuerSpecVenafiCloudApiTokenSecretRef',
     'ClusterIssuerSpecVenafiCloudApiTokenSecretRefPatch',
     'ClusterIssuerSpecVenafiCloudPatch',
+    'ClusterIssuerSpecVenafiNgts',
+    'ClusterIssuerSpecVenafiNgtsCredentialsRef',
+    'ClusterIssuerSpecVenafiNgtsCredentialsRefPatch',
+    'ClusterIssuerSpecVenafiNgtsPatch',
     'ClusterIssuerSpecVenafiPatch',
     'ClusterIssuerSpecVenafiTpp',
     'ClusterIssuerSpecVenafiTppCaBundleSecretRef',
@@ -627,6 +645,10 @@ __all__ = [
     'IssuerSpecVaultAuthAppRolePatch',
     'IssuerSpecVaultAuthAppRoleSecretRef',
     'IssuerSpecVaultAuthAppRoleSecretRefPatch',
+    'IssuerSpecVaultAuthAws',
+    'IssuerSpecVaultAuthAwsPatch',
+    'IssuerSpecVaultAuthAwsServiceAccountRef',
+    'IssuerSpecVaultAuthAwsServiceAccountRefPatch',
     'IssuerSpecVaultAuthClientCertificate',
     'IssuerSpecVaultAuthClientCertificatePatch',
     'IssuerSpecVaultAuthKubernetes',
@@ -650,6 +672,10 @@ __all__ = [
     'IssuerSpecVenafiCloudApiTokenSecretRef',
     'IssuerSpecVenafiCloudApiTokenSecretRefPatch',
     'IssuerSpecVenafiCloudPatch',
+    'IssuerSpecVenafiNgts',
+    'IssuerSpecVenafiNgtsCredentialsRef',
+    'IssuerSpecVenafiNgtsCredentialsRefPatch',
+    'IssuerSpecVenafiNgtsPatch',
     'IssuerSpecVenafiPatch',
     'IssuerSpecVenafiTpp',
     'IssuerSpecVenafiTppCaBundleSecretRef',
@@ -701,6 +727,7 @@ class Certificate(dict):
         X.509 certificate is stored in the Kubernetes Secret resource named in `spec.secretName`.
 
         The stored certificate will be renewed before it expires (as configured by `spec.renewBefore`).
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -797,6 +824,7 @@ class CertificateRequest(dict):
 
         A CertificateRequest is a one-shot resource, meaning it represents a single
         point in time request for a certificate and cannot be re-used.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -885,6 +913,7 @@ class CertificateRequestSpec(dict):
         """
         Specification of the desired state of the CertificateRequest resource.
         https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param _builtins.str duration: Requested 'duration' (i.e. lifetime) of the Certificate. Note that the
                issuer may choose to ignore the requested duration, just like any other
                requested attribute.
@@ -1060,6 +1089,7 @@ class CertificateRequestSpecIssuerRef(dict):
         from any namespace.
 
         The `name` field of the reference must always be specified.
+
         :param _builtins.str group: Group of the issuer being referred to.
                Defaults to 'cert-manager.io'.
         :param _builtins.str kind: Kind of the issuer being referred to.
@@ -1121,6 +1151,7 @@ class CertificateRequestSpecIssuerRefPatch(dict):
         from any namespace.
 
         The `name` field of the reference must always be specified.
+
         :param _builtins.str group: Group of the issuer being referred to.
                Defaults to 'cert-manager.io'.
         :param _builtins.str kind: Kind of the issuer being referred to.
@@ -1199,6 +1230,7 @@ class CertificateRequestSpecPatch(dict):
         """
         Specification of the desired state of the CertificateRequest resource.
         https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param _builtins.str duration: Requested 'duration' (i.e. lifetime) of the Certificate. Note that the
                issuer may choose to ignore the requested duration, just like any other
                requested attribute.
@@ -1388,6 +1420,7 @@ class CertificateRequestStatus(dict):
         This is set and managed automatically.
         Read-only.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param _builtins.str ca: The PEM encoded X.509 certificate of the signer, also known as the CA
                (Certificate Authority).
                This is set on a best-effort basis by different issuers.
@@ -1483,6 +1516,7 @@ class CertificateRequestStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         CertificateRequestCondition contains condition information for a CertificateRequest.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -1579,6 +1613,7 @@ class CertificateRequestStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         CertificateRequestCondition contains condition information for a CertificateRequest.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -1680,6 +1715,7 @@ class CertificateRequestStatusPatch(dict):
         This is set and managed automatically.
         Read-only.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param _builtins.str ca: The PEM encoded X.509 certificate of the signer, also known as the CA
                (Certificate Authority).
                This is set on a best-effort basis by different issuers.
@@ -1819,6 +1855,7 @@ class CertificateSpec(dict):
                  private_key: Optional['outputs.CertificateSpecPrivateKey'] = None,
                  renew_before: Optional[_builtins.str] = None,
                  renew_before_percentage: Optional[_builtins.int] = None,
+                 renewal: Optional['outputs.CertificateSpecRenewal'] = None,
                  revision_history_limit: Optional[_builtins.int] = None,
                  secret_name: Optional[_builtins.str] = None,
                  secret_template: Optional['outputs.CertificateSpecSecretTemplate'] = None,
@@ -1829,6 +1866,7 @@ class CertificateSpec(dict):
         """
         Specification of the desired state of the Certificate resource.
         https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param Sequence['CertificateSpecAdditionalOutputFormatsArgs'] additional_output_formats: Defines extra output formats of the private key and signed certificate chain
                to be written to this Certificate's target Secret.
         :param _builtins.str common_name: Requested common name X509 certificate subject attribute.
@@ -1957,6 +1995,8 @@ class CertificateSpec(dict):
             pulumi.set(__self__, "renew_before", renew_before)
         if renew_before_percentage is not None:
             pulumi.set(__self__, "renew_before_percentage", renew_before_percentage)
+        if renewal is not None:
+            pulumi.set(__self__, "renewal", renewal)
         if revision_history_limit is not None:
             pulumi.set(__self__, "revision_history_limit", revision_history_limit)
         if secret_name is not None:
@@ -2149,6 +2189,11 @@ class CertificateSpec(dict):
         return pulumi.get(self, "renew_before_percentage")
 
     @_builtins.property
+    @pulumi.getter
+    def renewal(self) -> Optional['outputs.CertificateSpecRenewal']:
+        return pulumi.get(self, "renewal")
+
+    @_builtins.property
     @pulumi.getter(name="revisionHistoryLimit")
     def revision_history_limit(self) -> Optional[_builtins.int]:
         """
@@ -2230,6 +2275,7 @@ class CertificateSpecAdditionalOutputFormats(dict):
         CertificateAdditionalOutputFormat defines an additional output format of a
         Certificate resource. These contain supplementary data formats of the signed
         certificate chain and paired private key.
+
         :param _builtins.str type: Type is the name of the format type that should be written to the
                Certificate's target Secret.
         """
@@ -2259,6 +2305,7 @@ class CertificateSpecAdditionalOutputFormatsPatch(dict):
         CertificateAdditionalOutputFormat defines an additional output format of a
         Certificate resource. These contain supplementary data formats of the signed
         certificate chain and paired private key.
+
         :param _builtins.str type: Type is the name of the format type that should be written to the
                Certificate's target Secret.
         """
@@ -2296,6 +2343,7 @@ class CertificateSpecIssuerRef(dict):
         from any namespace.
 
         The `name` field of the reference must always be specified.
+
         :param _builtins.str group: Group of the issuer being referred to.
                Defaults to 'cert-manager.io'.
         :param _builtins.str kind: Kind of the issuer being referred to.
@@ -2357,6 +2405,7 @@ class CertificateSpecIssuerRefPatch(dict):
         from any namespace.
 
         The `name` field of the reference must always be specified.
+
         :param _builtins.str group: Group of the issuer being referred to.
                Defaults to 'cert-manager.io'.
         :param _builtins.str kind: Kind of the issuer being referred to.
@@ -2455,6 +2504,7 @@ class CertificateSpecKeystoresJks(dict):
         """
         JKS configures options for storing a JKS keystore in the
         `spec.secretName` Secret resource.
+
         :param _builtins.str alias: Alias specifies the alias of the key in the keystore, required by the JKS format.
                If not provided, the default alias `certificate` will be used.
         :param _builtins.bool create: Create enables JKS keystore creation for the Certificate.
@@ -2536,6 +2586,7 @@ class CertificateSpecKeystoresJksPasswordSecretRef(dict):
         containing the password used to encrypt the JKS keystore.
         Mutually exclusive with password.
         One of password or passwordSecretRef must provide a password with a non-zero length.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -2583,6 +2634,7 @@ class CertificateSpecKeystoresJksPasswordSecretRefPatch(dict):
         containing the password used to encrypt the JKS keystore.
         Mutually exclusive with password.
         One of password or passwordSecretRef must provide a password with a non-zero length.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -2645,6 +2697,7 @@ class CertificateSpecKeystoresJksPatch(dict):
         """
         JKS configures options for storing a JKS keystore in the
         `spec.secretName` Secret resource.
+
         :param _builtins.str alias: Alias specifies the alias of the key in the keystore, required by the JKS format.
                If not provided, the default alias `certificate` will be used.
         :param _builtins.bool create: Create enables JKS keystore creation for the Certificate.
@@ -2768,6 +2821,7 @@ class CertificateSpecKeystoresPkcs12(dict):
         """
         PKCS12 configures options for storing a PKCS12 keystore in the
         `spec.secretName` Secret resource.
+
         :param _builtins.bool create: Create enables PKCS12 keystore creation for the Certificate.
                If true, a file named `keystore.p12` will be created in the target
                Secret resource, encrypted using the password stored in
@@ -2789,6 +2843,11 @@ class CertificateSpecKeystoresPkcs12(dict):
                `Modern2023`: Secure algorithm. Use this option in case you have to always use secure algorithms
                (e.g., because of company policy). Please note that the security of the algorithm is not that important
                in reality, because the unencrypted certificate and private key are also stored in the Secret.
+               `Modern2026`: Encodes PKCS#12 files using algorithms that are considered modern as of 2026.
+               Private keys and certificates are encrypted using PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC.
+               The MAC algorithm is PBMAC1 with PBKDF2-HMAC-SHA-256 and HMAC-SHA256.
+               Files produced with this profile can be read by OpenSSL 3.4.0 and higher, Java 26 and higher,
+               or with Java using compatible versions of Bouncy Castle. Meets FIPS 140-3 requirements.
         """
         if create is not None:
             pulumi.set(__self__, "create", create)
@@ -2843,6 +2902,11 @@ class CertificateSpecKeystoresPkcs12(dict):
         `Modern2023`: Secure algorithm. Use this option in case you have to always use secure algorithms
         (e.g., because of company policy). Please note that the security of the algorithm is not that important
         in reality, because the unencrypted certificate and private key are also stored in the Secret.
+        `Modern2026`: Encodes PKCS#12 files using algorithms that are considered modern as of 2026.
+        Private keys and certificates are encrypted using PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC.
+        The MAC algorithm is PBMAC1 with PBKDF2-HMAC-SHA-256 and HMAC-SHA256.
+        Files produced with this profile can be read by OpenSSL 3.4.0 and higher, Java 26 and higher,
+        or with Java using compatible versions of Bouncy Castle. Meets FIPS 140-3 requirements.
         """
         return pulumi.get(self, "profile")
 
@@ -2863,6 +2927,7 @@ class CertificateSpecKeystoresPkcs12PasswordSecretRef(dict):
         containing the password used to encrypt the PKCS#12 keystore.
         Mutually exclusive with password.
         One of password or passwordSecretRef must provide a password with a non-zero length.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -2910,6 +2975,7 @@ class CertificateSpecKeystoresPkcs12PasswordSecretRefPatch(dict):
         containing the password used to encrypt the PKCS#12 keystore.
         Mutually exclusive with password.
         One of password or passwordSecretRef must provide a password with a non-zero length.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -2972,6 +3038,7 @@ class CertificateSpecKeystoresPkcs12Patch(dict):
         """
         PKCS12 configures options for storing a PKCS12 keystore in the
         `spec.secretName` Secret resource.
+
         :param _builtins.bool create: Create enables PKCS12 keystore creation for the Certificate.
                If true, a file named `keystore.p12` will be created in the target
                Secret resource, encrypted using the password stored in
@@ -2993,6 +3060,11 @@ class CertificateSpecKeystoresPkcs12Patch(dict):
                `Modern2023`: Secure algorithm. Use this option in case you have to always use secure algorithms
                (e.g., because of company policy). Please note that the security of the algorithm is not that important
                in reality, because the unencrypted certificate and private key are also stored in the Secret.
+               `Modern2026`: Encodes PKCS#12 files using algorithms that are considered modern as of 2026.
+               Private keys and certificates are encrypted using PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC.
+               The MAC algorithm is PBMAC1 with PBKDF2-HMAC-SHA-256 and HMAC-SHA256.
+               Files produced with this profile can be read by OpenSSL 3.4.0 and higher, Java 26 and higher,
+               or with Java using compatible versions of Bouncy Castle. Meets FIPS 140-3 requirements.
         """
         if create is not None:
             pulumi.set(__self__, "create", create)
@@ -3047,6 +3119,11 @@ class CertificateSpecKeystoresPkcs12Patch(dict):
         `Modern2023`: Secure algorithm. Use this option in case you have to always use secure algorithms
         (e.g., because of company policy). Please note that the security of the algorithm is not that important
         in reality, because the unencrypted certificate and private key are also stored in the Secret.
+        `Modern2026`: Encodes PKCS#12 files using algorithms that are considered modern as of 2026.
+        Private keys and certificates are encrypted using PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC.
+        The MAC algorithm is PBMAC1 with PBKDF2-HMAC-SHA-256 and HMAC-SHA256.
+        Files produced with this profile can be read by OpenSSL 3.4.0 and higher, Java 26 and higher,
+        or with Java using compatible versions of Bouncy Castle. Meets FIPS 140-3 requirements.
         """
         return pulumi.get(self, "profile")
 
@@ -3072,6 +3149,7 @@ class CertificateSpecNameConstraints(dict):
         This is an Alpha Feature and is only enabled with the
         `--feature-gates=NameConstraints=true` option set on both
         the controller and webhook components.
+
         :param _builtins.bool critical: if true then the name constraints are marked critical.
         """
         if critical is not None:
@@ -3139,6 +3217,7 @@ class CertificateSpecNameConstraintsExcluded(dict):
         Excluded contains the constraints which must be disallowed. Any name matching a
         restriction in the excluded field is invalid regardless
         of information appearing in the permitted
+
         :param Sequence[_builtins.str] dns_domains: DNSDomains is a list of DNS domains that are permitted or excluded.
         :param Sequence[_builtins.str] email_addresses: EmailAddresses is a list of Email Addresses that are permitted or excluded.
         :param Sequence[_builtins.str] ip_ranges: IPRanges is a list of IP Ranges that are permitted or excluded.
@@ -3227,6 +3306,7 @@ class CertificateSpecNameConstraintsExcludedPatch(dict):
         Excluded contains the constraints which must be disallowed. Any name matching a
         restriction in the excluded field is invalid regardless
         of information appearing in the permitted
+
         :param Sequence[_builtins.str] dns_domains: DNSDomains is a list of DNS domains that are permitted or excluded.
         :param Sequence[_builtins.str] email_addresses: EmailAddresses is a list of Email Addresses that are permitted or excluded.
         :param Sequence[_builtins.str] ip_ranges: IPRanges is a list of IP Ranges that are permitted or excluded.
@@ -3297,6 +3377,7 @@ class CertificateSpecNameConstraintsPatch(dict):
         This is an Alpha Feature and is only enabled with the
         `--feature-gates=NameConstraints=true` option set on both
         the controller and webhook components.
+
         :param _builtins.bool critical: if true then the name constraints are marked critical.
         """
         if critical is not None:
@@ -3360,6 +3441,7 @@ class CertificateSpecNameConstraintsPermitted(dict):
                  uri_domains: Optional[Sequence[_builtins.str]] = None):
         """
         Permitted contains the constraints in which the names must be located.
+
         :param Sequence[_builtins.str] dns_domains: DNSDomains is a list of DNS domains that are permitted or excluded.
         :param Sequence[_builtins.str] email_addresses: EmailAddresses is a list of Email Addresses that are permitted or excluded.
         :param Sequence[_builtins.str] ip_ranges: IPRanges is a list of IP Ranges that are permitted or excluded.
@@ -3444,6 +3526,7 @@ class CertificateSpecNameConstraintsPermittedPatch(dict):
                  uri_domains: Optional[Sequence[_builtins.str]] = None):
         """
         Permitted contains the constraints in which the names must be located.
+
         :param Sequence[_builtins.str] dns_domains: DNSDomains is a list of DNS domains that are permitted or excluded.
         :param Sequence[_builtins.str] email_addresses: EmailAddresses is a list of Email Addresses that are permitted or excluded.
         :param Sequence[_builtins.str] ip_ranges: IPRanges is a list of IP Ranges that are permitted or excluded.
@@ -3675,6 +3758,7 @@ class CertificateSpecPatch(dict):
                  private_key: Optional['outputs.CertificateSpecPrivateKeyPatch'] = None,
                  renew_before: Optional[_builtins.str] = None,
                  renew_before_percentage: Optional[_builtins.int] = None,
+                 renewal: Optional['outputs.CertificateSpecRenewalPatch'] = None,
                  revision_history_limit: Optional[_builtins.int] = None,
                  secret_name: Optional[_builtins.str] = None,
                  secret_template: Optional['outputs.CertificateSpecSecretTemplatePatch'] = None,
@@ -3685,6 +3769,7 @@ class CertificateSpecPatch(dict):
         """
         Specification of the desired state of the Certificate resource.
         https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param Sequence['CertificateSpecAdditionalOutputFormatsPatchArgs'] additional_output_formats: Defines extra output formats of the private key and signed certificate chain
                to be written to this Certificate's target Secret.
         :param _builtins.str common_name: Requested common name X509 certificate subject attribute.
@@ -3813,6 +3898,8 @@ class CertificateSpecPatch(dict):
             pulumi.set(__self__, "renew_before", renew_before)
         if renew_before_percentage is not None:
             pulumi.set(__self__, "renew_before_percentage", renew_before_percentage)
+        if renewal is not None:
+            pulumi.set(__self__, "renewal", renewal)
         if revision_history_limit is not None:
             pulumi.set(__self__, "revision_history_limit", revision_history_limit)
         if secret_name is not None:
@@ -4005,6 +4092,11 @@ class CertificateSpecPatch(dict):
         return pulumi.get(self, "renew_before_percentage")
 
     @_builtins.property
+    @pulumi.getter
+    def renewal(self) -> Optional['outputs.CertificateSpecRenewalPatch']:
+        return pulumi.get(self, "renewal")
+
+    @_builtins.property
     @pulumi.getter(name="revisionHistoryLimit")
     def revision_history_limit(self) -> Optional[_builtins.int]:
         """
@@ -4104,6 +4196,7 @@ class CertificateSpecPrivateKey(dict):
         """
         Private key options. These include the key algorithm and size, the used
         encoding and the rotation policy.
+
         :param _builtins.str algorithm: Algorithm is the private key algorithm of the corresponding private key
                for this certificate.
                
@@ -4129,9 +4222,6 @@ class CertificateSpecPrivateKey(dict):
                will be generated whenever a re-issuance occurs.
                Default is `Always`.
                The default was changed from `Never` to `Always` in cert-manager >=v1.18.0.
-               The new default can be disabled by setting the
-               `--feature-gates=DefaultPrivateKeyRotationPolicyAlways=false` option on
-               the controller component.
         :param _builtins.int size: Size is the key bit size of the corresponding private key for this certificate.
                
                If `algorithm` is set to `RSA`, valid values are `2048`, `4096` or `8192`,
@@ -4193,9 +4283,6 @@ class CertificateSpecPrivateKey(dict):
         will be generated whenever a re-issuance occurs.
         Default is `Always`.
         The default was changed from `Never` to `Always` in cert-manager >=v1.18.0.
-        The new default can be disabled by setting the
-        `--feature-gates=DefaultPrivateKeyRotationPolicyAlways=false` option on
-        the controller component.
         """
         return pulumi.get(self, "rotation_policy")
 
@@ -4246,6 +4333,7 @@ class CertificateSpecPrivateKeyPatch(dict):
         """
         Private key options. These include the key algorithm and size, the used
         encoding and the rotation policy.
+
         :param _builtins.str algorithm: Algorithm is the private key algorithm of the corresponding private key
                for this certificate.
                
@@ -4271,9 +4359,6 @@ class CertificateSpecPrivateKeyPatch(dict):
                will be generated whenever a re-issuance occurs.
                Default is `Always`.
                The default was changed from `Never` to `Always` in cert-manager >=v1.18.0.
-               The new default can be disabled by setting the
-               `--feature-gates=DefaultPrivateKeyRotationPolicyAlways=false` option on
-               the controller component.
         :param _builtins.int size: Size is the key bit size of the corresponding private key for this certificate.
                
                If `algorithm` is set to `RSA`, valid values are `2048`, `4096` or `8192`,
@@ -4335,9 +4420,6 @@ class CertificateSpecPrivateKeyPatch(dict):
         will be generated whenever a re-issuance occurs.
         Default is `Always`.
         The default was changed from `Never` to `Always` in cert-manager >=v1.18.0.
-        The new default can be disabled by setting the
-        `--feature-gates=DefaultPrivateKeyRotationPolicyAlways=false` option on
-        the controller component.
         """
         return pulumi.get(self, "rotation_policy")
 
@@ -4358,6 +4440,248 @@ class CertificateSpecPrivateKeyPatch(dict):
 
 
 @pulumi.output_type
+class CertificateSpecRenewal(dict):
+    """
+    `renewal` allows configuration of how your certificate is renewed. If the policy mentioned is
+    `RenewBefore` then the controller respects `renewBefore` and `renewBeforePercentage`.
+    """
+    def __init__(__self__, *,
+                 policy: Optional[_builtins.str] = None,
+                 windows: Optional[Sequence['outputs.CertificateSpecRenewalWindows']] = None):
+        """
+        `renewal` allows configuration of how your certificate is renewed. If the policy mentioned is
+        `RenewBefore` then the controller respects `renewBefore` and `renewBeforePercentage`.
+
+        :param _builtins.str policy: `policy` must be one of `Disabled`, `RenewBefore`.
+        :param Sequence['CertificateSpecRenewalWindowsArgs'] windows: `windows` mentions the behavior of when the renewal must happen.
+        """
+        if policy is not None:
+            pulumi.set(__self__, "policy", policy)
+        if windows is not None:
+            pulumi.set(__self__, "windows", windows)
+
+    @_builtins.property
+    @pulumi.getter
+    def policy(self) -> Optional[_builtins.str]:
+        """
+        `policy` must be one of `Disabled`, `RenewBefore`.
+        """
+        return pulumi.get(self, "policy")
+
+    @_builtins.property
+    @pulumi.getter
+    def windows(self) -> Optional[Sequence['outputs.CertificateSpecRenewalWindows']]:
+        """
+        `windows` mentions the behavior of when the renewal must happen.
+        """
+        return pulumi.get(self, "windows")
+
+
+@pulumi.output_type
+class CertificateSpecRenewalPatch(dict):
+    """
+    `renewal` allows configuration of how your certificate is renewed. If the policy mentioned is
+    `RenewBefore` then the controller respects `renewBefore` and `renewBeforePercentage`.
+    """
+    def __init__(__self__, *,
+                 policy: Optional[_builtins.str] = None,
+                 windows: Optional[Sequence['outputs.CertificateSpecRenewalWindowsPatch']] = None):
+        """
+        `renewal` allows configuration of how your certificate is renewed. If the policy mentioned is
+        `RenewBefore` then the controller respects `renewBefore` and `renewBeforePercentage`.
+
+        :param _builtins.str policy: `policy` must be one of `Disabled`, `RenewBefore`.
+        :param Sequence['CertificateSpecRenewalWindowsPatchArgs'] windows: `windows` mentions the behavior of when the renewal must happen.
+        """
+        if policy is not None:
+            pulumi.set(__self__, "policy", policy)
+        if windows is not None:
+            pulumi.set(__self__, "windows", windows)
+
+    @_builtins.property
+    @pulumi.getter
+    def policy(self) -> Optional[_builtins.str]:
+        """
+        `policy` must be one of `Disabled`, `RenewBefore`.
+        """
+        return pulumi.get(self, "policy")
+
+    @_builtins.property
+    @pulumi.getter
+    def windows(self) -> Optional[Sequence['outputs.CertificateSpecRenewalWindowsPatch']]:
+        """
+        `windows` mentions the behavior of when the renewal must happen.
+        """
+        return pulumi.get(self, "windows")
+
+
+@pulumi.output_type
+class CertificateSpecRenewalWindows(dict):
+    """
+    CertificateRenewalWindows is the definition for renewal windows
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "windowDuration":
+            suggest = "window_duration"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in CertificateSpecRenewalWindows. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        CertificateSpecRenewalWindows.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        CertificateSpecRenewalWindows.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 cron: Optional[_builtins.str] = None,
+                 timezone: Optional[_builtins.str] = None,
+                 window_duration: Optional[_builtins.str] = None):
+        """
+        CertificateRenewalWindows is the definition for renewal windows
+
+        :param _builtins.str cron: `cron` is a cron compliant string to allow when the renewal should be allowed. Format is as shown below:
+               * * * * *
+               | | | | |
+               | | | | day of the week (0–6) (Sunday to Saturday;
+               | | | month (1–12)             7 is also Sunday on some systems)
+               | | day of the month (1–31)
+               | hour (0–23)
+               minute (0–59)
+        :param _builtins.str timezone: `timezone` is IANA compliant timezone. For example America/Denver.
+               If this field is not set, timezone is treated as UTC.
+        :param _builtins.str window_duration: `windowDuration` is how long the cron definition is active for.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+        """
+        if cron is not None:
+            pulumi.set(__self__, "cron", cron)
+        if timezone is not None:
+            pulumi.set(__self__, "timezone", timezone)
+        if window_duration is not None:
+            pulumi.set(__self__, "window_duration", window_duration)
+
+    @_builtins.property
+    @pulumi.getter
+    def cron(self) -> Optional[_builtins.str]:
+        """
+        `cron` is a cron compliant string to allow when the renewal should be allowed. Format is as shown below:
+        * * * * *
+        | | | | |
+        | | | | day of the week (0–6) (Sunday to Saturday;
+        | | | month (1–12)             7 is also Sunday on some systems)
+        | | day of the month (1–31)
+        | hour (0–23)
+        minute (0–59)
+        """
+        return pulumi.get(self, "cron")
+
+    @_builtins.property
+    @pulumi.getter
+    def timezone(self) -> Optional[_builtins.str]:
+        """
+        `timezone` is IANA compliant timezone. For example America/Denver.
+        If this field is not set, timezone is treated as UTC.
+        """
+        return pulumi.get(self, "timezone")
+
+    @_builtins.property
+    @pulumi.getter(name="windowDuration")
+    def window_duration(self) -> Optional[_builtins.str]:
+        """
+        `windowDuration` is how long the cron definition is active for.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+        """
+        return pulumi.get(self, "window_duration")
+
+
+@pulumi.output_type
+class CertificateSpecRenewalWindowsPatch(dict):
+    """
+    CertificateRenewalWindows is the definition for renewal windows
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "windowDuration":
+            suggest = "window_duration"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in CertificateSpecRenewalWindowsPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        CertificateSpecRenewalWindowsPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        CertificateSpecRenewalWindowsPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 cron: Optional[_builtins.str] = None,
+                 timezone: Optional[_builtins.str] = None,
+                 window_duration: Optional[_builtins.str] = None):
+        """
+        CertificateRenewalWindows is the definition for renewal windows
+
+        :param _builtins.str cron: `cron` is a cron compliant string to allow when the renewal should be allowed. Format is as shown below:
+               * * * * *
+               | | | | |
+               | | | | day of the week (0–6) (Sunday to Saturday;
+               | | | month (1–12)             7 is also Sunday on some systems)
+               | | day of the month (1–31)
+               | hour (0–23)
+               minute (0–59)
+        :param _builtins.str timezone: `timezone` is IANA compliant timezone. For example America/Denver.
+               If this field is not set, timezone is treated as UTC.
+        :param _builtins.str window_duration: `windowDuration` is how long the cron definition is active for.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+        """
+        if cron is not None:
+            pulumi.set(__self__, "cron", cron)
+        if timezone is not None:
+            pulumi.set(__self__, "timezone", timezone)
+        if window_duration is not None:
+            pulumi.set(__self__, "window_duration", window_duration)
+
+    @_builtins.property
+    @pulumi.getter
+    def cron(self) -> Optional[_builtins.str]:
+        """
+        `cron` is a cron compliant string to allow when the renewal should be allowed. Format is as shown below:
+        * * * * *
+        | | | | |
+        | | | | day of the week (0–6) (Sunday to Saturday;
+        | | | month (1–12)             7 is also Sunday on some systems)
+        | | day of the month (1–31)
+        | hour (0–23)
+        minute (0–59)
+        """
+        return pulumi.get(self, "cron")
+
+    @_builtins.property
+    @pulumi.getter
+    def timezone(self) -> Optional[_builtins.str]:
+        """
+        `timezone` is IANA compliant timezone. For example America/Denver.
+        If this field is not set, timezone is treated as UTC.
+        """
+        return pulumi.get(self, "timezone")
+
+    @_builtins.property
+    @pulumi.getter(name="windowDuration")
+    def window_duration(self) -> Optional[_builtins.str]:
+        """
+        `windowDuration` is how long the cron definition is active for.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration.
+        """
+        return pulumi.get(self, "window_duration")
+
+
+@pulumi.output_type
 class CertificateSpecSecretTemplate(dict):
     """
     Defines annotations and labels to be copied to the Certificate's Secret.
@@ -4375,6 +4699,7 @@ class CertificateSpecSecretTemplate(dict):
         SecretTemplate when added or removed. SecretTemplate annotations are added
         in conjunction with, and cannot overwrite, the base set of annotations
         cert-manager sets on the Certificate's Secret.
+
         :param Mapping[str, _builtins.str] annotations: Annotations is a key value map to be copied to the target Kubernetes Secret.
         :param Mapping[str, _builtins.str] labels: Labels is a key value map to be copied to the target Kubernetes Secret.
         """
@@ -4418,6 +4743,7 @@ class CertificateSpecSecretTemplatePatch(dict):
         SecretTemplate when added or removed. SecretTemplate annotations are added
         in conjunction with, and cannot overwrite, the base set of annotations
         cert-manager sets on the Certificate's Secret.
+
         :param Mapping[str, _builtins.str] annotations: Annotations is a key value map to be copied to the target Kubernetes Secret.
         :param Mapping[str, _builtins.str] labels: Labels is a key value map to be copied to the target Kubernetes Secret.
         """
@@ -4490,6 +4816,7 @@ class CertificateSpecSubject(dict):
 
         The common name attribute is specified separately in the `commonName` field.
         Cannot be set if the `literalSubject` field is set.
+
         :param Sequence[_builtins.str] countries: Countries to be used on the Certificate.
         :param Sequence[_builtins.str] localities: Cities to be used on the Certificate.
         :param Sequence[_builtins.str] organizational_units: Organizational Units to be used on the Certificate.
@@ -4628,6 +4955,7 @@ class CertificateSpecSubjectPatch(dict):
 
         The common name attribute is specified separately in the `commonName` field.
         Cannot be set if the `literalSubject` field is set.
+
         :param Sequence[_builtins.str] countries: Countries to be used on the Certificate.
         :param Sequence[_builtins.str] localities: Cities to be used on the Certificate.
         :param Sequence[_builtins.str] organizational_units: Organizational Units to be used on the Certificate.
@@ -4755,6 +5083,7 @@ class CertificateStatus(dict):
         return super().get(key, default)
 
     def __init__(__self__, *,
+                 acme: Optional['outputs.CertificateStatusAcme'] = None,
                  conditions: Optional[Sequence['outputs.CertificateStatusConditions']] = None,
                  failed_issuance_attempts: Optional[_builtins.int] = None,
                  last_failure_time: Optional[_builtins.str] = None,
@@ -4768,6 +5097,7 @@ class CertificateStatus(dict):
         This is set and managed automatically.
         Read-only.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param Sequence['CertificateStatusConditionsArgs'] conditions: List of status conditions to indicate the status of certificates.
                Known condition types are `Ready` and `Issuing`.
         :param _builtins.int failed_issuance_attempts: The number of continuous failed issuance attempts up till now. This
@@ -4808,6 +5138,8 @@ class CertificateStatus(dict):
                checking if the revision value in the annotation is greater than this
                field.
         """
+        if acme is not None:
+            pulumi.set(__self__, "acme", acme)
         if conditions is not None:
             pulumi.set(__self__, "conditions", conditions)
         if failed_issuance_attempts is not None:
@@ -4824,6 +5156,11 @@ class CertificateStatus(dict):
             pulumi.set(__self__, "renewal_time", renewal_time)
         if revision is not None:
             pulumi.set(__self__, "revision", revision)
+
+    @_builtins.property
+    @pulumi.getter
+    def acme(self) -> Optional['outputs.CertificateStatusAcme']:
+        return pulumi.get(self, "acme")
 
     @_builtins.property
     @pulumi.getter
@@ -4922,6 +5259,310 @@ class CertificateStatus(dict):
 
 
 @pulumi.output_type
+class CertificateStatusAcme(dict):
+    """
+    ACME stores information that is fetched from the ACME CA server.
+    """
+    def __init__(__self__, *,
+                 ari: Optional['outputs.CertificateStatusAcmeAri'] = None):
+        """
+        ACME stores information that is fetched from the ACME CA server.
+        """
+        if ari is not None:
+            pulumi.set(__self__, "ari", ari)
+
+    @_builtins.property
+    @pulumi.getter
+    def ari(self) -> Optional['outputs.CertificateStatusAcmeAri']:
+        return pulumi.get(self, "ari")
+
+
+@pulumi.output_type
+class CertificateStatusAcmeAri(dict):
+    """
+    ARI stores the ACME Renewal Information that is fetched from the ACME server
+    in accordance with RFC 9773. This is only populated if the ARI feature gate is enabled.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "explanationURL":
+            suggest = "explanation_url"
+        elif key == "lastChecked":
+            suggest = "last_checked"
+        elif key == "lastError":
+            suggest = "last_error"
+        elif key == "nextCheck":
+            suggest = "next_check"
+        elif key == "suggestedWindow":
+            suggest = "suggested_window"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in CertificateStatusAcmeAri. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        CertificateStatusAcmeAri.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        CertificateStatusAcmeAri.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 explanation_url: Optional[_builtins.str] = None,
+                 last_checked: Optional[_builtins.str] = None,
+                 last_error: Optional[_builtins.str] = None,
+                 next_check: Optional[_builtins.str] = None,
+                 suggested_window: Optional['outputs.CertificateStatusAcmeAriSuggestedWindow'] = None):
+        """
+        ARI stores the ACME Renewal Information that is fetched from the ACME server
+        in accordance with RFC 9773. This is only populated if the ARI feature gate is enabled.
+
+        :param _builtins.str explanation_url: ExplanationURL is a human-readable URL that may explain why the suggested window
+               has its current value.
+        :param _builtins.str last_checked: LastChecked is the time at which the ACME server was last checked for renewal information.
+        :param _builtins.str last_error: LastError is the last error encountered when checking the ACME server for renewal information, if any.
+        :param _builtins.str next_check: NextCheck is the time at which the ACME server will next be checked for renewal information.
+        """
+        if explanation_url is not None:
+            pulumi.set(__self__, "explanation_url", explanation_url)
+        if last_checked is not None:
+            pulumi.set(__self__, "last_checked", last_checked)
+        if last_error is not None:
+            pulumi.set(__self__, "last_error", last_error)
+        if next_check is not None:
+            pulumi.set(__self__, "next_check", next_check)
+        if suggested_window is not None:
+            pulumi.set(__self__, "suggested_window", suggested_window)
+
+    @_builtins.property
+    @pulumi.getter(name="explanationURL")
+    def explanation_url(self) -> Optional[_builtins.str]:
+        """
+        ExplanationURL is a human-readable URL that may explain why the suggested window
+        has its current value.
+        """
+        return pulumi.get(self, "explanation_url")
+
+    @_builtins.property
+    @pulumi.getter(name="lastChecked")
+    def last_checked(self) -> Optional[_builtins.str]:
+        """
+        LastChecked is the time at which the ACME server was last checked for renewal information.
+        """
+        return pulumi.get(self, "last_checked")
+
+    @_builtins.property
+    @pulumi.getter(name="lastError")
+    def last_error(self) -> Optional[_builtins.str]:
+        """
+        LastError is the last error encountered when checking the ACME server for renewal information, if any.
+        """
+        return pulumi.get(self, "last_error")
+
+    @_builtins.property
+    @pulumi.getter(name="nextCheck")
+    def next_check(self) -> Optional[_builtins.str]:
+        """
+        NextCheck is the time at which the ACME server will next be checked for renewal information.
+        """
+        return pulumi.get(self, "next_check")
+
+    @_builtins.property
+    @pulumi.getter(name="suggestedWindow")
+    def suggested_window(self) -> Optional['outputs.CertificateStatusAcmeAriSuggestedWindow']:
+        return pulumi.get(self, "suggested_window")
+
+
+@pulumi.output_type
+class CertificateStatusAcmeAriPatch(dict):
+    """
+    ARI stores the ACME Renewal Information that is fetched from the ACME server
+    in accordance with RFC 9773. This is only populated if the ARI feature gate is enabled.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "explanationURL":
+            suggest = "explanation_url"
+        elif key == "lastChecked":
+            suggest = "last_checked"
+        elif key == "lastError":
+            suggest = "last_error"
+        elif key == "nextCheck":
+            suggest = "next_check"
+        elif key == "suggestedWindow":
+            suggest = "suggested_window"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in CertificateStatusAcmeAriPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        CertificateStatusAcmeAriPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        CertificateStatusAcmeAriPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 explanation_url: Optional[_builtins.str] = None,
+                 last_checked: Optional[_builtins.str] = None,
+                 last_error: Optional[_builtins.str] = None,
+                 next_check: Optional[_builtins.str] = None,
+                 suggested_window: Optional['outputs.CertificateStatusAcmeAriSuggestedWindowPatch'] = None):
+        """
+        ARI stores the ACME Renewal Information that is fetched from the ACME server
+        in accordance with RFC 9773. This is only populated if the ARI feature gate is enabled.
+
+        :param _builtins.str explanation_url: ExplanationURL is a human-readable URL that may explain why the suggested window
+               has its current value.
+        :param _builtins.str last_checked: LastChecked is the time at which the ACME server was last checked for renewal information.
+        :param _builtins.str last_error: LastError is the last error encountered when checking the ACME server for renewal information, if any.
+        :param _builtins.str next_check: NextCheck is the time at which the ACME server will next be checked for renewal information.
+        """
+        if explanation_url is not None:
+            pulumi.set(__self__, "explanation_url", explanation_url)
+        if last_checked is not None:
+            pulumi.set(__self__, "last_checked", last_checked)
+        if last_error is not None:
+            pulumi.set(__self__, "last_error", last_error)
+        if next_check is not None:
+            pulumi.set(__self__, "next_check", next_check)
+        if suggested_window is not None:
+            pulumi.set(__self__, "suggested_window", suggested_window)
+
+    @_builtins.property
+    @pulumi.getter(name="explanationURL")
+    def explanation_url(self) -> Optional[_builtins.str]:
+        """
+        ExplanationURL is a human-readable URL that may explain why the suggested window
+        has its current value.
+        """
+        return pulumi.get(self, "explanation_url")
+
+    @_builtins.property
+    @pulumi.getter(name="lastChecked")
+    def last_checked(self) -> Optional[_builtins.str]:
+        """
+        LastChecked is the time at which the ACME server was last checked for renewal information.
+        """
+        return pulumi.get(self, "last_checked")
+
+    @_builtins.property
+    @pulumi.getter(name="lastError")
+    def last_error(self) -> Optional[_builtins.str]:
+        """
+        LastError is the last error encountered when checking the ACME server for renewal information, if any.
+        """
+        return pulumi.get(self, "last_error")
+
+    @_builtins.property
+    @pulumi.getter(name="nextCheck")
+    def next_check(self) -> Optional[_builtins.str]:
+        """
+        NextCheck is the time at which the ACME server will next be checked for renewal information.
+        """
+        return pulumi.get(self, "next_check")
+
+    @_builtins.property
+    @pulumi.getter(name="suggestedWindow")
+    def suggested_window(self) -> Optional['outputs.CertificateStatusAcmeAriSuggestedWindowPatch']:
+        return pulumi.get(self, "suggested_window")
+
+
+@pulumi.output_type
+class CertificateStatusAcmeAriSuggestedWindow(dict):
+    """
+    SuggestedWindow is the suggested renewal window as returned by the ACME server in accordance with RFC 9773.
+    """
+    def __init__(__self__, *,
+                 end: Optional[_builtins.str] = None,
+                 start: Optional[_builtins.str] = None):
+        """
+        SuggestedWindow is the suggested renewal window as returned by the ACME server in accordance with RFC 9773.
+
+        :param _builtins.str end: End is the end of the suggested renewal window.
+        :param _builtins.str start: Start is the start of the suggested renewal window.
+        """
+        if end is not None:
+            pulumi.set(__self__, "end", end)
+        if start is not None:
+            pulumi.set(__self__, "start", start)
+
+    @_builtins.property
+    @pulumi.getter
+    def end(self) -> Optional[_builtins.str]:
+        """
+        End is the end of the suggested renewal window.
+        """
+        return pulumi.get(self, "end")
+
+    @_builtins.property
+    @pulumi.getter
+    def start(self) -> Optional[_builtins.str]:
+        """
+        Start is the start of the suggested renewal window.
+        """
+        return pulumi.get(self, "start")
+
+
+@pulumi.output_type
+class CertificateStatusAcmeAriSuggestedWindowPatch(dict):
+    """
+    SuggestedWindow is the suggested renewal window as returned by the ACME server in accordance with RFC 9773.
+    """
+    def __init__(__self__, *,
+                 end: Optional[_builtins.str] = None,
+                 start: Optional[_builtins.str] = None):
+        """
+        SuggestedWindow is the suggested renewal window as returned by the ACME server in accordance with RFC 9773.
+
+        :param _builtins.str end: End is the end of the suggested renewal window.
+        :param _builtins.str start: Start is the start of the suggested renewal window.
+        """
+        if end is not None:
+            pulumi.set(__self__, "end", end)
+        if start is not None:
+            pulumi.set(__self__, "start", start)
+
+    @_builtins.property
+    @pulumi.getter
+    def end(self) -> Optional[_builtins.str]:
+        """
+        End is the end of the suggested renewal window.
+        """
+        return pulumi.get(self, "end")
+
+    @_builtins.property
+    @pulumi.getter
+    def start(self) -> Optional[_builtins.str]:
+        """
+        Start is the start of the suggested renewal window.
+        """
+        return pulumi.get(self, "start")
+
+
+@pulumi.output_type
+class CertificateStatusAcmePatch(dict):
+    """
+    ACME stores information that is fetched from the ACME CA server.
+    """
+    def __init__(__self__, *,
+                 ari: Optional['outputs.CertificateStatusAcmeAriPatch'] = None):
+        """
+        ACME stores information that is fetched from the ACME CA server.
+        """
+        if ari is not None:
+            pulumi.set(__self__, "ari", ari)
+
+    @_builtins.property
+    @pulumi.getter
+    def ari(self) -> Optional['outputs.CertificateStatusAcmeAriPatch']:
+        return pulumi.get(self, "ari")
+
+
+@pulumi.output_type
 class CertificateStatusConditions(dict):
     """
     CertificateCondition contains condition information for a Certificate.
@@ -4954,6 +5595,7 @@ class CertificateStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         CertificateCondition contains condition information for a Certificate.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -5070,6 +5712,7 @@ class CertificateStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         CertificateCondition contains condition information for a Certificate.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -5189,6 +5832,7 @@ class CertificateStatusPatch(dict):
         return super().get(key, default)
 
     def __init__(__self__, *,
+                 acme: Optional['outputs.CertificateStatusAcmePatch'] = None,
                  conditions: Optional[Sequence['outputs.CertificateStatusConditionsPatch']] = None,
                  failed_issuance_attempts: Optional[_builtins.int] = None,
                  last_failure_time: Optional[_builtins.str] = None,
@@ -5202,6 +5846,7 @@ class CertificateStatusPatch(dict):
         This is set and managed automatically.
         Read-only.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+
         :param Sequence['CertificateStatusConditionsPatchArgs'] conditions: List of status conditions to indicate the status of certificates.
                Known condition types are `Ready` and `Issuing`.
         :param _builtins.int failed_issuance_attempts: The number of continuous failed issuance attempts up till now. This
@@ -5242,6 +5887,8 @@ class CertificateStatusPatch(dict):
                checking if the revision value in the annotation is greater than this
                field.
         """
+        if acme is not None:
+            pulumi.set(__self__, "acme", acme)
         if conditions is not None:
             pulumi.set(__self__, "conditions", conditions)
         if failed_issuance_attempts is not None:
@@ -5258,6 +5905,11 @@ class CertificateStatusPatch(dict):
             pulumi.set(__self__, "renewal_time", renewal_time)
         if revision is not None:
             pulumi.set(__self__, "revision", revision)
+
+    @_builtins.property
+    @pulumi.getter
+    def acme(self) -> Optional['outputs.CertificateStatusAcmePatch']:
+        return pulumi.get(self, "acme")
 
     @_builtins.property
     @pulumi.getter
@@ -5393,6 +6045,7 @@ class ClusterIssuer(dict):
         It is similar to an Issuer, however it is cluster-scoped and therefore can
         be referenced by resources that exist in *any* namespace, not just the same
         namespace as the referent.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -5561,6 +6214,7 @@ class ClusterIssuerSpecAcme(dict):
         """
         ACME configures this issuer to communicate with a RFC8555 (ACME) server
         to obtain signed x509 certificates.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which can be used to validate the certificate
                chain presented by the ACME server.
                Mutually exclusive with SkipTLSVerify; prefer using CABundle to prevent various
@@ -5797,6 +6451,7 @@ class ClusterIssuerSpecAcmeExternalAccountBinding(dict):
         server.
         If set, upon registration cert-manager will attempt to associate the given
         external account credentials with the registered ACME account.
+
         :param _builtins.str key_algorithm: Deprecated: keyAlgorithm field exists for historical compatibility
                reasons and should not be used. The algorithm is now hardcoded to HS256
                in golang/x/crypto/acme.
@@ -5855,6 +6510,7 @@ class ClusterIssuerSpecAcmeExternalAccountBindingKeySecretRef(dict):
         the External Account Binding keyID above.
         The secret key stored in the Secret **must** be un-padded, base64 URL
         encoded data.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -5908,6 +6564,7 @@ class ClusterIssuerSpecAcmeExternalAccountBindingKeySecretRefPatch(dict):
         the External Account Binding keyID above.
         The secret key stored in the Secret **must** be un-padded, base64 URL
         encoded data.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -5977,6 +6634,7 @@ class ClusterIssuerSpecAcmeExternalAccountBindingPatch(dict):
         server.
         If set, upon registration cert-manager will attempt to associate the given
         external account credentials with the registered ACME account.
+
         :param _builtins.str key_algorithm: Deprecated: keyAlgorithm field exists for historical compatibility
                reasons and should not be used. The algorithm is now hardcoded to HS256
                in golang/x/crypto/acme.
@@ -6063,6 +6721,7 @@ class ClusterIssuerSpecAcmePatch(dict):
         """
         ACME configures this issuer to communicate with a RFC8555 (ACME) server
         to obtain signed x509 certificates.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which can be used to validate the certificate
                chain presented by the ACME server.
                Mutually exclusive with SkipTLSVerify; prefer using CABundle to prevent various
@@ -6279,6 +6938,7 @@ class ClusterIssuerSpecAcmePrivateKeySecretRef(dict):
         Optionally, a `key` may be specified to select a specific entry within
         the named Secret resource.
         If `key` is not specified, a default of `tls.key` will be used.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6328,6 +6988,7 @@ class ClusterIssuerSpecAcmePrivateKeySecretRefPatch(dict):
         Optionally, a `key` may be specified to select a specific entry within
         the named Secret resource.
         If `key` is not specified, a default of `tls.key` will be used.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6366,14 +7027,48 @@ class ClusterIssuerSpecAcmeSolvers(dict):
     A selector may be provided to use different solving strategies for different DNS names.
     Only one of HTTP01 or DNS01 must be provided.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "waitInsteadOfSelfCheck":
+            suggest = "wait_instead_of_self_check"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecAcmeSolvers. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecAcmeSolvers.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecAcmeSolvers.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  dns01: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01'] = None,
                  http01: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01'] = None,
-                 selector: Optional['outputs.ClusterIssuerSpecAcmeSolversSelector'] = None):
+                 selector: Optional['outputs.ClusterIssuerSpecAcmeSolversSelector'] = None,
+                 wait_instead_of_self_check: Optional[_builtins.str] = None):
         """
         An ACMEChallengeSolver describes how to solve ACME challenges for the issuer it is part of.
         A selector may be provided to use different solving strategies for different DNS names.
         Only one of HTTP01 or DNS01 must be provided.
+
+        :param _builtins.str wait_instead_of_self_check: WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+               instead waits this long after presentation before asking the ACME server
+               to validate the challenge.
+               
+               This is an advanced escape hatch for environments where cert-manager's
+               self-check cannot succeed from its own network or DNS viewpoint even
+               though the ACME server can still validate successfully, for example due
+               to split-horizon DNS or NAT hairpinning.
+               
+               A value of 0 skips the self-check and asks the ACME server to validate
+               immediately after presentation, relying on the ACME server's own
+               validation retries (RFC 8555 section 8.2) to succeed once the challenge
+               has propagated. A negative duration is rejected.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+               for example `30s` or `2m`.
         """
         if dns01 is not None:
             pulumi.set(__self__, "dns01", dns01)
@@ -6381,6 +7076,8 @@ class ClusterIssuerSpecAcmeSolvers(dict):
             pulumi.set(__self__, "http01", http01)
         if selector is not None:
             pulumi.set(__self__, "selector", selector)
+        if wait_instead_of_self_check is not None:
+            pulumi.set(__self__, "wait_instead_of_self_check", wait_instead_of_self_check)
 
     @_builtins.property
     @pulumi.getter
@@ -6396,6 +7093,28 @@ class ClusterIssuerSpecAcmeSolvers(dict):
     @pulumi.getter
     def selector(self) -> Optional['outputs.ClusterIssuerSpecAcmeSolversSelector']:
         return pulumi.get(self, "selector")
+
+    @_builtins.property
+    @pulumi.getter(name="waitInsteadOfSelfCheck")
+    def wait_instead_of_self_check(self) -> Optional[_builtins.str]:
+        """
+        WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+        instead waits this long after presentation before asking the ACME server
+        to validate the challenge.
+
+        This is an advanced escape hatch for environments where cert-manager's
+        self-check cannot succeed from its own network or DNS viewpoint even
+        though the ACME server can still validate successfully, for example due
+        to split-horizon DNS or NAT hairpinning.
+
+        A value of 0 skips the self-check and asks the ACME server to validate
+        immediately after presentation, relying on the ACME server's own
+        validation retries (RFC 8555 section 8.2) to succeed once the challenge
+        has propagated. A negative duration is rejected.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+        for example `30s` or `2m`.
+        """
+        return pulumi.get(self, "wait_instead_of_self_check")
 
 
 @pulumi.output_type
@@ -6441,6 +7160,7 @@ class ClusterIssuerSpecAcmeSolversDns01(dict):
         """
         Configures cert-manager to attempt to complete authorizations by
         performing the DNS01 challenge flow.
+
         :param _builtins.str cname_strategy: CNAMEStrategy configures how the DNS01 provider should handle CNAME
                records when found in DNS zones.
         """
@@ -6578,6 +7298,7 @@ class ClusterIssuerSpecAcmeSolversDns01AcmeDNSAccountSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6621,6 +7342,7 @@ class ClusterIssuerSpecAcmeSolversDns01AcmeDNSAccountSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6776,6 +7498,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiAccessTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6819,6 +7542,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiAccessTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6862,6 +7586,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiClientSecretSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6905,6 +7630,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiClientSecretSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6948,6 +7674,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiClientTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -6991,6 +7718,7 @@ class ClusterIssuerSpecAcmeSolversDns01AkamaiClientTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7110,6 +7838,8 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNS(dict):
             suggest = "subscription_id"
         elif key == "tenantID":
             suggest = "tenant_id"
+        elif key == "zoneType":
+            suggest = "zone_type"
 
         if suggest:
             pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecAcmeSolversDns01AzureDNS. Access the value via the '{suggest}' property getter instead.")
@@ -7130,9 +7860,11 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNS(dict):
                  managed_identity: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01AzureDNSManagedIdentity'] = None,
                  resource_group_name: Optional[_builtins.str] = None,
                  subscription_id: Optional[_builtins.str] = None,
-                 tenant_id: Optional[_builtins.str] = None):
+                 tenant_id: Optional[_builtins.str] = None,
+                 zone_type: Optional[_builtins.str] = None):
         """
         Use the Microsoft Azure DNS API to manage DNS01 challenge records.
+
         :param _builtins.str client_id: Auth: Azure Service Principal:
                The ClientID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientSecret and TenantID must also be set.
@@ -7143,6 +7875,16 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNS(dict):
         :param _builtins.str tenant_id: Auth: Azure Service Principal:
                The TenantID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientID and ClientSecret must also be set.
+        :param _builtins.str zone_type: ZoneType determines which type of Azure DNS zone to use.
+               
+               Valid values are:
+                 - AzurePublicZone  (default): Use a public Azure DNS zone.
+                 - AzurePrivateZone: Use an Azure Private DNS zone.
+               
+               If not specified, AzurePublicZone is used.
+               
+               Support for Azure Private DNS zones is currently
+               experimental and may change in future releases.
         """
         if client_id is not None:
             pulumi.set(__self__, "client_id", client_id)
@@ -7160,6 +7902,8 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNS(dict):
             pulumi.set(__self__, "subscription_id", subscription_id)
         if tenant_id is not None:
             pulumi.set(__self__, "tenant_id", tenant_id)
+        if zone_type is not None:
+            pulumi.set(__self__, "zone_type", zone_type)
 
     @_builtins.property
     @pulumi.getter(name="clientID")
@@ -7223,6 +7967,23 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNS(dict):
         """
         return pulumi.get(self, "tenant_id")
 
+    @_builtins.property
+    @pulumi.getter(name="zoneType")
+    def zone_type(self) -> Optional[_builtins.str]:
+        """
+        ZoneType determines which type of Azure DNS zone to use.
+
+        Valid values are:
+          - AzurePublicZone  (default): Use a public Azure DNS zone.
+          - AzurePrivateZone: Use an Azure Private DNS zone.
+
+        If not specified, AzurePublicZone is used.
+
+        Support for Azure Private DNS zones is currently
+        experimental and may change in future releases.
+        """
+        return pulumi.get(self, "zone_type")
+
 
 @pulumi.output_type
 class ClusterIssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRef(dict):
@@ -7238,6 +7999,7 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRef(dict):
         Auth: Azure Service Principal:
         A reference to a Secret containing the password associated with the Service Principal.
         If set, ClientID and TenantID must also be set.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7283,6 +8045,7 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRefPatch(dict):
         Auth: Azure Service Principal:
         A reference to a Secret containing the password associated with the Service Principal.
         If set, ClientID and TenantID must also be set.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7350,6 +8113,7 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSManagedIdentity(dict):
         Auth: Azure Workload Identity or Azure Managed Service Identity:
         Settings to enable Azure Workload Identity or Azure Managed Service Identity
         If set, ClientID, ClientSecret and TenantID must not be set.
+
         :param _builtins.str client_id: client ID of the managed identity, cannot be used at the same time as resourceID
         :param _builtins.str resource_id: resource ID of the managed identity, cannot be used at the same time as clientID
                Cannot be used for Azure Managed Service Identity
@@ -7424,6 +8188,7 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSManagedIdentityPatch(dict):
         Auth: Azure Workload Identity or Azure Managed Service Identity:
         Settings to enable Azure Workload Identity or Azure Managed Service Identity
         If set, ClientID, ClientSecret and TenantID must not be set.
+
         :param _builtins.str client_id: client ID of the managed identity, cannot be used at the same time as resourceID
         :param _builtins.str resource_id: resource ID of the managed identity, cannot be used at the same time as clientID
                Cannot be used for Azure Managed Service Identity
@@ -7484,6 +8249,8 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
             suggest = "subscription_id"
         elif key == "tenantID":
             suggest = "tenant_id"
+        elif key == "zoneType":
+            suggest = "zone_type"
 
         if suggest:
             pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch. Access the value via the '{suggest}' property getter instead.")
@@ -7504,9 +8271,11 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
                  managed_identity: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01AzureDNSManagedIdentityPatch'] = None,
                  resource_group_name: Optional[_builtins.str] = None,
                  subscription_id: Optional[_builtins.str] = None,
-                 tenant_id: Optional[_builtins.str] = None):
+                 tenant_id: Optional[_builtins.str] = None,
+                 zone_type: Optional[_builtins.str] = None):
         """
         Use the Microsoft Azure DNS API to manage DNS01 challenge records.
+
         :param _builtins.str client_id: Auth: Azure Service Principal:
                The ClientID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientSecret and TenantID must also be set.
@@ -7517,6 +8286,16 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
         :param _builtins.str tenant_id: Auth: Azure Service Principal:
                The TenantID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientID and ClientSecret must also be set.
+        :param _builtins.str zone_type: ZoneType determines which type of Azure DNS zone to use.
+               
+               Valid values are:
+                 - AzurePublicZone  (default): Use a public Azure DNS zone.
+                 - AzurePrivateZone: Use an Azure Private DNS zone.
+               
+               If not specified, AzurePublicZone is used.
+               
+               Support for Azure Private DNS zones is currently
+               experimental and may change in future releases.
         """
         if client_id is not None:
             pulumi.set(__self__, "client_id", client_id)
@@ -7534,6 +8313,8 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
             pulumi.set(__self__, "subscription_id", subscription_id)
         if tenant_id is not None:
             pulumi.set(__self__, "tenant_id", tenant_id)
+        if zone_type is not None:
+            pulumi.set(__self__, "zone_type", zone_type)
 
     @_builtins.property
     @pulumi.getter(name="clientID")
@@ -7597,6 +8378,23 @@ class ClusterIssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
         """
         return pulumi.get(self, "tenant_id")
 
+    @_builtins.property
+    @pulumi.getter(name="zoneType")
+    def zone_type(self) -> Optional[_builtins.str]:
+        """
+        ZoneType determines which type of Azure DNS zone to use.
+
+        Valid values are:
+          - AzurePublicZone  (default): Use a public Azure DNS zone.
+          - AzurePrivateZone: Use an Azure Private DNS zone.
+
+        If not specified, AzurePublicZone is used.
+
+        Support for Azure Private DNS zones is currently
+        experimental and may change in future releases.
+        """
+        return pulumi.get(self, "zone_type")
+
 
 @pulumi.output_type
 class ClusterIssuerSpecAcmeSolversDns01CloudDNS(dict):
@@ -7628,6 +8426,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudDNS(dict):
                  service_account_secret_ref: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRef'] = None):
         """
         Use the Google Cloud DNS API to manage DNS01 challenge records.
+
         :param _builtins.str hosted_zone_name: HostedZoneName is an optional field that tells cert-manager in which
                Cloud DNS zone the challenge record has to be created.
                If left empty cert-manager will automatically choose a zone.
@@ -7690,6 +8489,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudDNSPatch(dict):
                  service_account_secret_ref: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRefPatch'] = None):
         """
         Use the Google Cloud DNS API to manage DNS01 challenge records.
+
         :param _builtins.str hosted_zone_name: HostedZoneName is an optional field that tells cert-manager in which
                Cloud DNS zone the challenge record has to be created.
                If left empty cert-manager will automatically choose a zone.
@@ -7734,6 +8534,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7777,6 +8578,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRefPatch(dict
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7838,6 +8640,7 @@ class ClusterIssuerSpecAcmeSolversDns01Cloudflare(dict):
                  email: Optional[_builtins.str] = None):
         """
         Use the Cloudflare API to manage DNS01 challenge records.
+
         :param _builtins.str email: Email of the account, only required when using API key based authentication.
         """
         if api_key_secret_ref is not None:
@@ -7880,6 +8683,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudflareApiKeySecretRef(dict):
         API key to use to authenticate with Cloudflare.
         Note: using an API token to authenticate is now the recommended method
         as it allows greater control of permissions.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7925,6 +8729,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudflareApiKeySecretRefPatch(dict):
         API key to use to authenticate with Cloudflare.
         Note: using an API token to authenticate is now the recommended method
         as it allows greater control of permissions.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -7966,6 +8771,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudflareApiTokenSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         API token used to authenticate with Cloudflare.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8007,6 +8813,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudflareApiTokenSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         API token used to authenticate with Cloudflare.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8068,6 +8875,7 @@ class ClusterIssuerSpecAcmeSolversDns01CloudflarePatch(dict):
                  email: Optional[_builtins.str] = None):
         """
         Use the Cloudflare API to manage DNS01 challenge records.
+
         :param _builtins.str email: Email of the account, only required when using API key based authentication.
         """
         if api_key_secret_ref is not None:
@@ -8180,6 +8988,7 @@ class ClusterIssuerSpecAcmeSolversDns01DigitaloceanTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8223,6 +9032,7 @@ class ClusterIssuerSpecAcmeSolversDns01DigitaloceanTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8297,6 +9107,7 @@ class ClusterIssuerSpecAcmeSolversDns01Patch(dict):
         """
         Configures cert-manager to attempt to complete authorizations by
         performing the DNS01 challenge flow.
+
         :param _builtins.str cname_strategy: CNAMEStrategy configures how the DNS01 provider should handle CNAME
                records when found in DNS zones.
         """
@@ -8412,9 +9223,10 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136(dict):
         """
         Use RFC2136 ("Dynamic Updates in the Domain Name System") (https://datatracker.ietf.org/doc/rfc2136/)
         to manage DNS01 challenge records.
+
         :param _builtins.str nameserver: The IP address or hostname of an authoritative DNS server supporting
                RFC2136 in the form host:port. If the host is an IPv6 address it must be
-               enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+               enclosed in square brackets (e.g [2001:db8::1]); port is optional.
                This field is required.
         :param _builtins.str protocol: Protocol to use for dynamic DNS update queries. Valid values are (case-sensitive) ``TCP`` and ``UDP``; ``UDP`` (default).
         :param _builtins.str tsig_algorithm: The TSIG Algorithm configured in the DNS supporting RFC2136. Used only
@@ -8441,7 +9253,7 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136(dict):
         """
         The IP address or hostname of an authoritative DNS server supporting
         RFC2136 in the form host:port. If the host is an IPv6 address it must be
-        enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+        enclosed in square brackets (e.g [2001:db8::1]); port is optional.
         This field is required.
         """
         return pulumi.get(self, "nameserver")
@@ -8516,9 +9328,10 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136Patch(dict):
         """
         Use RFC2136 ("Dynamic Updates in the Domain Name System") (https://datatracker.ietf.org/doc/rfc2136/)
         to manage DNS01 challenge records.
+
         :param _builtins.str nameserver: The IP address or hostname of an authoritative DNS server supporting
                RFC2136 in the form host:port. If the host is an IPv6 address it must be
-               enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+               enclosed in square brackets (e.g [2001:db8::1]); port is optional.
                This field is required.
         :param _builtins.str protocol: Protocol to use for dynamic DNS update queries. Valid values are (case-sensitive) ``TCP`` and ``UDP``; ``UDP`` (default).
         :param _builtins.str tsig_algorithm: The TSIG Algorithm configured in the DNS supporting RFC2136. Used only
@@ -8545,7 +9358,7 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136Patch(dict):
         """
         The IP address or hostname of an authoritative DNS server supporting
         RFC2136 in the form host:port. If the host is an IPv6 address it must be
-        enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+        enclosed in square brackets (e.g [2001:db8::1]); port is optional.
         This field is required.
         """
         return pulumi.get(self, "nameserver")
@@ -8596,6 +9409,7 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136TsigSecretSecretRef(dict):
         """
         The name of the secret containing the TSIG value.
         If ``tsigKeyName`` is defined, this field is required.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8639,6 +9453,7 @@ class ClusterIssuerSpecAcmeSolversDns01Rfc2136TsigSecretSecretRefPatch(dict):
         """
         The name of the secret containing the TSIG value.
         If ``tsigKeyName`` is defined, this field is required.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8708,10 +9523,11 @@ class ClusterIssuerSpecAcmeSolversDns01Route53(dict):
                  secret_access_key_secret_ref: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef'] = None):
         """
         Use the AWS Route53 API to manage DNS01 challenge records.
+
         :param _builtins.str access_key_id: The AccessKeyID is used for authentication.
                Cannot be set when SecretAccessKeyID is set.
-               If neither the Access Key nor Key ID are set, we fall-back to using env
-               vars, shared credentials file or AWS Instance metadata,
+               If neither the Access Key nor Key ID are set, we fall back to using env
+               vars, shared credentials file, or AWS Instance metadata,
                see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         :param _builtins.str hosted_zone_id: If set, the provider will manage only this zone in Route53 and will not do a lookup using the route53:ListHostedZonesByName api call.
         :param _builtins.str region: Override the AWS region.
@@ -8760,8 +9576,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53(dict):
         """
         The AccessKeyID is used for authentication.
         Cannot be set when SecretAccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         """
         return pulumi.get(self, "access_key_id")
@@ -8834,8 +9650,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRef(dict):
     The SecretAccessKey is used for authentication. If set, pull the AWS
     access key ID from a key within a Kubernetes Secret.
     Cannot be set when AccessKeyID is set.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -8845,9 +9661,10 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRef(dict):
         The SecretAccessKey is used for authentication. If set, pull the AWS
         access key ID from a key within a Kubernetes Secret.
         Cannot be set when AccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -8885,8 +9702,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRefPatch(dict):
     The SecretAccessKey is used for authentication. If set, pull the AWS
     access key ID from a key within a Kubernetes Secret.
     Cannot be set when AccessKeyID is set.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -8896,9 +9713,10 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRefPatch(dict):
         The SecretAccessKey is used for authentication. If set, pull the AWS
         access key ID from a key within a Kubernetes Secret.
         Cannot be set when AccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -9039,6 +9857,7 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AuthKubernetesServiceAccountRef(di
         A reference to a service account that will be used to request a bound
         token (also known as "projected token"). To use this field, you must
         configure an RBAC rule to let cert-manager request a token.
+
         :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of audiences to include in the
                token passed to AWS. The default token consisting of the issuer's namespace
                and name is always included.
@@ -9084,6 +9903,7 @@ class ClusterIssuerSpecAcmeSolversDns01Route53AuthKubernetesServiceAccountRefPat
         A reference to a service account that will be used to request a bound
         token (also known as "projected token"). To use this field, you must
         configure an RBAC rule to let cert-manager request a token.
+
         :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of audiences to include in the
                token passed to AWS. The default token consisting of the issuer's namespace
                and name is always included.
@@ -9172,10 +9992,11 @@ class ClusterIssuerSpecAcmeSolversDns01Route53Patch(dict):
                  secret_access_key_secret_ref: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch'] = None):
         """
         Use the AWS Route53 API to manage DNS01 challenge records.
+
         :param _builtins.str access_key_id: The AccessKeyID is used for authentication.
                Cannot be set when SecretAccessKeyID is set.
-               If neither the Access Key nor Key ID are set, we fall-back to using env
-               vars, shared credentials file or AWS Instance metadata,
+               If neither the Access Key nor Key ID are set, we fall back to using env
+               vars, shared credentials file, or AWS Instance metadata,
                see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         :param _builtins.str hosted_zone_id: If set, the provider will manage only this zone in Route53 and will not do a lookup using the route53:ListHostedZonesByName api call.
         :param _builtins.str region: Override the AWS region.
@@ -9224,8 +10045,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53Patch(dict):
         """
         The AccessKeyID is used for authentication.
         Cannot be set when SecretAccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         """
         return pulumi.get(self, "access_key_id")
@@ -9296,8 +10117,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53Patch(dict):
 class ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
     """
     The SecretAccessKey is used for authentication.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -9305,9 +10126,10 @@ class ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         The SecretAccessKey is used for authentication.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -9343,8 +10165,8 @@ class ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
 class ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch(dict):
     """
     The SecretAccessKey is used for authentication.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -9352,9 +10174,10 @@ class ClusterIssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch(dict
                  name: Optional[_builtins.str] = None):
         """
         The SecretAccessKey is used for authentication.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -9418,6 +10241,7 @@ class ClusterIssuerSpecAcmeSolversDns01Webhook(dict):
         """
         Configure an external webhook based DNS01 challenge solver to manage
         DNS01 challenge records.
+
         :param Mapping[str, Any] config: Additional configuration that should be passed to the webhook apiserver
                when challenges are processed.
                This can contain arbitrary JSON data.
@@ -9510,6 +10334,7 @@ class ClusterIssuerSpecAcmeSolversDns01WebhookPatch(dict):
         """
         Configure an external webhook based DNS01 challenge solver to manage
         DNS01 challenge records.
+
         :param Mapping[str, Any] config: Additional configuration that should be passed to the webhook apiserver
                when challenges are processed.
                This can contain arbitrary JSON data.
@@ -9659,6 +10484,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoute(dict):
         in Kubernetes (https://gateway-api.sigs.k8s.io/). The Gateway solver will
         create HTTPRoutes with the specified labels in the same namespace as the challenge.
         This solver is experimental, and fields / behaviour may change in the future.
+
         :param Mapping[str, _builtins.str] labels: Custom labels that will be applied to HTTPRoutes created by cert-manager
                while solving HTTP-01 challenges.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsArgs'] parent_refs: When solving an HTTP-01 challenge, cert-manager creates an HTTPRoute.
@@ -9765,6 +10591,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -10061,6 +10888,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -10343,6 +11171,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePatch(dict):
         in Kubernetes (https://gateway-api.sigs.k8s.io/). The Gateway solver will
         create HTTPRoutes with the specified labels in the same namespace as the challenge.
         This solver is experimental, and fields / behaviour may change in the future.
+
         :param Mapping[str, _builtins.str] labels: Custom labels that will be applied to HTTPRoutes created by cert-manager
                while solving HTTP-01 challenges.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsPatchArgs'] parent_refs: When solving an HTTP-01 challenge, cert-manager creates an HTTPRoute.
@@ -10441,6 +11270,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateMetadata(dict
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -10482,6 +11312,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateMetadataPatch
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -10581,6 +11412,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpec(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecretsArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -10749,6 +11581,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
                  required_during_scheduling_ignored_during_execution: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecution'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -10815,6 +11648,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
                  required_during_scheduling_ignored_during_execution: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -10864,6 +11698,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -10897,6 +11732,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -10947,6 +11783,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
                  match_fields: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFields']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -10985,6 +11822,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11044,6 +11882,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11103,6 +11942,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11162,6 +12002,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11237,6 +12078,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
                  match_fields: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatch']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -11296,6 +12138,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -11343,6 +12186,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -11381,6 +12225,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11440,6 +12285,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11499,6 +12345,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11558,6 +12405,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -11637,6 +12485,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -11696,6 +12545,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityN
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsPatchArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -11795,6 +12645,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -11877,6 +12728,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -11957,6 +12809,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -12007,6 +12860,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -12069,6 +12923,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -12203,6 +13058,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -12245,6 +13101,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -12302,6 +13159,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -12377,6 +13235,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -12443,6 +13302,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -12485,6 +13345,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -12542,6 +13403,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -12623,6 +13485,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -12691,6 +13554,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -12843,6 +13707,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -12977,6 +13842,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -13019,6 +13885,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -13076,6 +13943,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -13151,6 +14019,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -13217,6 +14086,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -13259,6 +14129,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -13316,6 +14187,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -13397,6 +14269,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -13475,6 +14348,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -13607,6 +14481,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -13689,6 +14564,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -13769,6 +14645,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -13819,6 +14696,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -13881,6 +14759,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -14015,6 +14894,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -14057,6 +14937,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14114,6 +14995,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14189,6 +15071,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -14255,6 +15138,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -14297,6 +15181,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14354,6 +15239,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14435,6 +15321,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -14503,6 +15390,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -14655,6 +15543,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -14789,6 +15678,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -14831,6 +15721,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14888,6 +15779,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -14963,6 +15855,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -15029,6 +15922,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -15071,6 +15965,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -15128,6 +16023,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -15209,6 +16105,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -15287,6 +16184,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityP
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -15401,6 +16299,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePull
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -15434,6 +16333,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePull
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -15501,6 +16401,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecPatch(dic
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecretsPatchArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -15604,6 +16505,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecResources
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -15657,6 +16559,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecResources
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -15738,6 +16641,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
                  sysctls: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextSysctls']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -15956,6 +16860,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
                  sysctls: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextSysctlsPatch']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -16148,6 +17053,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -16217,6 +17123,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -16293,6 +17200,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -16363,6 +17271,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -16414,6 +17323,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -16449,6 +17359,7 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityC
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -16506,14 +17417,16 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecToleratio
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -16555,9 +17468,10 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecToleratio
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -16614,14 +17528,16 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecToleratio
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -16663,9 +17579,10 @@ class ClusterIssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecToleratio
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -16735,6 +17652,7 @@ class ClusterIssuerSpecAcmeSolversHttp01Ingress(dict):
         creating or modifying Ingress resources in order to route requests for
         '/.well-known/acme-challenge/XYZ' to 'challenge solver' pods that are
         provisioned by cert-manager for each Challenge to be completed.
+
         :param _builtins.str class_: This field configures the annotation `kubernetes.io/ingress.class` when
                creating Ingress resources to solve ACME challenges that use this
                challenge solver. Only one of `class`, `name` or `ingressClassName` may
@@ -16857,6 +17775,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressIngressTemplateMetadata(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver ingress.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver ingress.
         """
@@ -16898,6 +17817,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressIngressTemplateMetadataPatch(dict
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver ingress.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver ingress.
         """
@@ -16989,6 +17909,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPatch(dict):
         creating or modifying Ingress resources in order to route requests for
         '/.well-known/acme-challenge/XYZ' to 'challenge solver' pods that are
         provisioned by cert-manager for each Challenge to be completed.
+
         :param _builtins.str class_: This field configures the annotation `kubernetes.io/ingress.class` when
                creating Ingress resources to solve ACME challenges that use this
                challenge solver. Only one of `class`, `name` or `ingressClassName` may
@@ -17119,6 +18040,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateMetadata(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -17160,6 +18082,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateMetadataPatch(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -17259,6 +18182,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpec(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -17427,6 +18351,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
                  required_during_scheduling_ignored_during_execution: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecution'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -17493,6 +18418,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
                  required_during_scheduling_ignored_during_execution: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -17542,6 +18468,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -17575,6 +18502,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -17625,6 +18553,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
                  match_fields: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFields']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -17663,6 +18592,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -17722,6 +18652,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -17781,6 +18712,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -17840,6 +18772,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -17915,6 +18848,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
                  match_fields: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatch']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -17974,6 +18908,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -18021,6 +18956,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -18059,6 +18995,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -18118,6 +19055,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -18177,6 +19115,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -18236,6 +19175,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -18315,6 +19255,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -18374,6 +19315,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffini
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsPatchArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -18473,6 +19415,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -18555,6 +19498,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -18635,6 +19579,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -18685,6 +19630,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -18747,6 +19693,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -18881,6 +19828,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -18923,6 +19871,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -18980,6 +19929,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19055,6 +20005,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19121,6 +20072,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19163,6 +20115,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19220,6 +20173,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19301,6 +20255,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19369,6 +20324,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -19521,6 +20477,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -19655,6 +20612,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19697,6 +20655,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19754,6 +20713,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19829,6 +20789,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19895,6 +20856,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -19937,6 +20899,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -19994,6 +20957,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -20075,6 +21039,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -20153,6 +21118,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinit
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -20285,6 +21251,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -20367,6 +21334,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -20447,6 +21415,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -20497,6 +21466,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -20559,6 +21529,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -20693,6 +21664,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -20735,6 +21707,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -20792,6 +21765,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -20867,6 +21841,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -20933,6 +21908,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -20975,6 +21951,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21032,6 +22009,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21113,6 +22091,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -21181,6 +22160,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -21333,6 +22313,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -21467,6 +22448,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -21509,6 +22491,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21566,6 +22549,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21641,6 +22625,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -21707,6 +22692,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -21749,6 +22735,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21806,6 +22793,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -21887,6 +22875,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -21965,6 +22954,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAff
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -22079,6 +23069,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecrets(d
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -22112,6 +23103,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsPa
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -22179,6 +23171,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecPatch(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsPatchArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -22282,6 +23275,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecResources(dict):
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -22335,6 +23329,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecResourcesPatch(dic
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -22416,6 +23411,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContext(di
                  sysctls: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctls']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -22634,6 +23630,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextPat
                  sysctls: Optional[Sequence['outputs.ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctlsPatch']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -22826,6 +23823,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeL
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -22895,6 +23893,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeL
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -22971,6 +23970,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSec
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -23041,6 +24041,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSec
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -23092,6 +24093,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSys
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -23127,6 +24129,7 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSys
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -23184,14 +24187,16 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -23233,9 +24238,10 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerations(dict):
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -23292,14 +24298,16 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerationsPatch(d
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -23341,9 +24349,10 @@ class ClusterIssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerationsPatch(d
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -23425,14 +24434,48 @@ class ClusterIssuerSpecAcmeSolversPatch(dict):
     A selector may be provided to use different solving strategies for different DNS names.
     Only one of HTTP01 or DNS01 must be provided.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "waitInsteadOfSelfCheck":
+            suggest = "wait_instead_of_self_check"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecAcmeSolversPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecAcmeSolversPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecAcmeSolversPatch.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  dns01: Optional['outputs.ClusterIssuerSpecAcmeSolversDns01Patch'] = None,
                  http01: Optional['outputs.ClusterIssuerSpecAcmeSolversHttp01Patch'] = None,
-                 selector: Optional['outputs.ClusterIssuerSpecAcmeSolversSelectorPatch'] = None):
+                 selector: Optional['outputs.ClusterIssuerSpecAcmeSolversSelectorPatch'] = None,
+                 wait_instead_of_self_check: Optional[_builtins.str] = None):
         """
         An ACMEChallengeSolver describes how to solve ACME challenges for the issuer it is part of.
         A selector may be provided to use different solving strategies for different DNS names.
         Only one of HTTP01 or DNS01 must be provided.
+
+        :param _builtins.str wait_instead_of_self_check: WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+               instead waits this long after presentation before asking the ACME server
+               to validate the challenge.
+               
+               This is an advanced escape hatch for environments where cert-manager's
+               self-check cannot succeed from its own network or DNS viewpoint even
+               though the ACME server can still validate successfully, for example due
+               to split-horizon DNS or NAT hairpinning.
+               
+               A value of 0 skips the self-check and asks the ACME server to validate
+               immediately after presentation, relying on the ACME server's own
+               validation retries (RFC 8555 section 8.2) to succeed once the challenge
+               has propagated. A negative duration is rejected.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+               for example `30s` or `2m`.
         """
         if dns01 is not None:
             pulumi.set(__self__, "dns01", dns01)
@@ -23440,6 +24483,8 @@ class ClusterIssuerSpecAcmeSolversPatch(dict):
             pulumi.set(__self__, "http01", http01)
         if selector is not None:
             pulumi.set(__self__, "selector", selector)
+        if wait_instead_of_self_check is not None:
+            pulumi.set(__self__, "wait_instead_of_self_check", wait_instead_of_self_check)
 
     @_builtins.property
     @pulumi.getter
@@ -23455,6 +24500,28 @@ class ClusterIssuerSpecAcmeSolversPatch(dict):
     @pulumi.getter
     def selector(self) -> Optional['outputs.ClusterIssuerSpecAcmeSolversSelectorPatch']:
         return pulumi.get(self, "selector")
+
+    @_builtins.property
+    @pulumi.getter(name="waitInsteadOfSelfCheck")
+    def wait_instead_of_self_check(self) -> Optional[_builtins.str]:
+        """
+        WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+        instead waits this long after presentation before asking the ACME server
+        to validate the challenge.
+
+        This is an advanced escape hatch for environments where cert-manager's
+        self-check cannot succeed from its own network or DNS viewpoint even
+        though the ACME server can still validate successfully, for example due
+        to split-horizon DNS or NAT hairpinning.
+
+        A value of 0 skips the self-check and asks the ACME server to validate
+        immediately after presentation, relying on the ACME server's own
+        validation retries (RFC 8555 section 8.2) to succeed once the challenge
+        has propagated. A negative duration is rejected.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+        for example `30s` or `2m`.
+        """
+        return pulumi.get(self, "wait_instead_of_self_check")
 
 
 @pulumi.output_type
@@ -23497,6 +24564,7 @@ class ClusterIssuerSpecAcmeSolversSelector(dict):
         If not specified, the solver will be treated as the 'default' solver
         with the lowest priority, i.e. if any other solver has a more specific
         match, it will be used instead.
+
         :param Sequence[_builtins.str] dns_names: List of DNSNames that this solver will be used to solve.
                If specified and a match is found, a dnsNames selector will take
                precedence over a dnsZones selector.
@@ -23603,6 +24671,7 @@ class ClusterIssuerSpecAcmeSolversSelectorPatch(dict):
         If not specified, the solver will be treated as the 'default' solver
         with the lowest priority, i.e. if any other solver has a more specific
         match, it will be used instead.
+
         :param Sequence[_builtins.str] dns_names: List of DNSNames that this solver will be used to solve.
                If specified and a match is found, a dnsNames selector will take
                precedence over a dnsZones selector.
@@ -23708,6 +24777,7 @@ class ClusterIssuerSpecCa(dict):
         CA configures this issuer to sign certificates using a signing CA keypair
         stored in a Secret resource.
         This is used to build internal PKIs that are managed by cert-manager.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set, certificates will be issued without distribution points set.
@@ -23812,6 +24882,7 @@ class ClusterIssuerSpecCaPatch(dict):
         CA configures this issuer to sign certificates using a signing CA keypair
         stored in a Secret resource.
         This is used to build internal PKIs that are managed by cert-manager.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set, certificates will be issued without distribution points set.
@@ -23973,6 +25044,7 @@ class ClusterIssuerSpecSelfSigned(dict):
         """
         SelfSigned configures this issuer to 'self sign' certificates using the
         private key used to create the CertificateRequest object.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set certificate will be issued without CDP. Values are strings.
@@ -24019,6 +25091,7 @@ class ClusterIssuerSpecSelfSignedPatch(dict):
         """
         SelfSigned configures this issuer to 'self sign' certificates using the
         private key used to create the CertificateRequest object.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set certificate will be issued without CDP. Values are strings.
@@ -24081,6 +25154,7 @@ class ClusterIssuerSpecVault(dict):
         """
         Vault configures this issuer to sign certificates using a HashiCorp Vault
         PKI backend.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
                chain presented by Vault. Only used if using HTTPS to connect to Vault and
                ignored for HTTP connections.
@@ -24211,6 +25285,7 @@ class ClusterIssuerSpecVaultAuth(dict):
 
     def __init__(__self__, *,
                  app_role: Optional['outputs.ClusterIssuerSpecVaultAuthAppRole'] = None,
+                 aws: Optional['outputs.ClusterIssuerSpecVaultAuthAws'] = None,
                  client_certificate: Optional['outputs.ClusterIssuerSpecVaultAuthClientCertificate'] = None,
                  kubernetes: Optional['outputs.ClusterIssuerSpecVaultAuthKubernetes'] = None,
                  token_secret_ref: Optional['outputs.ClusterIssuerSpecVaultAuthTokenSecretRef'] = None):
@@ -24219,6 +25294,8 @@ class ClusterIssuerSpecVaultAuth(dict):
         """
         if app_role is not None:
             pulumi.set(__self__, "app_role", app_role)
+        if aws is not None:
+            pulumi.set(__self__, "aws", aws)
         if client_certificate is not None:
             pulumi.set(__self__, "client_certificate", client_certificate)
         if kubernetes is not None:
@@ -24230,6 +25307,11 @@ class ClusterIssuerSpecVaultAuth(dict):
     @pulumi.getter(name="appRole")
     def app_role(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAppRole']:
         return pulumi.get(self, "app_role")
+
+    @_builtins.property
+    @pulumi.getter
+    def aws(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAws']:
+        return pulumi.get(self, "aws")
 
     @_builtins.property
     @pulumi.getter(name="clientCertificate")
@@ -24279,6 +25361,7 @@ class ClusterIssuerSpecVaultAuthAppRole(dict):
         """
         AppRole authenticates with Vault using the App Role auth mechanism,
         with the role and secret stored in a Kubernetes Secret resource.
+
         :param _builtins.str path: Path where the App Role authentication backend is mounted in Vault, e.g:
                "approle"
         :param _builtins.str role_id: RoleID configured in the App Role authentication backend when setting
@@ -24347,6 +25430,7 @@ class ClusterIssuerSpecVaultAuthAppRolePatch(dict):
         """
         AppRole authenticates with Vault using the App Role auth mechanism,
         with the role and secret stored in a Kubernetes Secret resource.
+
         :param _builtins.str path: Path where the App Role authentication backend is mounted in Vault, e.g:
                "approle"
         :param _builtins.str role_id: RoleID configured in the App Role authentication backend when setting
@@ -24399,6 +25483,7 @@ class ClusterIssuerSpecVaultAuthAppRoleSecretRef(dict):
         to authenticate with Vault.
         The `key` field must be specified and denotes which entry within the Secret
         resource is used as the app role secret.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -24446,6 +25531,7 @@ class ClusterIssuerSpecVaultAuthAppRoleSecretRefPatch(dict):
         to authenticate with Vault.
         The `key` field must be specified and denotes which entry within the Secret
         resource is used as the app role secret.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -24473,6 +25559,332 @@ class ClusterIssuerSpecVaultAuthAppRoleSecretRefPatch(dict):
         """
         Name of the resource being referred to.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVaultAuthAws(dict):
+    """
+    AWS authenticates with Vault using AWS IAM authentication.
+    This allows authentication using IAM roles for service accounts (IRSA),
+    EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "iamRoleArn":
+            suggest = "iam_role_arn"
+        elif key == "mountPath":
+            suggest = "mount_path"
+        elif key == "serviceAccountRef":
+            suggest = "service_account_ref"
+        elif key == "vaultHeaderValue":
+            suggest = "vault_header_value"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecVaultAuthAws. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecVaultAuthAws.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecVaultAuthAws.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 iam_role_arn: Optional[_builtins.str] = None,
+                 mount_path: Optional[_builtins.str] = None,
+                 region: Optional[_builtins.str] = None,
+                 role: Optional[_builtins.str] = None,
+                 service_account_ref: Optional['outputs.ClusterIssuerSpecVaultAuthAwsServiceAccountRef'] = None,
+                 vault_header_value: Optional[_builtins.str] = None):
+        """
+        AWS authenticates with Vault using AWS IAM authentication.
+        This allows authentication using IAM roles for service accounts (IRSA),
+        EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+
+        :param _builtins.str iam_role_arn: The ARN of the AWS IAM role to assume using the Kubernetes service account
+               token. Required when using IRSA (serviceAccountRef is set).
+               This role must have a trust policy that allows the OIDC provider to assume it.
+        :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
+               Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+               `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+               default value "/v1/auth/aws" will be used.
+        :param _builtins.str region: The AWS region to use for authentication. If not specified, the region
+               will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+               variables, falling back to "us-east-1" if not set.
+        :param _builtins.str role: A required field containing the Vault Role to assume when authenticating.
+        :param _builtins.str vault_header_value: The Vault header value to include in the STS signing request.
+               This is used to prevent replay attacks.
+        """
+        if iam_role_arn is not None:
+            pulumi.set(__self__, "iam_role_arn", iam_role_arn)
+        if mount_path is not None:
+            pulumi.set(__self__, "mount_path", mount_path)
+        if region is not None:
+            pulumi.set(__self__, "region", region)
+        if role is not None:
+            pulumi.set(__self__, "role", role)
+        if service_account_ref is not None:
+            pulumi.set(__self__, "service_account_ref", service_account_ref)
+        if vault_header_value is not None:
+            pulumi.set(__self__, "vault_header_value", vault_header_value)
+
+    @_builtins.property
+    @pulumi.getter(name="iamRoleArn")
+    def iam_role_arn(self) -> Optional[_builtins.str]:
+        """
+        The ARN of the AWS IAM role to assume using the Kubernetes service account
+        token. Required when using IRSA (serviceAccountRef is set).
+        This role must have a trust policy that allows the OIDC provider to assume it.
+        """
+        return pulumi.get(self, "iam_role_arn")
+
+    @_builtins.property
+    @pulumi.getter(name="mountPath")
+    def mount_path(self) -> Optional[_builtins.str]:
+        """
+        The Vault mountPath here is the mount path to use when authenticating with
+        Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+        `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+        default value "/v1/auth/aws" will be used.
+        """
+        return pulumi.get(self, "mount_path")
+
+    @_builtins.property
+    @pulumi.getter
+    def region(self) -> Optional[_builtins.str]:
+        """
+        The AWS region to use for authentication. If not specified, the region
+        will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+        variables, falling back to "us-east-1" if not set.
+        """
+        return pulumi.get(self, "region")
+
+    @_builtins.property
+    @pulumi.getter
+    def role(self) -> Optional[_builtins.str]:
+        """
+        A required field containing the Vault Role to assume when authenticating.
+        """
+        return pulumi.get(self, "role")
+
+    @_builtins.property
+    @pulumi.getter(name="serviceAccountRef")
+    def service_account_ref(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAwsServiceAccountRef']:
+        return pulumi.get(self, "service_account_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="vaultHeaderValue")
+    def vault_header_value(self) -> Optional[_builtins.str]:
+        """
+        The Vault header value to include in the STS signing request.
+        This is used to prevent replay attacks.
+        """
+        return pulumi.get(self, "vault_header_value")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVaultAuthAwsPatch(dict):
+    """
+    AWS authenticates with Vault using AWS IAM authentication.
+    This allows authentication using IAM roles for service accounts (IRSA),
+    EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "iamRoleArn":
+            suggest = "iam_role_arn"
+        elif key == "mountPath":
+            suggest = "mount_path"
+        elif key == "serviceAccountRef":
+            suggest = "service_account_ref"
+        elif key == "vaultHeaderValue":
+            suggest = "vault_header_value"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecVaultAuthAwsPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecVaultAuthAwsPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecVaultAuthAwsPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 iam_role_arn: Optional[_builtins.str] = None,
+                 mount_path: Optional[_builtins.str] = None,
+                 region: Optional[_builtins.str] = None,
+                 role: Optional[_builtins.str] = None,
+                 service_account_ref: Optional['outputs.ClusterIssuerSpecVaultAuthAwsServiceAccountRefPatch'] = None,
+                 vault_header_value: Optional[_builtins.str] = None):
+        """
+        AWS authenticates with Vault using AWS IAM authentication.
+        This allows authentication using IAM roles for service accounts (IRSA),
+        EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+
+        :param _builtins.str iam_role_arn: The ARN of the AWS IAM role to assume using the Kubernetes service account
+               token. Required when using IRSA (serviceAccountRef is set).
+               This role must have a trust policy that allows the OIDC provider to assume it.
+        :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
+               Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+               `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+               default value "/v1/auth/aws" will be used.
+        :param _builtins.str region: The AWS region to use for authentication. If not specified, the region
+               will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+               variables, falling back to "us-east-1" if not set.
+        :param _builtins.str role: A required field containing the Vault Role to assume when authenticating.
+        :param _builtins.str vault_header_value: The Vault header value to include in the STS signing request.
+               This is used to prevent replay attacks.
+        """
+        if iam_role_arn is not None:
+            pulumi.set(__self__, "iam_role_arn", iam_role_arn)
+        if mount_path is not None:
+            pulumi.set(__self__, "mount_path", mount_path)
+        if region is not None:
+            pulumi.set(__self__, "region", region)
+        if role is not None:
+            pulumi.set(__self__, "role", role)
+        if service_account_ref is not None:
+            pulumi.set(__self__, "service_account_ref", service_account_ref)
+        if vault_header_value is not None:
+            pulumi.set(__self__, "vault_header_value", vault_header_value)
+
+    @_builtins.property
+    @pulumi.getter(name="iamRoleArn")
+    def iam_role_arn(self) -> Optional[_builtins.str]:
+        """
+        The ARN of the AWS IAM role to assume using the Kubernetes service account
+        token. Required when using IRSA (serviceAccountRef is set).
+        This role must have a trust policy that allows the OIDC provider to assume it.
+        """
+        return pulumi.get(self, "iam_role_arn")
+
+    @_builtins.property
+    @pulumi.getter(name="mountPath")
+    def mount_path(self) -> Optional[_builtins.str]:
+        """
+        The Vault mountPath here is the mount path to use when authenticating with
+        Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+        `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+        default value "/v1/auth/aws" will be used.
+        """
+        return pulumi.get(self, "mount_path")
+
+    @_builtins.property
+    @pulumi.getter
+    def region(self) -> Optional[_builtins.str]:
+        """
+        The AWS region to use for authentication. If not specified, the region
+        will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+        variables, falling back to "us-east-1" if not set.
+        """
+        return pulumi.get(self, "region")
+
+    @_builtins.property
+    @pulumi.getter
+    def role(self) -> Optional[_builtins.str]:
+        """
+        A required field containing the Vault Role to assume when authenticating.
+        """
+        return pulumi.get(self, "role")
+
+    @_builtins.property
+    @pulumi.getter(name="serviceAccountRef")
+    def service_account_ref(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAwsServiceAccountRefPatch']:
+        return pulumi.get(self, "service_account_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="vaultHeaderValue")
+    def vault_header_value(self) -> Optional[_builtins.str]:
+        """
+        The Vault header value to include in the STS signing request.
+        This is used to prevent replay attacks.
+        """
+        return pulumi.get(self, "vault_header_value")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVaultAuthAwsServiceAccountRef(dict):
+    """
+    A reference to a service account that will be used to request a web identity
+    token for IRSA (IAM Roles for Service Accounts) authentication.
+    """
+    def __init__(__self__, *,
+                 audiences: Optional[Sequence[_builtins.str]] = None,
+                 name: Optional[_builtins.str] = None):
+        """
+        A reference to a service account that will be used to request a web identity
+        token for IRSA (IAM Roles for Service Accounts) authentication.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
+        :param _builtins.str name: Name of the ServiceAccount used to request a token.
+        """
+        if audiences is not None:
+            pulumi.set(__self__, "audiences", audiences)
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def audiences(self) -> Optional[Sequence[_builtins.str]]:
+        """
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
+        """
+        return pulumi.get(self, "audiences")
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the ServiceAccount used to request a token.
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVaultAuthAwsServiceAccountRefPatch(dict):
+    """
+    A reference to a service account that will be used to request a web identity
+    token for IRSA (IAM Roles for Service Accounts) authentication.
+    """
+    def __init__(__self__, *,
+                 audiences: Optional[Sequence[_builtins.str]] = None,
+                 name: Optional[_builtins.str] = None):
+        """
+        A reference to a service account that will be used to request a web identity
+        token for IRSA (IAM Roles for Service Accounts) authentication.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
+        :param _builtins.str name: Name of the ServiceAccount used to request a token.
+        """
+        if audiences is not None:
+            pulumi.set(__self__, "audiences", audiences)
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def audiences(self) -> Optional[Sequence[_builtins.str]]:
+        """
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
+        """
+        return pulumi.get(self, "audiences")
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the ServiceAccount used to request a token.
         """
         return pulumi.get(self, "name")
 
@@ -24511,6 +25923,7 @@ class ClusterIssuerSpecVaultAuthClientCertificate(dict):
         ClientCertificate authenticates with Vault by presenting a client
         certificate during the request's TLS handshake.
         Works only when using HTTPS protocol.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -24593,6 +26006,7 @@ class ClusterIssuerSpecVaultAuthClientCertificatePatch(dict):
         ClientCertificate authenticates with Vault by presenting a client
         certificate during the request's TLS handshake.
         Works only when using HTTPS protocol.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -24676,6 +26090,7 @@ class ClusterIssuerSpecVaultAuthKubernetes(dict):
         """
         Kubernetes authenticates with Vault by passing the ServiceAccount
         token stored in the named Secret resource to the Vault server.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -24758,6 +26173,7 @@ class ClusterIssuerSpecVaultAuthKubernetesPatch(dict):
         """
         Kubernetes authenticates with Vault by passing the ServiceAccount
         token stored in the named Secret resource to the Vault server.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -24819,6 +26235,7 @@ class ClusterIssuerSpecVaultAuthKubernetesSecretRef(dict):
         The required Secret field containing a Kubernetes ServiceAccount JWT used
         for authenticating with Vault. Use of 'ambient credentials' is not
         supported.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -24864,6 +26281,7 @@ class ClusterIssuerSpecVaultAuthKubernetesSecretRefPatch(dict):
         The required Secret field containing a Kubernetes ServiceAccount JWT used
         for authenticating with Vault. Use of 'ambient credentials' is not
         supported.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -24913,8 +26331,9 @@ class ClusterIssuerSpecVaultAuthKubernetesServiceAccountRef(dict):
         using this field means that you don't rely on statically bound tokens. To
         use this field, you must configure an RBAC rule to let cert-manager
         request a token.
-        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-               consisting of the issuer's namespace and name is always included.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
         :param _builtins.str name: Name of the ServiceAccount used to request a token.
         """
         if audiences is not None:
@@ -24926,8 +26345,8 @@ class ClusterIssuerSpecVaultAuthKubernetesServiceAccountRef(dict):
     @pulumi.getter
     def audiences(self) -> Optional[Sequence[_builtins.str]]:
         """
-        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-        consisting of the issuer's namespace and name is always included.
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
         """
         return pulumi.get(self, "audiences")
 
@@ -24958,8 +26377,9 @@ class ClusterIssuerSpecVaultAuthKubernetesServiceAccountRefPatch(dict):
         using this field means that you don't rely on statically bound tokens. To
         use this field, you must configure an RBAC rule to let cert-manager
         request a token.
-        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-               consisting of the issuer's namespace and name is always included.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
         :param _builtins.str name: Name of the ServiceAccount used to request a token.
         """
         if audiences is not None:
@@ -24971,8 +26391,8 @@ class ClusterIssuerSpecVaultAuthKubernetesServiceAccountRefPatch(dict):
     @pulumi.getter
     def audiences(self) -> Optional[Sequence[_builtins.str]]:
         """
-        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-        consisting of the issuer's namespace and name is always included.
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
         """
         return pulumi.get(self, "audiences")
 
@@ -25013,6 +26433,7 @@ class ClusterIssuerSpecVaultAuthPatch(dict):
 
     def __init__(__self__, *,
                  app_role: Optional['outputs.ClusterIssuerSpecVaultAuthAppRolePatch'] = None,
+                 aws: Optional['outputs.ClusterIssuerSpecVaultAuthAwsPatch'] = None,
                  client_certificate: Optional['outputs.ClusterIssuerSpecVaultAuthClientCertificatePatch'] = None,
                  kubernetes: Optional['outputs.ClusterIssuerSpecVaultAuthKubernetesPatch'] = None,
                  token_secret_ref: Optional['outputs.ClusterIssuerSpecVaultAuthTokenSecretRefPatch'] = None):
@@ -25021,6 +26442,8 @@ class ClusterIssuerSpecVaultAuthPatch(dict):
         """
         if app_role is not None:
             pulumi.set(__self__, "app_role", app_role)
+        if aws is not None:
+            pulumi.set(__self__, "aws", aws)
         if client_certificate is not None:
             pulumi.set(__self__, "client_certificate", client_certificate)
         if kubernetes is not None:
@@ -25032,6 +26455,11 @@ class ClusterIssuerSpecVaultAuthPatch(dict):
     @pulumi.getter(name="appRole")
     def app_role(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAppRolePatch']:
         return pulumi.get(self, "app_role")
+
+    @_builtins.property
+    @pulumi.getter
+    def aws(self) -> Optional['outputs.ClusterIssuerSpecVaultAuthAwsPatch']:
+        return pulumi.get(self, "aws")
 
     @_builtins.property
     @pulumi.getter(name="clientCertificate")
@@ -25059,6 +26487,7 @@ class ClusterIssuerSpecVaultAuthTokenSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         TokenSecretRef authenticates with Vault by presenting a token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25100,6 +26529,7 @@ class ClusterIssuerSpecVaultAuthTokenSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         TokenSecretRef authenticates with Vault by presenting a token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25151,6 +26581,7 @@ class ClusterIssuerSpecVaultCaBundleSecretRef(dict):
         If neither CABundle nor CABundleSecretRef are defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
         If no key for the Secret is specified, cert-manager will default to 'ca.crt'.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25202,6 +26633,7 @@ class ClusterIssuerSpecVaultCaBundleSecretRefPatch(dict):
         If neither CABundle nor CABundleSecretRef are defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
         If no key for the Secret is specified, cert-manager will default to 'ca.crt'.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25245,6 +26677,7 @@ class ClusterIssuerSpecVaultClientCertSecretRef(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Certificate to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25288,6 +26721,7 @@ class ClusterIssuerSpecVaultClientCertSecretRefPatch(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Certificate to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25331,6 +26765,7 @@ class ClusterIssuerSpecVaultClientKeySecretRef(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Private Key to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25374,6 +26809,7 @@ class ClusterIssuerSpecVaultClientKeySecretRefPatch(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Private Key to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25449,6 +26885,7 @@ class ClusterIssuerSpecVaultPatch(dict):
         """
         Vault configures this issuer to sign certificates using a HashiCorp Vault
         PKI backend.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
                chain presented by Vault. Only used if using HTTPS to connect to Vault and
                ignored for HTTP connections.
@@ -25554,23 +26991,27 @@ class ClusterIssuerSpecVaultPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafi(dict):
     """
-    Venafi configures this issuer to sign certificates using a Venafi TPP
-    or Venafi Cloud policy zone.
+    Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+    or SaaS policy zone.
     """
     def __init__(__self__, *,
                  cloud: Optional['outputs.ClusterIssuerSpecVenafiCloud'] = None,
+                 ngts: Optional['outputs.ClusterIssuerSpecVenafiNgts'] = None,
                  tpp: Optional['outputs.ClusterIssuerSpecVenafiTpp'] = None,
                  zone: Optional[_builtins.str] = None):
         """
-        Venafi configures this issuer to sign certificates using a Venafi TPP
-        or Venafi Cloud policy zone.
-        :param _builtins.str zone: Zone is the Venafi Policy Zone to use for this issuer.
-               All requests made to the Venafi platform will be restricted by the named
+        Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+        or SaaS policy zone.
+
+        :param _builtins.str zone: Zone is the Certificate Manager Policy Zone to use for this issuer.
+               All requests made to the Certificate Manager platform will be restricted by the named
                zone policy.
                This field is required.
         """
         if cloud is not None:
             pulumi.set(__self__, "cloud", cloud)
+        if ngts is not None:
+            pulumi.set(__self__, "ngts", ngts)
         if tpp is not None:
             pulumi.set(__self__, "tpp", tpp)
         if zone is not None:
@@ -25583,6 +27024,11 @@ class ClusterIssuerSpecVenafi(dict):
 
     @_builtins.property
     @pulumi.getter
+    def ngts(self) -> Optional['outputs.ClusterIssuerSpecVenafiNgts']:
+        return pulumi.get(self, "ngts")
+
+    @_builtins.property
+    @pulumi.getter
     def tpp(self) -> Optional['outputs.ClusterIssuerSpecVenafiTpp']:
         return pulumi.get(self, "tpp")
 
@@ -25590,8 +27036,8 @@ class ClusterIssuerSpecVenafi(dict):
     @pulumi.getter
     def zone(self) -> Optional[_builtins.str]:
         """
-        Zone is the Venafi Policy Zone to use for this issuer.
-        All requests made to the Venafi platform will be restricted by the named
+        Zone is the Certificate Manager Policy Zone to use for this issuer.
+        All requests made to the Certificate Manager platform will be restricted by the named
         zone policy.
         This field is required.
         """
@@ -25601,8 +27047,8 @@ class ClusterIssuerSpecVenafi(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiCloud(dict):
     """
-    Cloud specifies the Venafi cloud configuration settings.
-    Only one of TPP or Cloud may be specified.
+    Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -25625,9 +27071,10 @@ class ClusterIssuerSpecVenafiCloud(dict):
                  api_token_secret_ref: Optional['outputs.ClusterIssuerSpecVenafiCloudApiTokenSecretRef'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        Cloud specifies the Venafi cloud configuration settings.
-        Only one of TPP or Cloud may be specified.
-        :param _builtins.str url: URL is the base URL for Venafi Cloud.
+        Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
+        :param _builtins.str url: URL is the base URL for CyberArk Certificate Manager SaaS.
                Defaults to "https://api.venafi.cloud/".
         """
         if api_token_secret_ref is not None:
@@ -25644,7 +27091,7 @@ class ClusterIssuerSpecVenafiCloud(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for Venafi Cloud.
+        URL is the base URL for CyberArk Certificate Manager SaaS.
         Defaults to "https://api.venafi.cloud/".
         """
         return pulumi.get(self, "url")
@@ -25653,13 +27100,14 @@ class ClusterIssuerSpecVenafiCloud(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiCloudApiTokenSecretRef(dict):
     """
-    APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+    APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
     """
     def __init__(__self__, *,
                  key: Optional[_builtins.str] = None,
                  name: Optional[_builtins.str] = None):
         """
-        APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+        APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25694,13 +27142,14 @@ class ClusterIssuerSpecVenafiCloudApiTokenSecretRef(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiCloudApiTokenSecretRefPatch(dict):
     """
-    APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+    APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
     """
     def __init__(__self__, *,
                  key: Optional[_builtins.str] = None,
                  name: Optional[_builtins.str] = None):
         """
-        APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+        APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25735,8 +27184,8 @@ class ClusterIssuerSpecVenafiCloudApiTokenSecretRefPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiCloudPatch(dict):
     """
-    Cloud specifies the Venafi cloud configuration settings.
-    Only one of TPP or Cloud may be specified.
+    Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -25759,9 +27208,10 @@ class ClusterIssuerSpecVenafiCloudPatch(dict):
                  api_token_secret_ref: Optional['outputs.ClusterIssuerSpecVenafiCloudApiTokenSecretRefPatch'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        Cloud specifies the Venafi cloud configuration settings.
-        Only one of TPP or Cloud may be specified.
-        :param _builtins.str url: URL is the base URL for Venafi Cloud.
+        Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
+        :param _builtins.str url: URL is the base URL for CyberArk Certificate Manager SaaS.
                Defaults to "https://api.venafi.cloud/".
         """
         if api_token_secret_ref is not None:
@@ -25778,8 +27228,246 @@ class ClusterIssuerSpecVenafiCloudPatch(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for Venafi Cloud.
+        URL is the base URL for CyberArk Certificate Manager SaaS.
         Defaults to "https://api.venafi.cloud/".
+        """
+        return pulumi.get(self, "url")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVenafiNgts(dict):
+    """
+    NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+    using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "credentialsRef":
+            suggest = "credentials_ref"
+        elif key == "tokenEndpoint":
+            suggest = "token_endpoint"
+        elif key == "tsgID":
+            suggest = "tsg_id"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecVenafiNgts. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecVenafiNgts.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecVenafiNgts.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 credentials_ref: Optional['outputs.ClusterIssuerSpecVenafiNgtsCredentialsRef'] = None,
+                 token_endpoint: Optional[_builtins.str] = None,
+                 tsg_id: Optional[_builtins.str] = None,
+                 url: Optional[_builtins.str] = None):
+        """
+        NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+        using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+
+        :param _builtins.str token_endpoint: TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+               for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+               Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        :param _builtins.str tsg_id: TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+               for example "1234567890". The tsg_id: prefix is added automatically.
+               This field is required.
+        :param _builtins.str url: URL is the base URL for the NGTS API endpoint.
+               Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        if credentials_ref is not None:
+            pulumi.set(__self__, "credentials_ref", credentials_ref)
+        if token_endpoint is not None:
+            pulumi.set(__self__, "token_endpoint", token_endpoint)
+        if tsg_id is not None:
+            pulumi.set(__self__, "tsg_id", tsg_id)
+        if url is not None:
+            pulumi.set(__self__, "url", url)
+
+    @_builtins.property
+    @pulumi.getter(name="credentialsRef")
+    def credentials_ref(self) -> Optional['outputs.ClusterIssuerSpecVenafiNgtsCredentialsRef']:
+        return pulumi.get(self, "credentials_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="tokenEndpoint")
+    def token_endpoint(self) -> Optional[_builtins.str]:
+        """
+        TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+        for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+        Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        """
+        return pulumi.get(self, "token_endpoint")
+
+    @_builtins.property
+    @pulumi.getter(name="tsgID")
+    def tsg_id(self) -> Optional[_builtins.str]:
+        """
+        TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+        for example "1234567890". The tsg_id: prefix is added automatically.
+        This field is required.
+        """
+        return pulumi.get(self, "tsg_id")
+
+    @_builtins.property
+    @pulumi.getter
+    def url(self) -> Optional[_builtins.str]:
+        """
+        URL is the base URL for the NGTS API endpoint.
+        Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        return pulumi.get(self, "url")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVenafiNgtsCredentialsRef(dict):
+    """
+    CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+    Client ID and Client Secret. The secret must contain the keys 'client-id' and
+    'client-secret'.
+    """
+    def __init__(__self__, *,
+                 name: Optional[_builtins.str] = None):
+        """
+        CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+        Client ID and Client Secret. The secret must contain the keys 'client-id' and
+        'client-secret'.
+
+        :param _builtins.str name: Name of the resource being referred to.
+               More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the resource being referred to.
+        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVenafiNgtsCredentialsRefPatch(dict):
+    """
+    CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+    Client ID and Client Secret. The secret must contain the keys 'client-id' and
+    'client-secret'.
+    """
+    def __init__(__self__, *,
+                 name: Optional[_builtins.str] = None):
+        """
+        CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+        Client ID and Client Secret. The secret must contain the keys 'client-id' and
+        'client-secret'.
+
+        :param _builtins.str name: Name of the resource being referred to.
+               More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the resource being referred to.
+        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class ClusterIssuerSpecVenafiNgtsPatch(dict):
+    """
+    NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+    using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "credentialsRef":
+            suggest = "credentials_ref"
+        elif key == "tokenEndpoint":
+            suggest = "token_endpoint"
+        elif key == "tsgID":
+            suggest = "tsg_id"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in ClusterIssuerSpecVenafiNgtsPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        ClusterIssuerSpecVenafiNgtsPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        ClusterIssuerSpecVenafiNgtsPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 credentials_ref: Optional['outputs.ClusterIssuerSpecVenafiNgtsCredentialsRefPatch'] = None,
+                 token_endpoint: Optional[_builtins.str] = None,
+                 tsg_id: Optional[_builtins.str] = None,
+                 url: Optional[_builtins.str] = None):
+        """
+        NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+        using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+
+        :param _builtins.str token_endpoint: TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+               for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+               Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        :param _builtins.str tsg_id: TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+               for example "1234567890". The tsg_id: prefix is added automatically.
+               This field is required.
+        :param _builtins.str url: URL is the base URL for the NGTS API endpoint.
+               Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        if credentials_ref is not None:
+            pulumi.set(__self__, "credentials_ref", credentials_ref)
+        if token_endpoint is not None:
+            pulumi.set(__self__, "token_endpoint", token_endpoint)
+        if tsg_id is not None:
+            pulumi.set(__self__, "tsg_id", tsg_id)
+        if url is not None:
+            pulumi.set(__self__, "url", url)
+
+    @_builtins.property
+    @pulumi.getter(name="credentialsRef")
+    def credentials_ref(self) -> Optional['outputs.ClusterIssuerSpecVenafiNgtsCredentialsRefPatch']:
+        return pulumi.get(self, "credentials_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="tokenEndpoint")
+    def token_endpoint(self) -> Optional[_builtins.str]:
+        """
+        TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+        for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+        Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        """
+        return pulumi.get(self, "token_endpoint")
+
+    @_builtins.property
+    @pulumi.getter(name="tsgID")
+    def tsg_id(self) -> Optional[_builtins.str]:
+        """
+        TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+        for example "1234567890". The tsg_id: prefix is added automatically.
+        This field is required.
+        """
+        return pulumi.get(self, "tsg_id")
+
+    @_builtins.property
+    @pulumi.getter
+    def url(self) -> Optional[_builtins.str]:
+        """
+        URL is the base URL for the NGTS API endpoint.
+        Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
         """
         return pulumi.get(self, "url")
 
@@ -25787,23 +27475,27 @@ class ClusterIssuerSpecVenafiCloudPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiPatch(dict):
     """
-    Venafi configures this issuer to sign certificates using a Venafi TPP
-    or Venafi Cloud policy zone.
+    Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+    or SaaS policy zone.
     """
     def __init__(__self__, *,
                  cloud: Optional['outputs.ClusterIssuerSpecVenafiCloudPatch'] = None,
+                 ngts: Optional['outputs.ClusterIssuerSpecVenafiNgtsPatch'] = None,
                  tpp: Optional['outputs.ClusterIssuerSpecVenafiTppPatch'] = None,
                  zone: Optional[_builtins.str] = None):
         """
-        Venafi configures this issuer to sign certificates using a Venafi TPP
-        or Venafi Cloud policy zone.
-        :param _builtins.str zone: Zone is the Venafi Policy Zone to use for this issuer.
-               All requests made to the Venafi platform will be restricted by the named
+        Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+        or SaaS policy zone.
+
+        :param _builtins.str zone: Zone is the Certificate Manager Policy Zone to use for this issuer.
+               All requests made to the Certificate Manager platform will be restricted by the named
                zone policy.
                This field is required.
         """
         if cloud is not None:
             pulumi.set(__self__, "cloud", cloud)
+        if ngts is not None:
+            pulumi.set(__self__, "ngts", ngts)
         if tpp is not None:
             pulumi.set(__self__, "tpp", tpp)
         if zone is not None:
@@ -25816,6 +27508,11 @@ class ClusterIssuerSpecVenafiPatch(dict):
 
     @_builtins.property
     @pulumi.getter
+    def ngts(self) -> Optional['outputs.ClusterIssuerSpecVenafiNgtsPatch']:
+        return pulumi.get(self, "ngts")
+
+    @_builtins.property
+    @pulumi.getter
     def tpp(self) -> Optional['outputs.ClusterIssuerSpecVenafiTppPatch']:
         return pulumi.get(self, "tpp")
 
@@ -25823,8 +27520,8 @@ class ClusterIssuerSpecVenafiPatch(dict):
     @pulumi.getter
     def zone(self) -> Optional[_builtins.str]:
         """
-        Zone is the Venafi Policy Zone to use for this issuer.
-        All requests made to the Venafi platform will be restricted by the named
+        Zone is the Certificate Manager Policy Zone to use for this issuer.
+        All requests made to the Certificate Manager platform will be restricted by the named
         zone policy.
         This field is required.
         """
@@ -25834,8 +27531,8 @@ class ClusterIssuerSpecVenafiPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiTpp(dict):
     """
-    TPP specifies Trust Protection Platform configuration settings.
-    Only one of TPP or Cloud may be specified.
+    TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -25864,13 +27561,14 @@ class ClusterIssuerSpecVenafiTpp(dict):
                  credentials_ref: Optional['outputs.ClusterIssuerSpecVenafiTppCredentialsRef'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        TPP specifies Trust Protection Platform configuration settings.
-        Only one of TPP or Cloud may be specified.
+        TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-               chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+               chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
                If undefined, the certificate bundle in the cert-manager controller container
                is used to validate the chain.
-        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
                for example: "https://tpp.example.com/vedsdk".
         """
         if ca_bundle is not None:
@@ -25887,7 +27585,7 @@ class ClusterIssuerSpecVenafiTpp(dict):
     def ca_bundle(self) -> Optional[_builtins.str]:
         """
         Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-        chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+        chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
         If undefined, the certificate bundle in the cert-manager controller container
         is used to validate the chain.
         """
@@ -25907,7 +27605,7 @@ class ClusterIssuerSpecVenafiTpp(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
         for example: "https://tpp.example.com/vedsdk".
         """
         return pulumi.get(self, "url")
@@ -25917,7 +27615,7 @@ class ClusterIssuerSpecVenafiTpp(dict):
 class ClusterIssuerSpecVenafiTppCaBundleSecretRef(dict):
     """
     Reference to a Secret containing a base64-encoded bundle of PEM CAs
-    which will be used to validate the certificate chain presented by the TPP server.
+    which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
     Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
     If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
     the cert-manager controller container is used to validate the TLS connection.
@@ -25927,10 +27625,11 @@ class ClusterIssuerSpecVenafiTppCaBundleSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         Reference to a Secret containing a base64-encoded bundle of PEM CAs
-        which will be used to validate the certificate chain presented by the TPP server.
+        which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
         Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
         If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -25966,7 +27665,7 @@ class ClusterIssuerSpecVenafiTppCaBundleSecretRef(dict):
 class ClusterIssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
     """
     Reference to a Secret containing a base64-encoded bundle of PEM CAs
-    which will be used to validate the certificate chain presented by the TPP server.
+    which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
     Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
     If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
     the cert-manager controller container is used to validate the TLS connection.
@@ -25976,10 +27675,11 @@ class ClusterIssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         Reference to a Secret containing a base64-encoded bundle of PEM CAs
-        which will be used to validate the certificate chain presented by the TPP server.
+        which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
         Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
         If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -26014,16 +27714,17 @@ class ClusterIssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiTppCredentialsRef(dict):
     """
-    CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+    CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
     The secret must contain the key 'access-token' for the Access Token Authentication,
     or two keys, 'username' and 'password' for the API Keys Authentication.
     """
     def __init__(__self__, *,
                  name: Optional[_builtins.str] = None):
         """
-        CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+        CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
         The secret must contain the key 'access-token' for the Access Token Authentication,
         or two keys, 'username' and 'password' for the API Keys Authentication.
+
         :param _builtins.str name: Name of the resource being referred to.
                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
         """
@@ -26043,16 +27744,17 @@ class ClusterIssuerSpecVenafiTppCredentialsRef(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiTppCredentialsRefPatch(dict):
     """
-    CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+    CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
     The secret must contain the key 'access-token' for the Access Token Authentication,
     or two keys, 'username' and 'password' for the API Keys Authentication.
     """
     def __init__(__self__, *,
                  name: Optional[_builtins.str] = None):
         """
-        CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+        CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
         The secret must contain the key 'access-token' for the Access Token Authentication,
         or two keys, 'username' and 'password' for the API Keys Authentication.
+
         :param _builtins.str name: Name of the resource being referred to.
                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
         """
@@ -26072,8 +27774,8 @@ class ClusterIssuerSpecVenafiTppCredentialsRefPatch(dict):
 @pulumi.output_type
 class ClusterIssuerSpecVenafiTppPatch(dict):
     """
-    TPP specifies Trust Protection Platform configuration settings.
-    Only one of TPP or Cloud may be specified.
+    TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -26102,13 +27804,14 @@ class ClusterIssuerSpecVenafiTppPatch(dict):
                  credentials_ref: Optional['outputs.ClusterIssuerSpecVenafiTppCredentialsRefPatch'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        TPP specifies Trust Protection Platform configuration settings.
-        Only one of TPP or Cloud may be specified.
+        TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-               chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+               chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
                If undefined, the certificate bundle in the cert-manager controller container
                is used to validate the chain.
-        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
                for example: "https://tpp.example.com/vedsdk".
         """
         if ca_bundle is not None:
@@ -26125,7 +27828,7 @@ class ClusterIssuerSpecVenafiTppPatch(dict):
     def ca_bundle(self) -> Optional[_builtins.str]:
         """
         Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-        chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+        chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
         If undefined, the certificate bundle in the cert-manager controller container
         is used to validate the chain.
         """
@@ -26145,7 +27848,7 @@ class ClusterIssuerSpecVenafiTppPatch(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
         for example: "https://tpp.example.com/vedsdk".
         """
         return pulumi.get(self, "url")
@@ -26161,6 +27864,7 @@ class ClusterIssuerStatus(dict):
                  conditions: Optional[Sequence['outputs.ClusterIssuerStatusConditions']] = None):
         """
         Status of the ClusterIssuer. This is set and managed automatically.
+
         :param Sequence['ClusterIssuerStatusConditionsArgs'] conditions: List of status conditions to indicate the status of a CertificateRequest.
                Known condition types are `Ready`.
         """
@@ -26218,6 +27922,7 @@ class ClusterIssuerStatusAcme(dict):
         ACME specific status options.
         This field should only be set if the Issuer is configured to use an ACME
         server to issue certificates.
+
         :param _builtins.str last_private_key_hash: LastPrivateKeyHash is a hash of the private key associated with the latest
                registered ACME account, in order to track changes made to registered account
                associated with the Issuer
@@ -26298,6 +28003,7 @@ class ClusterIssuerStatusAcmePatch(dict):
         ACME specific status options.
         This field should only be set if the Issuer is configured to use an ACME
         server to issue certificates.
+
         :param _builtins.str last_private_key_hash: LastPrivateKeyHash is a hash of the private key associated with the latest
                registered ACME account, in order to track changes made to registered account
                associated with the Issuer
@@ -26377,6 +28083,7 @@ class ClusterIssuerStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         IssuerCondition contains condition information for an Issuer.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -26493,6 +28200,7 @@ class ClusterIssuerStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         IssuerCondition contains condition information for an Issuer.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -26586,6 +28294,7 @@ class ClusterIssuerStatusPatch(dict):
                  conditions: Optional[Sequence['outputs.ClusterIssuerStatusConditionsPatch']] = None):
         """
         Status of the ClusterIssuer. This is set and managed automatically.
+
         :param Sequence['ClusterIssuerStatusConditionsPatchArgs'] conditions: List of status conditions to indicate the status of a CertificateRequest.
                Known condition types are `Ready`.
         """
@@ -26645,6 +28354,7 @@ class Issuer(dict):
         referenced as part of `issuerRef` fields.
         It is scoped to a single namespace and can therefore only be referenced by
         resources within the same namespace.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -26813,6 +28523,7 @@ class IssuerSpecAcme(dict):
         """
         ACME configures this issuer to communicate with a RFC8555 (ACME) server
         to obtain signed x509 certificates.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which can be used to validate the certificate
                chain presented by the ACME server.
                Mutually exclusive with SkipTLSVerify; prefer using CABundle to prevent various
@@ -27049,6 +28760,7 @@ class IssuerSpecAcmeExternalAccountBinding(dict):
         server.
         If set, upon registration cert-manager will attempt to associate the given
         external account credentials with the registered ACME account.
+
         :param _builtins.str key_algorithm: Deprecated: keyAlgorithm field exists for historical compatibility
                reasons and should not be used. The algorithm is now hardcoded to HS256
                in golang/x/crypto/acme.
@@ -27107,6 +28819,7 @@ class IssuerSpecAcmeExternalAccountBindingKeySecretRef(dict):
         the External Account Binding keyID above.
         The secret key stored in the Secret **must** be un-padded, base64 URL
         encoded data.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -27160,6 +28873,7 @@ class IssuerSpecAcmeExternalAccountBindingKeySecretRefPatch(dict):
         the External Account Binding keyID above.
         The secret key stored in the Secret **must** be un-padded, base64 URL
         encoded data.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -27229,6 +28943,7 @@ class IssuerSpecAcmeExternalAccountBindingPatch(dict):
         server.
         If set, upon registration cert-manager will attempt to associate the given
         external account credentials with the registered ACME account.
+
         :param _builtins.str key_algorithm: Deprecated: keyAlgorithm field exists for historical compatibility
                reasons and should not be used. The algorithm is now hardcoded to HS256
                in golang/x/crypto/acme.
@@ -27315,6 +29030,7 @@ class IssuerSpecAcmePatch(dict):
         """
         ACME configures this issuer to communicate with a RFC8555 (ACME) server
         to obtain signed x509 certificates.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which can be used to validate the certificate
                chain presented by the ACME server.
                Mutually exclusive with SkipTLSVerify; prefer using CABundle to prevent various
@@ -27531,6 +29247,7 @@ class IssuerSpecAcmePrivateKeySecretRef(dict):
         Optionally, a `key` may be specified to select a specific entry within
         the named Secret resource.
         If `key` is not specified, a default of `tls.key` will be used.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -27580,6 +29297,7 @@ class IssuerSpecAcmePrivateKeySecretRefPatch(dict):
         Optionally, a `key` may be specified to select a specific entry within
         the named Secret resource.
         If `key` is not specified, a default of `tls.key` will be used.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -27618,14 +29336,48 @@ class IssuerSpecAcmeSolvers(dict):
     A selector may be provided to use different solving strategies for different DNS names.
     Only one of HTTP01 or DNS01 must be provided.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "waitInsteadOfSelfCheck":
+            suggest = "wait_instead_of_self_check"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecAcmeSolvers. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecAcmeSolvers.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecAcmeSolvers.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  dns01: Optional['outputs.IssuerSpecAcmeSolversDns01'] = None,
                  http01: Optional['outputs.IssuerSpecAcmeSolversHttp01'] = None,
-                 selector: Optional['outputs.IssuerSpecAcmeSolversSelector'] = None):
+                 selector: Optional['outputs.IssuerSpecAcmeSolversSelector'] = None,
+                 wait_instead_of_self_check: Optional[_builtins.str] = None):
         """
         An ACMEChallengeSolver describes how to solve ACME challenges for the issuer it is part of.
         A selector may be provided to use different solving strategies for different DNS names.
         Only one of HTTP01 or DNS01 must be provided.
+
+        :param _builtins.str wait_instead_of_self_check: WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+               instead waits this long after presentation before asking the ACME server
+               to validate the challenge.
+               
+               This is an advanced escape hatch for environments where cert-manager's
+               self-check cannot succeed from its own network or DNS viewpoint even
+               though the ACME server can still validate successfully, for example due
+               to split-horizon DNS or NAT hairpinning.
+               
+               A value of 0 skips the self-check and asks the ACME server to validate
+               immediately after presentation, relying on the ACME server's own
+               validation retries (RFC 8555 section 8.2) to succeed once the challenge
+               has propagated. A negative duration is rejected.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+               for example `30s` or `2m`.
         """
         if dns01 is not None:
             pulumi.set(__self__, "dns01", dns01)
@@ -27633,6 +29385,8 @@ class IssuerSpecAcmeSolvers(dict):
             pulumi.set(__self__, "http01", http01)
         if selector is not None:
             pulumi.set(__self__, "selector", selector)
+        if wait_instead_of_self_check is not None:
+            pulumi.set(__self__, "wait_instead_of_self_check", wait_instead_of_self_check)
 
     @_builtins.property
     @pulumi.getter
@@ -27648,6 +29402,28 @@ class IssuerSpecAcmeSolvers(dict):
     @pulumi.getter
     def selector(self) -> Optional['outputs.IssuerSpecAcmeSolversSelector']:
         return pulumi.get(self, "selector")
+
+    @_builtins.property
+    @pulumi.getter(name="waitInsteadOfSelfCheck")
+    def wait_instead_of_self_check(self) -> Optional[_builtins.str]:
+        """
+        WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+        instead waits this long after presentation before asking the ACME server
+        to validate the challenge.
+
+        This is an advanced escape hatch for environments where cert-manager's
+        self-check cannot succeed from its own network or DNS viewpoint even
+        though the ACME server can still validate successfully, for example due
+        to split-horizon DNS or NAT hairpinning.
+
+        A value of 0 skips the self-check and asks the ACME server to validate
+        immediately after presentation, relying on the ACME server's own
+        validation retries (RFC 8555 section 8.2) to succeed once the challenge
+        has propagated. A negative duration is rejected.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+        for example `30s` or `2m`.
+        """
+        return pulumi.get(self, "wait_instead_of_self_check")
 
 
 @pulumi.output_type
@@ -27693,6 +29469,7 @@ class IssuerSpecAcmeSolversDns01(dict):
         """
         Configures cert-manager to attempt to complete authorizations by
         performing the DNS01 challenge flow.
+
         :param _builtins.str cname_strategy: CNAMEStrategy configures how the DNS01 provider should handle CNAME
                records when found in DNS zones.
         """
@@ -27830,6 +29607,7 @@ class IssuerSpecAcmeSolversDns01AcmeDNSAccountSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -27873,6 +29651,7 @@ class IssuerSpecAcmeSolversDns01AcmeDNSAccountSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28028,6 +29807,7 @@ class IssuerSpecAcmeSolversDns01AkamaiAccessTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28071,6 +29851,7 @@ class IssuerSpecAcmeSolversDns01AkamaiAccessTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28114,6 +29895,7 @@ class IssuerSpecAcmeSolversDns01AkamaiClientSecretSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28157,6 +29939,7 @@ class IssuerSpecAcmeSolversDns01AkamaiClientSecretSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28200,6 +29983,7 @@ class IssuerSpecAcmeSolversDns01AkamaiClientTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28243,6 +30027,7 @@ class IssuerSpecAcmeSolversDns01AkamaiClientTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28362,6 +30147,8 @@ class IssuerSpecAcmeSolversDns01AzureDNS(dict):
             suggest = "subscription_id"
         elif key == "tenantID":
             suggest = "tenant_id"
+        elif key == "zoneType":
+            suggest = "zone_type"
 
         if suggest:
             pulumi.log.warn(f"Key '{key}' not found in IssuerSpecAcmeSolversDns01AzureDNS. Access the value via the '{suggest}' property getter instead.")
@@ -28382,9 +30169,11 @@ class IssuerSpecAcmeSolversDns01AzureDNS(dict):
                  managed_identity: Optional['outputs.IssuerSpecAcmeSolversDns01AzureDNSManagedIdentity'] = None,
                  resource_group_name: Optional[_builtins.str] = None,
                  subscription_id: Optional[_builtins.str] = None,
-                 tenant_id: Optional[_builtins.str] = None):
+                 tenant_id: Optional[_builtins.str] = None,
+                 zone_type: Optional[_builtins.str] = None):
         """
         Use the Microsoft Azure DNS API to manage DNS01 challenge records.
+
         :param _builtins.str client_id: Auth: Azure Service Principal:
                The ClientID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientSecret and TenantID must also be set.
@@ -28395,6 +30184,16 @@ class IssuerSpecAcmeSolversDns01AzureDNS(dict):
         :param _builtins.str tenant_id: Auth: Azure Service Principal:
                The TenantID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientID and ClientSecret must also be set.
+        :param _builtins.str zone_type: ZoneType determines which type of Azure DNS zone to use.
+               
+               Valid values are:
+                 - AzurePublicZone  (default): Use a public Azure DNS zone.
+                 - AzurePrivateZone: Use an Azure Private DNS zone.
+               
+               If not specified, AzurePublicZone is used.
+               
+               Support for Azure Private DNS zones is currently
+               experimental and may change in future releases.
         """
         if client_id is not None:
             pulumi.set(__self__, "client_id", client_id)
@@ -28412,6 +30211,8 @@ class IssuerSpecAcmeSolversDns01AzureDNS(dict):
             pulumi.set(__self__, "subscription_id", subscription_id)
         if tenant_id is not None:
             pulumi.set(__self__, "tenant_id", tenant_id)
+        if zone_type is not None:
+            pulumi.set(__self__, "zone_type", zone_type)
 
     @_builtins.property
     @pulumi.getter(name="clientID")
@@ -28475,6 +30276,23 @@ class IssuerSpecAcmeSolversDns01AzureDNS(dict):
         """
         return pulumi.get(self, "tenant_id")
 
+    @_builtins.property
+    @pulumi.getter(name="zoneType")
+    def zone_type(self) -> Optional[_builtins.str]:
+        """
+        ZoneType determines which type of Azure DNS zone to use.
+
+        Valid values are:
+          - AzurePublicZone  (default): Use a public Azure DNS zone.
+          - AzurePrivateZone: Use an Azure Private DNS zone.
+
+        If not specified, AzurePublicZone is used.
+
+        Support for Azure Private DNS zones is currently
+        experimental and may change in future releases.
+        """
+        return pulumi.get(self, "zone_type")
+
 
 @pulumi.output_type
 class IssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRef(dict):
@@ -28490,6 +30308,7 @@ class IssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRef(dict):
         Auth: Azure Service Principal:
         A reference to a Secret containing the password associated with the Service Principal.
         If set, ClientID and TenantID must also be set.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28535,6 +30354,7 @@ class IssuerSpecAcmeSolversDns01AzureDNSClientSecretSecretRefPatch(dict):
         Auth: Azure Service Principal:
         A reference to a Secret containing the password associated with the Service Principal.
         If set, ClientID and TenantID must also be set.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -28602,6 +30422,7 @@ class IssuerSpecAcmeSolversDns01AzureDNSManagedIdentity(dict):
         Auth: Azure Workload Identity or Azure Managed Service Identity:
         Settings to enable Azure Workload Identity or Azure Managed Service Identity
         If set, ClientID, ClientSecret and TenantID must not be set.
+
         :param _builtins.str client_id: client ID of the managed identity, cannot be used at the same time as resourceID
         :param _builtins.str resource_id: resource ID of the managed identity, cannot be used at the same time as clientID
                Cannot be used for Azure Managed Service Identity
@@ -28676,6 +30497,7 @@ class IssuerSpecAcmeSolversDns01AzureDNSManagedIdentityPatch(dict):
         Auth: Azure Workload Identity or Azure Managed Service Identity:
         Settings to enable Azure Workload Identity or Azure Managed Service Identity
         If set, ClientID, ClientSecret and TenantID must not be set.
+
         :param _builtins.str client_id: client ID of the managed identity, cannot be used at the same time as resourceID
         :param _builtins.str resource_id: resource ID of the managed identity, cannot be used at the same time as clientID
                Cannot be used for Azure Managed Service Identity
@@ -28736,6 +30558,8 @@ class IssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
             suggest = "subscription_id"
         elif key == "tenantID":
             suggest = "tenant_id"
+        elif key == "zoneType":
+            suggest = "zone_type"
 
         if suggest:
             pulumi.log.warn(f"Key '{key}' not found in IssuerSpecAcmeSolversDns01AzureDNSPatch. Access the value via the '{suggest}' property getter instead.")
@@ -28756,9 +30580,11 @@ class IssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
                  managed_identity: Optional['outputs.IssuerSpecAcmeSolversDns01AzureDNSManagedIdentityPatch'] = None,
                  resource_group_name: Optional[_builtins.str] = None,
                  subscription_id: Optional[_builtins.str] = None,
-                 tenant_id: Optional[_builtins.str] = None):
+                 tenant_id: Optional[_builtins.str] = None,
+                 zone_type: Optional[_builtins.str] = None):
         """
         Use the Microsoft Azure DNS API to manage DNS01 challenge records.
+
         :param _builtins.str client_id: Auth: Azure Service Principal:
                The ClientID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientSecret and TenantID must also be set.
@@ -28769,6 +30595,16 @@ class IssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
         :param _builtins.str tenant_id: Auth: Azure Service Principal:
                The TenantID of the Azure Service Principal used to authenticate with Azure DNS.
                If set, ClientID and ClientSecret must also be set.
+        :param _builtins.str zone_type: ZoneType determines which type of Azure DNS zone to use.
+               
+               Valid values are:
+                 - AzurePublicZone  (default): Use a public Azure DNS zone.
+                 - AzurePrivateZone: Use an Azure Private DNS zone.
+               
+               If not specified, AzurePublicZone is used.
+               
+               Support for Azure Private DNS zones is currently
+               experimental and may change in future releases.
         """
         if client_id is not None:
             pulumi.set(__self__, "client_id", client_id)
@@ -28786,6 +30622,8 @@ class IssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
             pulumi.set(__self__, "subscription_id", subscription_id)
         if tenant_id is not None:
             pulumi.set(__self__, "tenant_id", tenant_id)
+        if zone_type is not None:
+            pulumi.set(__self__, "zone_type", zone_type)
 
     @_builtins.property
     @pulumi.getter(name="clientID")
@@ -28849,6 +30687,23 @@ class IssuerSpecAcmeSolversDns01AzureDNSPatch(dict):
         """
         return pulumi.get(self, "tenant_id")
 
+    @_builtins.property
+    @pulumi.getter(name="zoneType")
+    def zone_type(self) -> Optional[_builtins.str]:
+        """
+        ZoneType determines which type of Azure DNS zone to use.
+
+        Valid values are:
+          - AzurePublicZone  (default): Use a public Azure DNS zone.
+          - AzurePrivateZone: Use an Azure Private DNS zone.
+
+        If not specified, AzurePublicZone is used.
+
+        Support for Azure Private DNS zones is currently
+        experimental and may change in future releases.
+        """
+        return pulumi.get(self, "zone_type")
+
 
 @pulumi.output_type
 class IssuerSpecAcmeSolversDns01CloudDNS(dict):
@@ -28880,6 +30735,7 @@ class IssuerSpecAcmeSolversDns01CloudDNS(dict):
                  service_account_secret_ref: Optional['outputs.IssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRef'] = None):
         """
         Use the Google Cloud DNS API to manage DNS01 challenge records.
+
         :param _builtins.str hosted_zone_name: HostedZoneName is an optional field that tells cert-manager in which
                Cloud DNS zone the challenge record has to be created.
                If left empty cert-manager will automatically choose a zone.
@@ -28942,6 +30798,7 @@ class IssuerSpecAcmeSolversDns01CloudDNSPatch(dict):
                  service_account_secret_ref: Optional['outputs.IssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRefPatch'] = None):
         """
         Use the Google Cloud DNS API to manage DNS01 challenge records.
+
         :param _builtins.str hosted_zone_name: HostedZoneName is an optional field that tells cert-manager in which
                Cloud DNS zone the challenge record has to be created.
                If left empty cert-manager will automatically choose a zone.
@@ -28986,6 +30843,7 @@ class IssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29029,6 +30887,7 @@ class IssuerSpecAcmeSolversDns01CloudDNSServiceAccountSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29090,6 +30949,7 @@ class IssuerSpecAcmeSolversDns01Cloudflare(dict):
                  email: Optional[_builtins.str] = None):
         """
         Use the Cloudflare API to manage DNS01 challenge records.
+
         :param _builtins.str email: Email of the account, only required when using API key based authentication.
         """
         if api_key_secret_ref is not None:
@@ -29132,6 +30992,7 @@ class IssuerSpecAcmeSolversDns01CloudflareApiKeySecretRef(dict):
         API key to use to authenticate with Cloudflare.
         Note: using an API token to authenticate is now the recommended method
         as it allows greater control of permissions.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29177,6 +31038,7 @@ class IssuerSpecAcmeSolversDns01CloudflareApiKeySecretRefPatch(dict):
         API key to use to authenticate with Cloudflare.
         Note: using an API token to authenticate is now the recommended method
         as it allows greater control of permissions.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29218,6 +31080,7 @@ class IssuerSpecAcmeSolversDns01CloudflareApiTokenSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         API token used to authenticate with Cloudflare.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29259,6 +31122,7 @@ class IssuerSpecAcmeSolversDns01CloudflareApiTokenSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         API token used to authenticate with Cloudflare.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29320,6 +31184,7 @@ class IssuerSpecAcmeSolversDns01CloudflarePatch(dict):
                  email: Optional[_builtins.str] = None):
         """
         Use the Cloudflare API to manage DNS01 challenge records.
+
         :param _builtins.str email: Email of the account, only required when using API key based authentication.
         """
         if api_key_secret_ref is not None:
@@ -29432,6 +31297,7 @@ class IssuerSpecAcmeSolversDns01DigitaloceanTokenSecretRef(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29475,6 +31341,7 @@ class IssuerSpecAcmeSolversDns01DigitaloceanTokenSecretRefPatch(dict):
         """
         A reference to a specific 'key' within a Secret resource.
         In some instances, `key` is a required field.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29549,6 +31416,7 @@ class IssuerSpecAcmeSolversDns01Patch(dict):
         """
         Configures cert-manager to attempt to complete authorizations by
         performing the DNS01 challenge flow.
+
         :param _builtins.str cname_strategy: CNAMEStrategy configures how the DNS01 provider should handle CNAME
                records when found in DNS zones.
         """
@@ -29664,9 +31532,10 @@ class IssuerSpecAcmeSolversDns01Rfc2136(dict):
         """
         Use RFC2136 ("Dynamic Updates in the Domain Name System") (https://datatracker.ietf.org/doc/rfc2136/)
         to manage DNS01 challenge records.
+
         :param _builtins.str nameserver: The IP address or hostname of an authoritative DNS server supporting
                RFC2136 in the form host:port. If the host is an IPv6 address it must be
-               enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+               enclosed in square brackets (e.g [2001:db8::1]); port is optional.
                This field is required.
         :param _builtins.str protocol: Protocol to use for dynamic DNS update queries. Valid values are (case-sensitive) ``TCP`` and ``UDP``; ``UDP`` (default).
         :param _builtins.str tsig_algorithm: The TSIG Algorithm configured in the DNS supporting RFC2136. Used only
@@ -29693,7 +31562,7 @@ class IssuerSpecAcmeSolversDns01Rfc2136(dict):
         """
         The IP address or hostname of an authoritative DNS server supporting
         RFC2136 in the form host:port. If the host is an IPv6 address it must be
-        enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+        enclosed in square brackets (e.g [2001:db8::1]); port is optional.
         This field is required.
         """
         return pulumi.get(self, "nameserver")
@@ -29768,9 +31637,10 @@ class IssuerSpecAcmeSolversDns01Rfc2136Patch(dict):
         """
         Use RFC2136 ("Dynamic Updates in the Domain Name System") (https://datatracker.ietf.org/doc/rfc2136/)
         to manage DNS01 challenge records.
+
         :param _builtins.str nameserver: The IP address or hostname of an authoritative DNS server supporting
                RFC2136 in the form host:port. If the host is an IPv6 address it must be
-               enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+               enclosed in square brackets (e.g [2001:db8::1]); port is optional.
                This field is required.
         :param _builtins.str protocol: Protocol to use for dynamic DNS update queries. Valid values are (case-sensitive) ``TCP`` and ``UDP``; ``UDP`` (default).
         :param _builtins.str tsig_algorithm: The TSIG Algorithm configured in the DNS supporting RFC2136. Used only
@@ -29797,7 +31667,7 @@ class IssuerSpecAcmeSolversDns01Rfc2136Patch(dict):
         """
         The IP address or hostname of an authoritative DNS server supporting
         RFC2136 in the form host:port. If the host is an IPv6 address it must be
-        enclosed in square brackets (e.g [2001:db8::1]) ; port is optional.
+        enclosed in square brackets (e.g [2001:db8::1]); port is optional.
         This field is required.
         """
         return pulumi.get(self, "nameserver")
@@ -29848,6 +31718,7 @@ class IssuerSpecAcmeSolversDns01Rfc2136TsigSecretSecretRef(dict):
         """
         The name of the secret containing the TSIG value.
         If ``tsigKeyName`` is defined, this field is required.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29891,6 +31762,7 @@ class IssuerSpecAcmeSolversDns01Rfc2136TsigSecretSecretRefPatch(dict):
         """
         The name of the secret containing the TSIG value.
         If ``tsigKeyName`` is defined, this field is required.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -29960,10 +31832,11 @@ class IssuerSpecAcmeSolversDns01Route53(dict):
                  secret_access_key_secret_ref: Optional['outputs.IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef'] = None):
         """
         Use the AWS Route53 API to manage DNS01 challenge records.
+
         :param _builtins.str access_key_id: The AccessKeyID is used for authentication.
                Cannot be set when SecretAccessKeyID is set.
-               If neither the Access Key nor Key ID are set, we fall-back to using env
-               vars, shared credentials file or AWS Instance metadata,
+               If neither the Access Key nor Key ID are set, we fall back to using env
+               vars, shared credentials file, or AWS Instance metadata,
                see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         :param _builtins.str hosted_zone_id: If set, the provider will manage only this zone in Route53 and will not do a lookup using the route53:ListHostedZonesByName api call.
         :param _builtins.str region: Override the AWS region.
@@ -30012,8 +31885,8 @@ class IssuerSpecAcmeSolversDns01Route53(dict):
         """
         The AccessKeyID is used for authentication.
         Cannot be set when SecretAccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         """
         return pulumi.get(self, "access_key_id")
@@ -30086,8 +31959,8 @@ class IssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRef(dict):
     The SecretAccessKey is used for authentication. If set, pull the AWS
     access key ID from a key within a Kubernetes Secret.
     Cannot be set when AccessKeyID is set.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -30097,9 +31970,10 @@ class IssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRef(dict):
         The SecretAccessKey is used for authentication. If set, pull the AWS
         access key ID from a key within a Kubernetes Secret.
         Cannot be set when AccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -30137,8 +32011,8 @@ class IssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRefPatch(dict):
     The SecretAccessKey is used for authentication. If set, pull the AWS
     access key ID from a key within a Kubernetes Secret.
     Cannot be set when AccessKeyID is set.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -30148,9 +32022,10 @@ class IssuerSpecAcmeSolversDns01Route53AccessKeyIDSecretRefPatch(dict):
         The SecretAccessKey is used for authentication. If set, pull the AWS
         access key ID from a key within a Kubernetes Secret.
         Cannot be set when AccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -30291,6 +32166,7 @@ class IssuerSpecAcmeSolversDns01Route53AuthKubernetesServiceAccountRef(dict):
         A reference to a service account that will be used to request a bound
         token (also known as "projected token"). To use this field, you must
         configure an RBAC rule to let cert-manager request a token.
+
         :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of audiences to include in the
                token passed to AWS. The default token consisting of the issuer's namespace
                and name is always included.
@@ -30336,6 +32212,7 @@ class IssuerSpecAcmeSolversDns01Route53AuthKubernetesServiceAccountRefPatch(dict
         A reference to a service account that will be used to request a bound
         token (also known as "projected token"). To use this field, you must
         configure an RBAC rule to let cert-manager request a token.
+
         :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of audiences to include in the
                token passed to AWS. The default token consisting of the issuer's namespace
                and name is always included.
@@ -30424,10 +32301,11 @@ class IssuerSpecAcmeSolversDns01Route53Patch(dict):
                  secret_access_key_secret_ref: Optional['outputs.IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch'] = None):
         """
         Use the AWS Route53 API to manage DNS01 challenge records.
+
         :param _builtins.str access_key_id: The AccessKeyID is used for authentication.
                Cannot be set when SecretAccessKeyID is set.
-               If neither the Access Key nor Key ID are set, we fall-back to using env
-               vars, shared credentials file or AWS Instance metadata,
+               If neither the Access Key nor Key ID are set, we fall back to using env
+               vars, shared credentials file, or AWS Instance metadata,
                see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         :param _builtins.str hosted_zone_id: If set, the provider will manage only this zone in Route53 and will not do a lookup using the route53:ListHostedZonesByName api call.
         :param _builtins.str region: Override the AWS region.
@@ -30476,8 +32354,8 @@ class IssuerSpecAcmeSolversDns01Route53Patch(dict):
         """
         The AccessKeyID is used for authentication.
         Cannot be set when SecretAccessKeyID is set.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
         """
         return pulumi.get(self, "access_key_id")
@@ -30548,8 +32426,8 @@ class IssuerSpecAcmeSolversDns01Route53Patch(dict):
 class IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
     """
     The SecretAccessKey is used for authentication.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -30557,9 +32435,10 @@ class IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         The SecretAccessKey is used for authentication.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -30595,8 +32474,8 @@ class IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRef(dict):
 class IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch(dict):
     """
     The SecretAccessKey is used for authentication.
-    If neither the Access Key nor Key ID are set, we fall-back to using env
-    vars, shared credentials file or AWS Instance metadata,
+    If neither the Access Key nor Key ID are set, we fall back to using env
+    vars, shared credentials file, or AWS Instance metadata,
     see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
     """
     def __init__(__self__, *,
@@ -30604,9 +32483,10 @@ class IssuerSpecAcmeSolversDns01Route53SecretAccessKeySecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         The SecretAccessKey is used for authentication.
-        If neither the Access Key nor Key ID are set, we fall-back to using env
-        vars, shared credentials file or AWS Instance metadata,
+        If neither the Access Key nor Key ID are set, we fall back to using env
+        vars, shared credentials file, or AWS Instance metadata,
         see: https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/configuring-sdk.html#specifying-credentials
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -30670,6 +32550,7 @@ class IssuerSpecAcmeSolversDns01Webhook(dict):
         """
         Configure an external webhook based DNS01 challenge solver to manage
         DNS01 challenge records.
+
         :param Mapping[str, Any] config: Additional configuration that should be passed to the webhook apiserver
                when challenges are processed.
                This can contain arbitrary JSON data.
@@ -30762,6 +32643,7 @@ class IssuerSpecAcmeSolversDns01WebhookPatch(dict):
         """
         Configure an external webhook based DNS01 challenge solver to manage
         DNS01 challenge records.
+
         :param Mapping[str, Any] config: Additional configuration that should be passed to the webhook apiserver
                when challenges are processed.
                This can contain arbitrary JSON data.
@@ -30911,6 +32793,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoute(dict):
         in Kubernetes (https://gateway-api.sigs.k8s.io/). The Gateway solver will
         create HTTPRoutes with the specified labels in the same namespace as the challenge.
         This solver is experimental, and fields / behaviour may change in the future.
+
         :param Mapping[str, _builtins.str] labels: Custom labels that will be applied to HTTPRoutes created by cert-manager
                while solving HTTP-01 challenges.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsArgs'] parent_refs: When solving an HTTP-01 challenge, cert-manager creates an HTTPRoute.
@@ -31017,6 +32900,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -31313,6 +33197,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -31595,6 +33480,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePatch(dict):
         in Kubernetes (https://gateway-api.sigs.k8s.io/). The Gateway solver will
         create HTTPRoutes with the specified labels in the same namespace as the challenge.
         This solver is experimental, and fields / behaviour may change in the future.
+
         :param Mapping[str, _builtins.str] labels: Custom labels that will be applied to HTTPRoutes created by cert-manager
                while solving HTTP-01 challenges.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRouteParentRefsPatchArgs'] parent_refs: When solving an HTTP-01 challenge, cert-manager creates an HTTPRoute.
@@ -31693,6 +33579,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateMetadata(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -31734,6 +33621,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateMetadataPatch(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -31833,6 +33721,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpec(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecretsArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -32001,6 +33890,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
                  required_during_scheduling_ignored_during_execution: Optional['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecution'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -32067,6 +33957,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
                  required_during_scheduling_ignored_during_execution: Optional['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -32116,6 +34007,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -32149,6 +34041,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -32199,6 +34092,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
                  match_fields: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFields']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -32237,6 +34131,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32296,6 +34191,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32355,6 +34251,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32414,6 +34311,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32489,6 +34387,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
                  match_fields: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatch']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -32548,6 +34447,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -32595,6 +34495,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -32633,6 +34534,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32692,6 +34594,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32751,6 +34654,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32810,6 +34714,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -32889,6 +34794,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -32948,6 +34854,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffi
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsPatchArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -33047,6 +34954,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -33129,6 +35037,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -33209,6 +35118,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -33259,6 +35169,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -33321,6 +35232,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -33455,6 +35367,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -33497,6 +35410,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -33554,6 +35468,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -33629,6 +35544,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -33695,6 +35611,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -33737,6 +35654,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -33794,6 +35712,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -33875,6 +35794,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -33943,6 +35863,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -34095,6 +36016,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -34229,6 +36151,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -34271,6 +36194,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -34328,6 +36252,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -34403,6 +36328,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -34469,6 +36395,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -34511,6 +36438,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -34568,6 +36496,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -34649,6 +36578,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -34727,6 +36657,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAffin
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -34859,6 +36790,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -34941,6 +36873,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -35021,6 +36954,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -35071,6 +37005,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -35133,6 +37068,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -35267,6 +37203,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -35309,6 +37246,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -35366,6 +37304,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -35441,6 +37380,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -35507,6 +37447,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -35549,6 +37490,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -35606,6 +37548,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -35687,6 +37630,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -35755,6 +37699,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -35907,6 +37852,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -36041,6 +37987,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -36083,6 +38030,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -36140,6 +38088,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -36215,6 +38164,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -36281,6 +38231,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -36323,6 +38274,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -36380,6 +38332,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -36461,6 +38414,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -36539,6 +38493,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecAffinityPodAntiA
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -36653,6 +38608,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecrets
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -36686,6 +38642,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecrets
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -36753,6 +38710,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecPatch(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecImagePullSecretsPatchArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -36856,6 +38814,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecResources(dict):
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -36909,6 +38868,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecResourcesPatch(d
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -36990,6 +38950,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContext(
                  sysctls: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextSysctls']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -37208,6 +39169,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextP
                  sysctls: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextSysctlsPatch']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -37400,6 +39362,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -37469,6 +39432,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -37545,6 +39509,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -37615,6 +39580,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -37666,6 +39632,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -37701,6 +39668,7 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecSecurityContextS
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -37758,14 +39726,16 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecTolerations(dict
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -37807,9 +39777,10 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecTolerations(dict
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -37866,14 +39837,16 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecTolerationsPatch
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -37915,9 +39888,10 @@ class IssuerSpecAcmeSolversHttp01GatewayHTTPRoutePodTemplateSpecTolerationsPatch
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -37987,6 +39961,7 @@ class IssuerSpecAcmeSolversHttp01Ingress(dict):
         creating or modifying Ingress resources in order to route requests for
         '/.well-known/acme-challenge/XYZ' to 'challenge solver' pods that are
         provisioned by cert-manager for each Challenge to be completed.
+
         :param _builtins.str class_: This field configures the annotation `kubernetes.io/ingress.class` when
                creating Ingress resources to solve ACME challenges that use this
                challenge solver. Only one of `class`, `name` or `ingressClassName` may
@@ -38109,6 +40084,7 @@ class IssuerSpecAcmeSolversHttp01IngressIngressTemplateMetadata(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver ingress.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver ingress.
         """
@@ -38150,6 +40126,7 @@ class IssuerSpecAcmeSolversHttp01IngressIngressTemplateMetadataPatch(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver ingress.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver ingress.
         """
@@ -38241,6 +40218,7 @@ class IssuerSpecAcmeSolversHttp01IngressPatch(dict):
         creating or modifying Ingress resources in order to route requests for
         '/.well-known/acme-challenge/XYZ' to 'challenge solver' pods that are
         provisioned by cert-manager for each Challenge to be completed.
+
         :param _builtins.str class_: This field configures the annotation `kubernetes.io/ingress.class` when
                creating Ingress resources to solve ACME challenges that use this
                challenge solver. Only one of `class`, `name` or `ingressClassName` may
@@ -38371,6 +40349,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateMetadata(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -38412,6 +40391,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateMetadataPatch(dict):
         Only the 'labels' and 'annotations' fields may be set.
         If labels or annotations overlap with in-built values, the values here
         will override the in-built values.
+
         :param Mapping[str, _builtins.str] annotations: Annotations that should be added to the created ACME HTTP01 solver pods.
         :param Mapping[str, _builtins.str] labels: Labels that should be added to the created ACME HTTP01 solver pods.
         """
@@ -38511,6 +40491,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpec(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -38679,6 +40660,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinity(dict
                  required_during_scheduling_ignored_during_execution: Optional['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecution'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -38745,6 +40727,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPatch
                  required_during_scheduling_ignored_during_execution: Optional['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch'] = None):
         """
         Describes node affinity scheduling rules for the pod.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -38794,6 +40777,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -38827,6 +40811,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         An empty preferred scheduling term matches all objects with implicit weight 0
         (i.e. it's a no-op). A null preferred scheduling term matches no objects (i.e. is also a no-op).
+
         :param _builtins.int weight: Weight associated with matching the corresponding nodeSelectorTerm, in the range 1-100.
         """
         if preference is not None:
@@ -38877,6 +40862,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
                  match_fields: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFields']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -38915,6 +40901,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -38974,6 +40961,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39033,6 +41021,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39092,6 +41081,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39167,6 +41157,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPrefe
                  match_fields: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatch']] = None):
         """
         A node selector term, associated with the corresponding weight.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityPreferredDuringSchedulingIgnoredDuringExecutionPreferenceMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -39226,6 +41217,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -39273,6 +41265,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -39311,6 +41304,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39370,6 +41364,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39429,6 +41424,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39488,6 +41484,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         """
         A node selector requirement is a selector that contains values, a key, and an operator
         that relates the key and values.
+
         :param _builtins.str key: The label key that the selector applies to.
         :param _builtins.str operator: Represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
@@ -39567,6 +41564,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         A null or empty node selector term matches no objects. The requirements of
         them are ANDed.
         The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchExpressionsPatchArgs'] match_expressions: A list of node selector requirements by node's labels.
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsMatchFieldsPatchArgs'] match_fields: A list of node selector requirements by node's fields.
         """
@@ -39626,6 +41624,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequi
         If the affinity requirements specified by this field cease to be met
         at some point during pod execution (e.g. due to an update), the system
         may or may not try to eventually evict the pod from its node.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityNodeAffinityRequiredDuringSchedulingIgnoredDuringExecutionNodeSelectorTermsPatchArgs'] node_selector_terms: Required. A list of node selector terms. The terms are ORed.
         """
         if node_selector_terms is not None:
@@ -39725,6 +41724,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinity(dict)
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -39807,6 +41807,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPatch(
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -39887,6 +41888,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -39937,6 +41939,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -39999,6 +42002,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -40133,6 +42137,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -40175,6 +42180,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -40232,6 +42238,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -40307,6 +42314,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -40373,6 +42381,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -40415,6 +42424,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -40472,6 +42482,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -40553,6 +42564,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -40621,6 +42633,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityPrefer
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -40773,6 +42786,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -40907,6 +42921,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -40949,6 +42964,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -41006,6 +43022,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -41081,6 +43098,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -41147,6 +43165,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -41189,6 +43208,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -41246,6 +43266,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -41327,6 +43348,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -41405,6 +43427,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAffinityRequir
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -41537,6 +43560,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinity(d
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecution']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -41619,6 +43643,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPa
                  required_during_scheduling_ignored_during_execution: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionPatch']] = None):
         """
         Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPatchArgs'] preferred_during_scheduling_ignored_during_execution: The scheduler will prefer to schedule pods to nodes that satisfy
                the anti-affinity expressions specified by this field, but it may choose
                a node that violates one or more of the expressions. The node that is
@@ -41699,6 +43724,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -41749,6 +43775,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
                  weight: Optional[_builtins.int] = None):
         """
         The weights of all of the matched WeightedPodAffinityTerm fields are added per-node to find the most preferred node(s)
+
         :param _builtins.int weight: weight associated with matching the corresponding podAffinityTerm,
                in the range 1-100.
         """
@@ -41811,6 +43838,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -41945,6 +43973,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -41987,6 +44016,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42044,6 +44074,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42119,6 +44150,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -42185,6 +44217,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -42227,6 +44260,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42284,6 +44318,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42365,6 +44400,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPreferredDuringSchedulingIgnoredDuringExecutionPodAffinityTermNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -42433,6 +44469,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityPr
                  topology_key: Optional[_builtins.str] = None):
         """
         Required. A pod affinity term, associated with the corresponding weight.
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -42585,6 +44622,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -42719,6 +44757,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -42761,6 +44800,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42818,6 +44858,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -42893,6 +44934,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label query over a set of resources, in this case pods.
         If it's null, this PodAffinityTerm matches with no Pods.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionLabelSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -42959,6 +45001,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -43001,6 +45044,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -43058,6 +45102,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         """
         A label selector requirement is a selector that contains values, a key, and an operator that
         relates the key and values.
+
         :param _builtins.str key: key is the label key that the selector applies to.
         :param _builtins.str operator: operator represents a key's relationship to a set of values.
                Valid operators are In, NotIn, Exists and DoesNotExist.
@@ -43139,6 +45184,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         and the ones listed in the namespaces field.
         null selector and null or empty namespaces list means "this pod's namespace".
         An empty selector ({}) matches all namespaces.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRequiredDuringSchedulingIgnoredDuringExecutionNamespaceSelectorMatchExpressionsPatchArgs'] match_expressions: matchExpressions is a list of label selector requirements. The requirements are ANDed.
         :param Mapping[str, _builtins.str] match_labels: matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
                map is equivalent to an element of matchExpressions, whose key field is "key", the
@@ -43217,6 +45263,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecAffinityPodAntiAffinityRe
         where co-located is defined as running on a node whose value of
         the label with key <topologyKey> matches that of any node on which
         a pod of the set of pods is running
+
         :param Sequence[_builtins.str] match_label_keys: MatchLabelKeys is a set of pod label keys to select which pods will
                be taken into consideration. The keys are used to lookup values from the
                incoming pod labels, those key-value labels are merged with `labelSelector` as `key in (value)`
@@ -43331,6 +45378,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecrets(dict):
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -43364,6 +45412,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsPatch(dic
         """
         LocalObjectReference contains enough information to let you locate the
         referenced object inside the same namespace.
+
         :param _builtins.str name: Name of the referent.
                This field is effectively required, but due to backwards compatibility is
                allowed to be empty. Instances of this type with an empty value here are
@@ -43431,6 +45480,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecPatch(dict):
         PodSpec defines overrides for the HTTP01 challenge solver pod.
         Check ACMEChallengeSolverHTTP01IngressPodSpec to find out currently supported fields.
         All other fields will be ignored.
+
         :param Sequence['IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecImagePullSecretsPatchArgs'] image_pull_secrets: If specified, the pod's imagePullSecrets
         :param Mapping[str, _builtins.str] node_selector: NodeSelector is a selector which must be true for the pod to fit on a node.
                Selector which must match a node's labels for the pod to be scheduled on that node.
@@ -43534,6 +45584,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecResources(dict):
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -43587,6 +45638,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecResourcesPatch(dict):
         to the corresponding global resource requests configured via controller flags
         (--acme-http01-solver-resource-request-cpu, --acme-http01-solver-resource-request-memory).
         Kubernetes will reject pod creation if limits are lower than requests, causing challenge failures.
+
         :param Mapping[str, Union[_builtins.int, _builtins.str]] limits: Limits describes the maximum amount of compute resources allowed.
                More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         :param Mapping[str, Union[_builtins.int, _builtins.str]] requests: Requests describes the minimum amount of compute resources required.
@@ -43668,6 +45720,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContext(dict):
                  sysctls: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctls']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -43886,6 +45939,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextPatch(dict
                  sysctls: Optional[Sequence['outputs.IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctlsPatch']] = None):
         """
         If specified, the pod's security context
+
         :param _builtins.int fs_group: A special supplemental group that applies to all containers in a pod.
                Some volume types allow the Kubelet to change the ownership of that volume
                to be owned by the pod:
@@ -44078,6 +46132,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeLinuxOpt
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -44147,6 +46202,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeLinuxOpt
         both SecurityContext and PodSecurityContext, the value specified in SecurityContext
         takes precedence for that container.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str level: Level is SELinux level label that applies to the container.
         :param _builtins.str role: Role is a SELinux role label that applies to the container.
         :param _builtins.str type: Type is a SELinux type label that applies to the container.
@@ -44223,6 +46279,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeccompPro
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -44293,6 +46350,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSeccompPro
         """
         The seccomp options to use by the containers in this pod.
         Note that this field cannot be set when spec.os.name is windows.
+
         :param _builtins.str localhost_profile: localhostProfile indicates a profile defined in a file on the node should be used.
                The profile must be preconfigured on the node to work.
                Must be a descending path, relative to the kubelet's configured seccomp profile location.
@@ -44344,6 +46402,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctls(di
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -44379,6 +46438,7 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecSecurityContextSysctlsPat
                  value: Optional[_builtins.str] = None):
         """
         Sysctl defines a kernel parameter to be set
+
         :param _builtins.str name: Name of a property to set
         :param _builtins.str value: Value of a property to set
         """
@@ -44436,14 +46496,16 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerations(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -44485,9 +46547,10 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerations(dict):
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -44544,14 +46607,16 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerationsPatch(dict):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param _builtins.str effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param _builtins.str key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
         :param _builtins.str operator: Operator represents a key's relationship to the value.
-               Valid operators are Exists and Equal. Defaults to Equal.
+               Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                Exists is equivalent to wildcard for value, so that a pod can
                tolerate all taints of a particular category.
+               Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         :param _builtins.int toleration_seconds: TolerationSeconds represents the period of time the toleration (which must be
                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
                it is not set, which means tolerate the taint forever (do not evict). Zero and
@@ -44593,9 +46658,10 @@ class IssuerSpecAcmeSolversHttp01IngressPodTemplateSpecTolerationsPatch(dict):
     def operator(self) -> Optional[_builtins.str]:
         """
         Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
+        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
         Exists is equivalent to wildcard for value, so that a pod can
         tolerate all taints of a particular category.
+        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
         """
         return pulumi.get(self, "operator")
 
@@ -44677,14 +46743,48 @@ class IssuerSpecAcmeSolversPatch(dict):
     A selector may be provided to use different solving strategies for different DNS names.
     Only one of HTTP01 or DNS01 must be provided.
     """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "waitInsteadOfSelfCheck":
+            suggest = "wait_instead_of_self_check"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecAcmeSolversPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecAcmeSolversPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecAcmeSolversPatch.__key_warning(key)
+        return super().get(key, default)
+
     def __init__(__self__, *,
                  dns01: Optional['outputs.IssuerSpecAcmeSolversDns01Patch'] = None,
                  http01: Optional['outputs.IssuerSpecAcmeSolversHttp01Patch'] = None,
-                 selector: Optional['outputs.IssuerSpecAcmeSolversSelectorPatch'] = None):
+                 selector: Optional['outputs.IssuerSpecAcmeSolversSelectorPatch'] = None,
+                 wait_instead_of_self_check: Optional[_builtins.str] = None):
         """
         An ACMEChallengeSolver describes how to solve ACME challenges for the issuer it is part of.
         A selector may be provided to use different solving strategies for different DNS names.
         Only one of HTTP01 or DNS01 must be provided.
+
+        :param _builtins.str wait_instead_of_self_check: WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+               instead waits this long after presentation before asking the ACME server
+               to validate the challenge.
+               
+               This is an advanced escape hatch for environments where cert-manager's
+               self-check cannot succeed from its own network or DNS viewpoint even
+               though the ACME server can still validate successfully, for example due
+               to split-horizon DNS or NAT hairpinning.
+               
+               A value of 0 skips the self-check and asks the ACME server to validate
+               immediately after presentation, relying on the ACME server's own
+               validation retries (RFC 8555 section 8.2) to succeed once the challenge
+               has propagated. A negative duration is rejected.
+               Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+               for example `30s` or `2m`.
         """
         if dns01 is not None:
             pulumi.set(__self__, "dns01", dns01)
@@ -44692,6 +46792,8 @@ class IssuerSpecAcmeSolversPatch(dict):
             pulumi.set(__self__, "http01", http01)
         if selector is not None:
             pulumi.set(__self__, "selector", selector)
+        if wait_instead_of_self_check is not None:
+            pulumi.set(__self__, "wait_instead_of_self_check", wait_instead_of_self_check)
 
     @_builtins.property
     @pulumi.getter
@@ -44707,6 +46809,28 @@ class IssuerSpecAcmeSolversPatch(dict):
     @pulumi.getter
     def selector(self) -> Optional['outputs.IssuerSpecAcmeSolversSelectorPatch']:
         return pulumi.get(self, "selector")
+
+    @_builtins.property
+    @pulumi.getter(name="waitInsteadOfSelfCheck")
+    def wait_instead_of_self_check(self) -> Optional[_builtins.str]:
+        """
+        WaitInsteadOfSelfCheck, if set, skips cert-manager's self-check and
+        instead waits this long after presentation before asking the ACME server
+        to validate the challenge.
+
+        This is an advanced escape hatch for environments where cert-manager's
+        self-check cannot succeed from its own network or DNS viewpoint even
+        though the ACME server can still validate successfully, for example due
+        to split-horizon DNS or NAT hairpinning.
+
+        A value of 0 skips the self-check and asks the ACME server to validate
+        immediately after presentation, relying on the ACME server's own
+        validation retries (RFC 8555 section 8.2) to succeed once the challenge
+        has propagated. A negative duration is rejected.
+        Value must be in units accepted by Go time.ParseDuration https://golang.org/pkg/time/#ParseDuration,
+        for example `30s` or `2m`.
+        """
+        return pulumi.get(self, "wait_instead_of_self_check")
 
 
 @pulumi.output_type
@@ -44749,6 +46873,7 @@ class IssuerSpecAcmeSolversSelector(dict):
         If not specified, the solver will be treated as the 'default' solver
         with the lowest priority, i.e. if any other solver has a more specific
         match, it will be used instead.
+
         :param Sequence[_builtins.str] dns_names: List of DNSNames that this solver will be used to solve.
                If specified and a match is found, a dnsNames selector will take
                precedence over a dnsZones selector.
@@ -44855,6 +46980,7 @@ class IssuerSpecAcmeSolversSelectorPatch(dict):
         If not specified, the solver will be treated as the 'default' solver
         with the lowest priority, i.e. if any other solver has a more specific
         match, it will be used instead.
+
         :param Sequence[_builtins.str] dns_names: List of DNSNames that this solver will be used to solve.
                If specified and a match is found, a dnsNames selector will take
                precedence over a dnsZones selector.
@@ -44960,6 +47086,7 @@ class IssuerSpecCa(dict):
         CA configures this issuer to sign certificates using a signing CA keypair
         stored in a Secret resource.
         This is used to build internal PKIs that are managed by cert-manager.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set, certificates will be issued without distribution points set.
@@ -45064,6 +47191,7 @@ class IssuerSpecCaPatch(dict):
         CA configures this issuer to sign certificates using a signing CA keypair
         stored in a Secret resource.
         This is used to build internal PKIs that are managed by cert-manager.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set, certificates will be issued without distribution points set.
@@ -45225,6 +47353,7 @@ class IssuerSpecSelfSigned(dict):
         """
         SelfSigned configures this issuer to 'self sign' certificates using the
         private key used to create the CertificateRequest object.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set certificate will be issued without CDP. Values are strings.
@@ -45271,6 +47400,7 @@ class IssuerSpecSelfSignedPatch(dict):
         """
         SelfSigned configures this issuer to 'self sign' certificates using the
         private key used to create the CertificateRequest object.
+
         :param Sequence[_builtins.str] crl_distribution_points: The CRL distribution points is an X.509 v3 certificate extension which identifies
                the location of the CRL from which the revocation of this certificate can be checked.
                If not set certificate will be issued without CDP. Values are strings.
@@ -45333,6 +47463,7 @@ class IssuerSpecVault(dict):
         """
         Vault configures this issuer to sign certificates using a HashiCorp Vault
         PKI backend.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
                chain presented by Vault. Only used if using HTTPS to connect to Vault and
                ignored for HTTP connections.
@@ -45463,6 +47594,7 @@ class IssuerSpecVaultAuth(dict):
 
     def __init__(__self__, *,
                  app_role: Optional['outputs.IssuerSpecVaultAuthAppRole'] = None,
+                 aws: Optional['outputs.IssuerSpecVaultAuthAws'] = None,
                  client_certificate: Optional['outputs.IssuerSpecVaultAuthClientCertificate'] = None,
                  kubernetes: Optional['outputs.IssuerSpecVaultAuthKubernetes'] = None,
                  token_secret_ref: Optional['outputs.IssuerSpecVaultAuthTokenSecretRef'] = None):
@@ -45471,6 +47603,8 @@ class IssuerSpecVaultAuth(dict):
         """
         if app_role is not None:
             pulumi.set(__self__, "app_role", app_role)
+        if aws is not None:
+            pulumi.set(__self__, "aws", aws)
         if client_certificate is not None:
             pulumi.set(__self__, "client_certificate", client_certificate)
         if kubernetes is not None:
@@ -45482,6 +47616,11 @@ class IssuerSpecVaultAuth(dict):
     @pulumi.getter(name="appRole")
     def app_role(self) -> Optional['outputs.IssuerSpecVaultAuthAppRole']:
         return pulumi.get(self, "app_role")
+
+    @_builtins.property
+    @pulumi.getter
+    def aws(self) -> Optional['outputs.IssuerSpecVaultAuthAws']:
+        return pulumi.get(self, "aws")
 
     @_builtins.property
     @pulumi.getter(name="clientCertificate")
@@ -45531,6 +47670,7 @@ class IssuerSpecVaultAuthAppRole(dict):
         """
         AppRole authenticates with Vault using the App Role auth mechanism,
         with the role and secret stored in a Kubernetes Secret resource.
+
         :param _builtins.str path: Path where the App Role authentication backend is mounted in Vault, e.g:
                "approle"
         :param _builtins.str role_id: RoleID configured in the App Role authentication backend when setting
@@ -45599,6 +47739,7 @@ class IssuerSpecVaultAuthAppRolePatch(dict):
         """
         AppRole authenticates with Vault using the App Role auth mechanism,
         with the role and secret stored in a Kubernetes Secret resource.
+
         :param _builtins.str path: Path where the App Role authentication backend is mounted in Vault, e.g:
                "approle"
         :param _builtins.str role_id: RoleID configured in the App Role authentication backend when setting
@@ -45651,6 +47792,7 @@ class IssuerSpecVaultAuthAppRoleSecretRef(dict):
         to authenticate with Vault.
         The `key` field must be specified and denotes which entry within the Secret
         resource is used as the app role secret.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -45698,6 +47840,7 @@ class IssuerSpecVaultAuthAppRoleSecretRefPatch(dict):
         to authenticate with Vault.
         The `key` field must be specified and denotes which entry within the Secret
         resource is used as the app role secret.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -45725,6 +47868,332 @@ class IssuerSpecVaultAuthAppRoleSecretRefPatch(dict):
         """
         Name of the resource being referred to.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class IssuerSpecVaultAuthAws(dict):
+    """
+    AWS authenticates with Vault using AWS IAM authentication.
+    This allows authentication using IAM roles for service accounts (IRSA),
+    EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "iamRoleArn":
+            suggest = "iam_role_arn"
+        elif key == "mountPath":
+            suggest = "mount_path"
+        elif key == "serviceAccountRef":
+            suggest = "service_account_ref"
+        elif key == "vaultHeaderValue":
+            suggest = "vault_header_value"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecVaultAuthAws. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecVaultAuthAws.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecVaultAuthAws.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 iam_role_arn: Optional[_builtins.str] = None,
+                 mount_path: Optional[_builtins.str] = None,
+                 region: Optional[_builtins.str] = None,
+                 role: Optional[_builtins.str] = None,
+                 service_account_ref: Optional['outputs.IssuerSpecVaultAuthAwsServiceAccountRef'] = None,
+                 vault_header_value: Optional[_builtins.str] = None):
+        """
+        AWS authenticates with Vault using AWS IAM authentication.
+        This allows authentication using IAM roles for service accounts (IRSA),
+        EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+
+        :param _builtins.str iam_role_arn: The ARN of the AWS IAM role to assume using the Kubernetes service account
+               token. Required when using IRSA (serviceAccountRef is set).
+               This role must have a trust policy that allows the OIDC provider to assume it.
+        :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
+               Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+               `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+               default value "/v1/auth/aws" will be used.
+        :param _builtins.str region: The AWS region to use for authentication. If not specified, the region
+               will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+               variables, falling back to "us-east-1" if not set.
+        :param _builtins.str role: A required field containing the Vault Role to assume when authenticating.
+        :param _builtins.str vault_header_value: The Vault header value to include in the STS signing request.
+               This is used to prevent replay attacks.
+        """
+        if iam_role_arn is not None:
+            pulumi.set(__self__, "iam_role_arn", iam_role_arn)
+        if mount_path is not None:
+            pulumi.set(__self__, "mount_path", mount_path)
+        if region is not None:
+            pulumi.set(__self__, "region", region)
+        if role is not None:
+            pulumi.set(__self__, "role", role)
+        if service_account_ref is not None:
+            pulumi.set(__self__, "service_account_ref", service_account_ref)
+        if vault_header_value is not None:
+            pulumi.set(__self__, "vault_header_value", vault_header_value)
+
+    @_builtins.property
+    @pulumi.getter(name="iamRoleArn")
+    def iam_role_arn(self) -> Optional[_builtins.str]:
+        """
+        The ARN of the AWS IAM role to assume using the Kubernetes service account
+        token. Required when using IRSA (serviceAccountRef is set).
+        This role must have a trust policy that allows the OIDC provider to assume it.
+        """
+        return pulumi.get(self, "iam_role_arn")
+
+    @_builtins.property
+    @pulumi.getter(name="mountPath")
+    def mount_path(self) -> Optional[_builtins.str]:
+        """
+        The Vault mountPath here is the mount path to use when authenticating with
+        Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+        `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+        default value "/v1/auth/aws" will be used.
+        """
+        return pulumi.get(self, "mount_path")
+
+    @_builtins.property
+    @pulumi.getter
+    def region(self) -> Optional[_builtins.str]:
+        """
+        The AWS region to use for authentication. If not specified, the region
+        will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+        variables, falling back to "us-east-1" if not set.
+        """
+        return pulumi.get(self, "region")
+
+    @_builtins.property
+    @pulumi.getter
+    def role(self) -> Optional[_builtins.str]:
+        """
+        A required field containing the Vault Role to assume when authenticating.
+        """
+        return pulumi.get(self, "role")
+
+    @_builtins.property
+    @pulumi.getter(name="serviceAccountRef")
+    def service_account_ref(self) -> Optional['outputs.IssuerSpecVaultAuthAwsServiceAccountRef']:
+        return pulumi.get(self, "service_account_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="vaultHeaderValue")
+    def vault_header_value(self) -> Optional[_builtins.str]:
+        """
+        The Vault header value to include in the STS signing request.
+        This is used to prevent replay attacks.
+        """
+        return pulumi.get(self, "vault_header_value")
+
+
+@pulumi.output_type
+class IssuerSpecVaultAuthAwsPatch(dict):
+    """
+    AWS authenticates with Vault using AWS IAM authentication.
+    This allows authentication using IAM roles for service accounts (IRSA),
+    EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "iamRoleArn":
+            suggest = "iam_role_arn"
+        elif key == "mountPath":
+            suggest = "mount_path"
+        elif key == "serviceAccountRef":
+            suggest = "service_account_ref"
+        elif key == "vaultHeaderValue":
+            suggest = "vault_header_value"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecVaultAuthAwsPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecVaultAuthAwsPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecVaultAuthAwsPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 iam_role_arn: Optional[_builtins.str] = None,
+                 mount_path: Optional[_builtins.str] = None,
+                 region: Optional[_builtins.str] = None,
+                 role: Optional[_builtins.str] = None,
+                 service_account_ref: Optional['outputs.IssuerSpecVaultAuthAwsServiceAccountRefPatch'] = None,
+                 vault_header_value: Optional[_builtins.str] = None):
+        """
+        AWS authenticates with Vault using AWS IAM authentication.
+        This allows authentication using IAM roles for service accounts (IRSA),
+        EKS Pod Identity (PIA), or ambient credentials (EC2 instance profiles, ECS task role).
+
+        :param _builtins.str iam_role_arn: The ARN of the AWS IAM role to assume using the Kubernetes service account
+               token. Required when using IRSA (serviceAccountRef is set).
+               This role must have a trust policy that allows the OIDC provider to assume it.
+        :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
+               Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+               `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+               default value "/v1/auth/aws" will be used.
+        :param _builtins.str region: The AWS region to use for authentication. If not specified, the region
+               will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+               variables, falling back to "us-east-1" if not set.
+        :param _builtins.str role: A required field containing the Vault Role to assume when authenticating.
+        :param _builtins.str vault_header_value: The Vault header value to include in the STS signing request.
+               This is used to prevent replay attacks.
+        """
+        if iam_role_arn is not None:
+            pulumi.set(__self__, "iam_role_arn", iam_role_arn)
+        if mount_path is not None:
+            pulumi.set(__self__, "mount_path", mount_path)
+        if region is not None:
+            pulumi.set(__self__, "region", region)
+        if role is not None:
+            pulumi.set(__self__, "role", role)
+        if service_account_ref is not None:
+            pulumi.set(__self__, "service_account_ref", service_account_ref)
+        if vault_header_value is not None:
+            pulumi.set(__self__, "vault_header_value", vault_header_value)
+
+    @_builtins.property
+    @pulumi.getter(name="iamRoleArn")
+    def iam_role_arn(self) -> Optional[_builtins.str]:
+        """
+        The ARN of the AWS IAM role to assume using the Kubernetes service account
+        token. Required when using IRSA (serviceAccountRef is set).
+        This role must have a trust policy that allows the OIDC provider to assume it.
+        """
+        return pulumi.get(self, "iam_role_arn")
+
+    @_builtins.property
+    @pulumi.getter(name="mountPath")
+    def mount_path(self) -> Optional[_builtins.str]:
+        """
+        The Vault mountPath here is the mount path to use when authenticating with
+        Vault. For example, setting a value to `/v1/auth/foo`, will use the path
+        `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
+        default value "/v1/auth/aws" will be used.
+        """
+        return pulumi.get(self, "mount_path")
+
+    @_builtins.property
+    @pulumi.getter
+    def region(self) -> Optional[_builtins.str]:
+        """
+        The AWS region to use for authentication. If not specified, the region
+        will be determined from AWS_REGION or AWS_DEFAULT_REGION environment
+        variables, falling back to "us-east-1" if not set.
+        """
+        return pulumi.get(self, "region")
+
+    @_builtins.property
+    @pulumi.getter
+    def role(self) -> Optional[_builtins.str]:
+        """
+        A required field containing the Vault Role to assume when authenticating.
+        """
+        return pulumi.get(self, "role")
+
+    @_builtins.property
+    @pulumi.getter(name="serviceAccountRef")
+    def service_account_ref(self) -> Optional['outputs.IssuerSpecVaultAuthAwsServiceAccountRefPatch']:
+        return pulumi.get(self, "service_account_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="vaultHeaderValue")
+    def vault_header_value(self) -> Optional[_builtins.str]:
+        """
+        The Vault header value to include in the STS signing request.
+        This is used to prevent replay attacks.
+        """
+        return pulumi.get(self, "vault_header_value")
+
+
+@pulumi.output_type
+class IssuerSpecVaultAuthAwsServiceAccountRef(dict):
+    """
+    A reference to a service account that will be used to request a web identity
+    token for IRSA (IAM Roles for Service Accounts) authentication.
+    """
+    def __init__(__self__, *,
+                 audiences: Optional[Sequence[_builtins.str]] = None,
+                 name: Optional[_builtins.str] = None):
+        """
+        A reference to a service account that will be used to request a web identity
+        token for IRSA (IAM Roles for Service Accounts) authentication.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
+        :param _builtins.str name: Name of the ServiceAccount used to request a token.
+        """
+        if audiences is not None:
+            pulumi.set(__self__, "audiences", audiences)
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def audiences(self) -> Optional[Sequence[_builtins.str]]:
+        """
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
+        """
+        return pulumi.get(self, "audiences")
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the ServiceAccount used to request a token.
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class IssuerSpecVaultAuthAwsServiceAccountRefPatch(dict):
+    """
+    A reference to a service account that will be used to request a web identity
+    token for IRSA (IAM Roles for Service Accounts) authentication.
+    """
+    def __init__(__self__, *,
+                 audiences: Optional[Sequence[_builtins.str]] = None,
+                 name: Optional[_builtins.str] = None):
+        """
+        A reference to a service account that will be used to request a web identity
+        token for IRSA (IAM Roles for Service Accounts) authentication.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
+        :param _builtins.str name: Name of the ServiceAccount used to request a token.
+        """
+        if audiences is not None:
+            pulumi.set(__self__, "audiences", audiences)
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def audiences(self) -> Optional[Sequence[_builtins.str]]:
+        """
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
+        """
+        return pulumi.get(self, "audiences")
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the ServiceAccount used to request a token.
         """
         return pulumi.get(self, "name")
 
@@ -45763,6 +48232,7 @@ class IssuerSpecVaultAuthClientCertificate(dict):
         ClientCertificate authenticates with Vault by presenting a client
         certificate during the request's TLS handshake.
         Works only when using HTTPS protocol.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -45845,6 +48315,7 @@ class IssuerSpecVaultAuthClientCertificatePatch(dict):
         ClientCertificate authenticates with Vault by presenting a client
         certificate during the request's TLS handshake.
         Works only when using HTTPS protocol.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -45928,6 +48399,7 @@ class IssuerSpecVaultAuthKubernetes(dict):
         """
         Kubernetes authenticates with Vault by passing the ServiceAccount
         token stored in the named Secret resource to the Vault server.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -46010,6 +48482,7 @@ class IssuerSpecVaultAuthKubernetesPatch(dict):
         """
         Kubernetes authenticates with Vault by passing the ServiceAccount
         token stored in the named Secret resource to the Vault server.
+
         :param _builtins.str mount_path: The Vault mountPath here is the mount path to use when authenticating with
                Vault. For example, setting a value to `/v1/auth/foo`, will use the path
                `/v1/auth/foo/login` to authenticate with Vault. If unspecified, the
@@ -46071,6 +48544,7 @@ class IssuerSpecVaultAuthKubernetesSecretRef(dict):
         The required Secret field containing a Kubernetes ServiceAccount JWT used
         for authenticating with Vault. Use of 'ambient credentials' is not
         supported.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46116,6 +48590,7 @@ class IssuerSpecVaultAuthKubernetesSecretRefPatch(dict):
         The required Secret field containing a Kubernetes ServiceAccount JWT used
         for authenticating with Vault. Use of 'ambient credentials' is not
         supported.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46165,8 +48640,9 @@ class IssuerSpecVaultAuthKubernetesServiceAccountRef(dict):
         using this field means that you don't rely on statically bound tokens. To
         use this field, you must configure an RBAC rule to let cert-manager
         request a token.
-        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-               consisting of the issuer's namespace and name is always included.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
         :param _builtins.str name: Name of the ServiceAccount used to request a token.
         """
         if audiences is not None:
@@ -46178,8 +48654,8 @@ class IssuerSpecVaultAuthKubernetesServiceAccountRef(dict):
     @pulumi.getter
     def audiences(self) -> Optional[Sequence[_builtins.str]]:
         """
-        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-        consisting of the issuer's namespace and name is always included.
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
         """
         return pulumi.get(self, "audiences")
 
@@ -46210,8 +48686,9 @@ class IssuerSpecVaultAuthKubernetesServiceAccountRefPatch(dict):
         using this field means that you don't rely on statically bound tokens. To
         use this field, you must configure an RBAC rule to let cert-manager
         request a token.
-        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-               consisting of the issuer's namespace and name is always included.
+
+        :param Sequence[_builtins.str] audiences: TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+               The default audiences are always included in the token.
         :param _builtins.str name: Name of the ServiceAccount used to request a token.
         """
         if audiences is not None:
@@ -46223,8 +48700,8 @@ class IssuerSpecVaultAuthKubernetesServiceAccountRefPatch(dict):
     @pulumi.getter
     def audiences(self) -> Optional[Sequence[_builtins.str]]:
         """
-        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault. The default token
-        consisting of the issuer's namespace and name is always included.
+        TokenAudiences is an optional list of extra audiences to include in the token passed to Vault.
+        The default audiences are always included in the token.
         """
         return pulumi.get(self, "audiences")
 
@@ -46265,6 +48742,7 @@ class IssuerSpecVaultAuthPatch(dict):
 
     def __init__(__self__, *,
                  app_role: Optional['outputs.IssuerSpecVaultAuthAppRolePatch'] = None,
+                 aws: Optional['outputs.IssuerSpecVaultAuthAwsPatch'] = None,
                  client_certificate: Optional['outputs.IssuerSpecVaultAuthClientCertificatePatch'] = None,
                  kubernetes: Optional['outputs.IssuerSpecVaultAuthKubernetesPatch'] = None,
                  token_secret_ref: Optional['outputs.IssuerSpecVaultAuthTokenSecretRefPatch'] = None):
@@ -46273,6 +48751,8 @@ class IssuerSpecVaultAuthPatch(dict):
         """
         if app_role is not None:
             pulumi.set(__self__, "app_role", app_role)
+        if aws is not None:
+            pulumi.set(__self__, "aws", aws)
         if client_certificate is not None:
             pulumi.set(__self__, "client_certificate", client_certificate)
         if kubernetes is not None:
@@ -46284,6 +48764,11 @@ class IssuerSpecVaultAuthPatch(dict):
     @pulumi.getter(name="appRole")
     def app_role(self) -> Optional['outputs.IssuerSpecVaultAuthAppRolePatch']:
         return pulumi.get(self, "app_role")
+
+    @_builtins.property
+    @pulumi.getter
+    def aws(self) -> Optional['outputs.IssuerSpecVaultAuthAwsPatch']:
+        return pulumi.get(self, "aws")
 
     @_builtins.property
     @pulumi.getter(name="clientCertificate")
@@ -46311,6 +48796,7 @@ class IssuerSpecVaultAuthTokenSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         TokenSecretRef authenticates with Vault by presenting a token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46352,6 +48838,7 @@ class IssuerSpecVaultAuthTokenSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         TokenSecretRef authenticates with Vault by presenting a token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46403,6 +48890,7 @@ class IssuerSpecVaultCaBundleSecretRef(dict):
         If neither CABundle nor CABundleSecretRef are defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
         If no key for the Secret is specified, cert-manager will default to 'ca.crt'.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46454,6 +48942,7 @@ class IssuerSpecVaultCaBundleSecretRefPatch(dict):
         If neither CABundle nor CABundleSecretRef are defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
         If no key for the Secret is specified, cert-manager will default to 'ca.crt'.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46497,6 +48986,7 @@ class IssuerSpecVaultClientCertSecretRef(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Certificate to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46540,6 +49030,7 @@ class IssuerSpecVaultClientCertSecretRefPatch(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Certificate to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46583,6 +49074,7 @@ class IssuerSpecVaultClientKeySecretRef(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Private Key to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46626,6 +49118,7 @@ class IssuerSpecVaultClientKeySecretRefPatch(dict):
         """
         Reference to a Secret containing a PEM-encoded Client Private Key to use when the
         Vault server requires mTLS.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46701,6 +49194,7 @@ class IssuerSpecVaultPatch(dict):
         """
         Vault configures this issuer to sign certificates using a HashiCorp Vault
         PKI backend.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
                chain presented by Vault. Only used if using HTTPS to connect to Vault and
                ignored for HTTP connections.
@@ -46806,23 +49300,27 @@ class IssuerSpecVaultPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafi(dict):
     """
-    Venafi configures this issuer to sign certificates using a Venafi TPP
-    or Venafi Cloud policy zone.
+    Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+    or SaaS policy zone.
     """
     def __init__(__self__, *,
                  cloud: Optional['outputs.IssuerSpecVenafiCloud'] = None,
+                 ngts: Optional['outputs.IssuerSpecVenafiNgts'] = None,
                  tpp: Optional['outputs.IssuerSpecVenafiTpp'] = None,
                  zone: Optional[_builtins.str] = None):
         """
-        Venafi configures this issuer to sign certificates using a Venafi TPP
-        or Venafi Cloud policy zone.
-        :param _builtins.str zone: Zone is the Venafi Policy Zone to use for this issuer.
-               All requests made to the Venafi platform will be restricted by the named
+        Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+        or SaaS policy zone.
+
+        :param _builtins.str zone: Zone is the Certificate Manager Policy Zone to use for this issuer.
+               All requests made to the Certificate Manager platform will be restricted by the named
                zone policy.
                This field is required.
         """
         if cloud is not None:
             pulumi.set(__self__, "cloud", cloud)
+        if ngts is not None:
+            pulumi.set(__self__, "ngts", ngts)
         if tpp is not None:
             pulumi.set(__self__, "tpp", tpp)
         if zone is not None:
@@ -46835,6 +49333,11 @@ class IssuerSpecVenafi(dict):
 
     @_builtins.property
     @pulumi.getter
+    def ngts(self) -> Optional['outputs.IssuerSpecVenafiNgts']:
+        return pulumi.get(self, "ngts")
+
+    @_builtins.property
+    @pulumi.getter
     def tpp(self) -> Optional['outputs.IssuerSpecVenafiTpp']:
         return pulumi.get(self, "tpp")
 
@@ -46842,8 +49345,8 @@ class IssuerSpecVenafi(dict):
     @pulumi.getter
     def zone(self) -> Optional[_builtins.str]:
         """
-        Zone is the Venafi Policy Zone to use for this issuer.
-        All requests made to the Venafi platform will be restricted by the named
+        Zone is the Certificate Manager Policy Zone to use for this issuer.
+        All requests made to the Certificate Manager platform will be restricted by the named
         zone policy.
         This field is required.
         """
@@ -46853,8 +49356,8 @@ class IssuerSpecVenafi(dict):
 @pulumi.output_type
 class IssuerSpecVenafiCloud(dict):
     """
-    Cloud specifies the Venafi cloud configuration settings.
-    Only one of TPP or Cloud may be specified.
+    Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -46877,9 +49380,10 @@ class IssuerSpecVenafiCloud(dict):
                  api_token_secret_ref: Optional['outputs.IssuerSpecVenafiCloudApiTokenSecretRef'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        Cloud specifies the Venafi cloud configuration settings.
-        Only one of TPP or Cloud may be specified.
-        :param _builtins.str url: URL is the base URL for Venafi Cloud.
+        Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
+        :param _builtins.str url: URL is the base URL for CyberArk Certificate Manager SaaS.
                Defaults to "https://api.venafi.cloud/".
         """
         if api_token_secret_ref is not None:
@@ -46896,7 +49400,7 @@ class IssuerSpecVenafiCloud(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for Venafi Cloud.
+        URL is the base URL for CyberArk Certificate Manager SaaS.
         Defaults to "https://api.venafi.cloud/".
         """
         return pulumi.get(self, "url")
@@ -46905,13 +49409,14 @@ class IssuerSpecVenafiCloud(dict):
 @pulumi.output_type
 class IssuerSpecVenafiCloudApiTokenSecretRef(dict):
     """
-    APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+    APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
     """
     def __init__(__self__, *,
                  key: Optional[_builtins.str] = None,
                  name: Optional[_builtins.str] = None):
         """
-        APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+        APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46946,13 +49451,14 @@ class IssuerSpecVenafiCloudApiTokenSecretRef(dict):
 @pulumi.output_type
 class IssuerSpecVenafiCloudApiTokenSecretRefPatch(dict):
     """
-    APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+    APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
     """
     def __init__(__self__, *,
                  key: Optional[_builtins.str] = None,
                  name: Optional[_builtins.str] = None):
         """
-        APITokenSecretRef is a secret key selector for the Venafi Cloud API token.
+        APITokenSecretRef is a secret key selector for the CyberArk Certificate Manager SaaS API token.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -46987,8 +49493,8 @@ class IssuerSpecVenafiCloudApiTokenSecretRefPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafiCloudPatch(dict):
     """
-    Cloud specifies the Venafi cloud configuration settings.
-    Only one of TPP or Cloud may be specified.
+    Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -47011,9 +49517,10 @@ class IssuerSpecVenafiCloudPatch(dict):
                  api_token_secret_ref: Optional['outputs.IssuerSpecVenafiCloudApiTokenSecretRefPatch'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        Cloud specifies the Venafi cloud configuration settings.
-        Only one of TPP or Cloud may be specified.
-        :param _builtins.str url: URL is the base URL for Venafi Cloud.
+        Cloud specifies the CyberArk Certificate Manager SaaS configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
+        :param _builtins.str url: URL is the base URL for CyberArk Certificate Manager SaaS.
                Defaults to "https://api.venafi.cloud/".
         """
         if api_token_secret_ref is not None:
@@ -47030,8 +49537,246 @@ class IssuerSpecVenafiCloudPatch(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for Venafi Cloud.
+        URL is the base URL for CyberArk Certificate Manager SaaS.
         Defaults to "https://api.venafi.cloud/".
+        """
+        return pulumi.get(self, "url")
+
+
+@pulumi.output_type
+class IssuerSpecVenafiNgts(dict):
+    """
+    NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+    using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "credentialsRef":
+            suggest = "credentials_ref"
+        elif key == "tokenEndpoint":
+            suggest = "token_endpoint"
+        elif key == "tsgID":
+            suggest = "tsg_id"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecVenafiNgts. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecVenafiNgts.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecVenafiNgts.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 credentials_ref: Optional['outputs.IssuerSpecVenafiNgtsCredentialsRef'] = None,
+                 token_endpoint: Optional[_builtins.str] = None,
+                 tsg_id: Optional[_builtins.str] = None,
+                 url: Optional[_builtins.str] = None):
+        """
+        NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+        using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+
+        :param _builtins.str token_endpoint: TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+               for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+               Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        :param _builtins.str tsg_id: TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+               for example "1234567890". The tsg_id: prefix is added automatically.
+               This field is required.
+        :param _builtins.str url: URL is the base URL for the NGTS API endpoint.
+               Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        if credentials_ref is not None:
+            pulumi.set(__self__, "credentials_ref", credentials_ref)
+        if token_endpoint is not None:
+            pulumi.set(__self__, "token_endpoint", token_endpoint)
+        if tsg_id is not None:
+            pulumi.set(__self__, "tsg_id", tsg_id)
+        if url is not None:
+            pulumi.set(__self__, "url", url)
+
+    @_builtins.property
+    @pulumi.getter(name="credentialsRef")
+    def credentials_ref(self) -> Optional['outputs.IssuerSpecVenafiNgtsCredentialsRef']:
+        return pulumi.get(self, "credentials_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="tokenEndpoint")
+    def token_endpoint(self) -> Optional[_builtins.str]:
+        """
+        TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+        for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+        Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        """
+        return pulumi.get(self, "token_endpoint")
+
+    @_builtins.property
+    @pulumi.getter(name="tsgID")
+    def tsg_id(self) -> Optional[_builtins.str]:
+        """
+        TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+        for example "1234567890". The tsg_id: prefix is added automatically.
+        This field is required.
+        """
+        return pulumi.get(self, "tsg_id")
+
+    @_builtins.property
+    @pulumi.getter
+    def url(self) -> Optional[_builtins.str]:
+        """
+        URL is the base URL for the NGTS API endpoint.
+        Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        return pulumi.get(self, "url")
+
+
+@pulumi.output_type
+class IssuerSpecVenafiNgtsCredentialsRef(dict):
+    """
+    CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+    Client ID and Client Secret. The secret must contain the keys 'client-id' and
+    'client-secret'.
+    """
+    def __init__(__self__, *,
+                 name: Optional[_builtins.str] = None):
+        """
+        CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+        Client ID and Client Secret. The secret must contain the keys 'client-id' and
+        'client-secret'.
+
+        :param _builtins.str name: Name of the resource being referred to.
+               More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the resource being referred to.
+        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class IssuerSpecVenafiNgtsCredentialsRefPatch(dict):
+    """
+    CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+    Client ID and Client Secret. The secret must contain the keys 'client-id' and
+    'client-secret'.
+    """
+    def __init__(__self__, *,
+                 name: Optional[_builtins.str] = None):
+        """
+        CredentialsRef is a reference to a Kubernetes Secret containing the OAuth 2.0
+        Client ID and Client Secret. The secret must contain the keys 'client-id' and
+        'client-secret'.
+
+        :param _builtins.str name: Name of the resource being referred to.
+               More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        if name is not None:
+            pulumi.set(__self__, "name", name)
+
+    @_builtins.property
+    @pulumi.getter
+    def name(self) -> Optional[_builtins.str]:
+        """
+        Name of the resource being referred to.
+        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+        """
+        return pulumi.get(self, "name")
+
+
+@pulumi.output_type
+class IssuerSpecVenafiNgtsPatch(dict):
+    """
+    NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+    using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+    """
+    @staticmethod
+    def __key_warning(key: str):
+        suggest = None
+        if key == "credentialsRef":
+            suggest = "credentials_ref"
+        elif key == "tokenEndpoint":
+            suggest = "token_endpoint"
+        elif key == "tsgID":
+            suggest = "tsg_id"
+
+        if suggest:
+            pulumi.log.warn(f"Key '{key}' not found in IssuerSpecVenafiNgtsPatch. Access the value via the '{suggest}' property getter instead.")
+
+    def __getitem__(self, key: str) -> Any:
+        IssuerSpecVenafiNgtsPatch.__key_warning(key)
+        return super().__getitem__(key)
+
+    def get(self, key: str, default = None) -> Any:
+        IssuerSpecVenafiNgtsPatch.__key_warning(key)
+        return super().get(key, default)
+
+    def __init__(__self__, *,
+                 credentials_ref: Optional['outputs.IssuerSpecVenafiNgtsCredentialsRefPatch'] = None,
+                 token_endpoint: Optional[_builtins.str] = None,
+                 tsg_id: Optional[_builtins.str] = None,
+                 url: Optional[_builtins.str] = None):
+        """
+        NGTS specifies Palo Alto Networks Next Generation Trust Services (NGTS) configuration
+        using OAuth 2.0 Client Credentials. Only one of tpp, cloud, or ngts may be specified.
+
+        :param _builtins.str token_endpoint: TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+               for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+               Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        :param _builtins.str tsg_id: TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+               for example "1234567890". The tsg_id: prefix is added automatically.
+               This field is required.
+        :param _builtins.str url: URL is the base URL for the NGTS API endpoint.
+               Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
+        """
+        if credentials_ref is not None:
+            pulumi.set(__self__, "credentials_ref", credentials_ref)
+        if token_endpoint is not None:
+            pulumi.set(__self__, "token_endpoint", token_endpoint)
+        if tsg_id is not None:
+            pulumi.set(__self__, "tsg_id", tsg_id)
+        if url is not None:
+            pulumi.set(__self__, "url", url)
+
+    @_builtins.property
+    @pulumi.getter(name="credentialsRef")
+    def credentials_ref(self) -> Optional['outputs.IssuerSpecVenafiNgtsCredentialsRefPatch']:
+        return pulumi.get(self, "credentials_ref")
+
+    @_builtins.property
+    @pulumi.getter(name="tokenEndpoint")
+    def token_endpoint(self) -> Optional[_builtins.str]:
+        """
+        TokenEndpoint is the OAuth 2.0 token endpoint URL used to obtain access tokens,
+        for example "https://auth.apps.paloaltonetworks.com/oauth2/access_token".
+        Defaults to "https://auth.apps.paloaltonetworks.com/oauth2/access_token" if not set.
+        """
+        return pulumi.get(self, "token_endpoint")
+
+    @_builtins.property
+    @pulumi.getter(name="tsgID")
+    def tsg_id(self) -> Optional[_builtins.str]:
+        """
+        TSGID is the Tenant Service Group ID used to scope the OAuth 2.0 access token,
+        for example "1234567890". The tsg_id: prefix is added automatically.
+        This field is required.
+        """
+        return pulumi.get(self, "tsg_id")
+
+    @_builtins.property
+    @pulumi.getter
+    def url(self) -> Optional[_builtins.str]:
+        """
+        URL is the base URL for the NGTS API endpoint.
+        Defaults to "https://api.strata.paloaltonetworks.com/ngts" if not set.
         """
         return pulumi.get(self, "url")
 
@@ -47039,23 +49784,27 @@ class IssuerSpecVenafiCloudPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafiPatch(dict):
     """
-    Venafi configures this issuer to sign certificates using a Venafi TPP
-    or Venafi Cloud policy zone.
+    Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+    or SaaS policy zone.
     """
     def __init__(__self__, *,
                  cloud: Optional['outputs.IssuerSpecVenafiCloudPatch'] = None,
+                 ngts: Optional['outputs.IssuerSpecVenafiNgtsPatch'] = None,
                  tpp: Optional['outputs.IssuerSpecVenafiTppPatch'] = None,
                  zone: Optional[_builtins.str] = None):
         """
-        Venafi configures this issuer to sign certificates using a Venafi TPP
-        or Venafi Cloud policy zone.
-        :param _builtins.str zone: Zone is the Venafi Policy Zone to use for this issuer.
-               All requests made to the Venafi platform will be restricted by the named
+        Venafi configures this issuer to sign certificates using a CyberArk Certificate Manager Self-Hosted
+        or SaaS policy zone.
+
+        :param _builtins.str zone: Zone is the Certificate Manager Policy Zone to use for this issuer.
+               All requests made to the Certificate Manager platform will be restricted by the named
                zone policy.
                This field is required.
         """
         if cloud is not None:
             pulumi.set(__self__, "cloud", cloud)
+        if ngts is not None:
+            pulumi.set(__self__, "ngts", ngts)
         if tpp is not None:
             pulumi.set(__self__, "tpp", tpp)
         if zone is not None:
@@ -47068,6 +49817,11 @@ class IssuerSpecVenafiPatch(dict):
 
     @_builtins.property
     @pulumi.getter
+    def ngts(self) -> Optional['outputs.IssuerSpecVenafiNgtsPatch']:
+        return pulumi.get(self, "ngts")
+
+    @_builtins.property
+    @pulumi.getter
     def tpp(self) -> Optional['outputs.IssuerSpecVenafiTppPatch']:
         return pulumi.get(self, "tpp")
 
@@ -47075,8 +49829,8 @@ class IssuerSpecVenafiPatch(dict):
     @pulumi.getter
     def zone(self) -> Optional[_builtins.str]:
         """
-        Zone is the Venafi Policy Zone to use for this issuer.
-        All requests made to the Venafi platform will be restricted by the named
+        Zone is the Certificate Manager Policy Zone to use for this issuer.
+        All requests made to the Certificate Manager platform will be restricted by the named
         zone policy.
         This field is required.
         """
@@ -47086,8 +49840,8 @@ class IssuerSpecVenafiPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafiTpp(dict):
     """
-    TPP specifies Trust Protection Platform configuration settings.
-    Only one of TPP or Cloud may be specified.
+    TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -47116,13 +49870,14 @@ class IssuerSpecVenafiTpp(dict):
                  credentials_ref: Optional['outputs.IssuerSpecVenafiTppCredentialsRef'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        TPP specifies Trust Protection Platform configuration settings.
-        Only one of TPP or Cloud may be specified.
+        TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-               chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+               chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
                If undefined, the certificate bundle in the cert-manager controller container
                is used to validate the chain.
-        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
                for example: "https://tpp.example.com/vedsdk".
         """
         if ca_bundle is not None:
@@ -47139,7 +49894,7 @@ class IssuerSpecVenafiTpp(dict):
     def ca_bundle(self) -> Optional[_builtins.str]:
         """
         Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-        chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+        chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
         If undefined, the certificate bundle in the cert-manager controller container
         is used to validate the chain.
         """
@@ -47159,7 +49914,7 @@ class IssuerSpecVenafiTpp(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
         for example: "https://tpp.example.com/vedsdk".
         """
         return pulumi.get(self, "url")
@@ -47169,7 +49924,7 @@ class IssuerSpecVenafiTpp(dict):
 class IssuerSpecVenafiTppCaBundleSecretRef(dict):
     """
     Reference to a Secret containing a base64-encoded bundle of PEM CAs
-    which will be used to validate the certificate chain presented by the TPP server.
+    which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
     Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
     If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
     the cert-manager controller container is used to validate the TLS connection.
@@ -47179,10 +49934,11 @@ class IssuerSpecVenafiTppCaBundleSecretRef(dict):
                  name: Optional[_builtins.str] = None):
         """
         Reference to a Secret containing a base64-encoded bundle of PEM CAs
-        which will be used to validate the certificate chain presented by the TPP server.
+        which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
         Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
         If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -47218,7 +49974,7 @@ class IssuerSpecVenafiTppCaBundleSecretRef(dict):
 class IssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
     """
     Reference to a Secret containing a base64-encoded bundle of PEM CAs
-    which will be used to validate the certificate chain presented by the TPP server.
+    which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
     Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
     If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
     the cert-manager controller container is used to validate the TLS connection.
@@ -47228,10 +49984,11 @@ class IssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         Reference to a Secret containing a base64-encoded bundle of PEM CAs
-        which will be used to validate the certificate chain presented by the TPP server.
+        which will be used to validate the certificate chain presented by the CyberArk Certificate Manager Self-Hosted server.
         Only used if using HTTPS; ignored for HTTP. Mutually exclusive with CABundle.
         If neither CABundle nor CABundleSecretRef is defined, the certificate bundle in
         the cert-manager controller container is used to validate the TLS connection.
+
         :param _builtins.str key: The key of the entry in the Secret resource's `data` field to be used.
                Some instances of this field may be defaulted, in others it may be
                required.
@@ -47266,16 +50023,17 @@ class IssuerSpecVenafiTppCaBundleSecretRefPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafiTppCredentialsRef(dict):
     """
-    CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+    CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
     The secret must contain the key 'access-token' for the Access Token Authentication,
     or two keys, 'username' and 'password' for the API Keys Authentication.
     """
     def __init__(__self__, *,
                  name: Optional[_builtins.str] = None):
         """
-        CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+        CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
         The secret must contain the key 'access-token' for the Access Token Authentication,
         or two keys, 'username' and 'password' for the API Keys Authentication.
+
         :param _builtins.str name: Name of the resource being referred to.
                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
         """
@@ -47295,16 +50053,17 @@ class IssuerSpecVenafiTppCredentialsRef(dict):
 @pulumi.output_type
 class IssuerSpecVenafiTppCredentialsRefPatch(dict):
     """
-    CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+    CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
     The secret must contain the key 'access-token' for the Access Token Authentication,
     or two keys, 'username' and 'password' for the API Keys Authentication.
     """
     def __init__(__self__, *,
                  name: Optional[_builtins.str] = None):
         """
-        CredentialsRef is a reference to a Secret containing the Venafi TPP API credentials.
+        CredentialsRef is a reference to a Secret containing the CyberArk Certificate Manager Self-Hosted API credentials.
         The secret must contain the key 'access-token' for the Access Token Authentication,
         or two keys, 'username' and 'password' for the API Keys Authentication.
+
         :param _builtins.str name: Name of the resource being referred to.
                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
         """
@@ -47324,8 +50083,8 @@ class IssuerSpecVenafiTppCredentialsRefPatch(dict):
 @pulumi.output_type
 class IssuerSpecVenafiTppPatch(dict):
     """
-    TPP specifies Trust Protection Platform configuration settings.
-    Only one of TPP or Cloud may be specified.
+    TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+    Only one of CyberArk Certificate Manager may be specified.
     """
     @staticmethod
     def __key_warning(key: str):
@@ -47354,13 +50113,14 @@ class IssuerSpecVenafiTppPatch(dict):
                  credentials_ref: Optional['outputs.IssuerSpecVenafiTppCredentialsRefPatch'] = None,
                  url: Optional[_builtins.str] = None):
         """
-        TPP specifies Trust Protection Platform configuration settings.
-        Only one of TPP or Cloud may be specified.
+        TPP specifies CyberArk Certificate Manager Self-Hosted configuration settings.
+        Only one of CyberArk Certificate Manager may be specified.
+
         :param _builtins.str ca_bundle: Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-               chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+               chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
                If undefined, the certificate bundle in the cert-manager controller container
                is used to validate the chain.
-        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        :param _builtins.str url: URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
                for example: "https://tpp.example.com/vedsdk".
         """
         if ca_bundle is not None:
@@ -47377,7 +50137,7 @@ class IssuerSpecVenafiTppPatch(dict):
     def ca_bundle(self) -> Optional[_builtins.str]:
         """
         Base64-encoded bundle of PEM CAs which will be used to validate the certificate
-        chain presented by the TPP server. Only used if using HTTPS; ignored for HTTP.
+        chain presented by the CyberArk Certificate Manager Self-Hosted server. Only used if using HTTPS; ignored for HTTP.
         If undefined, the certificate bundle in the cert-manager controller container
         is used to validate the chain.
         """
@@ -47397,7 +50157,7 @@ class IssuerSpecVenafiTppPatch(dict):
     @pulumi.getter
     def url(self) -> Optional[_builtins.str]:
         """
-        URL is the base URL for the vedsdk endpoint of the Venafi TPP instance,
+        URL is the base URL for the vedsdk endpoint of the CyberArk Certificate Manager Self-Hosted instance,
         for example: "https://tpp.example.com/vedsdk".
         """
         return pulumi.get(self, "url")
@@ -47413,6 +50173,7 @@ class IssuerStatus(dict):
                  conditions: Optional[Sequence['outputs.IssuerStatusConditions']] = None):
         """
         Status of the Issuer. This is set and managed automatically.
+
         :param Sequence['IssuerStatusConditionsArgs'] conditions: List of status conditions to indicate the status of a CertificateRequest.
                Known condition types are `Ready`.
         """
@@ -47470,6 +50231,7 @@ class IssuerStatusAcme(dict):
         ACME specific status options.
         This field should only be set if the Issuer is configured to use an ACME
         server to issue certificates.
+
         :param _builtins.str last_private_key_hash: LastPrivateKeyHash is a hash of the private key associated with the latest
                registered ACME account, in order to track changes made to registered account
                associated with the Issuer
@@ -47550,6 +50312,7 @@ class IssuerStatusAcmePatch(dict):
         ACME specific status options.
         This field should only be set if the Issuer is configured to use an ACME
         server to issue certificates.
+
         :param _builtins.str last_private_key_hash: LastPrivateKeyHash is a hash of the private key associated with the latest
                registered ACME account, in order to track changes made to registered account
                associated with the Issuer
@@ -47629,6 +50392,7 @@ class IssuerStatusConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         IssuerCondition contains condition information for an Issuer.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -47745,6 +50509,7 @@ class IssuerStatusConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         IssuerCondition contains condition information for an Issuer.
+
         :param _builtins.str last_transition_time: LastTransitionTime is the timestamp corresponding to the last status
                change of this condition.
         :param _builtins.str message: Message is a human readable description of the details of the last
@@ -47838,6 +50603,7 @@ class IssuerStatusPatch(dict):
                  conditions: Optional[Sequence['outputs.IssuerStatusConditionsPatch']] = None):
         """
         Status of the Issuer. This is set and managed automatically.
+
         :param Sequence['IssuerStatusConditionsPatchArgs'] conditions: List of status conditions to indicate the status of a CertificateRequest.
                Known condition types are `Ready`.
         """

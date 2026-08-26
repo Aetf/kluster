@@ -87,6 +87,7 @@ class BackendTLSPolicy(dict):
         """
         BackendTLSPolicy provides a way to configure how a Gateway
         connects to a Backend via TLS.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -165,6 +166,7 @@ class BackendTLSPolicySpec(dict):
                  validation: Optional['outputs.BackendTLSPolicySpecValidation'] = None):
         """
         Spec defines the desired state of BackendTLSPolicy.
+
         :param Mapping[str, _builtins.str] options: Options are a list of key/value pairs to enable extended TLS
                configuration for each implementation. For example, configuring the
                minimum TLS version or supported cipher suites.
@@ -176,8 +178,6 @@ class BackendTLSPolicySpec(dict):
                
                Support: Implementation-specific
         :param Sequence['BackendTLSPolicySpecTargetRefsArgs'] target_refs: TargetRefs identifies an API object to apply the policy to.
-               Only Services have Extended support. Implementations MAY support
-               additional objects, with Implementation Specific support.
                Note that this config applies to the entire referenced resource
                by default, but this default may change in the future to provide
                a more granular application of the policy.
@@ -198,17 +198,42 @@ class BackendTLSPolicySpec(dict):
                  example, a policy with a creation timestamp of "2021-07-15
                  01:02:03" MUST be given precedence over a policy with a
                  creation timestamp of "2021-07-15 01:02:04".
-               * The policy appearing first in alphabetical order by {name}.
-                 For example, a policy named `bar` is given precedence over a
-                 policy named `baz`.
+               * The policy appearing first in alphabetical order by {namespace}/{name}.
+                 For example, a policy named `foo/bar` is given precedence over a
+                 policy named `foo/baz`.
                
                For any BackendTLSPolicy that does not take precedence, the
                implementation MUST ensure the `Accepted` Condition is set to
                `status: False`, with Reason `Conflicted`.
                
-               Support: Extended for Kubernetes Service
+               Implementations SHOULD NOT support more than one targetRef at this
+               time. Although the API technically allows for this, the current guidance
+               for conflict resolution and status handling is lacking. Until that can be
+               clarified in a future release, the safest approach is to support a single
+               targetRef.
                
-               Support: Implementation-specific for any other resource
+               Support Levels:
+               
+               * Extended: Kubernetes Service referenced by backendRefs used on a Route.
+                 - HTTPRoute, GRPCRoute, TLSRoute with termination
+                 - Filters that needs a backend of type Service, like Mirror and External Authorization
+               
+               * Implementation-Specific: Implementations MAY use BackendTLSPolicy for:
+                 - Services not referenced by any Route (e.g., infrastructure services)
+                 - Service mesh workload-to-service communication
+                 - Other resource types beyond Service
+               
+               Implementations SHOULD aim to ensure that BackendTLSPolicy behavior is consistent,
+               even outside of the extended HTTPRoute -(backendRef) -> Service path.
+               They SHOULD clearly document how BackendTLSPolicy is interpreted in these
+               scenarios, including:
+                 - Which resources beyond Service are supported
+                 - How the policy is discovered and applied
+                 - Any implementation-specific semantics or restrictions
+               
+               Note that this config applies to the entire referenced resource
+               by default, but this default may change in the future to provide
+               a more granular application of the policy.
         """
         if options is not None:
             pulumi.set(__self__, "options", options)
@@ -239,8 +264,6 @@ class BackendTLSPolicySpec(dict):
     def target_refs(self) -> Optional[Sequence['outputs.BackendTLSPolicySpecTargetRefs']]:
         """
         TargetRefs identifies an API object to apply the policy to.
-        Only Services have Extended support. Implementations MAY support
-        additional objects, with Implementation Specific support.
         Note that this config applies to the entire referenced resource
         by default, but this default may change in the future to provide
         a more granular application of the policy.
@@ -261,17 +284,42 @@ class BackendTLSPolicySpec(dict):
           example, a policy with a creation timestamp of "2021-07-15
           01:02:03" MUST be given precedence over a policy with a
           creation timestamp of "2021-07-15 01:02:04".
-        * The policy appearing first in alphabetical order by {name}.
-          For example, a policy named `bar` is given precedence over a
-          policy named `baz`.
+        * The policy appearing first in alphabetical order by {namespace}/{name}.
+          For example, a policy named `foo/bar` is given precedence over a
+          policy named `foo/baz`.
 
         For any BackendTLSPolicy that does not take precedence, the
         implementation MUST ensure the `Accepted` Condition is set to
         `status: False`, with Reason `Conflicted`.
 
-        Support: Extended for Kubernetes Service
+        Implementations SHOULD NOT support more than one targetRef at this
+        time. Although the API technically allows for this, the current guidance
+        for conflict resolution and status handling is lacking. Until that can be
+        clarified in a future release, the safest approach is to support a single
+        targetRef.
 
-        Support: Implementation-specific for any other resource
+        Support Levels:
+
+        * Extended: Kubernetes Service referenced by backendRefs used on a Route.
+          - HTTPRoute, GRPCRoute, TLSRoute with termination
+          - Filters that needs a backend of type Service, like Mirror and External Authorization
+
+        * Implementation-Specific: Implementations MAY use BackendTLSPolicy for:
+          - Services not referenced by any Route (e.g., infrastructure services)
+          - Service mesh workload-to-service communication
+          - Other resource types beyond Service
+
+        Implementations SHOULD aim to ensure that BackendTLSPolicy behavior is consistent,
+        even outside of the extended HTTPRoute -(backendRef) -> Service path.
+        They SHOULD clearly document how BackendTLSPolicy is interpreted in these
+        scenarios, including:
+          - Which resources beyond Service are supported
+          - How the policy is discovered and applied
+          - Any implementation-specific semantics or restrictions
+
+        Note that this config applies to the entire referenced resource
+        by default, but this default may change in the future to provide
+        a more granular application of the policy.
         """
         return pulumi.get(self, "target_refs")
 
@@ -309,6 +357,7 @@ class BackendTLSPolicySpecPatch(dict):
                  validation: Optional['outputs.BackendTLSPolicySpecValidationPatch'] = None):
         """
         Spec defines the desired state of BackendTLSPolicy.
+
         :param Mapping[str, _builtins.str] options: Options are a list of key/value pairs to enable extended TLS
                configuration for each implementation. For example, configuring the
                minimum TLS version or supported cipher suites.
@@ -320,8 +369,6 @@ class BackendTLSPolicySpecPatch(dict):
                
                Support: Implementation-specific
         :param Sequence['BackendTLSPolicySpecTargetRefsPatchArgs'] target_refs: TargetRefs identifies an API object to apply the policy to.
-               Only Services have Extended support. Implementations MAY support
-               additional objects, with Implementation Specific support.
                Note that this config applies to the entire referenced resource
                by default, but this default may change in the future to provide
                a more granular application of the policy.
@@ -342,17 +389,42 @@ class BackendTLSPolicySpecPatch(dict):
                  example, a policy with a creation timestamp of "2021-07-15
                  01:02:03" MUST be given precedence over a policy with a
                  creation timestamp of "2021-07-15 01:02:04".
-               * The policy appearing first in alphabetical order by {name}.
-                 For example, a policy named `bar` is given precedence over a
-                 policy named `baz`.
+               * The policy appearing first in alphabetical order by {namespace}/{name}.
+                 For example, a policy named `foo/bar` is given precedence over a
+                 policy named `foo/baz`.
                
                For any BackendTLSPolicy that does not take precedence, the
                implementation MUST ensure the `Accepted` Condition is set to
                `status: False`, with Reason `Conflicted`.
                
-               Support: Extended for Kubernetes Service
+               Implementations SHOULD NOT support more than one targetRef at this
+               time. Although the API technically allows for this, the current guidance
+               for conflict resolution and status handling is lacking. Until that can be
+               clarified in a future release, the safest approach is to support a single
+               targetRef.
                
-               Support: Implementation-specific for any other resource
+               Support Levels:
+               
+               * Extended: Kubernetes Service referenced by backendRefs used on a Route.
+                 - HTTPRoute, GRPCRoute, TLSRoute with termination
+                 - Filters that needs a backend of type Service, like Mirror and External Authorization
+               
+               * Implementation-Specific: Implementations MAY use BackendTLSPolicy for:
+                 - Services not referenced by any Route (e.g., infrastructure services)
+                 - Service mesh workload-to-service communication
+                 - Other resource types beyond Service
+               
+               Implementations SHOULD aim to ensure that BackendTLSPolicy behavior is consistent,
+               even outside of the extended HTTPRoute -(backendRef) -> Service path.
+               They SHOULD clearly document how BackendTLSPolicy is interpreted in these
+               scenarios, including:
+                 - Which resources beyond Service are supported
+                 - How the policy is discovered and applied
+                 - Any implementation-specific semantics or restrictions
+               
+               Note that this config applies to the entire referenced resource
+               by default, but this default may change in the future to provide
+               a more granular application of the policy.
         """
         if options is not None:
             pulumi.set(__self__, "options", options)
@@ -383,8 +455,6 @@ class BackendTLSPolicySpecPatch(dict):
     def target_refs(self) -> Optional[Sequence['outputs.BackendTLSPolicySpecTargetRefsPatch']]:
         """
         TargetRefs identifies an API object to apply the policy to.
-        Only Services have Extended support. Implementations MAY support
-        additional objects, with Implementation Specific support.
         Note that this config applies to the entire referenced resource
         by default, but this default may change in the future to provide
         a more granular application of the policy.
@@ -405,17 +475,42 @@ class BackendTLSPolicySpecPatch(dict):
           example, a policy with a creation timestamp of "2021-07-15
           01:02:03" MUST be given precedence over a policy with a
           creation timestamp of "2021-07-15 01:02:04".
-        * The policy appearing first in alphabetical order by {name}.
-          For example, a policy named `bar` is given precedence over a
-          policy named `baz`.
+        * The policy appearing first in alphabetical order by {namespace}/{name}.
+          For example, a policy named `foo/bar` is given precedence over a
+          policy named `foo/baz`.
 
         For any BackendTLSPolicy that does not take precedence, the
         implementation MUST ensure the `Accepted` Condition is set to
         `status: False`, with Reason `Conflicted`.
 
-        Support: Extended for Kubernetes Service
+        Implementations SHOULD NOT support more than one targetRef at this
+        time. Although the API technically allows for this, the current guidance
+        for conflict resolution and status handling is lacking. Until that can be
+        clarified in a future release, the safest approach is to support a single
+        targetRef.
 
-        Support: Implementation-specific for any other resource
+        Support Levels:
+
+        * Extended: Kubernetes Service referenced by backendRefs used on a Route.
+          - HTTPRoute, GRPCRoute, TLSRoute with termination
+          - Filters that needs a backend of type Service, like Mirror and External Authorization
+
+        * Implementation-Specific: Implementations MAY use BackendTLSPolicy for:
+          - Services not referenced by any Route (e.g., infrastructure services)
+          - Service mesh workload-to-service communication
+          - Other resource types beyond Service
+
+        Implementations SHOULD aim to ensure that BackendTLSPolicy behavior is consistent,
+        even outside of the extended HTTPRoute -(backendRef) -> Service path.
+        They SHOULD clearly document how BackendTLSPolicy is interpreted in these
+        scenarios, including:
+          - Which resources beyond Service are supported
+          - How the policy is discovered and applied
+          - Any implementation-specific semantics or restrictions
+
+        Note that this config applies to the entire referenced resource
+        by default, but this default may change in the future to provide
+        a more granular application of the policy.
         """
         return pulumi.get(self, "target_refs")
 
@@ -470,6 +565,7 @@ class BackendTLSPolicySpecTargetRefs(dict):
         Note: This should only be used for direct policy attachment when references
         to SectionName are actually needed. In all other cases,
         LocalPolicyTargetReference should be used.
+
         :param _builtins.str group: Group is the group of the target resource.
         :param _builtins.str kind: Kind is kind of the target resource.
         :param _builtins.str name: Name is the name of the target resource.
@@ -582,6 +678,7 @@ class BackendTLSPolicySpecTargetRefsPatch(dict):
         Note: This should only be used for direct policy attachment when references
         to SectionName are actually needed. In all other cases,
         LocalPolicyTargetReference should be used.
+
         :param _builtins.str group: Group is the group of the target resource.
         :param _builtins.str kind: Kind is kind of the target resource.
         :param _builtins.str name: Name is the name of the target resource.
@@ -682,6 +779,7 @@ class BackendTLSPolicySpecValidation(dict):
                  well_known_ca_certificates: Optional[_builtins.str] = None):
         """
         Validation contains backend TLS validation configuration.
+
         :param Sequence['BackendTLSPolicySpecValidationCaCertificateRefsArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes objects that
                contain a PEM-encoded TLS CA certificate bundle, which is used to
                validate a TLS handshake between the Gateway and backend Pod.
@@ -742,8 +840,8 @@ class BackendTLSPolicySpecValidation(dict):
                have at least one Subject Alternate Name matching one of the specified SubjectAltNames.
                
                Support: Extended
-        :param _builtins.str well_known_ca_certificates: WellKnownCACertificates specifies whether system CA certificates may be used in
-               the TLS handshake between the gateway and backend pod.
+        :param _builtins.str well_known_ca_certificates: WellKnownCACertificates specifies whether a well-known set of CA certificates
+               may be used in the TLS handshake between the gateway and backend pod.
                
                If WellKnownCACertificates is unspecified or empty (""), then CACertificateRefs
                must be specified with at least one entry for a valid configuration. Only one of
@@ -752,6 +850,13 @@ class BackendTLSPolicySpecValidation(dict):
                the supplied value is not recognized, the implementation MUST ensure the
                `Accepted` Condition on the BackendTLSPolicy is set to `status: False`, with
                a Reason `Invalid`.
+               
+               Valid values include:
+               * "System" - indicates that well-known system CA certificates should be used.
+               
+               Implementations MAY define their own sets of CA certificates. Such definitions
+               MUST use an implementation-specific, prefixed name, such as
+               `mycompany.com/my-custom-ca-certificates`.
                
                Support: Implementation-specific
         """
@@ -849,8 +954,8 @@ class BackendTLSPolicySpecValidation(dict):
     @pulumi.getter(name="wellKnownCACertificates")
     def well_known_ca_certificates(self) -> Optional[_builtins.str]:
         """
-        WellKnownCACertificates specifies whether system CA certificates may be used in
-        the TLS handshake between the gateway and backend pod.
+        WellKnownCACertificates specifies whether a well-known set of CA certificates
+        may be used in the TLS handshake between the gateway and backend pod.
 
         If WellKnownCACertificates is unspecified or empty (""), then CACertificateRefs
         must be specified with at least one entry for a valid configuration. Only one of
@@ -859,6 +964,13 @@ class BackendTLSPolicySpecValidation(dict):
         the supplied value is not recognized, the implementation MUST ensure the
         `Accepted` Condition on the BackendTLSPolicy is set to `status: False`, with
         a Reason `Invalid`.
+
+        Valid values include:
+        * "System" - indicates that well-known system CA certificates should be used.
+
+        Implementations MAY define their own sets of CA certificates. Such definitions
+        MUST use an implementation-specific, prefixed name, such as
+        `mycompany.com/my-custom-ca-certificates`.
 
         Support: Implementation-specific
         """
@@ -890,6 +1002,7 @@ class BackendTLSPolicySpecValidationCaCertificateRefs(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -953,6 +1066,7 @@ class BackendTLSPolicySpecValidationCaCertificateRefsPatch(dict):
         References to objects with invalid Group and Kind are not valid, and must
         be rejected by the implementation, with appropriate Conditions set
         on the containing object.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is kind of the referent. For example "HTTPRoute" or "Service".
@@ -1024,6 +1138,7 @@ class BackendTLSPolicySpecValidationPatch(dict):
                  well_known_ca_certificates: Optional[_builtins.str] = None):
         """
         Validation contains backend TLS validation configuration.
+
         :param Sequence['BackendTLSPolicySpecValidationCaCertificateRefsPatchArgs'] ca_certificate_refs: CACertificateRefs contains one or more references to Kubernetes objects that
                contain a PEM-encoded TLS CA certificate bundle, which is used to
                validate a TLS handshake between the Gateway and backend Pod.
@@ -1084,8 +1199,8 @@ class BackendTLSPolicySpecValidationPatch(dict):
                have at least one Subject Alternate Name matching one of the specified SubjectAltNames.
                
                Support: Extended
-        :param _builtins.str well_known_ca_certificates: WellKnownCACertificates specifies whether system CA certificates may be used in
-               the TLS handshake between the gateway and backend pod.
+        :param _builtins.str well_known_ca_certificates: WellKnownCACertificates specifies whether a well-known set of CA certificates
+               may be used in the TLS handshake between the gateway and backend pod.
                
                If WellKnownCACertificates is unspecified or empty (""), then CACertificateRefs
                must be specified with at least one entry for a valid configuration. Only one of
@@ -1094,6 +1209,13 @@ class BackendTLSPolicySpecValidationPatch(dict):
                the supplied value is not recognized, the implementation MUST ensure the
                `Accepted` Condition on the BackendTLSPolicy is set to `status: False`, with
                a Reason `Invalid`.
+               
+               Valid values include:
+               * "System" - indicates that well-known system CA certificates should be used.
+               
+               Implementations MAY define their own sets of CA certificates. Such definitions
+               MUST use an implementation-specific, prefixed name, such as
+               `mycompany.com/my-custom-ca-certificates`.
                
                Support: Implementation-specific
         """
@@ -1191,8 +1313,8 @@ class BackendTLSPolicySpecValidationPatch(dict):
     @pulumi.getter(name="wellKnownCACertificates")
     def well_known_ca_certificates(self) -> Optional[_builtins.str]:
         """
-        WellKnownCACertificates specifies whether system CA certificates may be used in
-        the TLS handshake between the gateway and backend pod.
+        WellKnownCACertificates specifies whether a well-known set of CA certificates
+        may be used in the TLS handshake between the gateway and backend pod.
 
         If WellKnownCACertificates is unspecified or empty (""), then CACertificateRefs
         must be specified with at least one entry for a valid configuration. Only one of
@@ -1201,6 +1323,13 @@ class BackendTLSPolicySpecValidationPatch(dict):
         the supplied value is not recognized, the implementation MUST ensure the
         `Accepted` Condition on the BackendTLSPolicy is set to `status: False`, with
         a Reason `Invalid`.
+
+        Valid values include:
+        * "System" - indicates that well-known system CA certificates should be used.
+
+        Implementations MAY define their own sets of CA certificates. Such definitions
+        MUST use an implementation-specific, prefixed name, such as
+        `mycompany.com/my-custom-ca-certificates`.
 
         Support: Implementation-specific
         """
@@ -1218,6 +1347,7 @@ class BackendTLSPolicySpecValidationSubjectAltNames(dict):
                  uri: Optional[_builtins.str] = None):
         """
         SubjectAltName represents Subject Alternative Name.
+
         :param _builtins.str hostname: Hostname contains Subject Alternative Name specified in DNS name format.
                Required when Type is set to Hostname, ignored otherwise.
                
@@ -1285,6 +1415,7 @@ class BackendTLSPolicySpecValidationSubjectAltNamesPatch(dict):
                  uri: Optional[_builtins.str] = None):
         """
         SubjectAltName represents Subject Alternative Name.
+
         :param _builtins.str hostname: Hostname contains Subject Alternative Name specified in DNS name format.
                Required when Type is set to Hostname, ignored otherwise.
                
@@ -1350,6 +1481,7 @@ class BackendTLSPolicyStatus(dict):
                  ancestors: Optional[Sequence['outputs.BackendTLSPolicyStatusAncestors']] = None):
         """
         Status defines the current state of BackendTLSPolicy.
+
         :param Sequence['BackendTLSPolicyStatusAncestorsArgs'] ancestors: Ancestors is a list of ancestor resources (usually Gateways) that are
                associated with the policy, and the status of the policy with respect to
                each ancestor. When this policy attaches to a parent, the controller that
@@ -1508,6 +1640,7 @@ class BackendTLSPolicyStatusAncestors(dict):
 
         This struct is intended to be used in a slice that's effectively a map,
         with a composite key made up of the AncestorRef and the ControllerName.
+
         :param Sequence['BackendTLSPolicyStatusAncestorsConditionsArgs'] conditions: Conditions describes the status of the Policy with respect to the given Ancestor.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
@@ -1597,6 +1730,7 @@ class BackendTLSPolicyStatusAncestorsAncestorRef(dict):
         """
         AncestorRef corresponds with a ParentRef in the spec that this
         PolicyAncestorStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -1873,6 +2007,7 @@ class BackendTLSPolicyStatusAncestorsAncestorRefPatch(dict):
         """
         AncestorRef corresponds with a ParentRef in the spec that this
         PolicyAncestorStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -2149,6 +2284,7 @@ class BackendTLSPolicyStatusAncestorsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -2267,6 +2403,7 @@ class BackendTLSPolicyStatusAncestorsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -2440,6 +2577,7 @@ class BackendTLSPolicyStatusAncestorsPatch(dict):
 
         This struct is intended to be used in a slice that's effectively a map,
         with a composite key made up of the AncestorRef and the ControllerName.
+
         :param Sequence['BackendTLSPolicyStatusAncestorsConditionsPatchArgs'] conditions: Conditions describes the status of the Policy with respect to the given Ancestor.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
@@ -2505,6 +2643,7 @@ class BackendTLSPolicyStatusPatch(dict):
                  ancestors: Optional[Sequence['outputs.BackendTLSPolicyStatusAncestorsPatch']] = None):
         """
         Status defines the current state of BackendTLSPolicy.
+
         :param Sequence['BackendTLSPolicyStatusAncestorsPatchArgs'] ancestors: Ancestors is a list of ancestor resources (usually Gateways) that are
                associated with the policy, and the status of the policy with respect to
                each ancestor. When this policy attaches to a parent, the controller that
@@ -2615,6 +2754,7 @@ class TLSRoute(dict):
 
         If you need to forward traffic to a single target for a TLS listener, you
         could choose to use a TCPRoute with a TLS listener.
+
         :param _builtins.str api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param _builtins.str kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param '_meta.v1.ObjectMetaArgs' metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -2696,6 +2836,7 @@ class TLSRouteSpec(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of SNI hostnames that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -2703,32 +2844,6 @@ class TLSRouteSpec(dict):
                1. IPs are not allowed in SNI hostnames per RFC 6066.
                2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
                   label must appear by itself as the first label.
-               
-               If a hostname is specified by both the Listener and TLSRoute, there
-               must be at least one intersecting hostname for the TLSRoute to be
-               attached to the Listener. For example:
-               
-               * A Listener with `test.example.com` as the hostname matches TLSRoutes
-                 that have specified at least one of `test.example.com` or
-                 `*.example.com`.
-               * A Listener with `*.example.com` as the hostname matches TLSRoutes
-                 that have specified at least one hostname that matches the Listener
-                 hostname. For example, `test.example.com` and `*.example.com` would both
-                 match. On the other hand, `example.com` and `test.example.net` would not
-                 match.
-               
-               If both the Listener and TLSRoute have specified hostnames, any
-               TLSRoute hostnames that do not match the Listener hostname MUST be
-               ignored. For example, if a Listener specified `*.example.com`, and the
-               TLSRoute specified `test.example.com` and `test.example.net`,
-               `test.example.net` must not be considered for a match.
-               
-               If both the Listener and TLSRoute have specified hostnames, and none
-               match with the criteria above, then the TLSRoute is not accepted. The
-               implementation must raise an 'Accepted' Condition with a status of
-               `False` in the corresponding RouteParentStatus.
-               
-               Support: Core
         :param Sequence['TLSRouteSpecParentRefsArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -2824,32 +2939,6 @@ class TLSRouteSpec(dict):
         1. IPs are not allowed in SNI hostnames per RFC 6066.
         2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
            label must appear by itself as the first label.
-
-        If a hostname is specified by both the Listener and TLSRoute, there
-        must be at least one intersecting hostname for the TLSRoute to be
-        attached to the Listener. For example:
-
-        * A Listener with `test.example.com` as the hostname matches TLSRoutes
-          that have specified at least one of `test.example.com` or
-          `*.example.com`.
-        * A Listener with `*.example.com` as the hostname matches TLSRoutes
-          that have specified at least one hostname that matches the Listener
-          hostname. For example, `test.example.com` and `*.example.com` would both
-          match. On the other hand, `example.com` and `test.example.net` would not
-          match.
-
-        If both the Listener and TLSRoute have specified hostnames, any
-        TLSRoute hostnames that do not match the Listener hostname MUST be
-        ignored. For example, if a Listener specified `*.example.com`, and the
-        TLSRoute specified `test.example.com` and `test.example.net`,
-        `test.example.net` must not be considered for a match.
-
-        If both the Listener and TLSRoute have specified hostnames, and none
-        match with the criteria above, then the TLSRoute is not accepted. The
-        implementation must raise an 'Accepted' Condition with a status of
-        `False` in the corresponding RouteParentStatus.
-
-        Support: Core
         """
         return pulumi.get(self, "hostnames")
 
@@ -3002,6 +3091,7 @@ class TLSRouteSpecParentRefs(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3298,6 +3388,7 @@ class TLSRouteSpecParentRefsPatch(dict):
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3572,6 +3663,7 @@ class TLSRouteSpecPatch(dict):
                  use_default_gateways: Optional[_builtins.str] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param Sequence[_builtins.str] hostnames: Hostnames defines a set of SNI hostnames that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -3579,32 +3671,6 @@ class TLSRouteSpecPatch(dict):
                1. IPs are not allowed in SNI hostnames per RFC 6066.
                2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
                   label must appear by itself as the first label.
-               
-               If a hostname is specified by both the Listener and TLSRoute, there
-               must be at least one intersecting hostname for the TLSRoute to be
-               attached to the Listener. For example:
-               
-               * A Listener with `test.example.com` as the hostname matches TLSRoutes
-                 that have specified at least one of `test.example.com` or
-                 `*.example.com`.
-               * A Listener with `*.example.com` as the hostname matches TLSRoutes
-                 that have specified at least one hostname that matches the Listener
-                 hostname. For example, `test.example.com` and `*.example.com` would both
-                 match. On the other hand, `example.com` and `test.example.net` would not
-                 match.
-               
-               If both the Listener and TLSRoute have specified hostnames, any
-               TLSRoute hostnames that do not match the Listener hostname MUST be
-               ignored. For example, if a Listener specified `*.example.com`, and the
-               TLSRoute specified `test.example.com` and `test.example.net`,
-               `test.example.net` must not be considered for a match.
-               
-               If both the Listener and TLSRoute have specified hostnames, and none
-               match with the criteria above, then the TLSRoute is not accepted. The
-               implementation must raise an 'Accepted' Condition with a status of
-               `False` in the corresponding RouteParentStatus.
-               
-               Support: Core
         :param Sequence['TLSRouteSpecParentRefsPatchArgs'] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -3700,32 +3766,6 @@ class TLSRouteSpecPatch(dict):
         1. IPs are not allowed in SNI hostnames per RFC 6066.
         2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
            label must appear by itself as the first label.
-
-        If a hostname is specified by both the Listener and TLSRoute, there
-        must be at least one intersecting hostname for the TLSRoute to be
-        attached to the Listener. For example:
-
-        * A Listener with `test.example.com` as the hostname matches TLSRoutes
-          that have specified at least one of `test.example.com` or
-          `*.example.com`.
-        * A Listener with `*.example.com` as the hostname matches TLSRoutes
-          that have specified at least one hostname that matches the Listener
-          hostname. For example, `test.example.com` and `*.example.com` would both
-          match. On the other hand, `example.com` and `test.example.net` would not
-          match.
-
-        If both the Listener and TLSRoute have specified hostnames, any
-        TLSRoute hostnames that do not match the Listener hostname MUST be
-        ignored. For example, if a Listener specified `*.example.com`, and the
-        TLSRoute specified `test.example.com` and `test.example.net`,
-        `test.example.net` must not be considered for a match.
-
-        If both the Listener and TLSRoute have specified hostnames, and none
-        match with the criteria above, then the TLSRoute is not accepted. The
-        implementation must raise an 'Accepted' Condition with a status of
-        `False` in the corresponding RouteParentStatus.
-
-        Support: Core
         """
         return pulumi.get(self, "hostnames")
 
@@ -3852,15 +3892,18 @@ class TLSRouteSpecRules(dict):
                  name: Optional[_builtins.str] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param Sequence['TLSRouteSpecRulesBackendRefsArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -3869,9 +3912,9 @@ class TLSRouteSpecRules(dict):
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -3887,10 +3930,12 @@ class TLSRouteSpecRules(dict):
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -3899,6 +3944,8 @@ class TLSRouteSpecRules(dict):
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -3907,8 +3954,6 @@ class TLSRouteSpecRules(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -3979,6 +4024,7 @@ class TLSRouteSpecRulesBackendRefs(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4190,6 +4236,7 @@ class TLSRouteSpecRulesBackendRefsPatch(dict):
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param _builtins.str group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param _builtins.str kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4362,15 +4409,18 @@ class TLSRouteSpecRulesPatch(dict):
                  name: Optional[_builtins.str] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param Sequence['TLSRouteSpecRulesBackendRefsPatchArgs'] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -4379,9 +4429,9 @@ class TLSRouteSpecRulesPatch(dict):
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param _builtins.str name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -4397,10 +4447,12 @@ class TLSRouteSpecRulesPatch(dict):
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -4409,6 +4461,8 @@ class TLSRouteSpecRulesPatch(dict):
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
@@ -4417,8 +4471,6 @@ class TLSRouteSpecRulesPatch(dict):
     def name(self) -> Optional[_builtins.str]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
@@ -4432,6 +4484,7 @@ class TLSRouteStatus(dict):
                  parents: Optional[Sequence['outputs.TLSRouteStatusParents']] = None):
         """
         Status defines the current state of TLSRoute.
+
         :param Sequence['TLSRouteStatusParentsArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -4504,6 +4557,7 @@ class TLSRouteStatusParents(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TLSRouteStatusParentsConditionsArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -4522,7 +4576,7 @@ class TLSRouteStatusParents(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -4566,7 +4620,7 @@ class TLSRouteStatusParents(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -4629,6 +4683,7 @@ class TLSRouteStatusParentsConditions(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -4747,6 +4802,7 @@ class TLSRouteStatusParentsConditionsPatch(dict):
                  type: Optional[_builtins.str] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param _builtins.str last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param _builtins.str message: message is a human readable message indicating details about the transition.
@@ -4865,6 +4921,7 @@ class TLSRouteStatusParentsParentRef(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -5141,6 +5198,7 @@ class TLSRouteStatusParentsParentRefPatch(dict):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param _builtins.str group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -5416,6 +5474,7 @@ class TLSRouteStatusParentsPatch(dict):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param Sequence['TLSRouteStatusParentsConditionsPatchArgs'] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -5434,7 +5493,7 @@ class TLSRouteStatusParentsPatch(dict):
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param _builtins.str controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -5478,7 +5537,7 @@ class TLSRouteStatusParentsPatch(dict):
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
@@ -5517,6 +5576,7 @@ class TLSRouteStatusPatch(dict):
                  parents: Optional[Sequence['outputs.TLSRouteStatusParentsPatch']] = None):
         """
         Status defines the current state of TLSRoute.
+
         :param Sequence['TLSRouteStatusParentsPatchArgs'] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
