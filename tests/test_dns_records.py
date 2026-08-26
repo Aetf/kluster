@@ -174,12 +174,15 @@ def _estate_keys(zone: str) -> set[str]:
 def test_every_public_zone_carries_the_whole_mirrored_estate() -> None:
     """`PUBLIC_ALL` membership is the claim that the zone is a full mirror.
 
-    An app fanning a route across the set CNAMEs to an anchor in each zone it
-    publishes in, so a member missing the shared block publishes names that
-    cannot resolve. The check is against the block itself rather than zone
-    against zone, because the zones legitimately differ elsewhere -- two of
-    them carry mail and site verifications of their own -- and because that
-    makes editing the block the only way to add a mirrored name.
+    The check is against the block itself rather than zone against zone,
+    because the zones legitimately differ elsewhere -- two of them carry mail
+    and site verifications of their own -- and because that makes editing the
+    block the only way to add a mirrored name.
+
+    The cluster anchors are not part of the block: they are declared in the
+    primary zone alone, and an app fanning a route across the set publishes a
+    CNAME per zone that targets the primary's anchor
+    (`test_the_anchors_live_only_in_the_primary_zone`).
     """
     mirrored = {record.resource_key for record in MIRRORED_ESTATE}
 
