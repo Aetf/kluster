@@ -27,10 +27,20 @@ import pulumi
 from kluster import conventions
 from kluster.dns.adguard import declare_rewrites
 from kluster.dns.legacy import LEGACY
-from kluster.dns.model import Record, a
+from kluster.dns.model import Record, a, aaaa
 from kluster.dns.routes import ROUTES, rewrites
 from kluster.dns.zone import ManagedZone
 from kluster.dns.zones import ESTATE
+
+#: The `physical` outputs the anchors are made of: the load balancer's two
+#: public addresses, and the reserved IPv4 behind the dedicated VIP.
+OUTPUT_CLUSTER_V4 = 'cluster_endpoint'
+OUTPUT_CLUSTER_V6 = 'cluster_endpoint_v6'
+OUTPUT_VIP1_V4 = 'vip1'
+
+#: Both families of the cluster anchor say the same thing to a reader of the
+#: Cloudflare dashboard, so they say it in the same words.
+ANCHOR_CLUSTER_COMMENT = 'cluster ingress; every app record is a CNAME here'
 
 
 async def main() -> None:
@@ -77,23 +87,44 @@ async def main() -> None:
 def _anchors(physical: pulumi.StackReference) -> Sequence[Record]:
     """The anchor namespace, from the physical stack's addresses.
 
-    `kluster.hosts` is the cluster's front door (the network load balancer)
-    and `vip1.hosts` the dedicated VIP, which nothing resolves in anger — it
-    is there so an operator can name the address without looking it up. The
-    state backend deliberately has no anchor: its clients pin its IP, and its
-    hot path must not depend on this stack.
+    `kluster.hosts` is the cluster's front door — the network load balancer,
+    which is dual-stack (architecture.md §3.2), so the anchor carries both an
+    A and an AAAA and an app CNAME to it inherits both families. `vip1.hosts`
+    is the dedicated VIP, which nothing resolves in anger: it is there so an
+    operator can name the address without looking it up. It is IPv4 only by
+    construction — the VIP is a reserved public IPv4 that OCI 1:1-NATs onto a
+    secondary private address, and that mechanism has no IPv6 counterpart.
+    The state backend deliberately has no anchor: its clients pin its IP, and
+    its hot path must not depend on this stack.
+
+    These are also the only anchors in the estate that are not literals, and
+    nothing here awaits them. An address the `physical` stack has not
+    published yet travels into the record as an unresolved output rather than
+    raising, so this program declares the same records whether or not
+    `physical` has been applied — which is the state it is in today.
     """
     return (
         a(
             conventions.ANCHOR_CLUSTER,
-            physical.get_output('cluster_endpoint').apply(str),
+            _address(physical, OUTPUT_CLUSTER_V4),
             ttl=conventions.ANCHOR_TTL,
-            comment='cluster ingress; every app record is a CNAME here',
+            comment=ANCHOR_CLUSTER_COMMENT,
+        ),
+        aaaa(
+            conventions.ANCHOR_CLUSTER,
+            _address(physical, OUTPUT_CLUSTER_V6),
+            ttl=conventions.ANCHOR_TTL,
+            comment=ANCHOR_CLUSTER_COMMENT,
         ),
         a(
             conventions.ANCHOR_VIP1,
-            physical.get_output('vip1').apply(str),
+            _address(physical, OUTPUT_VIP1_V4),
             ttl=conventions.ANCHOR_TTL,
-            comment='dedicated VIP, operator convenience',
+            comment='dedicated VIP, operator convenience; IPv4 only by construction',
         ),
     )
+
+
+def _address(physical: pulumi.StackReference, output: str) -> pulumi.Output[str]:
+    """One address output of the physical stack, as a record's content."""
+    return physical.get_output(output).apply(str)
