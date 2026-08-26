@@ -22,12 +22,13 @@ __all__ = ['UDPRoutePatchArgs', 'UDPRoutePatch']
 @pulumi.input_type
 class UDPRoutePatchArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']] = None,
-                 spec: Optional[pulumi.Input['UDPRouteSpecPatchArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']] = None,
+                 spec: pulumi.Input[Optional['UDPRouteSpecPatchArgs']] = None):
         """
         The set of arguments for constructing a UDPRoutePatch resource.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaPatchArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -43,47 +44,47 @@ class UDPRoutePatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['UDPRouteSpecPatchArgs']]:
+    def spec(self) -> pulumi.Input[Optional['UDPRouteSpecPatchArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['UDPRouteSpecPatchArgs']]):
+    def spec(self, value: pulumi.Input[Optional['UDPRouteSpecPatchArgs']]):
         pulumi.set(self, "spec", value)
 
 
@@ -93,10 +94,10 @@ class UDPRoutePatch(pulumi.CustomResource):
     def __init__(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
-                 spec: Optional[pulumi.Input[Union['UDPRouteSpecPatchArgs', 'UDPRouteSpecPatchArgsDict']]] = None,
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
+                 spec: pulumi.Input[Optional[Union['UDPRouteSpecPatchArgs', 'UDPRouteSpecPatchArgsDict']]] = None,
                  __props__=None):
         """
         Patch resources are used to modify existing Kubernetes resources by using
@@ -108,6 +109,7 @@ class UDPRoutePatch(pulumi.CustomResource):
         UDPRoute provides a way to route UDP traffic. When combined with a Gateway
         listener, it can be used to forward traffic on the port specified by the
         listener to a set of backends specified by the UDPRoute.
+
 
         :param str resource_name: The name of the resource.
         :param pulumi.ResourceOptions opts: Options for the resource.
@@ -132,6 +134,7 @@ class UDPRoutePatch(pulumi.CustomResource):
         listener, it can be used to forward traffic on the port specified by the
         listener to a set of backends specified by the UDPRoute.
 
+
         :param str resource_name: The name of the resource.
         :param UDPRoutePatchArgs args: The arguments to use to populate this resource's properties.
         :param pulumi.ResourceOptions opts: Options for the resource.
@@ -147,10 +150,10 @@ class UDPRoutePatch(pulumi.CustomResource):
     def _internal_init(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
-                 spec: Optional[pulumi.Input[Union['UDPRouteSpecPatchArgs', 'UDPRouteSpecPatchArgsDict']]] = None,
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
+                 spec: pulumi.Input[Optional[Union['UDPRouteSpecPatchArgs', 'UDPRouteSpecPatchArgsDict']]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -165,6 +168,8 @@ class UDPRoutePatch(pulumi.CustomResource):
             __props__.__dict__["metadata"] = metadata
             __props__.__dict__["spec"] = spec
             __props__.__dict__["status"] = None
+        alias_opts = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_="kubernetes:gateway.networking.k8s.io/v1:UDPRoutePatch")])
+        opts = pulumi.ResourceOptions.merge(opts, alias_opts)
         super(UDPRoutePatch, __self__).__init__(
             'kubernetes:gateway.networking.k8s.io/v1alpha2:UDPRoutePatch',
             resource_name,

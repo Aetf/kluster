@@ -18,6 +18,9 @@ from .ClusterPatch import *
 from .Database import *
 from .DatabaseList import *
 from .DatabasePatch import *
+from .DatabaseRole import *
+from .DatabaseRoleList import *
+from .DatabaseRolePatch import *
 from .FailoverQuorum import *
 from .FailoverQuorumList import *
 from .FailoverQuorumPatch import *

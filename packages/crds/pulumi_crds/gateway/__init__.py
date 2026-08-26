@@ -10,8 +10,6 @@ import typing
 if typing.TYPE_CHECKING:
     import pulumi_crds.gateway.v1 as __v1
     v1 = __v1
-    import pulumi_crds.gateway.v1alpha1 as __v1alpha1
-    v1alpha1 = __v1alpha1
     import pulumi_crds.gateway.v1alpha2 as __v1alpha2
     v1alpha2 = __v1alpha2
     import pulumi_crds.gateway.v1alpha3 as __v1alpha3
@@ -20,7 +18,6 @@ if typing.TYPE_CHECKING:
     v1beta1 = __v1beta1
 else:
     v1 = _utilities.lazy_import('pulumi_crds.gateway.v1')
-    v1alpha1 = _utilities.lazy_import('pulumi_crds.gateway.v1alpha1')
     v1alpha2 = _utilities.lazy_import('pulumi_crds.gateway.v1alpha2')
     v1alpha3 = _utilities.lazy_import('pulumi_crds.gateway.v1alpha3')
     v1beta1 = _utilities.lazy_import('pulumi_crds.gateway.v1beta1')

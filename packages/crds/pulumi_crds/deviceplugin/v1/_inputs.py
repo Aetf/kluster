@@ -130,46 +130,42 @@ __all__ = [
     'SgxDevicePluginArgsDict',
 ]
 
-MYPY = False
-
-if not MYPY:
-    class DlbDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with DLB device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with a script that initializes devices.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    DlbDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with DLB device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with a script that initializes devices.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class DlbDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with DLB device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with a script that initializes devices.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -189,114 +185,112 @@ class DlbDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with DLB device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with a script that initializes devices.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class DlbDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    DlbDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class DlbDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -325,7 +319,7 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -333,12 +327,12 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -346,12 +340,12 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -361,12 +355,12 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -376,12 +370,12 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -389,59 +383,57 @@ class DlbDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class DlbDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    DlbDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class DlbDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -470,7 +462,7 @@ class DlbDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -478,12 +470,12 @@ class DlbDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -491,12 +483,12 @@ class DlbDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -506,12 +498,12 @@ class DlbDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -521,12 +513,12 @@ class DlbDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -534,48 +526,46 @@ class DlbDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class DlbDevicePluginSpecArgsDict(TypedDict):
-        """
-        DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with DLB device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with a script that initializes devices.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    DlbDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginSpecArgsDict(TypedDict):
+    """
+    DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with DLB device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with a script that initializes devices.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class DlbDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]] = None):
         """
         DlbDevicePluginSpec defines the desired state of DlbDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with DLB device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with a script that initializes devices.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -595,124 +585,122 @@ class DlbDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with DLB device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with a script that initializes devices.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['DlbDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class DlbDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    DlbDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class DlbDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -749,19 +737,19 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -774,12 +762,12 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -787,12 +775,12 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -800,12 +788,12 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -813,12 +801,12 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -826,12 +814,12 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -839,42 +827,40 @@ class DlbDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class DlbDevicePluginStatusArgsDict(TypedDict):
-        """
-        DlbDevicePluginStatus defines the observed state of DlbDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['DlbDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    DlbDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginStatusArgsDict(TypedDict):
+    """
+    DlbDevicePluginStatus defines the observed state of DlbDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['DlbDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class DlbDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['DlbDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['DlbDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         DlbDevicePluginStatus defines the observed state of DlbDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -892,16 +878,16 @@ class DlbDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['DlbDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['DlbDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['DlbDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['DlbDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -909,24 +895,24 @@ class DlbDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -934,46 +920,44 @@ class DlbDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class DlbDevicePluginArgsDict(TypedDict):
-        """
-        DEPRECATED: DlbDevicePlugin is the Schema for the dlbdeviceplugins API. It represents
-        the DLB device plugin responsible for advertising Intel DLB hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['DlbDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['DlbDevicePluginStatusArgsDict']]
-elif False:
-    DlbDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class DlbDevicePluginArgsDict(TypedDict):
+    """
+    DEPRECATED: DlbDevicePlugin is the Schema for the dlbdeviceplugins API. It represents
+    the DLB device plugin responsible for advertising Intel DLB hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['DlbDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['DlbDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class DlbDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['DlbDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['DlbDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['DlbDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['DlbDevicePluginStatusArgs']] = None):
         """
         DEPRECATED: DlbDevicePlugin is the Schema for the dlbdeviceplugins API. It represents
         the DLB device plugin responsible for advertising Intel DLB hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -991,107 +975,111 @@ class DlbDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['DlbDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['DlbDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['DlbDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['DlbDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['DlbDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['DlbDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['DlbDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['DlbDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class DsaDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with DSA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same DSA device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    DsaDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+    """
+    driver: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Driver name used for the DSA devices.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with DSA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same DSA device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class DsaDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 driver: pulumi.Input[Optional[_builtins.str]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+
+        :param pulumi.Input[_builtins.str] driver: Driver name used for the DSA devices.
         :param pulumi.Input[_builtins.str] image: Image is a container image with DSA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -1100,6 +1088,8 @@ class DsaDevicePluginSpecPatchArgs:
         :param pulumi.Input[_builtins.int] shared_dev_num: SharedDevNum is a number of containers that can share the same DSA device.
         :param pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]] tolerations: Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
+        if driver is not None:
+            pulumi.set(__self__, "driver", driver)
         if image is not None:
             pulumi.set(__self__, "image", image)
         if init_image is not None:
@@ -1117,138 +1107,148 @@ class DsaDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def driver(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        Driver name used for the DSA devices.
+        """
+        return pulumi.get(self, "driver")
+
+    @driver.setter
+    def driver(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "driver", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with DSA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same DSA device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class DsaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    DsaDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class DsaDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -1277,7 +1277,7 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -1285,12 +1285,12 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -1298,12 +1298,12 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -1313,12 +1313,12 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -1328,12 +1328,12 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -1341,59 +1341,57 @@ class DsaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class DsaDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    DsaDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class DsaDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -1422,7 +1420,7 @@ class DsaDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -1430,12 +1428,12 @@ class DsaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -1443,12 +1441,12 @@ class DsaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -1458,12 +1456,12 @@ class DsaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -1473,12 +1471,12 @@ class DsaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -1486,58 +1484,62 @@ class DsaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class DsaDevicePluginSpecArgsDict(TypedDict):
-        """
-        DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with DSA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same DSA device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    DsaDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginSpecArgsDict(TypedDict):
+    """
+    DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+    """
+    driver: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Driver name used for the DSA devices.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with DSA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same DSA device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class DsaDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]] = None):
+                 driver: pulumi.Input[Optional[_builtins.str]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]] = None):
         """
         DsaDevicePluginSpec defines the desired state of DsaDevicePlugin.
+
+        :param pulumi.Input[_builtins.str] driver: Driver name used for the DSA devices.
         :param pulumi.Input[_builtins.str] image: Image is a container image with DSA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -1546,6 +1548,8 @@ class DsaDevicePluginSpecArgs:
         :param pulumi.Input[_builtins.int] shared_dev_num: SharedDevNum is a number of containers that can share the same DSA device.
         :param pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]] tolerations: Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
+        if driver is not None:
+            pulumi.set(__self__, "driver", driver)
         if image is not None:
             pulumi.set(__self__, "image", image)
         if init_image is not None:
@@ -1563,148 +1567,158 @@ class DsaDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def driver(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        Driver name used for the DSA devices.
+        """
+        return pulumi.get(self, "driver")
+
+    @driver.setter
+    def driver(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "driver", value)
+
+    @_builtins.property
+    @pulumi.getter
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with DSA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is an initcontainer image to configure and enable DSA devices and workqueues with idxd-config (accel-config) utility
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the DSA devices and workqueues configuration into idxd-config initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same DSA device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['DsaDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class DsaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    DsaDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class DsaDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -1741,19 +1755,19 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -1766,12 +1780,12 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -1779,12 +1793,12 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -1792,12 +1806,12 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -1805,12 +1819,12 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -1818,12 +1832,12 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -1831,42 +1845,40 @@ class DsaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class DsaDevicePluginStatusArgsDict(TypedDict):
-        """
-        DsaDevicePluginStatus defines the observed state of DsaDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['DsaDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    DsaDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginStatusArgsDict(TypedDict):
+    """
+    DsaDevicePluginStatus defines the observed state of DsaDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['DsaDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class DsaDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['DsaDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['DsaDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         DsaDevicePluginStatus defines the observed state of DsaDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -1884,16 +1896,16 @@ class DsaDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['DsaDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['DsaDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['DsaDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['DsaDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -1901,24 +1913,24 @@ class DsaDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -1926,46 +1938,44 @@ class DsaDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class DsaDevicePluginArgsDict(TypedDict):
-        """
-        DsaDevicePlugin is the Schema for the dsadeviceplugins API. It represents
-        the DSA device plugin responsible for advertising Intel DSA hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['DsaDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['DsaDevicePluginStatusArgsDict']]
-elif False:
-    DsaDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class DsaDevicePluginArgsDict(TypedDict):
+    """
+    DsaDevicePlugin is the Schema for the dsadeviceplugins API. It represents
+    the DSA device plugin responsible for advertising Intel DSA hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['DsaDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['DsaDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class DsaDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['DsaDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['DsaDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['DsaDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['DsaDevicePluginStatusArgs']] = None):
         """
         DsaDevicePlugin is the Schema for the dsadeviceplugins API. It represents
         the DSA device plugin responsible for advertising Intel DSA hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -1983,102 +1993,100 @@ class DsaDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['DsaDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['DsaDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['DsaDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['DsaDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['DsaDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['DsaDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['DsaDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['DsaDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with FPGA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        mode: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Mode is a mode of the plugin's operation.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    FpgaDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with FPGA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Mode is a mode of the plugin's operation.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 mode: Optional[pulumi.Input[_builtins.str]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with FPGA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -2101,126 +2109,124 @@ class FpgaDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with FPGA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter
-    def mode(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Mode is a mode of the plugin's operation.
         """
         return pulumi.get(self, "mode")
 
     @mode.setter
-    def mode(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def mode(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "mode", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    FpgaDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -2249,7 +2255,7 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2257,12 +2263,12 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -2270,12 +2276,12 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -2285,12 +2291,12 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -2300,12 +2306,12 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -2313,59 +2319,57 @@ class FpgaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    FpgaDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -2394,7 +2398,7 @@ class FpgaDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -2402,12 +2406,12 @@ class FpgaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -2415,12 +2419,12 @@ class FpgaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -2430,12 +2434,12 @@ class FpgaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -2445,12 +2449,12 @@ class FpgaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -2458,53 +2462,51 @@ class FpgaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginSpecArgsDict(TypedDict):
-        """
-        FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with FPGA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        mode: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Mode is a mode of the plugin's operation.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    FpgaDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginSpecArgsDict(TypedDict):
+    """
+    FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with FPGA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Mode is a mode of the plugin's operation.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 mode: Optional[pulumi.Input[_builtins.str]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]] = None):
         """
         FpgaDevicePluginSpec defines the desired state of FpgaDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with FPGA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -2527,136 +2529,134 @@ class FpgaDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with FPGA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools used to initialize the host before starting FPGA workloads on it.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter
-    def mode(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Mode is a mode of the plugin's operation.
         """
         return pulumi.get(self, "mode")
 
     @mode.setter
-    def mode(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def mode(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "mode", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['FpgaDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    FpgaDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -2693,19 +2693,19 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -2718,12 +2718,12 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -2731,12 +2731,12 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -2744,12 +2744,12 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -2757,12 +2757,12 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -2770,12 +2770,12 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -2783,42 +2783,40 @@ class FpgaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginStatusArgsDict(TypedDict):
-        """
-        FpgaDevicePluginStatus defines the observed state of FpgaDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['FpgaDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    FpgaDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginStatusArgsDict(TypedDict):
+    """
+    FpgaDevicePluginStatus defines the observed state of FpgaDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['FpgaDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class FpgaDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['FpgaDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['FpgaDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         FpgaDevicePluginStatus defines the observed state of FpgaDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -2836,16 +2834,16 @@ class FpgaDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['FpgaDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['FpgaDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['FpgaDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['FpgaDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -2853,24 +2851,24 @@ class FpgaDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -2878,46 +2876,44 @@ class FpgaDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class FpgaDevicePluginArgsDict(TypedDict):
-        """
-        DEPRECATED: FpgaDevicePlugin is the Schema for the fpgadeviceplugins API. It represents
-        the FPGA device plugin responsible for advertising Intel FPGA hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['FpgaDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['FpgaDevicePluginStatusArgsDict']]
-elif False:
-    FpgaDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class FpgaDevicePluginArgsDict(TypedDict):
+    """
+    DEPRECATED: FpgaDevicePlugin is the Schema for the fpgadeviceplugins API. It represents
+    the FPGA device plugin responsible for advertising Intel FPGA hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['FpgaDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['FpgaDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class FpgaDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['FpgaDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['FpgaDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['FpgaDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['FpgaDevicePluginStatusArgs']] = None):
         """
         DEPRECATED: FpgaDevicePlugin is the Schema for the fpgadeviceplugins API. It represents
         the FPGA device plugin responsible for advertising Intel FPGA hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -2935,153 +2931,161 @@ class FpgaDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['FpgaDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['FpgaDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['FpgaDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['FpgaDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['FpgaDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['FpgaDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['FpgaDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['FpgaDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class GpuDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
-        """
-        allow_ids: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
-        If not set, all devices are advertised.
-        The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
-        Cannot be used together with DenyIDs.
-        """
-        bypath_mode: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
-        See GPU plugin documentation for detailed description of the modes.
-        If left empty, it defaults to 'single'.
-        """
-        deny_ids: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
-        If not set, all devices are advertised.
-        The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
-        Cannot be used together with AllowIDs.
-        """
-        enable_monitoring: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with GPU device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        preferred_allocation_policy: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
-        See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same GPU device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    GpuDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+    """
+    allow_ids: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
+    If not set, all devices are advertised.
+    The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
+    Cannot be used together with DenyIDs.
+    """
+    bypath_mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
+    See GPU plugin documentation for detailed description of the modes.
+    If left empty, it defaults to 'single'.
+    """
+    deny_ids: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
+    If not set, all devices are advertised.
+    The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
+    Cannot be used together with AllowIDs.
+    """
+    enable_monitoring: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+    on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with GPU device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    monitoring_mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+    single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+    split: per-driver resources (i915_monitoring, xe_monitoring).
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    preferred_allocation_policy: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
+    See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same GPU device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class GpuDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 allow_ids: Optional[pulumi.Input[_builtins.str]] = None,
-                 bypath_mode: Optional[pulumi.Input[_builtins.str]] = None,
-                 deny_ids: Optional[pulumi.Input[_builtins.str]] = None,
-                 enable_monitoring: Optional[pulumi.Input[_builtins.bool]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 preferred_allocation_policy: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 allow_ids: pulumi.Input[Optional[_builtins.str]] = None,
+                 bypath_mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 deny_ids: pulumi.Input[Optional[_builtins.str]] = None,
+                 enable_monitoring: pulumi.Input[Optional[_builtins.bool]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 monitoring_mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 preferred_allocation_policy: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+
         :param pulumi.Input[_builtins.str] allow_ids: AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with DenyIDs.
-        :param pulumi.Input[_builtins.str] bypath_mode: ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        :param pulumi.Input[_builtins.str] bypath_mode: ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
                See GPU plugin documentation for detailed description of the modes.
                If left empty, it defaults to 'single'.
         :param pulumi.Input[_builtins.str] deny_ids: DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with AllowIDs.
-        :param pulumi.Input[_builtins.bool] enable_monitoring: EnableMonitoring enables the monitoring resource ('i915_monitoring')
-               which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        :param pulumi.Input[_builtins.bool] enable_monitoring: EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+               on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         :param pulumi.Input[_builtins.str] image: Image is a container image with GPU device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
+        :param pulumi.Input[_builtins.str] monitoring_mode: MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+               single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+               split: per-driver resources (i915_monitoring, xe_monitoring).
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         :param pulumi.Input[_builtins.str] preferred_allocation_policy: PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
                See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3102,6 +3106,8 @@ class GpuDevicePluginSpecPatchArgs:
             pulumi.set(__self__, "init_image", init_image)
         if log_level is not None:
             pulumi.set(__self__, "log_level", log_level)
+        if monitoring_mode is not None:
+            pulumi.set(__self__, "monitoring_mode", monitoring_mode)
         if node_selector is not None:
             pulumi.set(__self__, "node_selector", node_selector)
         if preferred_allocation_policy is not None:
@@ -3113,7 +3119,7 @@ class GpuDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="allowIDs")
-    def allow_ids(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def allow_ids(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
         If not set, all devices are advertised.
@@ -3123,26 +3129,26 @@ class GpuDevicePluginSpecPatchArgs:
         return pulumi.get(self, "allow_ids")
 
     @allow_ids.setter
-    def allow_ids(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def allow_ids(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "allow_ids", value)
 
     @_builtins.property
     @pulumi.getter(name="bypathMode")
-    def bypath_mode(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def bypath_mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
         See GPU plugin documentation for detailed description of the modes.
         If left empty, it defaults to 'single'.
         """
         return pulumi.get(self, "bypath_mode")
 
     @bypath_mode.setter
-    def bypath_mode(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def bypath_mode(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "bypath_mode", value)
 
     @_builtins.property
     @pulumi.getter(name="denyIDs")
-    def deny_ids(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def deny_ids(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
         If not set, all devices are advertised.
@@ -3152,73 +3158,87 @@ class GpuDevicePluginSpecPatchArgs:
         return pulumi.get(self, "deny_ids")
 
     @deny_ids.setter
-    def deny_ids(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def deny_ids(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "deny_ids", value)
 
     @_builtins.property
     @pulumi.getter(name="enableMonitoring")
-    def enable_monitoring(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def enable_monitoring(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+        on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         """
         return pulumi.get(self, "enable_monitoring")
 
     @enable_monitoring.setter
-    def enable_monitoring(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def enable_monitoring(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "enable_monitoring", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with GPU device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
+    @pulumi.getter(name="monitoringMode")
+    def monitoring_mode(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+        single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+        split: per-driver resources (i915_monitoring, xe_monitoring).
+        """
+        return pulumi.get(self, "monitoring_mode")
+
+    @monitoring_mode.setter
+    def monitoring_mode(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "monitoring_mode", value)
+
+    @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="preferredAllocationPolicy")
-    def preferred_allocation_policy(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def preferred_allocation_policy(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
         See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3226,83 +3246,81 @@ class GpuDevicePluginSpecPatchArgs:
         return pulumi.get(self, "preferred_allocation_policy")
 
     @preferred_allocation_policy.setter
-    def preferred_allocation_policy(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def preferred_allocation_policy(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "preferred_allocation_policy", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same GPU device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class GpuDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    GpuDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class GpuDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -3331,7 +3349,7 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -3339,12 +3357,12 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -3352,12 +3370,12 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -3367,12 +3385,12 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -3382,12 +3400,12 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -3395,59 +3413,57 @@ class GpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class GpuDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    GpuDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class GpuDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -3476,7 +3492,7 @@ class GpuDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -3484,12 +3500,12 @@ class GpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -3497,12 +3513,12 @@ class GpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -3512,12 +3528,12 @@ class GpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -3527,12 +3543,12 @@ class GpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -3540,104 +3556,112 @@ class GpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class GpuDevicePluginSpecArgsDict(TypedDict):
-        """
-        GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
-        """
-        allow_ids: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
-        If not set, all devices are advertised.
-        The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
-        Cannot be used together with DenyIDs.
-        """
-        bypath_mode: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
-        See GPU plugin documentation for detailed description of the modes.
-        If left empty, it defaults to 'single'.
-        """
-        deny_ids: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
-        If not set, all devices are advertised.
-        The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
-        Cannot be used together with AllowIDs.
-        """
-        enable_monitoring: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with GPU device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        preferred_allocation_policy: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
-        See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same GPU device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    GpuDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginSpecArgsDict(TypedDict):
+    """
+    GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+    """
+    allow_ids: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
+    If not set, all devices are advertised.
+    The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
+    Cannot be used together with DenyIDs.
+    """
+    bypath_mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
+    See GPU plugin documentation for detailed description of the modes.
+    If left empty, it defaults to 'single'.
+    """
+    deny_ids: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
+    If not set, all devices are advertised.
+    The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
+    Cannot be used together with AllowIDs.
+    """
+    enable_monitoring: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+    on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with GPU device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    monitoring_mode: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+    single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+    split: per-driver resources (i915_monitoring, xe_monitoring).
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    preferred_allocation_policy: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
+    See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same GPU device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class GpuDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 allow_ids: Optional[pulumi.Input[_builtins.str]] = None,
-                 bypath_mode: Optional[pulumi.Input[_builtins.str]] = None,
-                 deny_ids: Optional[pulumi.Input[_builtins.str]] = None,
-                 enable_monitoring: Optional[pulumi.Input[_builtins.bool]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 preferred_allocation_policy: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]] = None):
+                 allow_ids: pulumi.Input[Optional[_builtins.str]] = None,
+                 bypath_mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 deny_ids: pulumi.Input[Optional[_builtins.str]] = None,
+                 enable_monitoring: pulumi.Input[Optional[_builtins.bool]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 monitoring_mode: pulumi.Input[Optional[_builtins.str]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 preferred_allocation_policy: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]] = None):
         """
         GpuDevicePluginSpec defines the desired state of GpuDevicePlugin.
+
         :param pulumi.Input[_builtins.str] allow_ids: AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with DenyIDs.
-        :param pulumi.Input[_builtins.str] bypath_mode: ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        :param pulumi.Input[_builtins.str] bypath_mode: ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
                See GPU plugin documentation for detailed description of the modes.
                If left empty, it defaults to 'single'.
         :param pulumi.Input[_builtins.str] deny_ids: DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
                If not set, all devices are advertised.
                The list can contain IDs in the form of '0x1234,0x49a4,0x50b4'.
                Cannot be used together with AllowIDs.
-        :param pulumi.Input[_builtins.bool] enable_monitoring: EnableMonitoring enables the monitoring resource ('i915_monitoring')
-               which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        :param pulumi.Input[_builtins.bool] enable_monitoring: EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+               on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         :param pulumi.Input[_builtins.str] image: Image is a container image with GPU device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
+        :param pulumi.Input[_builtins.str] monitoring_mode: MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+               single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+               split: per-driver resources (i915_monitoring, xe_monitoring).
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         :param pulumi.Input[_builtins.str] preferred_allocation_policy: PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
                See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3658,6 +3682,8 @@ class GpuDevicePluginSpecArgs:
             pulumi.set(__self__, "init_image", init_image)
         if log_level is not None:
             pulumi.set(__self__, "log_level", log_level)
+        if monitoring_mode is not None:
+            pulumi.set(__self__, "monitoring_mode", monitoring_mode)
         if node_selector is not None:
             pulumi.set(__self__, "node_selector", node_selector)
         if preferred_allocation_policy is not None:
@@ -3669,7 +3695,7 @@ class GpuDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="allowIDs")
-    def allow_ids(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def allow_ids(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         AllowIDs is a comma-separated list of PCI IDs of GPU devices that should only be advertised by the plugin.
         If not set, all devices are advertised.
@@ -3679,26 +3705,26 @@ class GpuDevicePluginSpecArgs:
         return pulumi.get(self, "allow_ids")
 
     @allow_ids.setter
-    def allow_ids(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def allow_ids(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "allow_ids", value)
 
     @_builtins.property
     @pulumi.getter(name="bypathMode")
-    def bypath_mode(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def bypath_mode(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
-        ByPathMode changes how plugin handles the DRM by-path/ directory mounting for GPU devices.
+        ByPathMode changes how plugin handles the DRM by-path/-dir mounting for GPU devices.
         See GPU plugin documentation for detailed description of the modes.
         If left empty, it defaults to 'single'.
         """
         return pulumi.get(self, "bypath_mode")
 
     @bypath_mode.setter
-    def bypath_mode(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def bypath_mode(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "bypath_mode", value)
 
     @_builtins.property
     @pulumi.getter(name="denyIDs")
-    def deny_ids(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def deny_ids(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         DenyIDs is a comma-separated list of PCI IDs of GPU devices that should only be denied by the plugin.
         If not set, all devices are advertised.
@@ -3708,73 +3734,87 @@ class GpuDevicePluginSpecArgs:
         return pulumi.get(self, "deny_ids")
 
     @deny_ids.setter
-    def deny_ids(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def deny_ids(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "deny_ids", value)
 
     @_builtins.property
     @pulumi.getter(name="enableMonitoring")
-    def enable_monitoring(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def enable_monitoring(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
-        EnableMonitoring enables the monitoring resource ('i915_monitoring')
-        which gives access to all GPU devices on given node. Typically used with Intel XPU-Manager.
+        EnableMonitoring enables the monitoring resource which gives access to all GPU devices
+        on the given node. Typically used with Intel XPU-Manager. See also MonitoringMode.
         """
         return pulumi.get(self, "enable_monitoring")
 
     @enable_monitoring.setter
-    def enable_monitoring(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def enable_monitoring(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "enable_monitoring", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with GPU device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools (e.g., GPU NFD source hook) installed on each node.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
+    @pulumi.getter(name="monitoringMode")
+    def monitoring_mode(self) -> pulumi.Input[Optional[_builtins.str]]:
+        """
+        MonitoringMode sets how monitoring resources are exposed when EnableMonitoring is true.
+        single (default): single GPU 'monitoring' resource for all Intel GPU kernel drivers.
+        split: per-driver resources (i915_monitoring, xe_monitoring).
+        """
+        return pulumi.get(self, "monitoring_mode")
+
+    @monitoring_mode.setter
+    def monitoring_mode(self, value: pulumi.Input[Optional[_builtins.str]]):
+        pulumi.set(self, "monitoring_mode", value)
+
+    @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="preferredAllocationPolicy")
-    def preferred_allocation_policy(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def preferred_allocation_policy(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
         See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
@@ -3782,93 +3822,91 @@ class GpuDevicePluginSpecArgs:
         return pulumi.get(self, "preferred_allocation_policy")
 
     @preferred_allocation_policy.setter
-    def preferred_allocation_policy(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def preferred_allocation_policy(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "preferred_allocation_policy", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same GPU device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['GpuDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class GpuDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    GpuDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class GpuDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -3905,19 +3943,19 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -3930,12 +3968,12 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -3943,12 +3981,12 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -3956,12 +3994,12 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -3969,12 +4007,12 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -3982,12 +4020,12 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -3995,42 +4033,40 @@ class GpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class GpuDevicePluginStatusArgsDict(TypedDict):
-        """
-        GpuDevicePluginStatus defines the observed state of GpuDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['GpuDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    GpuDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginStatusArgsDict(TypedDict):
+    """
+    GpuDevicePluginStatus defines the observed state of GpuDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['GpuDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class GpuDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['GpuDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['GpuDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         GpuDevicePluginStatus defines the observed state of GpuDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -4048,16 +4084,16 @@ class GpuDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['GpuDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['GpuDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['GpuDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['GpuDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -4065,24 +4101,24 @@ class GpuDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -4090,46 +4126,44 @@ class GpuDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class GpuDevicePluginArgsDict(TypedDict):
-        """
-        GpuDevicePlugin is the Schema for the gpudeviceplugins API. It represents
-        the GPU device plugin responsible for advertising Intel GPU hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['GpuDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['GpuDevicePluginStatusArgsDict']]
-elif False:
-    GpuDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class GpuDevicePluginArgsDict(TypedDict):
+    """
+    GpuDevicePlugin is the Schema for the gpudeviceplugins API. It represents
+    the GPU device plugin responsible for advertising Intel GPU hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['GpuDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['GpuDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class GpuDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['GpuDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['GpuDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['GpuDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['GpuDevicePluginStatusArgs']] = None):
         """
         GpuDevicePlugin is the Schema for the gpudeviceplugins API. It represents
         the GPU device plugin responsible for advertising Intel GPU hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -4147,107 +4181,105 @@ class GpuDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['GpuDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['GpuDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['GpuDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['GpuDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['GpuDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['GpuDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['GpuDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['GpuDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class IaaDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with IAA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same IAA device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    IaaDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with IAA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same IAA device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class IaaDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with IAA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -4273,138 +4305,136 @@ class IaaDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with IAA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same IAA device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class IaaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    IaaDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class IaaDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -4433,7 +4463,7 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -4441,12 +4471,12 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -4454,12 +4484,12 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -4469,12 +4499,12 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -4484,12 +4514,12 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -4497,59 +4527,57 @@ class IaaDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class IaaDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    IaaDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class IaaDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -4578,7 +4606,7 @@ class IaaDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -4586,12 +4614,12 @@ class IaaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -4599,12 +4627,12 @@ class IaaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -4614,12 +4642,12 @@ class IaaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -4629,12 +4657,12 @@ class IaaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -4642,58 +4670,56 @@ class IaaDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class IaaDevicePluginSpecArgsDict(TypedDict):
-        """
-        IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with IAA device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same IAA device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    IaaDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginSpecArgsDict(TypedDict):
+    """
+    IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with IAA device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same IAA device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class IaaDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]] = None):
         """
         IaaDevicePluginSpec defines the desired state of IaaDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with IAA device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
@@ -4719,148 +4745,146 @@ class IaaDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with IAA device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is an initcontainer image to configure and enable IAA devices and workqueues with accel-config utility
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the IAA configuration into idxd initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same IAA device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['IaaDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class IaaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    IaaDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class IaaDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -4897,19 +4921,19 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -4922,12 +4946,12 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -4935,12 +4959,12 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -4948,12 +4972,12 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -4961,12 +4985,12 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -4974,12 +4998,12 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -4987,42 +5011,40 @@ class IaaDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class IaaDevicePluginStatusArgsDict(TypedDict):
-        """
-        IaaDevicePluginStatus defines the observed state of IaaDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['IaaDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    IaaDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginStatusArgsDict(TypedDict):
+    """
+    IaaDevicePluginStatus defines the observed state of IaaDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['IaaDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class IaaDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['IaaDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['IaaDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         IaaDevicePluginStatus defines the observed state of IaaDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -5040,16 +5062,16 @@ class IaaDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['IaaDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['IaaDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['IaaDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['IaaDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -5057,24 +5079,24 @@ class IaaDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -5082,46 +5104,44 @@ class IaaDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class IaaDevicePluginArgsDict(TypedDict):
-        """
-        IaaDevicePlugin is the Schema for the iaadeviceplugins API. It represents
-        the IAA device plugin responsible for advertising Intel IAA hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['IaaDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['IaaDevicePluginStatusArgsDict']]
-elif False:
-    IaaDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class IaaDevicePluginArgsDict(TypedDict):
+    """
+    IaaDevicePlugin is the Schema for the iaadeviceplugins API. It represents
+    the IAA device plugin responsible for advertising Intel IAA hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['IaaDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['IaaDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class IaaDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['IaaDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['IaaDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['IaaDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['IaaDevicePluginStatusArgs']] = None):
         """
         IaaDevicePlugin is the Schema for the iaadeviceplugins API. It represents
         the IAA device plugin responsible for advertising Intel IAA hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -5139,97 +5159,95 @@ class IaaDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['IaaDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['IaaDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['IaaDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['IaaDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['IaaDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['IaaDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['IaaDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['IaaDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class NpuDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with NPU device plugin executable.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same NPU device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    NpuDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with NPU device plugin executable.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same NPU device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class NpuDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with NPU device plugin executable.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
@@ -5249,114 +5267,112 @@ class NpuDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with NPU device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same NPU device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class NpuDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    NpuDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class NpuDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -5385,7 +5401,7 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -5393,12 +5409,12 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -5406,12 +5422,12 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -5421,12 +5437,12 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -5436,12 +5452,12 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -5449,59 +5465,57 @@ class NpuDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NpuDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    NpuDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class NpuDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -5530,7 +5544,7 @@ class NpuDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -5538,12 +5552,12 @@ class NpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -5551,12 +5565,12 @@ class NpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -5566,12 +5580,12 @@ class NpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -5581,12 +5595,12 @@ class NpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -5594,48 +5608,46 @@ class NpuDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class NpuDevicePluginSpecArgsDict(TypedDict):
-        """
-        NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with NPU device plugin executable.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        shared_dev_num: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        SharedDevNum is a number of containers that can share the same NPU device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    NpuDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginSpecArgsDict(TypedDict):
+    """
+    NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with NPU device plugin executable.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    shared_dev_num: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    SharedDevNum is a number of containers that can share the same NPU device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class NpuDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 shared_dev_num: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]] = None):
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 shared_dev_num: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]] = None):
         """
         NpuDevicePluginSpec defines the desired state of NpuDevicePlugin.
+
         :param pulumi.Input[_builtins.str] image: Image is a container image with NPU device plugin executable.
         :param pulumi.Input[_builtins.int] log_level: LogLevel sets the plugin's log level.
         :param pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]] node_selector: NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
@@ -5655,124 +5667,122 @@ class NpuDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with NPU device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="sharedDevNum")
-    def shared_dev_num(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def shared_dev_num(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         SharedDevNum is a number of containers that can share the same NPU device.
         """
         return pulumi.get(self, "shared_dev_num")
 
     @shared_dev_num.setter
-    def shared_dev_num(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def shared_dev_num(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "shared_dev_num", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['NpuDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class NpuDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    NpuDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class NpuDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -5809,19 +5819,19 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -5834,12 +5844,12 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -5847,12 +5857,12 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -5860,12 +5870,12 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -5873,12 +5883,12 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -5886,12 +5896,12 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -5899,42 +5909,40 @@ class NpuDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class NpuDevicePluginStatusArgsDict(TypedDict):
-        """
-        NpuDevicePluginStatus defines the observed state of NpuDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['NpuDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    NpuDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginStatusArgsDict(TypedDict):
+    """
+    NpuDevicePluginStatus defines the observed state of NpuDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['NpuDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class NpuDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['NpuDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['NpuDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         NpuDevicePluginStatus defines the observed state of NpuDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -5952,16 +5960,16 @@ class NpuDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['NpuDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['NpuDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['NpuDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['NpuDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -5969,24 +5977,24 @@ class NpuDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -5994,46 +6002,44 @@ class NpuDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class NpuDevicePluginArgsDict(TypedDict):
-        """
-        NpuDevicePlugin is the Schema for the npudeviceplugins API. It represents
-        the NPU device plugin responsible for advertising Intel NPU hardware resources to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['NpuDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['NpuDevicePluginStatusArgsDict']]
-elif False:
-    NpuDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class NpuDevicePluginArgsDict(TypedDict):
+    """
+    NpuDevicePlugin is the Schema for the npudeviceplugins API. It represents
+    the NPU device plugin responsible for advertising Intel NPU hardware resources to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['NpuDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['NpuDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class NpuDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['NpuDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['NpuDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['NpuDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['NpuDevicePluginStatusArgs']] = None):
         """
         NpuDevicePlugin is the Schema for the npudeviceplugins API. It represents
         the NPU device plugin responsible for advertising Intel NPU hardware resources to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -6051,123 +6057,121 @@ class NpuDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['NpuDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['NpuDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['NpuDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['NpuDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['NpuDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['NpuDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['NpuDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['NpuDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class QatDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        QatDevicePluginSpec defines the desired state of QatDevicePlugin.
-        """
-        dpdk_driver: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        DpdkDriver is a DPDK device driver for configuring the QAT device.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with QAT device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with a script that initialize devices.
-        """
-        kernel_vf_drivers: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        max_num_devices: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        preferred_allocation_policy: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
-        See documentation for detailed description of the policies.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    QatDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+    """
+    dpdk_driver: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    DpdkDriver is a DPDK device driver for configuring the QAT device.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with QAT device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with a script that initialize devices.
+    """
+    kernel_vf_drivers: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    max_num_devices: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    preferred_allocation_policy: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
+    See documentation for detailed description of the policies.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class QatDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 dpdk_driver: Optional[pulumi.Input[_builtins.str]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 kernel_vf_drivers: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 max_num_devices: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 preferred_allocation_policy: Optional[pulumi.Input[_builtins.str]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 dpdk_driver: pulumi.Input[Optional[_builtins.str]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 kernel_vf_drivers: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 max_num_devices: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 preferred_allocation_policy: pulumi.Input[Optional[_builtins.str]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+
         :param pulumi.Input[_builtins.str] dpdk_driver: DpdkDriver is a DPDK device driver for configuring the QAT device.
         :param pulumi.Input[_builtins.str] image: Image is a container image with QAT device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with a script that initialize devices.
@@ -6203,91 +6207,91 @@ class QatDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="dpdkDriver")
-    def dpdk_driver(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def dpdk_driver(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         DpdkDriver is a DPDK device driver for configuring the QAT device.
         """
         return pulumi.get(self, "dpdk_driver")
 
     @dpdk_driver.setter
-    def dpdk_driver(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def dpdk_driver(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "dpdk_driver", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with QAT device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with a script that initialize devices.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="kernelVfDrivers")
-    def kernel_vf_drivers(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def kernel_vf_drivers(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
         """
         return pulumi.get(self, "kernel_vf_drivers")
 
     @kernel_vf_drivers.setter
-    def kernel_vf_drivers(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def kernel_vf_drivers(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "kernel_vf_drivers", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="maxNumDevices")
-    def max_num_devices(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def max_num_devices(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
         """
         return pulumi.get(self, "max_num_devices")
 
     @max_num_devices.setter
-    def max_num_devices(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def max_num_devices(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "max_num_devices", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="preferredAllocationPolicy")
-    def preferred_allocation_policy(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def preferred_allocation_policy(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
         See documentation for detailed description of the policies.
@@ -6295,83 +6299,81 @@ class QatDevicePluginSpecPatchArgs:
         return pulumi.get(self, "preferred_allocation_policy")
 
     @preferred_allocation_policy.setter
-    def preferred_allocation_policy(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def preferred_allocation_policy(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "preferred_allocation_policy", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class QatDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    QatDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class QatDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -6400,7 +6402,7 @@ class QatDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -6408,12 +6410,12 @@ class QatDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -6421,12 +6423,12 @@ class QatDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -6436,12 +6438,12 @@ class QatDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -6451,12 +6453,12 @@ class QatDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -6464,59 +6466,57 @@ class QatDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class QatDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    QatDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class QatDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -6545,7 +6545,7 @@ class QatDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -6553,12 +6553,12 @@ class QatDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -6566,12 +6566,12 @@ class QatDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -6581,12 +6581,12 @@ class QatDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -6596,12 +6596,12 @@ class QatDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -6609,74 +6609,72 @@ class QatDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class QatDevicePluginSpecArgsDict(TypedDict):
-        """
-        QatDevicePluginSpec defines the desired state of QatDevicePlugin.
-        """
-        dpdk_driver: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        DpdkDriver is a DPDK device driver for configuring the QAT device.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with QAT device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with a script that initialize devices.
-        """
-        kernel_vf_drivers: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        max_num_devices: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        preferred_allocation_policy: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
-        See documentation for detailed description of the policies.
-        """
-        provisioning_config: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    QatDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginSpecArgsDict(TypedDict):
+    """
+    QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+    """
+    dpdk_driver: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    DpdkDriver is a DPDK device driver for configuring the QAT device.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with QAT device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with a script that initialize devices.
+    """
+    kernel_vf_drivers: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    max_num_devices: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    preferred_allocation_policy: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
+    See documentation for detailed description of the policies.
+    """
+    provisioning_config: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class QatDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 dpdk_driver: Optional[pulumi.Input[_builtins.str]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 kernel_vf_drivers: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 max_num_devices: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 preferred_allocation_policy: Optional[pulumi.Input[_builtins.str]] = None,
-                 provisioning_config: Optional[pulumi.Input[_builtins.str]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]] = None):
+                 dpdk_driver: pulumi.Input[Optional[_builtins.str]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 kernel_vf_drivers: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 max_num_devices: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 preferred_allocation_policy: pulumi.Input[Optional[_builtins.str]] = None,
+                 provisioning_config: pulumi.Input[Optional[_builtins.str]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]] = None):
         """
         QatDevicePluginSpec defines the desired state of QatDevicePlugin.
+
         :param pulumi.Input[_builtins.str] dpdk_driver: DpdkDriver is a DPDK device driver for configuring the QAT device.
         :param pulumi.Input[_builtins.str] image: Image is a container image with QAT device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with a script that initialize devices.
@@ -6712,91 +6710,91 @@ class QatDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="dpdkDriver")
-    def dpdk_driver(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def dpdk_driver(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         DpdkDriver is a DPDK device driver for configuring the QAT device.
         """
         return pulumi.get(self, "dpdk_driver")
 
     @dpdk_driver.setter
-    def dpdk_driver(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def dpdk_driver(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "dpdk_driver", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with QAT device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with a script that initialize devices.
         """
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="kernelVfDrivers")
-    def kernel_vf_drivers(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def kernel_vf_drivers(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         KernelVfDrivers is a list of VF device drivers for the QuickAssist devices in the system.
         """
         return pulumi.get(self, "kernel_vf_drivers")
 
     @kernel_vf_drivers.setter
-    def kernel_vf_drivers(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def kernel_vf_drivers(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "kernel_vf_drivers", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="maxNumDevices")
-    def max_num_devices(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def max_num_devices(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         MaxNumDevices is a maximum number of QAT devices to be provided to the QuickAssist device plugin
         """
         return pulumi.get(self, "max_num_devices")
 
     @max_num_devices.setter
-    def max_num_devices(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def max_num_devices(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "max_num_devices", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="preferredAllocationPolicy")
-    def preferred_allocation_policy(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def preferred_allocation_policy(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         PreferredAllocationPolicy sets the mode of allocating QAT devices on a node.
         See documentation for detailed description of the policies.
@@ -6804,93 +6802,91 @@ class QatDevicePluginSpecArgs:
         return pulumi.get(self, "preferred_allocation_policy")
 
     @preferred_allocation_policy.setter
-    def preferred_allocation_policy(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def preferred_allocation_policy(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "preferred_allocation_policy", value)
 
     @_builtins.property
     @pulumi.getter(name="provisioningConfig")
-    def provisioning_config(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def provisioning_config(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ProvisioningConfig is a ConfigMap used to pass the configuration of QAT devices into qat initcontainer.
         """
         return pulumi.get(self, "provisioning_config")
 
     @provisioning_config.setter
-    def provisioning_config(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def provisioning_config(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "provisioning_config", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['QatDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class QatDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    QatDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class QatDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -6927,19 +6923,19 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -6952,12 +6948,12 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -6965,12 +6961,12 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -6978,12 +6974,12 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -6991,12 +6987,12 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -7004,12 +7000,12 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -7017,42 +7013,40 @@ class QatDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class QatDevicePluginStatusArgsDict(TypedDict):
-        """
-        QatDevicePluginStatus defines the observed state of QatDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['QatDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    QatDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginStatusArgsDict(TypedDict):
+    """
+    QatDevicePluginStatus defines the observed state of QatDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['QatDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class QatDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['QatDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['QatDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         QatDevicePluginStatus defines the observed state of QatDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -7070,16 +7064,16 @@ class QatDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['QatDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['QatDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['QatDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['QatDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -7087,24 +7081,24 @@ class QatDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -7112,46 +7106,44 @@ class QatDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class QatDevicePluginArgsDict(TypedDict):
-        """
-        QatDevicePlugin is the Schema for the qatdeviceplugins API. It represents the QAT device
-        plugin responsible for advertising Intel QuickAssist Technology hardware resources
-        to the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['QatDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['QatDevicePluginStatusArgsDict']]
-elif False:
-    QatDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class QatDevicePluginArgsDict(TypedDict):
+    """
+    QatDevicePlugin is the Schema for the qatdeviceplugins API. It represents the QAT device
+    plugin responsible for advertising Intel QuickAssist Technology hardware resources
+    to the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['QatDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['QatDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class QatDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['QatDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['QatDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['QatDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['QatDevicePluginStatusArgs']] = None):
         """
         QatDevicePlugin is the Schema for the qatdeviceplugins API. It represents the QAT device
         plugin responsible for advertising Intel QuickAssist Technology hardware resources
         to the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -7169,114 +7161,114 @@ class QatDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['QatDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['QatDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['QatDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['QatDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['QatDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['QatDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['QatDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['QatDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class SgxDevicePluginSpecPatchArgsDict(TypedDict):
-        """
-        SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        """
-        dcap_infra_resources: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
-        """
-        enclave_limit: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        EnclaveLimit is a number of containers that can share the same SGX enclave device.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with SGX device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
-        Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provision_limit: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        ProvisionLimit is a number of containers that can share the same SGX provision device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    SgxDevicePluginSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginSpecPatchArgsDict(TypedDict):
+    """
+    SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
+    """
+    dcap_infra_resources: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+    This is will be removed/modified in the future.
+    """
+    enclave_limit: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    EnclaveLimit is a number of containers that can share the same SGX enclave device.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with SGX device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
+    Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provision_limit: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    ProvisionLimit is a number of containers that can share the same SGX provision device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class SgxDevicePluginSpecPatchArgs:
     def __init__(__self__, *,
-                 dcap_infra_resources: Optional[pulumi.Input[_builtins.bool]] = None,
-                 enclave_limit: Optional[pulumi.Input[_builtins.int]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provision_limit: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]] = None):
+                 dcap_infra_resources: pulumi.Input[Optional[_builtins.bool]] = None,
+                 enclave_limit: pulumi.Input[Optional[_builtins.int]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provision_limit: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]] = None):
         """
         SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        :param pulumi.Input[_builtins.bool] dcap_infra_resources: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+
+        :param pulumi.Input[_builtins.bool] dcap_infra_resources: Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+               This is will be removed/modified in the future.
         :param pulumi.Input[_builtins.int] enclave_limit: EnclaveLimit is a number of containers that can share the same SGX enclave device.
         :param pulumi.Input[_builtins.str] image: Image is a container image with SGX device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
@@ -7305,43 +7297,44 @@ class SgxDevicePluginSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="dcapInfraResources")
-    def dcap_infra_resources(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def dcap_infra_resources(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        This is will be removed/modified in the future.
         """
         return pulumi.get(self, "dcap_infra_resources")
 
     @dcap_infra_resources.setter
-    def dcap_infra_resources(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def dcap_infra_resources(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "dcap_infra_resources", value)
 
     @_builtins.property
     @pulumi.getter(name="enclaveLimit")
-    def enclave_limit(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def enclave_limit(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         EnclaveLimit is a number of containers that can share the same SGX enclave device.
         """
         return pulumi.get(self, "enclave_limit")
 
     @enclave_limit.setter
-    def enclave_limit(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def enclave_limit(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "enclave_limit", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with SGX device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
         Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
@@ -7349,107 +7342,105 @@ class SgxDevicePluginSpecPatchArgs:
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisionLimit")
-    def provision_limit(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def provision_limit(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         ProvisionLimit is a number of containers that can share the same SGX provision device.
         """
         return pulumi.get(self, "provision_limit")
 
     @provision_limit.setter
-    def provision_limit(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def provision_limit(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "provision_limit", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsPatchArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class SgxDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    SgxDevicePluginSpecTolerationsPatchArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginSpecTolerationsPatchArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class SgxDevicePluginSpecTolerationsPatchArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -7478,7 +7469,7 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -7486,12 +7477,12 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -7499,12 +7490,12 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -7514,12 +7505,12 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -7529,12 +7520,12 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -7542,59 +7533,57 @@ class SgxDevicePluginSpecTolerationsPatchArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class SgxDevicePluginSpecTolerationsArgsDict(TypedDict):
-        """
-        The pod this Toleration is attached to tolerates any taint that matches
-        the triple <key,value,effect> using the matching operator <operator>.
-        """
-        effect: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Effect indicates the taint effect to match. Empty means match all taint effects.
-        When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
-        """
-        key: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Key is the taint key that the toleration applies to. Empty means match all taint keys.
-        If the key is empty, operator must be Exists; this combination means to match all values and all keys.
-        """
-        operator: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Operator represents a key's relationship to the value.
-        Valid operators are Exists and Equal. Defaults to Equal.
-        Exists is equivalent to wildcard for value, so that a pod can
-        tolerate all taints of a particular category.
-        """
-        toleration_seconds: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        TolerationSeconds represents the period of time the toleration (which must be
-        of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
-        it is not set, which means tolerate the taint forever (do not evict). Zero and
-        negative values will be treated as 0 (evict immediately) by the system.
-        """
-        value: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Value is the taint value the toleration matches to.
-        If the operator is Exists, the value should be empty, otherwise just a regular string.
-        """
-elif False:
-    SgxDevicePluginSpecTolerationsArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginSpecTolerationsArgsDict(TypedDict):
+    """
+    The pod this Toleration is attached to tolerates any taint that matches
+    the triple <key,value,effect> using the matching operator <operator>.
+    """
+    effect: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Effect indicates the taint effect to match. Empty means match all taint effects.
+    When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+    """
+    key: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Key is the taint key that the toleration applies to. Empty means match all taint keys.
+    If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+    """
+    operator: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Operator represents a key's relationship to the value.
+    Valid operators are Exists and Equal. Defaults to Equal.
+    Exists is equivalent to wildcard for value, so that a pod can
+    tolerate all taints of a particular category.
+    """
+    toleration_seconds: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    TolerationSeconds represents the period of time the toleration (which must be
+    of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+    it is not set, which means tolerate the taint forever (do not evict). Zero and
+    negative values will be treated as 0 (evict immediately) by the system.
+    """
+    value: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Value is the taint value the toleration matches to.
+    If the operator is Exists, the value should be empty, otherwise just a regular string.
+    """
 
 @pulumi.input_type
 class SgxDevicePluginSpecTolerationsArgs:
     def __init__(__self__, *,
-                 effect: Optional[pulumi.Input[_builtins.str]] = None,
-                 key: Optional[pulumi.Input[_builtins.str]] = None,
-                 operator: Optional[pulumi.Input[_builtins.str]] = None,
-                 toleration_seconds: Optional[pulumi.Input[_builtins.int]] = None,
-                 value: Optional[pulumi.Input[_builtins.str]] = None):
+                 effect: pulumi.Input[Optional[_builtins.str]] = None,
+                 key: pulumi.Input[Optional[_builtins.str]] = None,
+                 operator: pulumi.Input[Optional[_builtins.str]] = None,
+                 toleration_seconds: pulumi.Input[Optional[_builtins.int]] = None,
+                 value: pulumi.Input[Optional[_builtins.str]] = None):
         """
         The pod this Toleration is attached to tolerates any taint that matches
         the triple <key,value,effect> using the matching operator <operator>.
+
         :param pulumi.Input[_builtins.str] effect: Effect indicates the taint effect to match. Empty means match all taint effects.
                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
         :param pulumi.Input[_builtins.str] key: Key is the taint key that the toleration applies to. Empty means match all taint keys.
@@ -7623,7 +7612,7 @@ class SgxDevicePluginSpecTolerationsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def effect(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def effect(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Effect indicates the taint effect to match. Empty means match all taint effects.
         When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
@@ -7631,12 +7620,12 @@ class SgxDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "effect")
 
     @effect.setter
-    def effect(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def effect(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "effect", value)
 
     @_builtins.property
     @pulumi.getter
-    def key(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def key(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Key is the taint key that the toleration applies to. Empty means match all taint keys.
         If the key is empty, operator must be Exists; this combination means to match all values and all keys.
@@ -7644,12 +7633,12 @@ class SgxDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "key")
 
     @key.setter
-    def key(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def key(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "key", value)
 
     @_builtins.property
     @pulumi.getter
-    def operator(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def operator(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Operator represents a key's relationship to the value.
         Valid operators are Exists and Equal. Defaults to Equal.
@@ -7659,12 +7648,12 @@ class SgxDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "operator")
 
     @operator.setter
-    def operator(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def operator(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "operator", value)
 
     @_builtins.property
     @pulumi.getter(name="tolerationSeconds")
-    def toleration_seconds(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def toleration_seconds(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         TolerationSeconds represents the period of time the toleration (which must be
         of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
@@ -7674,12 +7663,12 @@ class SgxDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "toleration_seconds")
 
     @toleration_seconds.setter
-    def toleration_seconds(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def toleration_seconds(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "toleration_seconds", value)
 
     @_builtins.property
     @pulumi.getter
-    def value(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def value(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Value is the taint value the toleration matches to.
         If the operator is Exists, the value should be empty, otherwise just a regular string.
@@ -7687,65 +7676,65 @@ class SgxDevicePluginSpecTolerationsArgs:
         return pulumi.get(self, "value")
 
     @value.setter
-    def value(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def value(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "value", value)
 
 
-if not MYPY:
-    class SgxDevicePluginSpecArgsDict(TypedDict):
-        """
-        SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        """
-        dcap_infra_resources: NotRequired[pulumi.Input[_builtins.bool]]
-        """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
-        """
-        enclave_limit: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        EnclaveLimit is a number of containers that can share the same SGX enclave device.
-        """
-        image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Image is a container image with SGX device plugin executable.
-        """
-        init_image: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
-        Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
-        """
-        log_level: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        LogLevel sets the plugin's log level.
-        """
-        node_selector: NotRequired[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]
-        """
-        NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
-        """
-        provision_limit: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        ProvisionLimit is a number of containers that can share the same SGX provision device.
-        """
-        tolerations: NotRequired[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgsDict']]]]
-        """
-        Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
-        """
-elif False:
-    SgxDevicePluginSpecArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginSpecArgsDict(TypedDict):
+    """
+    SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
+    """
+    dcap_infra_resources: NotRequired[pulumi.Input[Optional[_builtins.bool]]]
+    """
+    Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+    This is will be removed/modified in the future.
+    """
+    enclave_limit: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    EnclaveLimit is a number of containers that can share the same SGX enclave device.
+    """
+    image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Image is a container image with SGX device plugin executable.
+    """
+    init_image: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
+    Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
+    """
+    log_level: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    LogLevel sets the plugin's log level.
+    """
+    node_selector: NotRequired[pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]]
+    """
+    NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
+    """
+    provision_limit: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    ProvisionLimit is a number of containers that can share the same SGX provision device.
+    """
+    tolerations: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]]]
+    """
+    Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
+    """
 
 @pulumi.input_type
 class SgxDevicePluginSpecArgs:
     def __init__(__self__, *,
-                 dcap_infra_resources: Optional[pulumi.Input[_builtins.bool]] = None,
-                 enclave_limit: Optional[pulumi.Input[_builtins.int]] = None,
-                 image: Optional[pulumi.Input[_builtins.str]] = None,
-                 init_image: Optional[pulumi.Input[_builtins.str]] = None,
-                 log_level: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_selector: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
-                 provision_limit: Optional[pulumi.Input[_builtins.int]] = None,
-                 tolerations: Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]] = None):
+                 dcap_infra_resources: pulumi.Input[Optional[_builtins.bool]] = None,
+                 enclave_limit: pulumi.Input[Optional[_builtins.int]] = None,
+                 image: pulumi.Input[Optional[_builtins.str]] = None,
+                 init_image: pulumi.Input[Optional[_builtins.str]] = None,
+                 log_level: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_selector: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]] = None,
+                 provision_limit: pulumi.Input[Optional[_builtins.int]] = None,
+                 tolerations: pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]] = None):
         """
         SgxDevicePluginSpec defines the desired state of SgxDevicePlugin.
-        :param pulumi.Input[_builtins.bool] dcap_infra_resources: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+
+        :param pulumi.Input[_builtins.bool] dcap_infra_resources: Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+               This is will be removed/modified in the future.
         :param pulumi.Input[_builtins.int] enclave_limit: EnclaveLimit is a number of containers that can share the same SGX enclave device.
         :param pulumi.Input[_builtins.str] image: Image is a container image with SGX device plugin executable.
         :param pulumi.Input[_builtins.str] init_image: InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
@@ -7774,43 +7763,44 @@ class SgxDevicePluginSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="dcapInfraResources")
-    def dcap_infra_resources(self) -> Optional[pulumi.Input[_builtins.bool]]:
+    def dcap_infra_resources(self) -> pulumi.Input[Optional[_builtins.bool]]:
         """
-        DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        Deprecated: DcapInfraResources flag enables two special resources for Intel DCAP infrastructure containers.
+        This is will be removed/modified in the future.
         """
         return pulumi.get(self, "dcap_infra_resources")
 
     @dcap_infra_resources.setter
-    def dcap_infra_resources(self, value: Optional[pulumi.Input[_builtins.bool]]):
+    def dcap_infra_resources(self, value: pulumi.Input[Optional[_builtins.bool]]):
         pulumi.set(self, "dcap_infra_resources", value)
 
     @_builtins.property
     @pulumi.getter(name="enclaveLimit")
-    def enclave_limit(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def enclave_limit(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         EnclaveLimit is a number of containers that can share the same SGX enclave device.
         """
         return pulumi.get(self, "enclave_limit")
 
     @enclave_limit.setter
-    def enclave_limit(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def enclave_limit(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "enclave_limit", value)
 
     @_builtins.property
     @pulumi.getter
-    def image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Image is a container image with SGX device plugin executable.
         """
         return pulumi.get(self, "image")
 
     @image.setter
-    def image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "image", value)
 
     @_builtins.property
     @pulumi.getter(name="initImage")
-    def init_image(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def init_image(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         InitImage is a container image with tools (i.e., SGX NFD source hook) installed on each node.
         Recommendation is to leave this unset and prefer the SGX NodeFeatureRule instead.
@@ -7818,117 +7808,115 @@ class SgxDevicePluginSpecArgs:
         return pulumi.get(self, "init_image")
 
     @init_image.setter
-    def init_image(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def init_image(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "init_image", value)
 
     @_builtins.property
     @pulumi.getter(name="logLevel")
-    def log_level(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def log_level(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         LogLevel sets the plugin's log level.
         """
         return pulumi.get(self, "log_level")
 
     @log_level.setter
-    def log_level(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def log_level(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "log_level", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeSelector")
-    def node_selector(self) -> Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]:
+    def node_selector(self) -> pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]:
         """
         NodeSelector provides a simple way to constrain device plugin pods to nodes with particular labels.
         """
         return pulumi.get(self, "node_selector")
 
     @node_selector.setter
-    def node_selector(self, value: Optional[pulumi.Input[Mapping[str, pulumi.Input[_builtins.str]]]]):
+    def node_selector(self, value: pulumi.Input[Optional[Mapping[str, pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_selector", value)
 
     @_builtins.property
     @pulumi.getter(name="provisionLimit")
-    def provision_limit(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def provision_limit(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         ProvisionLimit is a number of containers that can share the same SGX provision device.
         """
         return pulumi.get(self, "provision_limit")
 
     @provision_limit.setter
-    def provision_limit(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def provision_limit(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "provision_limit", value)
 
     @_builtins.property
     @pulumi.getter
-    def tolerations(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]]:
+    def tolerations(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]]:
         """
         Specialized nodes (e.g., with accelerators) can be Tainted to make sure unwanted pods are not scheduled on them. Tolerations can be set for the plugin pod to neutralize the Taint.
         """
         return pulumi.get(self, "tolerations")
 
     @tolerations.setter
-    def tolerations(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]]):
+    def tolerations(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['SgxDevicePluginSpecTolerationsArgs']]]]):
         pulumi.set(self, "tolerations", value)
 
 
-if not MYPY:
-    class SgxDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
-        """
-        ControlledDaemoSet references the DaemonSet controlled by the operator.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        API version of the referent.
-        """
-        field_path: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        If referring to a piece of an object instead of an entire object, this string
-        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-        For example, if the object reference is to a container within a pod, this would take on a value like:
-        "spec.containers{name}" (where "name" refers to the name of the container that triggered
-        the event) or if no container name is specified "spec.containers[2]" (container with
-        index 2 in this pod). This syntax is chosen only to have some well-defined way of
-        referencing a part of an object.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind of the referent.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-        """
-        resource_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Specific resourceVersion to which this reference is made, if any.
-        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-        """
-        uid: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UID of the referent.
-        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-        """
-elif False:
-    SgxDevicePluginStatusControlledDaemonSetArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginStatusControlledDaemonSetArgsDict(TypedDict):
+    """
+    ControlledDaemoSet references the DaemonSet controlled by the operator.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    API version of the referent.
+    """
+    field_path: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    If referring to a piece of an object instead of an entire object, this string
+    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+    For example, if the object reference is to a container within a pod, this would take on a value like:
+    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+    the event) or if no container name is specified "spec.containers[2]" (container with
+    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+    referencing a part of an object.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind of the referent.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+    """
+    resource_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Specific resourceVersion to which this reference is made, if any.
+    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+    """
+    uid: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UID of the referent.
+    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+    """
 
 @pulumi.input_type
 class SgxDevicePluginStatusControlledDaemonSetArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 field_path: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 resource_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 uid: Optional[pulumi.Input[_builtins.str]] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 field_path: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 resource_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 uid: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ControlledDaemoSet references the DaemonSet controlled by the operator.
+
         :param pulumi.Input[_builtins.str] api_version: API version of the referent.
         :param pulumi.Input[_builtins.str] field_path: If referring to a piece of an object instead of an entire object, this string
                should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -7965,19 +7953,19 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         API version of the referent.
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter(name="fieldPath")
-    def field_path(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def field_path(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         If referring to a piece of an object instead of an entire object, this string
         should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
@@ -7990,12 +7978,12 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "field_path")
 
     @field_path.setter
-    def field_path(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def field_path(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "field_path", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind of the referent.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
@@ -8003,12 +7991,12 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
@@ -8016,12 +8004,12 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
@@ -8029,12 +8017,12 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter(name="resourceVersion")
-    def resource_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def resource_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Specific resourceVersion to which this reference is made, if any.
         More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
@@ -8042,12 +8030,12 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "resource_version")
 
     @resource_version.setter
-    def resource_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def resource_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "resource_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def uid(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def uid(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UID of the referent.
         More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
@@ -8055,42 +8043,40 @@ class SgxDevicePluginStatusControlledDaemonSetArgs:
         return pulumi.get(self, "uid")
 
     @uid.setter
-    def uid(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def uid(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "uid", value)
 
 
-if not MYPY:
-    class SgxDevicePluginStatusArgsDict(TypedDict):
-        """
-        SgxDevicePluginStatus defines the observed state of SgxDevicePlugin.
-        """
-        controlled_daemon_set: NotRequired[pulumi.Input['SgxDevicePluginStatusControlledDaemonSetArgsDict']]
-        desired_number_scheduled: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The total number of nodes that should be running the device plugin
-        pod (including nodes correctly running the device plugin pod).
-        """
-        node_names: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        The list of Node names where the device plugin pods are running.
-        """
-        number_ready: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        The number of nodes that should be running the device plugin pod and have one
-        or more of the device plugin pod running and ready.
-        """
-elif False:
-    SgxDevicePluginStatusArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginStatusArgsDict(TypedDict):
+    """
+    SgxDevicePluginStatus defines the observed state of SgxDevicePlugin.
+    """
+    controlled_daemon_set: NotRequired[pulumi.Input[Optional['SgxDevicePluginStatusControlledDaemonSetArgs']]]
+    desired_number_scheduled: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The total number of nodes that should be running the device plugin
+    pod (including nodes correctly running the device plugin pod).
+    """
+    node_names: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    The list of Node names where the device plugin pods are running.
+    """
+    number_ready: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    The number of nodes that should be running the device plugin pod and have one
+    or more of the device plugin pod running and ready.
+    """
 
 @pulumi.input_type
 class SgxDevicePluginStatusArgs:
     def __init__(__self__, *,
-                 controlled_daemon_set: Optional[pulumi.Input['SgxDevicePluginStatusControlledDaemonSetArgs']] = None,
-                 desired_number_scheduled: Optional[pulumi.Input[_builtins.int]] = None,
-                 node_names: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 number_ready: Optional[pulumi.Input[_builtins.int]] = None):
+                 controlled_daemon_set: pulumi.Input[Optional['SgxDevicePluginStatusControlledDaemonSetArgs']] = None,
+                 desired_number_scheduled: pulumi.Input[Optional[_builtins.int]] = None,
+                 node_names: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 number_ready: pulumi.Input[Optional[_builtins.int]] = None):
         """
         SgxDevicePluginStatus defines the observed state of SgxDevicePlugin.
+
         :param pulumi.Input[_builtins.int] desired_number_scheduled: The total number of nodes that should be running the device plugin
                pod (including nodes correctly running the device plugin pod).
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] node_names: The list of Node names where the device plugin pods are running.
@@ -8108,16 +8094,16 @@ class SgxDevicePluginStatusArgs:
 
     @_builtins.property
     @pulumi.getter(name="controlledDaemonSet")
-    def controlled_daemon_set(self) -> Optional[pulumi.Input['SgxDevicePluginStatusControlledDaemonSetArgs']]:
+    def controlled_daemon_set(self) -> pulumi.Input[Optional['SgxDevicePluginStatusControlledDaemonSetArgs']]:
         return pulumi.get(self, "controlled_daemon_set")
 
     @controlled_daemon_set.setter
-    def controlled_daemon_set(self, value: Optional[pulumi.Input['SgxDevicePluginStatusControlledDaemonSetArgs']]):
+    def controlled_daemon_set(self, value: pulumi.Input[Optional['SgxDevicePluginStatusControlledDaemonSetArgs']]):
         pulumi.set(self, "controlled_daemon_set", value)
 
     @_builtins.property
     @pulumi.getter(name="desiredNumberScheduled")
-    def desired_number_scheduled(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def desired_number_scheduled(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The total number of nodes that should be running the device plugin
         pod (including nodes correctly running the device plugin pod).
@@ -8125,24 +8111,24 @@ class SgxDevicePluginStatusArgs:
         return pulumi.get(self, "desired_number_scheduled")
 
     @desired_number_scheduled.setter
-    def desired_number_scheduled(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def desired_number_scheduled(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "desired_number_scheduled", value)
 
     @_builtins.property
     @pulumi.getter(name="nodeNames")
-    def node_names(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def node_names(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         The list of Node names where the device plugin pods are running.
         """
         return pulumi.get(self, "node_names")
 
     @node_names.setter
-    def node_names(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def node_names(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "node_names", value)
 
     @_builtins.property
     @pulumi.getter(name="numberReady")
-    def number_ready(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def number_ready(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         The number of nodes that should be running the device plugin pod and have one
         or more of the device plugin pod running and ready.
@@ -8150,46 +8136,44 @@ class SgxDevicePluginStatusArgs:
         return pulumi.get(self, "number_ready")
 
     @number_ready.setter
-    def number_ready(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def number_ready(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "number_ready", value)
 
 
-if not MYPY:
-    class SgxDevicePluginArgsDict(TypedDict):
-        """
-        SgxDevicePlugin is the Schema for the sgxdeviceplugins API. It represents
-        the SGX device plugin responsible for advertising SGX device nodes to
-        the kubelet.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['SgxDevicePluginSpecArgsDict']]
-        status: NotRequired[pulumi.Input['SgxDevicePluginStatusArgsDict']]
-elif False:
-    SgxDevicePluginArgsDict: TypeAlias = Mapping[str, Any]
+class SgxDevicePluginArgsDict(TypedDict):
+    """
+    SgxDevicePlugin is the Schema for the sgxdeviceplugins API. It represents
+    the SGX device plugin responsible for advertising SGX device nodes to
+    the kubelet.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['SgxDevicePluginSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['SgxDevicePluginStatusArgs']]]
 
 @pulumi.input_type
 class SgxDevicePluginArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['SgxDevicePluginSpecArgs']] = None,
-                 status: Optional[pulumi.Input['SgxDevicePluginStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['SgxDevicePluginSpecArgs']] = None,
+                 status: pulumi.Input[Optional['SgxDevicePluginStatusArgs']] = None):
         """
         SgxDevicePlugin is the Schema for the sgxdeviceplugins API. It represents
         the SGX device plugin responsible for advertising SGX device nodes to
         the kubelet.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -8207,56 +8191,56 @@ class SgxDevicePluginArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['SgxDevicePluginSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['SgxDevicePluginSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['SgxDevicePluginSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['SgxDevicePluginSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['SgxDevicePluginStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['SgxDevicePluginStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['SgxDevicePluginStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['SgxDevicePluginStatusArgs']]):
         pulumi.set(self, "status", value)
 
 

@@ -1229,7 +1229,7 @@ wheels = [
 
 [[package]]
 name = "pulumi-crds"
-version = "4.29.0"
+version = "4.23.0"
 source = { editable = "packages/crds" }
 dependencies = [
     { name = "parver" },
@@ -1242,7 +1242,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "parver", specifier = ">=0.2.1" },
-    { name = "pulumi", specifier = ">=3.165.0,<4.0.0" },
+    { name = "pulumi", specifier = ">=3.231.0,<4.0.0" },
     { name = "pulumi-kubernetes", specifier = "==4.23.0" },
     { name = "requests", specifier = ">=2.21,<3.0" },
     { name = "semver", specifier = ">=2.8.1" },

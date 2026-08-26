@@ -96,147 +96,142 @@ __all__ = [
     'UDPRouteArgsDict',
 ]
 
-MYPY = False
+class TCPRouteSpecParentRefsPatchArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-if not MYPY:
-    class TCPRouteSpecParentRefsPatchArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    There are two kinds of parent resources with "Core" support:
 
-        There are two kinds of parent resources with "Core" support:
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
-
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-
-
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
-
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TCPRouteSpecParentRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TCPRouteSpecParentRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -250,6 +245,7 @@ class TCPRouteSpecParentRefsPatchArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -359,7 +355,7 @@ class TCPRouteSpecParentRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -371,12 +367,12 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -390,12 +386,12 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -404,12 +400,12 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -437,12 +433,12 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -478,12 +474,12 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -513,149 +509,146 @@ class TCPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TCPRouteSpecParentRefsArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+class TCPRouteSpecParentRefsArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TCPRouteSpecParentRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TCPRouteSpecParentRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -669,6 +662,7 @@ class TCPRouteSpecParentRefsArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -778,7 +772,7 @@ class TCPRouteSpecParentRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -790,12 +784,12 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -809,12 +803,12 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -823,12 +817,12 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -856,12 +850,12 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -897,12 +891,12 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -932,109 +926,107 @@ class TCPRouteSpecParentRefsArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TCPRouteSpecPatchArgsDict(TypedDict):
-        """
-        Spec defines the desired state of TCPRoute.
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+class TCPRouteSpecPatchArgsDict(TypedDict):
+    """
+    Spec defines the desired state of TCPRoute.
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgsDict']]]]
-        """
-        Rules are a list of TCP matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]]]
+    """
+    Rules are a list of TCP matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    TCPRouteSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecPatchArgs:
     def __init__(__self__, *,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of TCPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -1119,7 +1111,7 @@ class TCPRouteSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -1186,24 +1178,24 @@ class TCPRouteSpecPatchArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsPatchArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]]:
         """
         Rules are a list of TCP matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesPatchArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -1221,115 +1213,112 @@ class TCPRouteSpecPatchArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class TCPRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class TCPRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    TCPRouteSpecRulesBackendRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecRulesBackendRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -1358,6 +1347,7 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -1418,7 +1408,7 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -1426,12 +1416,12 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -1451,24 +1441,24 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -1483,12 +1473,12 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -1499,12 +1489,12 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -1523,115 +1513,112 @@ class TCPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class TCPRouteSpecRulesBackendRefsArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class TCPRouteSpecRulesBackendRefsArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    TCPRouteSpecRulesBackendRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecRulesBackendRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -1660,6 +1647,7 @@ class TCPRouteSpecRulesBackendRefsArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -1720,7 +1708,7 @@ class TCPRouteSpecRulesBackendRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -1728,12 +1716,12 @@ class TCPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -1753,24 +1741,24 @@ class TCPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -1785,12 +1773,12 @@ class TCPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -1801,12 +1789,12 @@ class TCPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -1825,48 +1813,38 @@ class TCPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class TCPRouteSpecRulesPatchArgsDict(TypedDict):
-        """
-        TCPRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or a
-        Service with no endpoints), the underlying implementation MUST actively
-        reject connection attempts to this backend. Connection rejections must
-        respect weight; if an invalid backend is requested to have 80% of
-        connections, then 80% of connections must be rejected instead.
+class TCPRouteSpecRulesPatchArgsDict(TypedDict):
+    """
+    TCPRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or a
+    Service with no endpoints), the underlying implementation MUST actively
+    reject connection attempts to this backend. Connection rejections must
+    respect weight; if an invalid backend is requested to have 80% of
+    connections, then 80% of connections must be rejected instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
-        """
-elif False:
-    TCPRouteSpecRulesPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core for Kubernetes Service
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecRulesPatchArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         TCPRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -1875,15 +1853,7 @@ class TCPRouteSpecRulesPatchArgs:
                connections, then 80% of connections must be rejected instead.
                
                Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
         :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -1892,7 +1862,7 @@ class TCPRouteSpecRulesPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or a
@@ -1902,72 +1872,54 @@ class TCPRouteSpecRulesPatchArgs:
         connections, then 80% of connections must be rejected instead.
 
         Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsPatchArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class TCPRouteSpecRulesArgsDict(TypedDict):
-        """
-        TCPRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or a
-        Service with no endpoints), the underlying implementation MUST actively
-        reject connection attempts to this backend. Connection rejections must
-        respect weight; if an invalid backend is requested to have 80% of
-        connections, then 80% of connections must be rejected instead.
+class TCPRouteSpecRulesArgsDict(TypedDict):
+    """
+    TCPRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or a
+    Service with no endpoints), the underlying implementation MUST actively
+    reject connection attempts to this backend. Connection rejections must
+    respect weight; if an invalid backend is requested to have 80% of
+    connections, then 80% of connections must be rejected instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
-        """
-elif False:
-    TCPRouteSpecRulesArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core for Kubernetes Service
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecRulesArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         TCPRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -1976,15 +1928,7 @@ class TCPRouteSpecRulesArgs:
                connections, then 80% of connections must be rejected instead.
                
                Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
         :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -1993,7 +1937,7 @@ class TCPRouteSpecRulesArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or a
@@ -2003,133 +1947,123 @@ class TCPRouteSpecRulesArgs:
         connections, then 80% of connections must be rejected instead.
 
         Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesBackendRefsArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class TCPRouteSpecArgsDict(TypedDict):
-        """
-        Spec defines the desired state of TCPRoute.
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+class TCPRouteSpecArgsDict(TypedDict):
+    """
+    Spec defines the desired state of TCPRoute.
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesArgsDict']]]]
-        """
-        Rules are a list of TCP matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]]]
+    """
+    Rules are a list of TCP matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    TCPRouteSpecArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class TCPRouteSpecArgs:
     def __init__(__self__, *,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of TCPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -2214,7 +2148,7 @@ class TCPRouteSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -2281,24 +2215,24 @@ class TCPRouteSpecArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecParentRefsArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]]:
         """
         Rules are a list of TCP matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteSpecRulesArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -2316,61 +2250,59 @@ class TCPRouteSpecArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class TCPRouteStatusParentsConditionsArgsDict(TypedDict):
-        """
-        Condition contains details for one aspect of the current state of this API Resource.
-        """
-        last_transition_time: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        lastTransitionTime is the last time the condition transitioned from one status to another.
-        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-        """
-        message: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        message is a human readable message indicating details about the transition.
-        This may be an empty string.
-        """
-        observed_generation: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        observedGeneration represents the .metadata.generation that the condition was set based upon.
-        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-        with respect to the current state of the instance.
-        """
-        reason: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-        Producers of specific condition types may define expected values and meanings for this field,
-        and whether the values are considered a guaranteed API.
-        The value should be a CamelCase string.
-        This field may not be empty.
-        """
-        status: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        status of the condition, one of True, False, Unknown.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        type of condition in CamelCase or in foo.example.com/CamelCase.
-        """
-elif False:
-    TCPRouteStatusParentsConditionsArgsDict: TypeAlias = Mapping[str, Any]
+class TCPRouteStatusParentsConditionsArgsDict(TypedDict):
+    """
+    Condition contains details for one aspect of the current state of this API Resource.
+    """
+    last_transition_time: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    lastTransitionTime is the last time the condition transitioned from one status to another.
+    This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+    """
+    message: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    message is a human readable message indicating details about the transition.
+    This may be an empty string.
+    """
+    observed_generation: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    observedGeneration represents the .metadata.generation that the condition was set based upon.
+    For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+    with respect to the current state of the instance.
+    """
+    reason: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    reason contains a programmatic identifier indicating the reason for the condition's last transition.
+    Producers of specific condition types may define expected values and meanings for this field,
+    and whether the values are considered a guaranteed API.
+    The value should be a CamelCase string.
+    This field may not be empty.
+    """
+    status: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    status of the condition, one of True, False, Unknown.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    type of condition in CamelCase or in foo.example.com/CamelCase.
+    """
 
 @pulumi.input_type
 class TCPRouteStatusParentsConditionsArgs:
     def __init__(__self__, *,
-                 last_transition_time: Optional[pulumi.Input[_builtins.str]] = None,
-                 message: Optional[pulumi.Input[_builtins.str]] = None,
-                 observed_generation: Optional[pulumi.Input[_builtins.int]] = None,
-                 reason: Optional[pulumi.Input[_builtins.str]] = None,
-                 status: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 last_transition_time: pulumi.Input[Optional[_builtins.str]] = None,
+                 message: pulumi.Input[Optional[_builtins.str]] = None,
+                 observed_generation: pulumi.Input[Optional[_builtins.int]] = None,
+                 reason: pulumi.Input[Optional[_builtins.str]] = None,
+                 status: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param pulumi.Input[_builtins.str] last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param pulumi.Input[_builtins.str] message: message is a human readable message indicating details about the transition.
@@ -2401,7 +2333,7 @@ class TCPRouteStatusParentsConditionsArgs:
 
     @_builtins.property
     @pulumi.getter(name="lastTransitionTime")
-    def last_transition_time(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def last_transition_time(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         lastTransitionTime is the last time the condition transitioned from one status to another.
         This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
@@ -2409,12 +2341,12 @@ class TCPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "last_transition_time")
 
     @last_transition_time.setter
-    def last_transition_time(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def last_transition_time(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "last_transition_time", value)
 
     @_builtins.property
     @pulumi.getter
-    def message(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def message(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         message is a human readable message indicating details about the transition.
         This may be an empty string.
@@ -2422,12 +2354,12 @@ class TCPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "message")
 
     @message.setter
-    def message(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def message(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "message", value)
 
     @_builtins.property
     @pulumi.getter(name="observedGeneration")
-    def observed_generation(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def observed_generation(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         observedGeneration represents the .metadata.generation that the condition was set based upon.
         For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
@@ -2436,12 +2368,12 @@ class TCPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "observed_generation")
 
     @observed_generation.setter
-    def observed_generation(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def observed_generation(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "observed_generation", value)
 
     @_builtins.property
     @pulumi.getter
-    def reason(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def reason(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         reason contains a programmatic identifier indicating the reason for the condition's last transition.
         Producers of specific condition types may define expected values and meanings for this field,
@@ -2452,166 +2384,164 @@ class TCPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "reason")
 
     @reason.setter
-    def reason(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def reason(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "reason", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def status(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         status of the condition, one of True, False, Unknown.
         """
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def status(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "status", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         type of condition in CamelCase or in foo.example.com/CamelCase.
         """
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class TCPRouteStatusParentsParentRefArgsDict(TypedDict):
-        """
-        ParentRef corresponds with a ParentRef in the spec that this
-        RouteParentStatus struct describes the status of.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+class TCPRouteStatusParentsParentRefArgsDict(TypedDict):
+    """
+    ParentRef corresponds with a ParentRef in the spec that this
+    RouteParentStatus struct describes the status of.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TCPRouteStatusParentsParentRefArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TCPRouteStatusParentsParentRefArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -2721,7 +2651,7 @@ class TCPRouteStatusParentsParentRefArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -2733,12 +2663,12 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -2752,12 +2682,12 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -2766,12 +2696,12 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -2799,12 +2729,12 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -2840,12 +2770,12 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -2875,67 +2805,65 @@ class TCPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TCPRouteStatusParentsArgsDict(TypedDict):
-        """
-        RouteParentStatus describes the status of a route with respect to an
-        associated Parent.
-        """
-        conditions: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgsDict']]]]
-        """
-        Conditions describes the status of the route with respect to the Gateway.
-        Note that the route's availability is also subject to the Gateway's own
-        status conditions and listener status.
+class TCPRouteStatusParentsArgsDict(TypedDict):
+    """
+    RouteParentStatus describes the status of a route with respect to an
+    associated Parent.
+    """
+    conditions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]]]
+    """
+    Conditions describes the status of the route with respect to the Gateway.
+    Note that the route's availability is also subject to the Gateway's own
+    status conditions and listener status.
 
-        If the Route's ParentRef specifies an existing Gateway that supports
-        Routes of this kind AND that Gateway's controller has sufficient access,
-        then that Gateway's controller MUST set the "Accepted" condition on the
-        Route, to indicate whether the route has been accepted or rejected by the
-        Gateway, and why.
+    If the Route's ParentRef specifies an existing Gateway that supports
+    Routes of this kind AND that Gateway's controller has sufficient access,
+    then that Gateway's controller MUST set the "Accepted" condition on the
+    Route, to indicate whether the route has been accepted or rejected by the
+    Gateway, and why.
 
-        A Route MUST be considered "Accepted" if at least one of the Route's
-        rules is implemented by the Gateway.
+    A Route MUST be considered "Accepted" if at least one of the Route's
+    rules is implemented by the Gateway.
 
-        There are a number of cases where the "Accepted" condition may not be set
-        due to lack of controller visibility, that includes when:
+    There are a number of cases where the "Accepted" condition may not be set
+    due to lack of controller visibility, that includes when:
 
-        * The Route refers to a nonexistent parent.
-        * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
-        """
-        controller_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ControllerName is a domain/path string that indicates the name of the
-        controller that wrote this status. This corresponds with the
-        controllerName field on GatewayClass.
+    * The Route refers to a nonexistent parent.
+    * The Route is of a type that the controller does not support.
+    * The Route is in a namespace to which the controller does not have access.
+    """
+    controller_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ControllerName is a domain/path string that indicates the name of the
+    controller that wrote this status. This corresponds with the
+    controllerName field on GatewayClass.
 
-        Example: "example.net/gateway-controller".
+    Example: "example.net/gateway-controller".
 
-        The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
-        valid Kubernetes names
-        (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
+    The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
+    valid Kubernetes names
+    (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
 
-        Controllers MUST populate this field when writing status. Controllers should ensure that
-        entries to status populated with their ControllerName are cleaned up when they are no
-        longer necessary.
-        """
-        parent_ref: NotRequired[pulumi.Input['TCPRouteStatusParentsParentRefArgsDict']]
-elif False:
-    TCPRouteStatusParentsArgsDict: TypeAlias = Mapping[str, Any]
+    Controllers MUST populate this field when writing status. Controllers should ensure that
+    entries to status populated with their ControllerName are cleaned up when they are no
+    longer necessary.
+    """
+    parent_ref: NotRequired[pulumi.Input[Optional['TCPRouteStatusParentsParentRefArgs']]]
 
 @pulumi.input_type
 class TCPRouteStatusParentsArgs:
     def __init__(__self__, *,
-                 conditions: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]] = None,
-                 controller_name: Optional[pulumi.Input[_builtins.str]] = None,
-                 parent_ref: Optional[pulumi.Input['TCPRouteStatusParentsParentRefArgs']] = None):
+                 conditions: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]] = None,
+                 controller_name: pulumi.Input[Optional[_builtins.str]] = None,
+                 parent_ref: pulumi.Input[Optional['TCPRouteStatusParentsParentRefArgs']] = None):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -2954,7 +2882,7 @@ class TCPRouteStatusParentsArgs:
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param pulumi.Input[_builtins.str] controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -2978,7 +2906,7 @@ class TCPRouteStatusParentsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def conditions(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]]:
+    def conditions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]]:
         """
         Conditions describes the status of the route with respect to the Gateway.
         Note that the route's availability is also subject to the Gateway's own
@@ -2998,17 +2926,17 @@ class TCPRouteStatusParentsArgs:
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
     @conditions.setter
-    def conditions(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]]):
+    def conditions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsConditionsArgs']]]]):
         pulumi.set(self, "conditions", value)
 
     @_builtins.property
     @pulumi.getter(name="controllerName")
-    def controller_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def controller_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ControllerName is a domain/path string that indicates the name of the
         controller that wrote this status. This corresponds with the
@@ -3027,50 +2955,48 @@ class TCPRouteStatusParentsArgs:
         return pulumi.get(self, "controller_name")
 
     @controller_name.setter
-    def controller_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def controller_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "controller_name", value)
 
     @_builtins.property
     @pulumi.getter(name="parentRef")
-    def parent_ref(self) -> Optional[pulumi.Input['TCPRouteStatusParentsParentRefArgs']]:
+    def parent_ref(self) -> pulumi.Input[Optional['TCPRouteStatusParentsParentRefArgs']]:
         return pulumi.get(self, "parent_ref")
 
     @parent_ref.setter
-    def parent_ref(self, value: Optional[pulumi.Input['TCPRouteStatusParentsParentRefArgs']]):
+    def parent_ref(self, value: pulumi.Input[Optional['TCPRouteStatusParentsParentRefArgs']]):
         pulumi.set(self, "parent_ref", value)
 
 
-if not MYPY:
-    class TCPRouteStatusArgsDict(TypedDict):
-        """
-        Status defines the current state of TCPRoute.
-        """
-        parents: NotRequired[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsArgsDict']]]]
-        """
-        Parents is a list of parent resources (usually Gateways) that are
-        associated with the route, and the status of the route with respect to
-        each parent. When this route attaches to a parent, the controller that
-        manages the parent must add an entry to this list when the controller
-        first sees the route and should update the entry as appropriate when the
-        route or gateway is modified.
+class TCPRouteStatusArgsDict(TypedDict):
+    """
+    Status defines the current state of TCPRoute.
+    """
+    parents: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]]]
+    """
+    Parents is a list of parent resources (usually Gateways) that are
+    associated with the route, and the status of the route with respect to
+    each parent. When this route attaches to a parent, the controller that
+    manages the parent must add an entry to this list when the controller
+    first sees the route and should update the entry as appropriate when the
+    route or gateway is modified.
 
-        Note that parent references that cannot be resolved by an implementation
-        of this API will not be added to this list. Implementations of this API
-        can only populate Route status for the Gateways/parent resources they are
-        responsible for.
+    Note that parent references that cannot be resolved by an implementation
+    of this API will not be added to this list. Implementations of this API
+    can only populate Route status for the Gateways/parent resources they are
+    responsible for.
 
-        A maximum of 32 Gateways will be represented in this list. An empty list
-        means the route has not been attached to any Gateway.
-        """
-elif False:
-    TCPRouteStatusArgsDict: TypeAlias = Mapping[str, Any]
+    A maximum of 32 Gateways will be represented in this list. An empty list
+    means the route has not been attached to any Gateway.
+    """
 
 @pulumi.input_type
 class TCPRouteStatusArgs:
     def __init__(__self__, *,
-                 parents: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]] = None):
+                 parents: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]] = None):
         """
         Status defines the current state of TCPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -3091,7 +3017,7 @@ class TCPRouteStatusArgs:
 
     @_builtins.property
     @pulumi.getter
-    def parents(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]]:
+    def parents(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]]:
         """
         Parents is a list of parent resources (usually Gateways) that are
         associated with the route, and the status of the route with respect to
@@ -3111,46 +3037,44 @@ class TCPRouteStatusArgs:
         return pulumi.get(self, "parents")
 
     @parents.setter
-    def parents(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]]):
+    def parents(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TCPRouteStatusParentsArgs']]]]):
         pulumi.set(self, "parents", value)
 
 
-if not MYPY:
-    class TCPRouteArgsDict(TypedDict):
-        """
-        TCPRoute provides a way to route TCP requests. When combined with a Gateway
-        listener, it can be used to forward connections on the port specified by the
-        listener to a set of backends specified by the TCPRoute.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['TCPRouteSpecArgsDict']]
-        status: NotRequired[pulumi.Input['TCPRouteStatusArgsDict']]
-elif False:
-    TCPRouteArgsDict: TypeAlias = Mapping[str, Any]
+class TCPRouteArgsDict(TypedDict):
+    """
+    TCPRoute provides a way to route TCP requests. When combined with a Gateway
+    listener, it can be used to forward connections on the port specified by the
+    listener to a set of backends specified by the TCPRoute.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['TCPRouteSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['TCPRouteStatusArgs']]]
 
 @pulumi.input_type
 class TCPRouteArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['TCPRouteSpecArgs']] = None,
-                 status: Optional[pulumi.Input['TCPRouteStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['TCPRouteSpecArgs']] = None,
+                 status: pulumi.Input[Optional['TCPRouteStatusArgs']] = None):
         """
         TCPRoute provides a way to route TCP requests. When combined with a Gateway
         listener, it can be used to forward connections on the port specified by the
         listener to a set of backends specified by the TCPRoute.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -3168,198 +3092,195 @@ class TCPRouteArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['TCPRouteSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['TCPRouteSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['TCPRouteSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['TCPRouteSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['TCPRouteStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['TCPRouteStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['TCPRouteStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['TCPRouteStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class TLSRouteSpecParentRefsPatchArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+class TLSRouteSpecParentRefsPatchArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TLSRouteSpecParentRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TLSRouteSpecParentRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -3373,6 +3294,7 @@ class TLSRouteSpecParentRefsPatchArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3482,7 +3404,7 @@ class TLSRouteSpecParentRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -3494,12 +3416,12 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -3513,12 +3435,12 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -3527,12 +3449,12 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -3560,12 +3482,12 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -3601,12 +3523,12 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -3636,149 +3558,146 @@ class TLSRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TLSRouteSpecParentRefsArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+class TLSRouteSpecParentRefsArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TLSRouteSpecParentRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TLSRouteSpecParentRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -3792,6 +3711,7 @@ class TLSRouteSpecParentRefsArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -3901,7 +3821,7 @@ class TLSRouteSpecParentRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -3913,12 +3833,12 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -3932,12 +3852,12 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -3946,12 +3866,12 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -3979,12 +3899,12 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -4020,12 +3940,12 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -4055,146 +3975,144 @@ class TLSRouteSpecParentRefsArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TLSRouteSpecPatchArgsDict(TypedDict):
-        """
-        Spec defines the desired state of TLSRoute.
-        """
-        hostnames: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Hostnames defines a set of SNI names that should match against the
-        SNI attribute of TLS ClientHello message in TLS handshake. This matches
-        the RFC 1123 definition of a hostname with 2 notable exceptions:
+class TLSRouteSpecPatchArgsDict(TypedDict):
+    """
+    Spec defines the desired state of TLSRoute.
+    """
+    hostnames: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Hostnames defines a set of SNI names that should match against the
+    SNI attribute of TLS ClientHello message in TLS handshake. This matches
+    the RFC 1123 definition of a hostname with 2 notable exceptions:
 
-        1. IPs are not allowed in SNI names per RFC 6066.
-        2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
-           label must appear by itself as the first label.
+    1. IPs are not allowed in SNI names per RFC 6066.
+    2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
+       label must appear by itself as the first label.
 
-        If a hostname is specified by both the Listener and TLSRoute, there
-        must be at least one intersecting hostname for the TLSRoute to be
-        attached to the Listener. For example:
+    If a hostname is specified by both the Listener and TLSRoute, there
+    must be at least one intersecting hostname for the TLSRoute to be
+    attached to the Listener. For example:
 
-        * A Listener with `test.example.com` as the hostname matches TLSRoutes
-          that have either not specified any hostnames, or have specified at
-          least one of `test.example.com` or `*.example.com`.
-        * A Listener with `*.example.com` as the hostname matches TLSRoutes
-          that have either not specified any hostnames or have specified at least
-          one hostname that matches the Listener hostname. For example,
-          `test.example.com` and `*.example.com` would both match. On the other
-          hand, `example.com` and `test.example.net` would not match.
+    * A Listener with `test.example.com` as the hostname matches TLSRoutes
+      that have either not specified any hostnames, or have specified at
+      least one of `test.example.com` or `*.example.com`.
+    * A Listener with `*.example.com` as the hostname matches TLSRoutes
+      that have either not specified any hostnames or have specified at least
+      one hostname that matches the Listener hostname. For example,
+      `test.example.com` and `*.example.com` would both match. On the other
+      hand, `example.com` and `test.example.net` would not match.
 
-        If both the Listener and TLSRoute have specified hostnames, any
-        TLSRoute hostnames that do not match the Listener hostname MUST be
-        ignored. For example, if a Listener specified `*.example.com`, and the
-        TLSRoute specified `test.example.com` and `test.example.net`,
-        `test.example.net` must not be considered for a match.
+    If both the Listener and TLSRoute have specified hostnames, any
+    TLSRoute hostnames that do not match the Listener hostname MUST be
+    ignored. For example, if a Listener specified `*.example.com`, and the
+    TLSRoute specified `test.example.com` and `test.example.net`,
+    `test.example.net` must not be considered for a match.
 
-        If both the Listener and TLSRoute have specified hostnames, and none
-        match with the criteria above, then the TLSRoute is not accepted. The
-        implementation must raise an 'Accepted' Condition with a status of
-        `False` in the corresponding RouteParentStatus.
+    If both the Listener and TLSRoute have specified hostnames, and none
+    match with the criteria above, then the TLSRoute is not accepted. The
+    implementation must raise an 'Accepted' Condition with a status of
+    `False` in the corresponding RouteParentStatus.
 
-        Support: Core
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+    Support: Core
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgsDict']]]]
-        """
-        Rules are a list of TLS matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]]]
+    """
+    Rules are a list of TLS matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    TLSRouteSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecPatchArgs:
     def __init__(__self__, *,
-                 hostnames: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 hostnames: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] hostnames: Hostnames defines a set of SNI names that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -4314,7 +4232,7 @@ class TLSRouteSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def hostnames(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def hostnames(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Hostnames defines a set of SNI names that should match against the
         SNI attribute of TLS ClientHello message in TLS handshake. This matches
@@ -4353,12 +4271,12 @@ class TLSRouteSpecPatchArgs:
         return pulumi.get(self, "hostnames")
 
     @hostnames.setter
-    def hostnames(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def hostnames(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "hostnames", value)
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -4425,24 +4343,24 @@ class TLSRouteSpecPatchArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsPatchArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]]:
         """
         Rules are a list of TLS matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesPatchArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -4460,115 +4378,112 @@ class TLSRouteSpecPatchArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class TLSRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class TLSRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    TLSRouteSpecRulesBackendRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecRulesBackendRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -4597,6 +4512,7 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4657,7 +4573,7 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -4665,12 +4581,12 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -4690,24 +4606,24 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -4722,12 +4638,12 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -4738,12 +4654,12 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -4762,115 +4678,112 @@ class TLSRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class TLSRouteSpecRulesBackendRefsArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class TLSRouteSpecRulesBackendRefsArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    TLSRouteSpecRulesBackendRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecRulesBackendRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -4899,6 +4812,7 @@ class TLSRouteSpecRulesBackendRefsArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -4959,7 +4873,7 @@ class TLSRouteSpecRulesBackendRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -4967,12 +4881,12 @@ class TLSRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -4992,24 +4906,24 @@ class TLSRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -5024,12 +4938,12 @@ class TLSRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -5040,12 +4954,12 @@ class TLSRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -5064,60 +4978,62 @@ class TLSRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class TLSRouteSpecRulesPatchArgsDict(TypedDict):
-        """
-        TLSRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or
-        a Service with no endpoints), the rule performs no forwarding; if no
-        filters are specified that would result in a response being sent, the
-        underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+class TLSRouteSpecRulesPatchArgsDict(TypedDict):
+    """
+    TLSRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or
+    a Service with no endpoints), the rule performs no forwarding; if no
+    filters are specified that would result in a response being sent, the
+    underlying implementation must actively reject request attempts to this
+    backend, by rejecting the connection. Request rejections must respect
+    weight; if an invalid backend is requested to have 80% of requests, then
+    80% of requests must be rejected instead.
 
-        Support: Core for Kubernetes Service
+    When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+    can be used to enable re-encryption of the traffic to the backends.
 
-        Support: Extended for Kubernetes ServiceImport
+    Support: Core for Kubernetes Service
 
-        Support: Implementation-specific for any other resource
+    Support: Extended for Kubernetes ServiceImport
 
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    Support: Implementation-specific for any other resource
 
-        Support: Extended
-        """
-elif False:
-    TLSRouteSpecRulesPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support for weight: Extended
+
+    Support for BackendTLSPolicy: Extended
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecRulesPatchArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -5126,9 +5042,9 @@ class TLSRouteSpecRulesPatchArgs:
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -5137,17 +5053,19 @@ class TLSRouteSpecRulesPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -5156,78 +5074,80 @@ class TLSRouteSpecRulesPatchArgs:
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsPatchArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class TLSRouteSpecRulesArgsDict(TypedDict):
-        """
-        TLSRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or
-        a Service with no endpoints), the rule performs no forwarding; if no
-        filters are specified that would result in a response being sent, the
-        underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+class TLSRouteSpecRulesArgsDict(TypedDict):
+    """
+    TLSRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or
+    a Service with no endpoints), the rule performs no forwarding; if no
+    filters are specified that would result in a response being sent, the
+    underlying implementation must actively reject request attempts to this
+    backend, by rejecting the connection. Request rejections must respect
+    weight; if an invalid backend is requested to have 80% of requests, then
+    80% of requests must be rejected instead.
 
-        Support: Core for Kubernetes Service
+    When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+    can be used to enable re-encryption of the traffic to the backends.
 
-        Support: Extended for Kubernetes ServiceImport
+    Support: Core for Kubernetes Service
 
-        Support: Implementation-specific for any other resource
+    Support: Extended for Kubernetes ServiceImport
 
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    Support: Implementation-specific for any other resource
 
-        Support: Extended
-        """
-elif False:
-    TLSRouteSpecRulesArgsDict: TypeAlias = Mapping[str, Any]
+    Support for weight: Extended
+
+    Support for BackendTLSPolicy: Extended
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecRulesArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         TLSRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or
                a Service with no endpoints), the rule performs no forwarding; if no
                filters are specified that would result in a response being sent, the
                underlying implementation must actively reject request attempts to this
-               backend, by rejecting the connection or returning a 500 status code.
-               Request rejections must respect weight; if an invalid backend is
-               requested to have 80% of requests, then 80% of requests must be rejected
-               instead.
+               backend, by rejecting the connection. Request rejections must respect
+               weight; if an invalid backend is requested to have 80% of requests, then
+               80% of requests must be rejected instead.
+               
+               When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+               can be used to enable re-encryption of the traffic to the backends.
                
                Support: Core for Kubernetes Service
                
@@ -5236,9 +5156,9 @@ class TLSRouteSpecRulesArgs:
                Support: Implementation-specific for any other resource
                
                Support for weight: Extended
-        :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
                
-               Support: Extended
+               Support for BackendTLSPolicy: Extended
+        :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -5247,17 +5167,19 @@ class TLSRouteSpecRulesArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or
         a Service with no endpoints), the rule performs no forwarding; if no
         filters are specified that would result in a response being sent, the
         underlying implementation must actively reject request attempts to this
-        backend, by rejecting the connection or returning a 500 status code.
-        Request rejections must respect weight; if an invalid backend is
-        requested to have 80% of requests, then 80% of requests must be rejected
-        instead.
+        backend, by rejecting the connection. Request rejections must respect
+        weight; if an invalid backend is requested to have 80% of requests, then
+        80% of requests must be rejected instead.
+
+        When a TLSRoute is attached to a listener in Terminate mode, a BackendTLSPolicy
+        can be used to enable re-encryption of the traffic to the backends.
 
         Support: Core for Kubernetes Service
 
@@ -5266,164 +5188,162 @@ class TLSRouteSpecRulesArgs:
         Support: Implementation-specific for any other resource
 
         Support for weight: Extended
+
+        Support for BackendTLSPolicy: Extended
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesBackendRefsArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class TLSRouteSpecArgsDict(TypedDict):
-        """
-        Spec defines the desired state of TLSRoute.
-        """
-        hostnames: NotRequired[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]
-        """
-        Hostnames defines a set of SNI names that should match against the
-        SNI attribute of TLS ClientHello message in TLS handshake. This matches
-        the RFC 1123 definition of a hostname with 2 notable exceptions:
+class TLSRouteSpecArgsDict(TypedDict):
+    """
+    Spec defines the desired state of TLSRoute.
+    """
+    hostnames: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]]
+    """
+    Hostnames defines a set of SNI names that should match against the
+    SNI attribute of TLS ClientHello message in TLS handshake. This matches
+    the RFC 1123 definition of a hostname with 2 notable exceptions:
 
-        1. IPs are not allowed in SNI names per RFC 6066.
-        2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
-           label must appear by itself as the first label.
+    1. IPs are not allowed in SNI names per RFC 6066.
+    2. A hostname may be prefixed with a wildcard label (`*.`). The wildcard
+       label must appear by itself as the first label.
 
-        If a hostname is specified by both the Listener and TLSRoute, there
-        must be at least one intersecting hostname for the TLSRoute to be
-        attached to the Listener. For example:
+    If a hostname is specified by both the Listener and TLSRoute, there
+    must be at least one intersecting hostname for the TLSRoute to be
+    attached to the Listener. For example:
 
-        * A Listener with `test.example.com` as the hostname matches TLSRoutes
-          that have either not specified any hostnames, or have specified at
-          least one of `test.example.com` or `*.example.com`.
-        * A Listener with `*.example.com` as the hostname matches TLSRoutes
-          that have either not specified any hostnames or have specified at least
-          one hostname that matches the Listener hostname. For example,
-          `test.example.com` and `*.example.com` would both match. On the other
-          hand, `example.com` and `test.example.net` would not match.
+    * A Listener with `test.example.com` as the hostname matches TLSRoutes
+      that have either not specified any hostnames, or have specified at
+      least one of `test.example.com` or `*.example.com`.
+    * A Listener with `*.example.com` as the hostname matches TLSRoutes
+      that have either not specified any hostnames or have specified at least
+      one hostname that matches the Listener hostname. For example,
+      `test.example.com` and `*.example.com` would both match. On the other
+      hand, `example.com` and `test.example.net` would not match.
 
-        If both the Listener and TLSRoute have specified hostnames, any
-        TLSRoute hostnames that do not match the Listener hostname MUST be
-        ignored. For example, if a Listener specified `*.example.com`, and the
-        TLSRoute specified `test.example.com` and `test.example.net`,
-        `test.example.net` must not be considered for a match.
+    If both the Listener and TLSRoute have specified hostnames, any
+    TLSRoute hostnames that do not match the Listener hostname MUST be
+    ignored. For example, if a Listener specified `*.example.com`, and the
+    TLSRoute specified `test.example.com` and `test.example.net`,
+    `test.example.net` must not be considered for a match.
 
-        If both the Listener and TLSRoute have specified hostnames, and none
-        match with the criteria above, then the TLSRoute is not accepted. The
-        implementation must raise an 'Accepted' Condition with a status of
-        `False` in the corresponding RouteParentStatus.
+    If both the Listener and TLSRoute have specified hostnames, and none
+    match with the criteria above, then the TLSRoute is not accepted. The
+    implementation must raise an 'Accepted' Condition with a status of
+    `False` in the corresponding RouteParentStatus.
 
-        Support: Core
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+    Support: Core
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesArgsDict']]]]
-        """
-        Rules are a list of TLS matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]]]
+    """
+    Rules are a list of TLS matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    TLSRouteSpecArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class TLSRouteSpecArgs:
     def __init__(__self__, *,
-                 hostnames: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]] = None,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 hostnames: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]] = None,
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of TLSRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input[_builtins.str]]] hostnames: Hostnames defines a set of SNI names that should match against the
                SNI attribute of TLS ClientHello message in TLS handshake. This matches
                the RFC 1123 definition of a hostname with 2 notable exceptions:
@@ -5543,7 +5463,7 @@ class TLSRouteSpecArgs:
 
     @_builtins.property
     @pulumi.getter
-    def hostnames(self) -> Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]:
+    def hostnames(self) -> pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]:
         """
         Hostnames defines a set of SNI names that should match against the
         SNI attribute of TLS ClientHello message in TLS handshake. This matches
@@ -5582,12 +5502,12 @@ class TLSRouteSpecArgs:
         return pulumi.get(self, "hostnames")
 
     @hostnames.setter
-    def hostnames(self, value: Optional[pulumi.Input[Sequence[pulumi.Input[_builtins.str]]]]):
+    def hostnames(self, value: pulumi.Input[Optional[Sequence[pulumi.Input[_builtins.str]]]]):
         pulumi.set(self, "hostnames", value)
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -5654,24 +5574,24 @@ class TLSRouteSpecArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecParentRefsArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]]:
         """
         Rules are a list of TLS matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteSpecRulesArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -5689,61 +5609,59 @@ class TLSRouteSpecArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class TLSRouteStatusParentsConditionsArgsDict(TypedDict):
-        """
-        Condition contains details for one aspect of the current state of this API Resource.
-        """
-        last_transition_time: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        lastTransitionTime is the last time the condition transitioned from one status to another.
-        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-        """
-        message: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        message is a human readable message indicating details about the transition.
-        This may be an empty string.
-        """
-        observed_generation: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        observedGeneration represents the .metadata.generation that the condition was set based upon.
-        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-        with respect to the current state of the instance.
-        """
-        reason: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-        Producers of specific condition types may define expected values and meanings for this field,
-        and whether the values are considered a guaranteed API.
-        The value should be a CamelCase string.
-        This field may not be empty.
-        """
-        status: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        status of the condition, one of True, False, Unknown.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        type of condition in CamelCase or in foo.example.com/CamelCase.
-        """
-elif False:
-    TLSRouteStatusParentsConditionsArgsDict: TypeAlias = Mapping[str, Any]
+class TLSRouteStatusParentsConditionsArgsDict(TypedDict):
+    """
+    Condition contains details for one aspect of the current state of this API Resource.
+    """
+    last_transition_time: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    lastTransitionTime is the last time the condition transitioned from one status to another.
+    This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+    """
+    message: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    message is a human readable message indicating details about the transition.
+    This may be an empty string.
+    """
+    observed_generation: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    observedGeneration represents the .metadata.generation that the condition was set based upon.
+    For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+    with respect to the current state of the instance.
+    """
+    reason: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    reason contains a programmatic identifier indicating the reason for the condition's last transition.
+    Producers of specific condition types may define expected values and meanings for this field,
+    and whether the values are considered a guaranteed API.
+    The value should be a CamelCase string.
+    This field may not be empty.
+    """
+    status: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    status of the condition, one of True, False, Unknown.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    type of condition in CamelCase or in foo.example.com/CamelCase.
+    """
 
 @pulumi.input_type
 class TLSRouteStatusParentsConditionsArgs:
     def __init__(__self__, *,
-                 last_transition_time: Optional[pulumi.Input[_builtins.str]] = None,
-                 message: Optional[pulumi.Input[_builtins.str]] = None,
-                 observed_generation: Optional[pulumi.Input[_builtins.int]] = None,
-                 reason: Optional[pulumi.Input[_builtins.str]] = None,
-                 status: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 last_transition_time: pulumi.Input[Optional[_builtins.str]] = None,
+                 message: pulumi.Input[Optional[_builtins.str]] = None,
+                 observed_generation: pulumi.Input[Optional[_builtins.int]] = None,
+                 reason: pulumi.Input[Optional[_builtins.str]] = None,
+                 status: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param pulumi.Input[_builtins.str] last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param pulumi.Input[_builtins.str] message: message is a human readable message indicating details about the transition.
@@ -5774,7 +5692,7 @@ class TLSRouteStatusParentsConditionsArgs:
 
     @_builtins.property
     @pulumi.getter(name="lastTransitionTime")
-    def last_transition_time(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def last_transition_time(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         lastTransitionTime is the last time the condition transitioned from one status to another.
         This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
@@ -5782,12 +5700,12 @@ class TLSRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "last_transition_time")
 
     @last_transition_time.setter
-    def last_transition_time(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def last_transition_time(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "last_transition_time", value)
 
     @_builtins.property
     @pulumi.getter
-    def message(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def message(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         message is a human readable message indicating details about the transition.
         This may be an empty string.
@@ -5795,12 +5713,12 @@ class TLSRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "message")
 
     @message.setter
-    def message(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def message(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "message", value)
 
     @_builtins.property
     @pulumi.getter(name="observedGeneration")
-    def observed_generation(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def observed_generation(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         observedGeneration represents the .metadata.generation that the condition was set based upon.
         For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
@@ -5809,12 +5727,12 @@ class TLSRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "observed_generation")
 
     @observed_generation.setter
-    def observed_generation(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def observed_generation(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "observed_generation", value)
 
     @_builtins.property
     @pulumi.getter
-    def reason(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def reason(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         reason contains a programmatic identifier indicating the reason for the condition's last transition.
         Producers of specific condition types may define expected values and meanings for this field,
@@ -5825,166 +5743,164 @@ class TLSRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "reason")
 
     @reason.setter
-    def reason(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def reason(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "reason", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def status(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         status of the condition, one of True, False, Unknown.
         """
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def status(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "status", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         type of condition in CamelCase or in foo.example.com/CamelCase.
         """
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class TLSRouteStatusParentsParentRefArgsDict(TypedDict):
-        """
-        ParentRef corresponds with a ParentRef in the spec that this
-        RouteParentStatus struct describes the status of.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+class TLSRouteStatusParentsParentRefArgsDict(TypedDict):
+    """
+    ParentRef corresponds with a ParentRef in the spec that this
+    RouteParentStatus struct describes the status of.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    TLSRouteStatusParentsParentRefArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class TLSRouteStatusParentsParentRefArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -6094,7 +6010,7 @@ class TLSRouteStatusParentsParentRefArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -6106,12 +6022,12 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -6125,12 +6041,12 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -6139,12 +6055,12 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -6172,12 +6088,12 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -6213,12 +6129,12 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -6248,67 +6164,65 @@ class TLSRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class TLSRouteStatusParentsArgsDict(TypedDict):
-        """
-        RouteParentStatus describes the status of a route with respect to an
-        associated Parent.
-        """
-        conditions: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgsDict']]]]
-        """
-        Conditions describes the status of the route with respect to the Gateway.
-        Note that the route's availability is also subject to the Gateway's own
-        status conditions and listener status.
+class TLSRouteStatusParentsArgsDict(TypedDict):
+    """
+    RouteParentStatus describes the status of a route with respect to an
+    associated Parent.
+    """
+    conditions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]]]
+    """
+    Conditions describes the status of the route with respect to the Gateway.
+    Note that the route's availability is also subject to the Gateway's own
+    status conditions and listener status.
 
-        If the Route's ParentRef specifies an existing Gateway that supports
-        Routes of this kind AND that Gateway's controller has sufficient access,
-        then that Gateway's controller MUST set the "Accepted" condition on the
-        Route, to indicate whether the route has been accepted or rejected by the
-        Gateway, and why.
+    If the Route's ParentRef specifies an existing Gateway that supports
+    Routes of this kind AND that Gateway's controller has sufficient access,
+    then that Gateway's controller MUST set the "Accepted" condition on the
+    Route, to indicate whether the route has been accepted or rejected by the
+    Gateway, and why.
 
-        A Route MUST be considered "Accepted" if at least one of the Route's
-        rules is implemented by the Gateway.
+    A Route MUST be considered "Accepted" if at least one of the Route's
+    rules is implemented by the Gateway.
 
-        There are a number of cases where the "Accepted" condition may not be set
-        due to lack of controller visibility, that includes when:
+    There are a number of cases where the "Accepted" condition may not be set
+    due to lack of controller visibility, that includes when:
 
-        * The Route refers to a nonexistent parent.
-        * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
-        """
-        controller_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ControllerName is a domain/path string that indicates the name of the
-        controller that wrote this status. This corresponds with the
-        controllerName field on GatewayClass.
+    * The Route refers to a nonexistent parent.
+    * The Route is of a type that the controller does not support.
+    * The Route is in a namespace to which the controller does not have access.
+    """
+    controller_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ControllerName is a domain/path string that indicates the name of the
+    controller that wrote this status. This corresponds with the
+    controllerName field on GatewayClass.
 
-        Example: "example.net/gateway-controller".
+    Example: "example.net/gateway-controller".
 
-        The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
-        valid Kubernetes names
-        (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
+    The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
+    valid Kubernetes names
+    (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
 
-        Controllers MUST populate this field when writing status. Controllers should ensure that
-        entries to status populated with their ControllerName are cleaned up when they are no
-        longer necessary.
-        """
-        parent_ref: NotRequired[pulumi.Input['TLSRouteStatusParentsParentRefArgsDict']]
-elif False:
-    TLSRouteStatusParentsArgsDict: TypeAlias = Mapping[str, Any]
+    Controllers MUST populate this field when writing status. Controllers should ensure that
+    entries to status populated with their ControllerName are cleaned up when they are no
+    longer necessary.
+    """
+    parent_ref: NotRequired[pulumi.Input[Optional['TLSRouteStatusParentsParentRefArgs']]]
 
 @pulumi.input_type
 class TLSRouteStatusParentsArgs:
     def __init__(__self__, *,
-                 conditions: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]] = None,
-                 controller_name: Optional[pulumi.Input[_builtins.str]] = None,
-                 parent_ref: Optional[pulumi.Input['TLSRouteStatusParentsParentRefArgs']] = None):
+                 conditions: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]] = None,
+                 controller_name: pulumi.Input[Optional[_builtins.str]] = None,
+                 parent_ref: pulumi.Input[Optional['TLSRouteStatusParentsParentRefArgs']] = None):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -6327,7 +6241,7 @@ class TLSRouteStatusParentsArgs:
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param pulumi.Input[_builtins.str] controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -6351,7 +6265,7 @@ class TLSRouteStatusParentsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def conditions(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]]:
+    def conditions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]]:
         """
         Conditions describes the status of the route with respect to the Gateway.
         Note that the route's availability is also subject to the Gateway's own
@@ -6371,17 +6285,17 @@ class TLSRouteStatusParentsArgs:
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
     @conditions.setter
-    def conditions(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]]):
+    def conditions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsConditionsArgs']]]]):
         pulumi.set(self, "conditions", value)
 
     @_builtins.property
     @pulumi.getter(name="controllerName")
-    def controller_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def controller_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ControllerName is a domain/path string that indicates the name of the
         controller that wrote this status. This corresponds with the
@@ -6400,50 +6314,48 @@ class TLSRouteStatusParentsArgs:
         return pulumi.get(self, "controller_name")
 
     @controller_name.setter
-    def controller_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def controller_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "controller_name", value)
 
     @_builtins.property
     @pulumi.getter(name="parentRef")
-    def parent_ref(self) -> Optional[pulumi.Input['TLSRouteStatusParentsParentRefArgs']]:
+    def parent_ref(self) -> pulumi.Input[Optional['TLSRouteStatusParentsParentRefArgs']]:
         return pulumi.get(self, "parent_ref")
 
     @parent_ref.setter
-    def parent_ref(self, value: Optional[pulumi.Input['TLSRouteStatusParentsParentRefArgs']]):
+    def parent_ref(self, value: pulumi.Input[Optional['TLSRouteStatusParentsParentRefArgs']]):
         pulumi.set(self, "parent_ref", value)
 
 
-if not MYPY:
-    class TLSRouteStatusArgsDict(TypedDict):
-        """
-        Status defines the current state of TLSRoute.
-        """
-        parents: NotRequired[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsArgsDict']]]]
-        """
-        Parents is a list of parent resources (usually Gateways) that are
-        associated with the route, and the status of the route with respect to
-        each parent. When this route attaches to a parent, the controller that
-        manages the parent must add an entry to this list when the controller
-        first sees the route and should update the entry as appropriate when the
-        route or gateway is modified.
+class TLSRouteStatusArgsDict(TypedDict):
+    """
+    Status defines the current state of TLSRoute.
+    """
+    parents: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]]]
+    """
+    Parents is a list of parent resources (usually Gateways) that are
+    associated with the route, and the status of the route with respect to
+    each parent. When this route attaches to a parent, the controller that
+    manages the parent must add an entry to this list when the controller
+    first sees the route and should update the entry as appropriate when the
+    route or gateway is modified.
 
-        Note that parent references that cannot be resolved by an implementation
-        of this API will not be added to this list. Implementations of this API
-        can only populate Route status for the Gateways/parent resources they are
-        responsible for.
+    Note that parent references that cannot be resolved by an implementation
+    of this API will not be added to this list. Implementations of this API
+    can only populate Route status for the Gateways/parent resources they are
+    responsible for.
 
-        A maximum of 32 Gateways will be represented in this list. An empty list
-        means the route has not been attached to any Gateway.
-        """
-elif False:
-    TLSRouteStatusArgsDict: TypeAlias = Mapping[str, Any]
+    A maximum of 32 Gateways will be represented in this list. An empty list
+    means the route has not been attached to any Gateway.
+    """
 
 @pulumi.input_type
 class TLSRouteStatusArgs:
     def __init__(__self__, *,
-                 parents: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]] = None):
+                 parents: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]] = None):
         """
         Status defines the current state of TLSRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -6464,7 +6376,7 @@ class TLSRouteStatusArgs:
 
     @_builtins.property
     @pulumi.getter
-    def parents(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]]:
+    def parents(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]]:
         """
         Parents is a list of parent resources (usually Gateways) that are
         associated with the route, and the status of the route with respect to
@@ -6484,52 +6396,44 @@ class TLSRouteStatusArgs:
         return pulumi.get(self, "parents")
 
     @parents.setter
-    def parents(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]]):
+    def parents(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['TLSRouteStatusParentsArgs']]]]):
         pulumi.set(self, "parents", value)
 
 
-if not MYPY:
-    class TLSRouteArgsDict(TypedDict):
-        """
-        The TLSRoute resource is similar to TCPRoute, but can be configured
-        to match against TLS-specific metadata. This allows more flexibility
-        in matching streams for a given TLS listener.
-
-        If you need to forward traffic to a single target for a TLS listener, you
-        could choose to use a TCPRoute with a TLS listener.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['TLSRouteSpecArgsDict']]
-        status: NotRequired[pulumi.Input['TLSRouteStatusArgsDict']]
-elif False:
-    TLSRouteArgsDict: TypeAlias = Mapping[str, Any]
+class TLSRouteArgsDict(TypedDict):
+    """
+    The TLSRoute resource is similar to TCPRoute, but can be configured
+    to match against TLS-specific metadata. This allows more flexibility
+    in matching streams for a given TLS listener.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['TLSRouteSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['TLSRouteStatusArgs']]]
 
 @pulumi.input_type
 class TLSRouteArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['TLSRouteSpecArgs']] = None,
-                 status: Optional[pulumi.Input['TLSRouteStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['TLSRouteSpecArgs']] = None,
+                 status: pulumi.Input[Optional['TLSRouteStatusArgs']] = None):
         """
         The TLSRoute resource is similar to TCPRoute, but can be configured
         to match against TLS-specific metadata. This allows more flexibility
         in matching streams for a given TLS listener.
 
-        If you need to forward traffic to a single target for a TLS listener, you
-        could choose to use a TCPRoute with a TLS listener.
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -6547,198 +6451,195 @@ class TLSRouteArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['TLSRouteSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['TLSRouteSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['TLSRouteSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['TLSRouteSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['TLSRouteStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['TLSRouteStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['TLSRouteStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['TLSRouteStatusArgs']]):
         pulumi.set(self, "status", value)
 
 
-if not MYPY:
-    class UDPRouteSpecParentRefsPatchArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+class UDPRouteSpecParentRefsPatchArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    UDPRouteSpecParentRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class UDPRouteSpecParentRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -6752,6 +6653,7 @@ class UDPRouteSpecParentRefsPatchArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -6861,7 +6763,7 @@ class UDPRouteSpecParentRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -6873,12 +6775,12 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -6892,12 +6794,12 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -6906,12 +6808,12 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -6939,12 +6841,12 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -6980,12 +6882,12 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -7015,149 +6917,146 @@ class UDPRouteSpecParentRefsPatchArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class UDPRouteSpecParentRefsArgsDict(TypedDict):
-        """
-        ParentReference identifies an API object (usually a Gateway) that can be considered
-        a parent of this resource (usually a route). There are two kinds of parent resources
-        with "Core" support:
+class UDPRouteSpecParentRefsArgsDict(TypedDict):
+    """
+    ParentReference identifies an API object (usually a Gateway) that can be considered
+    a parent of this resource (usually a route). There are two kinds of parent resources
+    with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        The API object must be valid in the cluster; the Group and Kind must
-        be registered in the cluster for this reference to be valid.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+    The API object must be valid in the cluster; the Group and Kind must
+    be registered in the cluster for this reference to be valid.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    UDPRouteSpecParentRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class UDPRouteSpecParentRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentReference identifies an API object (usually a Gateway) that can be considered
         a parent of this resource (usually a route). There are two kinds of parent resources
@@ -7171,6 +7070,7 @@ class UDPRouteSpecParentRefsArgs:
 
         The API object must be valid in the cluster; the Group and Kind must
         be registered in the cluster for this reference to be valid.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -7280,7 +7180,7 @@ class UDPRouteSpecParentRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -7292,12 +7192,12 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -7311,12 +7211,12 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -7325,12 +7225,12 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -7358,12 +7258,12 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -7399,12 +7299,12 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -7434,109 +7334,107 @@ class UDPRouteSpecParentRefsArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class UDPRouteSpecPatchArgsDict(TypedDict):
-        """
-        Spec defines the desired state of UDPRoute.
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+class UDPRouteSpecPatchArgsDict(TypedDict):
+    """
+    Spec defines the desired state of UDPRoute.
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgsDict']]]]
-        """
-        Rules are a list of UDP matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]]]
+    """
+    Rules are a list of UDP matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    UDPRouteSpecPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecPatchArgs:
     def __init__(__self__, *,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of UDPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -7621,7 +7519,7 @@ class UDPRouteSpecPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -7688,24 +7586,24 @@ class UDPRouteSpecPatchArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsPatchArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]]:
         """
         Rules are a list of UDP matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesPatchArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -7723,115 +7621,112 @@ class UDPRouteSpecPatchArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class UDPRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class UDPRouteSpecRulesBackendRefsPatchArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    UDPRouteSpecRulesBackendRefsPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecRulesBackendRefsPatchArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -7860,6 +7755,7 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -7920,7 +7816,7 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -7928,12 +7824,12 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -7953,24 +7849,24 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -7985,12 +7881,12 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -8001,12 +7897,12 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -8025,115 +7921,112 @@ class UDPRouteSpecRulesBackendRefsPatchArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class UDPRouteSpecRulesBackendRefsArgsDict(TypedDict):
-        """
-        BackendRef defines how a Route should forward a request to a Kubernetes
-        resource.
+class UDPRouteSpecRulesBackendRefsArgsDict(TypedDict):
+    """
+    BackendRef defines how a Route should forward a request to a Kubernetes
+    resource.
 
-        Note that when a namespace different than the local namespace is specified, a
-        ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
-
-
-        When the BackendRef points to a Kubernetes Service, implementations SHOULD
-        honor the appProtocol field if it is set for the target Service Port.
-
-        Implementations supporting appProtocol SHOULD recognize the Kubernetes
-        Standard Application Protocols defined in KEP-3726.
-
-        If a Service appProtocol isn't specified, an implementation MAY infer the
-        backend protocol through its own means. Implementations MAY infer the
-        protocol from the Route type referring to the backend Service.
-
-        If a Route is not able to send traffic to the backend using the specified
-        protocol then the backend is considered invalid. Implementations MUST set the
-        "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
+    Note that when a namespace different than the local namespace is specified, a
+    ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
 
 
-        Note that when the BackendTLSPolicy object is enabled by the implementation,
-        there are some extra rules about validity to consider here. See the fields
-        where this struct is used for more information about the exact behavior.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent. For example, "gateway.networking.k8s.io".
-        When unspecified or empty string, core API group is inferred.
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is the Kubernetes resource kind of the referent. For example
-        "Service".
+    When the BackendRef points to a Kubernetes Service, implementations SHOULD
+    honor the appProtocol field if it is set for the target Service Port.
 
-        Defaults to "Service" when not specified.
+    Implementations supporting appProtocol SHOULD recognize the Kubernetes
+    Standard Application Protocols defined in KEP-3726.
 
-        ExternalName services can refer to CNAME DNS records that may live
-        outside of the cluster and as such are difficult to reason about in
-        terms of conformance. They also may not be safe to forward to (see
-        CVE-2021-25740 for more information). Implementations SHOULD NOT
-        support ExternalName Services.
+    If a Service appProtocol isn't specified, an implementation MAY infer the
+    backend protocol through its own means. Implementations MAY infer the
+    protocol from the Route type referring to the backend Service.
 
-        Support: Core (Services with a type other than ExternalName)
+    If a Route is not able to send traffic to the backend using the specified
+    protocol then the backend is considered invalid. Implementations MUST set the
+    "ResolvedRefs" condition to "False" with the "UnsupportedProtocol" reason.
 
-        Support: Implementation-specific (Services with type ExternalName)
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the backend. When unspecified, the local
-        namespace is inferred.
 
-        Note that when a namespace different than the local namespace is specified,
-        a ReferenceGrant object is required in the referent namespace to allow that
-        namespace's owner to accept the reference. See the ReferenceGrant
-        documentation for details.
+    Note that when the BackendTLSPolicy object is enabled by the implementation,
+    there are some extra rules about validity to consider here. See the fields
+    where this struct is used for more information about the exact behavior.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent. For example, "gateway.networking.k8s.io".
+    When unspecified or empty string, core API group is inferred.
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is the Kubernetes resource kind of the referent. For example
+    "Service".
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port specifies the destination port number to use for this resource.
-        Port is required when the referent is a Kubernetes Service. In this
-        case, the port number is the service port number, not the target port.
-        For other resources, destination port might be derived from the referent
-        resource or this field.
-        """
-        weight: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Weight specifies the proportion of requests forwarded to the referenced
-        backend. This is computed as weight/(sum of all weights in this
-        BackendRefs list). For non-zero values, there may be some epsilon from
-        the exact proportion defined here depending on the precision an
-        implementation supports. Weight is not a percentage and the sum of
-        weights does not need to equal 100.
+    Defaults to "Service" when not specified.
 
-        If only one backend is specified and it has a weight greater than 0, 100%
-        of the traffic is forwarded to that backend. If weight is set to 0, no
-        traffic should be forwarded for this entry. If unspecified, weight
-        defaults to 1.
+    ExternalName services can refer to CNAME DNS records that may live
+    outside of the cluster and as such are difficult to reason about in
+    terms of conformance. They also may not be safe to forward to (see
+    CVE-2021-25740 for more information). Implementations SHOULD NOT
+    support ExternalName Services.
 
-        Support for this field varies based on the context where used.
-        """
-elif False:
-    UDPRouteSpecRulesBackendRefsArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Core (Services with a type other than ExternalName)
+
+    Support: Implementation-specific (Services with type ExternalName)
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the backend. When unspecified, the local
+    namespace is inferred.
+
+    Note that when a namespace different than the local namespace is specified,
+    a ReferenceGrant object is required in the referent namespace to allow that
+    namespace's owner to accept the reference. See the ReferenceGrant
+    documentation for details.
+
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port specifies the destination port number to use for this resource.
+    Port is required when the referent is a Kubernetes Service. In this
+    case, the port number is the service port number, not the target port.
+    For other resources, destination port might be derived from the referent
+    resource or this field.
+    """
+    weight: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Weight specifies the proportion of requests forwarded to the referenced
+    backend. This is computed as weight/(sum of all weights in this
+    BackendRefs list). For non-zero values, there may be some epsilon from
+    the exact proportion defined here depending on the precision an
+    implementation supports. Weight is not a percentage and the sum of
+    weights does not need to equal 100.
+
+    If only one backend is specified and it has a weight greater than 0, 100%
+    of the traffic is forwarded to that backend. If weight is set to 0, no
+    traffic should be forwarded for this entry. If unspecified, weight
+    defaults to 1.
+
+    Support for this field varies based on the context where used.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecRulesBackendRefsArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 weight: Optional[pulumi.Input[_builtins.int]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 weight: pulumi.Input[Optional[_builtins.int]] = None):
         """
         BackendRef defines how a Route should forward a request to a Kubernetes
         resource.
@@ -8162,6 +8055,7 @@ class UDPRouteSpecRulesBackendRefsArgs:
         Note that when the BackendTLSPolicy object is enabled by the implementation,
         there are some extra rules about validity to consider here. See the fields
         where this struct is used for more information about the exact behavior.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent. For example, "gateway.networking.k8s.io".
                When unspecified or empty string, core API group is inferred.
         :param pulumi.Input[_builtins.str] kind: Kind is the Kubernetes resource kind of the referent. For example
@@ -8222,7 +8116,7 @@ class UDPRouteSpecRulesBackendRefsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent. For example, "gateway.networking.k8s.io".
         When unspecified or empty string, core API group is inferred.
@@ -8230,12 +8124,12 @@ class UDPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is the Kubernetes resource kind of the referent. For example
         "Service".
@@ -8255,24 +8149,24 @@ class UDPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the backend. When unspecified, the local
         namespace is inferred.
@@ -8287,12 +8181,12 @@ class UDPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port specifies the destination port number to use for this resource.
         Port is required when the referent is a Kubernetes Service. In this
@@ -8303,12 +8197,12 @@ class UDPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter
-    def weight(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def weight(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Weight specifies the proportion of requests forwarded to the referenced
         backend. This is computed as weight/(sum of all weights in this
@@ -8327,48 +8221,38 @@ class UDPRouteSpecRulesBackendRefsArgs:
         return pulumi.get(self, "weight")
 
     @weight.setter
-    def weight(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def weight(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "weight", value)
 
 
-if not MYPY:
-    class UDPRouteSpecRulesPatchArgsDict(TypedDict):
-        """
-        UDPRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or a
-        Service with no endpoints), the underlying implementation MUST actively
-        reject connection attempts to this backend. Packet drops must
-        respect weight; if an invalid backend is requested to have 80% of
-        the packets, then 80% of packets must be dropped instead.
+class UDPRouteSpecRulesPatchArgsDict(TypedDict):
+    """
+    UDPRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or a
+    Service with no endpoints), the underlying implementation MUST actively
+    reject connection attempts to this backend. Packet drops must
+    respect weight; if an invalid backend is requested to have 80% of
+    the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
-        """
-elif False:
-    UDPRouteSpecRulesPatchArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Extended for Kubernetes Service
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecRulesPatchArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         UDPRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -8376,16 +8260,8 @@ class UDPRouteSpecRulesPatchArgs:
                respect weight; if an invalid backend is requested to have 80% of
                the packets, then 80% of packets must be dropped instead.
                
-               Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
+               Support: Extended for Kubernetes Service
         :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -8394,7 +8270,7 @@ class UDPRouteSpecRulesPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or a
@@ -8403,73 +8279,55 @@ class UDPRouteSpecRulesPatchArgs:
         respect weight; if an invalid backend is requested to have 80% of
         the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
+        Support: Extended for Kubernetes Service
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsPatchArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class UDPRouteSpecRulesArgsDict(TypedDict):
-        """
-        UDPRouteRule is the configuration for a given rule.
-        """
-        backend_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgsDict']]]]
-        """
-        BackendRefs defines the backend(s) where matching requests should be
-        sent. If unspecified or invalid (refers to a nonexistent resource or a
-        Service with no endpoints), the underlying implementation MUST actively
-        reject connection attempts to this backend. Packet drops must
-        respect weight; if an invalid backend is requested to have 80% of
-        the packets, then 80% of packets must be dropped instead.
+class UDPRouteSpecRulesArgsDict(TypedDict):
+    """
+    UDPRouteRule is the configuration for a given rule.
+    """
+    backend_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]]]
+    """
+    BackendRefs defines the backend(s) where matching requests should be
+    sent. If unspecified or invalid (refers to a nonexistent resource or a
+    Service with no endpoints), the underlying implementation MUST actively
+    reject connection attempts to this backend. Packet drops must
+    respect weight; if an invalid backend is requested to have 80% of
+    the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
-        """
-elif False:
-    UDPRouteSpecRulesArgsDict: TypeAlias = Mapping[str, Any]
+    Support: Extended for Kubernetes Service
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the route rule. This name MUST be unique within a Route if it is set.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecRulesArgs:
     def __init__(__self__, *,
-                 backend_refs: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None):
+                 backend_refs: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         UDPRouteRule is the configuration for a given rule.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]] backend_refs: BackendRefs defines the backend(s) where matching requests should be
                sent. If unspecified or invalid (refers to a nonexistent resource or a
                Service with no endpoints), the underlying implementation MUST actively
@@ -8477,16 +8335,8 @@ class UDPRouteSpecRulesArgs:
                respect weight; if an invalid backend is requested to have 80% of
                the packets, then 80% of packets must be dropped instead.
                
-               Support: Core for Kubernetes Service
-               
-               Support: Extended for Kubernetes ServiceImport
-               
-               Support: Implementation-specific for any other resource
-               
-               Support for weight: Extended
+               Support: Extended for Kubernetes Service
         :param pulumi.Input[_builtins.str] name: Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-               
-               Support: Extended
         """
         if backend_refs is not None:
             pulumi.set(__self__, "backend_refs", backend_refs)
@@ -8495,7 +8345,7 @@ class UDPRouteSpecRulesArgs:
 
     @_builtins.property
     @pulumi.getter(name="backendRefs")
-    def backend_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]]:
+    def backend_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]]:
         """
         BackendRefs defines the backend(s) where matching requests should be
         sent. If unspecified or invalid (refers to a nonexistent resource or a
@@ -8504,134 +8354,124 @@ class UDPRouteSpecRulesArgs:
         respect weight; if an invalid backend is requested to have 80% of
         the packets, then 80% of packets must be dropped instead.
 
-        Support: Core for Kubernetes Service
-
-        Support: Extended for Kubernetes ServiceImport
-
-        Support: Implementation-specific for any other resource
-
-        Support for weight: Extended
+        Support: Extended for Kubernetes Service
         """
         return pulumi.get(self, "backend_refs")
 
     @backend_refs.setter
-    def backend_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]]):
+    def backend_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesBackendRefsArgs']]]]):
         pulumi.set(self, "backend_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the route rule. This name MUST be unique within a Route if it is set.
-
-        Support: Extended
         """
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
 
-if not MYPY:
-    class UDPRouteSpecArgsDict(TypedDict):
-        """
-        Spec defines the desired state of UDPRoute.
-        """
-        parent_refs: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgsDict']]]]
-        """
-        ParentRefs references the resources (usually Gateways) that a Route wants
-        to be attached to. Note that the referenced parent resource needs to
-        allow this for the attachment to be complete. For Gateways, that means
-        the Gateway needs to allow attachment from Routes of this kind and
-        namespace. For Services, that means the Service must either be in the same
-        namespace for a "producer" route, or the mesh implementation must support
-        and allow "consumer" routes for the referenced Service. ReferenceGrant is
-        not applicable for governing ParentRefs to Services - it is not possible to
-        create a "producer" route for a Service in a different namespace from the
-        Route.
+class UDPRouteSpecArgsDict(TypedDict):
+    """
+    Spec defines the desired state of UDPRoute.
+    """
+    parent_refs: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]]]
+    """
+    ParentRefs references the resources (usually Gateways) that a Route wants
+    to be attached to. Note that the referenced parent resource needs to
+    allow this for the attachment to be complete. For Gateways, that means
+    the Gateway needs to allow attachment from Routes of this kind and
+    namespace. For Services, that means the Service must either be in the same
+    namespace for a "producer" route, or the mesh implementation must support
+    and allow "consumer" routes for the referenced Service. ReferenceGrant is
+    not applicable for governing ParentRefs to Services - it is not possible to
+    create a "producer" route for a Service in a different namespace from the
+    Route.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        This API may be extended in the future to support additional kinds of parent
-        resources.
+    This API may be extended in the future to support additional kinds of parent
+    resources.
 
-        ParentRefs must be _distinct_. This means either that:
+    ParentRefs must be _distinct_. This means either that:
 
-        * They select different objects.  If this is the case, then parentRef
-          entries are distinct. In terms of fields, this means that the
-          multi-part key defined by `group`, `kind`, `namespace`, and `name` must
-          be unique across all parentRef entries in the Route.
-        * They do not select different objects, but for each optional field used,
-          each ParentRef that selects the same object must set the same set of
-          optional fields to different values. If one ParentRef sets a
-          combination of optional fields, all must set the same combination.
+    * They select different objects.  If this is the case, then parentRef
+      entries are distinct. In terms of fields, this means that the
+      multi-part key defined by `group`, `kind`, `namespace`, and `name` must
+      be unique across all parentRef entries in the Route.
+    * They do not select different objects, but for each optional field used,
+      each ParentRef that selects the same object must set the same set of
+      optional fields to different values. If one ParentRef sets a
+      combination of optional fields, all must set the same combination.
 
-        Some examples:
+    Some examples:
 
-        * If one ParentRef sets `sectionName`, all ParentRefs referencing the
-          same object must also set `sectionName`.
-        * If one ParentRef sets `port`, all ParentRefs referencing the same
-          object must also set `port`.
-        * If one ParentRef sets `sectionName` and `port`, all ParentRefs
-          referencing the same object must also set `sectionName` and `port`.
+    * If one ParentRef sets `sectionName`, all ParentRefs referencing the
+      same object must also set `sectionName`.
+    * If one ParentRef sets `port`, all ParentRefs referencing the same
+      object must also set `port`.
+    * If one ParentRef sets `sectionName` and `port`, all ParentRefs
+      referencing the same object must also set `sectionName` and `port`.
 
-        It is possible to separately reference multiple distinct objects that may
-        be collapsed by an implementation. For example, some implementations may
-        choose to merge compatible Gateway Listeners together. If that is the
-        case, the list of routes attached to those resources should also be
-        merged.
+    It is possible to separately reference multiple distinct objects that may
+    be collapsed by an implementation. For example, some implementations may
+    choose to merge compatible Gateway Listeners together. If that is the
+    case, the list of routes attached to those resources should also be
+    merged.
 
-        Note that for ParentRefs that cross namespace boundaries, there are specific
-        rules. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example,
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable other kinds of cross-namespace reference.
+    Note that for ParentRefs that cross namespace boundaries, there are specific
+    rules. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example,
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable other kinds of cross-namespace reference.
 
 
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
-        """
-        rules: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesArgsDict']]]]
-        """
-        Rules are a list of UDP matchers and actions.
-        """
-        use_default_gateways: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        UseDefaultGateways indicates the default Gateway scope to use for this
-        Route. If unset (the default) or set to None, the Route will not be
-        attached to any default Gateway; if set, it will be attached to any
-        default Gateway supporting the named scope, subject to the usual rules
-        about which Routes a Gateway is allowed to claim.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
+    """
+    rules: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]]]
+    """
+    Rules are a list of UDP matchers and actions.
+    """
+    use_default_gateways: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    UseDefaultGateways indicates the default Gateway scope to use for this
+    Route. If unset (the default) or set to None, the Route will not be
+    attached to any default Gateway; if set, it will be attached to any
+    default Gateway supporting the named scope, subject to the usual rules
+    about which Routes a Gateway is allowed to claim.
 
-        Think carefully before using this functionality! The set of default
-        Gateways supporting the requested scope can change over time without
-        any notice to the Route author, and in many situations it will not be
-        appropriate to request a default Gateway for a given Route -- for
-        example, a Route with specific security requirements should almost
-        certainly not use a default Gateway.
-        """
-elif False:
-    UDPRouteSpecArgsDict: TypeAlias = Mapping[str, Any]
+    Think carefully before using this functionality! The set of default
+    Gateways supporting the requested scope can change over time without
+    any notice to the Route author, and in many situations it will not be
+    appropriate to request a default Gateway for a given Route -- for
+    example, a Route with specific security requirements should almost
+    certainly not use a default Gateway.
+    """
 
 @pulumi.input_type
 class UDPRouteSpecArgs:
     def __init__(__self__, *,
-                 parent_refs: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]] = None,
-                 rules: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]] = None,
-                 use_default_gateways: Optional[pulumi.Input[_builtins.str]] = None):
+                 parent_refs: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]] = None,
+                 rules: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]] = None,
+                 use_default_gateways: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Spec defines the desired state of UDPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]] parent_refs: ParentRefs references the resources (usually Gateways) that a Route wants
                to be attached to. Note that the referenced parent resource needs to
                allow this for the attachment to be complete. For Gateways, that means
@@ -8716,7 +8556,7 @@ class UDPRouteSpecArgs:
 
     @_builtins.property
     @pulumi.getter(name="parentRefs")
-    def parent_refs(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]]:
+    def parent_refs(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]]:
         """
         ParentRefs references the resources (usually Gateways) that a Route wants
         to be attached to. Note that the referenced parent resource needs to
@@ -8783,24 +8623,24 @@ class UDPRouteSpecArgs:
         return pulumi.get(self, "parent_refs")
 
     @parent_refs.setter
-    def parent_refs(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]]):
+    def parent_refs(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecParentRefsArgs']]]]):
         pulumi.set(self, "parent_refs", value)
 
     @_builtins.property
     @pulumi.getter
-    def rules(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]]:
+    def rules(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]]:
         """
         Rules are a list of UDP matchers and actions.
         """
         return pulumi.get(self, "rules")
 
     @rules.setter
-    def rules(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]]):
+    def rules(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteSpecRulesArgs']]]]):
         pulumi.set(self, "rules", value)
 
     @_builtins.property
     @pulumi.getter(name="useDefaultGateways")
-    def use_default_gateways(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def use_default_gateways(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         UseDefaultGateways indicates the default Gateway scope to use for this
         Route. If unset (the default) or set to None, the Route will not be
@@ -8818,61 +8658,59 @@ class UDPRouteSpecArgs:
         return pulumi.get(self, "use_default_gateways")
 
     @use_default_gateways.setter
-    def use_default_gateways(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def use_default_gateways(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "use_default_gateways", value)
 
 
-if not MYPY:
-    class UDPRouteStatusParentsConditionsArgsDict(TypedDict):
-        """
-        Condition contains details for one aspect of the current state of this API Resource.
-        """
-        last_transition_time: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        lastTransitionTime is the last time the condition transitioned from one status to another.
-        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-        """
-        message: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        message is a human readable message indicating details about the transition.
-        This may be an empty string.
-        """
-        observed_generation: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        observedGeneration represents the .metadata.generation that the condition was set based upon.
-        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-        with respect to the current state of the instance.
-        """
-        reason: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-        Producers of specific condition types may define expected values and meanings for this field,
-        and whether the values are considered a guaranteed API.
-        The value should be a CamelCase string.
-        This field may not be empty.
-        """
-        status: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        status of the condition, one of True, False, Unknown.
-        """
-        type: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        type of condition in CamelCase or in foo.example.com/CamelCase.
-        """
-elif False:
-    UDPRouteStatusParentsConditionsArgsDict: TypeAlias = Mapping[str, Any]
+class UDPRouteStatusParentsConditionsArgsDict(TypedDict):
+    """
+    Condition contains details for one aspect of the current state of this API Resource.
+    """
+    last_transition_time: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    lastTransitionTime is the last time the condition transitioned from one status to another.
+    This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+    """
+    message: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    message is a human readable message indicating details about the transition.
+    This may be an empty string.
+    """
+    observed_generation: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    observedGeneration represents the .metadata.generation that the condition was set based upon.
+    For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+    with respect to the current state of the instance.
+    """
+    reason: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    reason contains a programmatic identifier indicating the reason for the condition's last transition.
+    Producers of specific condition types may define expected values and meanings for this field,
+    and whether the values are considered a guaranteed API.
+    The value should be a CamelCase string.
+    This field may not be empty.
+    """
+    status: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    status of the condition, one of True, False, Unknown.
+    """
+    type: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    type of condition in CamelCase or in foo.example.com/CamelCase.
+    """
 
 @pulumi.input_type
 class UDPRouteStatusParentsConditionsArgs:
     def __init__(__self__, *,
-                 last_transition_time: Optional[pulumi.Input[_builtins.str]] = None,
-                 message: Optional[pulumi.Input[_builtins.str]] = None,
-                 observed_generation: Optional[pulumi.Input[_builtins.int]] = None,
-                 reason: Optional[pulumi.Input[_builtins.str]] = None,
-                 status: Optional[pulumi.Input[_builtins.str]] = None,
-                 type: Optional[pulumi.Input[_builtins.str]] = None):
+                 last_transition_time: pulumi.Input[Optional[_builtins.str]] = None,
+                 message: pulumi.Input[Optional[_builtins.str]] = None,
+                 observed_generation: pulumi.Input[Optional[_builtins.int]] = None,
+                 reason: pulumi.Input[Optional[_builtins.str]] = None,
+                 status: pulumi.Input[Optional[_builtins.str]] = None,
+                 type: pulumi.Input[Optional[_builtins.str]] = None):
         """
         Condition contains details for one aspect of the current state of this API Resource.
+
         :param pulumi.Input[_builtins.str] last_transition_time: lastTransitionTime is the last time the condition transitioned from one status to another.
                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
         :param pulumi.Input[_builtins.str] message: message is a human readable message indicating details about the transition.
@@ -8903,7 +8741,7 @@ class UDPRouteStatusParentsConditionsArgs:
 
     @_builtins.property
     @pulumi.getter(name="lastTransitionTime")
-    def last_transition_time(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def last_transition_time(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         lastTransitionTime is the last time the condition transitioned from one status to another.
         This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
@@ -8911,12 +8749,12 @@ class UDPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "last_transition_time")
 
     @last_transition_time.setter
-    def last_transition_time(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def last_transition_time(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "last_transition_time", value)
 
     @_builtins.property
     @pulumi.getter
-    def message(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def message(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         message is a human readable message indicating details about the transition.
         This may be an empty string.
@@ -8924,12 +8762,12 @@ class UDPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "message")
 
     @message.setter
-    def message(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def message(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "message", value)
 
     @_builtins.property
     @pulumi.getter(name="observedGeneration")
-    def observed_generation(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def observed_generation(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         observedGeneration represents the .metadata.generation that the condition was set based upon.
         For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
@@ -8938,12 +8776,12 @@ class UDPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "observed_generation")
 
     @observed_generation.setter
-    def observed_generation(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def observed_generation(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "observed_generation", value)
 
     @_builtins.property
     @pulumi.getter
-    def reason(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def reason(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         reason contains a programmatic identifier indicating the reason for the condition's last transition.
         Producers of specific condition types may define expected values and meanings for this field,
@@ -8954,166 +8792,164 @@ class UDPRouteStatusParentsConditionsArgs:
         return pulumi.get(self, "reason")
 
     @reason.setter
-    def reason(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def reason(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "reason", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def status(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         status of the condition, one of True, False, Unknown.
         """
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def status(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "status", value)
 
     @_builtins.property
     @pulumi.getter
-    def type(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def type(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         type of condition in CamelCase or in foo.example.com/CamelCase.
         """
         return pulumi.get(self, "type")
 
     @type.setter
-    def type(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def type(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "type", value)
 
 
-if not MYPY:
-    class UDPRouteStatusParentsParentRefArgsDict(TypedDict):
-        """
-        ParentRef corresponds with a ParentRef in the spec that this
-        RouteParentStatus struct describes the status of.
-        """
-        group: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Group is the group of the referent.
-        When unspecified, "gateway.networking.k8s.io" is inferred.
-        To set the core API group (such as for a "Service" kind referent),
-        Group must be explicitly set to "" (empty string).
+class UDPRouteStatusParentsParentRefArgsDict(TypedDict):
+    """
+    ParentRef corresponds with a ParentRef in the spec that this
+    RouteParentStatus struct describes the status of.
+    """
+    group: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Group is the group of the referent.
+    When unspecified, "gateway.networking.k8s.io" is inferred.
+    To set the core API group (such as for a "Service" kind referent),
+    Group must be explicitly set to "" (empty string).
 
-        Support: Core
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is kind of the referent.
+    Support: Core
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is kind of the referent.
 
-        There are two kinds of parent resources with "Core" support:
+    There are two kinds of parent resources with "Core" support:
 
-        * Gateway (Gateway conformance profile)
-        * Service (Mesh conformance profile, ClusterIP Services only)
+    * Gateway (Gateway conformance profile)
+    * Service (Mesh conformance profile, ClusterIP Services only)
 
-        Support for other resources is Implementation-Specific.
-        """
-        name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Name is the name of the referent.
+    Support for other resources is Implementation-Specific.
+    """
+    name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Name is the name of the referent.
 
-        Support: Core
-        """
-        namespace: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Namespace is the namespace of the referent. When unspecified, this refers
-        to the local namespace of the Route.
+    Support: Core
+    """
+    namespace: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Namespace is the namespace of the referent. When unspecified, this refers
+    to the local namespace of the Route.
 
-        Note that there are specific rules for ParentRefs which cross namespace
-        boundaries. Cross-namespace references are only valid if they are explicitly
-        allowed by something in the namespace they are referring to. For example:
-        Gateway has the AllowedRoutes field, and ReferenceGrant provides a
-        generic way to enable any other kind of cross-namespace reference.
-
-
-        ParentRefs from a Route to a Service in the same namespace are "producer"
-        routes, which apply default routing rules to inbound connections from
-        any namespace to the Service.
-
-        ParentRefs from a Route to a Service in a different namespace are
-        "consumer" routes, and these routing rules are only applied to outbound
-        connections originating from the same namespace as the Route, for which
-        the intended destination of the connections are a Service targeted as a
-        ParentRef of the Route.
+    Note that there are specific rules for ParentRefs which cross namespace
+    boundaries. Cross-namespace references are only valid if they are explicitly
+    allowed by something in the namespace they are referring to. For example:
+    Gateway has the AllowedRoutes field, and ReferenceGrant provides a
+    generic way to enable any other kind of cross-namespace reference.
 
 
-        Support: Core
-        """
-        port: NotRequired[pulumi.Input[_builtins.int]]
-        """
-        Port is the network port this Route targets. It can be interpreted
-        differently based on the type of parent resource.
+    ParentRefs from a Route to a Service in the same namespace are "producer"
+    routes, which apply default routing rules to inbound connections from
+    any namespace to the Service.
 
-        When the parent resource is a Gateway, this targets all listeners
-        listening on the specified port that also support this kind of Route(and
-        select this Route). It's not recommended to set `Port` unless the
-        networking behaviors specified in a Route must apply to a specific port
-        as opposed to a listener(s) whose port(s) may be changed. When both Port
-        and SectionName are specified, the name and port of the selected listener
-        must match both specified values.
+    ParentRefs from a Route to a Service in a different namespace are
+    "consumer" routes, and these routing rules are only applied to outbound
+    connections originating from the same namespace as the Route, for which
+    the intended destination of the connections are a Service targeted as a
+    ParentRef of the Route.
 
 
-        When the parent resource is a Service, this targets a specific port in the
-        Service spec. When both Port (experimental) and SectionName are specified,
-        the name and port of the selected port must match both specified values.
+    Support: Core
+    """
+    port: NotRequired[pulumi.Input[Optional[_builtins.int]]]
+    """
+    Port is the network port this Route targets. It can be interpreted
+    differently based on the type of parent resource.
+
+    When the parent resource is a Gateway, this targets all listeners
+    listening on the specified port that also support this kind of Route(and
+    select this Route). It's not recommended to set `Port` unless the
+    networking behaviors specified in a Route must apply to a specific port
+    as opposed to a listener(s) whose port(s) may be changed. When both Port
+    and SectionName are specified, the name and port of the selected listener
+    must match both specified values.
 
 
-        Implementations MAY choose to support other parent resources.
-        Implementations supporting other types of parent resources MUST clearly
-        document how/if Port is interpreted.
+    When the parent resource is a Service, this targets a specific port in the
+    Service spec. When both Port (experimental) and SectionName are specified,
+    the name and port of the selected port must match both specified values.
 
-        For the purpose of status, an attachment is considered successful as
-        long as the parent resource accepts it partially. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
-        from the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route,
-        the Route MUST be considered detached from the Gateway.
 
-        Support: Extended
-        """
-        section_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        SectionName is the name of a section within the target resource. In the
-        following resources, SectionName is interpreted as the following:
+    Implementations MAY choose to support other parent resources.
+    Implementations supporting other types of parent resources MUST clearly
+    document how/if Port is interpreted.
 
-        * Gateway: Listener name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
-        * Service: Port name. When both Port (experimental) and SectionName
-        are specified, the name and port of the selected listener must match
-        both specified values.
+    For the purpose of status, an attachment is considered successful as
+    long as the parent resource accepts it partially. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment
+    from the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route,
+    the Route MUST be considered detached from the Gateway.
 
-        Implementations MAY choose to support attaching Routes to other resources.
-        If that is the case, they MUST clearly document how SectionName is
-        interpreted.
+    Support: Extended
+    """
+    section_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    SectionName is the name of a section within the target resource. In the
+    following resources, SectionName is interpreted as the following:
 
-        When unspecified (empty string), this will reference the entire resource.
-        For the purpose of status, an attachment is considered successful if at
-        least one section in the parent resource accepts it. For example, Gateway
-        listeners can restrict which Routes can attach to them by Route kind,
-        namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
-        the referencing Route, the Route MUST be considered successfully
-        attached. If no Gateway listeners accept attachment from this Route, the
-        Route MUST be considered detached from the Gateway.
+    * Gateway: Listener name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
+    * Service: Port name. When both Port (experimental) and SectionName
+    are specified, the name and port of the selected listener must match
+    both specified values.
 
-        Support: Core
-        """
-elif False:
-    UDPRouteStatusParentsParentRefArgsDict: TypeAlias = Mapping[str, Any]
+    Implementations MAY choose to support attaching Routes to other resources.
+    If that is the case, they MUST clearly document how SectionName is
+    interpreted.
+
+    When unspecified (empty string), this will reference the entire resource.
+    For the purpose of status, an attachment is considered successful if at
+    least one section in the parent resource accepts it. For example, Gateway
+    listeners can restrict which Routes can attach to them by Route kind,
+    namespace, or hostname. If 1 of 2 Gateway listeners accept attachment from
+    the referencing Route, the Route MUST be considered successfully
+    attached. If no Gateway listeners accept attachment from this Route, the
+    Route MUST be considered detached from the Gateway.
+
+    Support: Core
+    """
 
 @pulumi.input_type
 class UDPRouteStatusParentsParentRefArgs:
     def __init__(__self__, *,
-                 group: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 name: Optional[pulumi.Input[_builtins.str]] = None,
-                 namespace: Optional[pulumi.Input[_builtins.str]] = None,
-                 port: Optional[pulumi.Input[_builtins.int]] = None,
-                 section_name: Optional[pulumi.Input[_builtins.str]] = None):
+                 group: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 name: pulumi.Input[Optional[_builtins.str]] = None,
+                 namespace: pulumi.Input[Optional[_builtins.str]] = None,
+                 port: pulumi.Input[Optional[_builtins.int]] = None,
+                 section_name: pulumi.Input[Optional[_builtins.str]] = None):
         """
         ParentRef corresponds with a ParentRef in the spec that this
         RouteParentStatus struct describes the status of.
+
         :param pulumi.Input[_builtins.str] group: Group is the group of the referent.
                When unspecified, "gateway.networking.k8s.io" is inferred.
                To set the core API group (such as for a "Service" kind referent),
@@ -9223,7 +9059,7 @@ class UDPRouteStatusParentsParentRefArgs:
 
     @_builtins.property
     @pulumi.getter
-    def group(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def group(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Group is the group of the referent.
         When unspecified, "gateway.networking.k8s.io" is inferred.
@@ -9235,12 +9071,12 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "group")
 
     @group.setter
-    def group(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def group(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "group", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is kind of the referent.
 
@@ -9254,12 +9090,12 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Name is the name of the referent.
 
@@ -9268,12 +9104,12 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "name")
 
     @name.setter
-    def name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "name", value)
 
     @_builtins.property
     @pulumi.getter
-    def namespace(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def namespace(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Namespace is the namespace of the referent. When unspecified, this refers
         to the local namespace of the Route.
@@ -9301,12 +9137,12 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "namespace")
 
     @namespace.setter
-    def namespace(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def namespace(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "namespace", value)
 
     @_builtins.property
     @pulumi.getter
-    def port(self) -> Optional[pulumi.Input[_builtins.int]]:
+    def port(self) -> pulumi.Input[Optional[_builtins.int]]:
         """
         Port is the network port this Route targets. It can be interpreted
         differently based on the type of parent resource.
@@ -9342,12 +9178,12 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "port")
 
     @port.setter
-    def port(self, value: Optional[pulumi.Input[_builtins.int]]):
+    def port(self, value: pulumi.Input[Optional[_builtins.int]]):
         pulumi.set(self, "port", value)
 
     @_builtins.property
     @pulumi.getter(name="sectionName")
-    def section_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def section_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         SectionName is the name of a section within the target resource. In the
         following resources, SectionName is interpreted as the following:
@@ -9377,67 +9213,65 @@ class UDPRouteStatusParentsParentRefArgs:
         return pulumi.get(self, "section_name")
 
     @section_name.setter
-    def section_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def section_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "section_name", value)
 
 
-if not MYPY:
-    class UDPRouteStatusParentsArgsDict(TypedDict):
-        """
-        RouteParentStatus describes the status of a route with respect to an
-        associated Parent.
-        """
-        conditions: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgsDict']]]]
-        """
-        Conditions describes the status of the route with respect to the Gateway.
-        Note that the route's availability is also subject to the Gateway's own
-        status conditions and listener status.
+class UDPRouteStatusParentsArgsDict(TypedDict):
+    """
+    RouteParentStatus describes the status of a route with respect to an
+    associated Parent.
+    """
+    conditions: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]]]
+    """
+    Conditions describes the status of the route with respect to the Gateway.
+    Note that the route's availability is also subject to the Gateway's own
+    status conditions and listener status.
 
-        If the Route's ParentRef specifies an existing Gateway that supports
-        Routes of this kind AND that Gateway's controller has sufficient access,
-        then that Gateway's controller MUST set the "Accepted" condition on the
-        Route, to indicate whether the route has been accepted or rejected by the
-        Gateway, and why.
+    If the Route's ParentRef specifies an existing Gateway that supports
+    Routes of this kind AND that Gateway's controller has sufficient access,
+    then that Gateway's controller MUST set the "Accepted" condition on the
+    Route, to indicate whether the route has been accepted or rejected by the
+    Gateway, and why.
 
-        A Route MUST be considered "Accepted" if at least one of the Route's
-        rules is implemented by the Gateway.
+    A Route MUST be considered "Accepted" if at least one of the Route's
+    rules is implemented by the Gateway.
 
-        There are a number of cases where the "Accepted" condition may not be set
-        due to lack of controller visibility, that includes when:
+    There are a number of cases where the "Accepted" condition may not be set
+    due to lack of controller visibility, that includes when:
 
-        * The Route refers to a nonexistent parent.
-        * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
-        """
-        controller_name: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        ControllerName is a domain/path string that indicates the name of the
-        controller that wrote this status. This corresponds with the
-        controllerName field on GatewayClass.
+    * The Route refers to a nonexistent parent.
+    * The Route is of a type that the controller does not support.
+    * The Route is in a namespace to which the controller does not have access.
+    """
+    controller_name: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    ControllerName is a domain/path string that indicates the name of the
+    controller that wrote this status. This corresponds with the
+    controllerName field on GatewayClass.
 
-        Example: "example.net/gateway-controller".
+    Example: "example.net/gateway-controller".
 
-        The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
-        valid Kubernetes names
-        (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
+    The format of this field is DOMAIN "/" PATH, where DOMAIN and PATH are
+    valid Kubernetes names
+    (https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names).
 
-        Controllers MUST populate this field when writing status. Controllers should ensure that
-        entries to status populated with their ControllerName are cleaned up when they are no
-        longer necessary.
-        """
-        parent_ref: NotRequired[pulumi.Input['UDPRouteStatusParentsParentRefArgsDict']]
-elif False:
-    UDPRouteStatusParentsArgsDict: TypeAlias = Mapping[str, Any]
+    Controllers MUST populate this field when writing status. Controllers should ensure that
+    entries to status populated with their ControllerName are cleaned up when they are no
+    longer necessary.
+    """
+    parent_ref: NotRequired[pulumi.Input[Optional['UDPRouteStatusParentsParentRefArgs']]]
 
 @pulumi.input_type
 class UDPRouteStatusParentsArgs:
     def __init__(__self__, *,
-                 conditions: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]] = None,
-                 controller_name: Optional[pulumi.Input[_builtins.str]] = None,
-                 parent_ref: Optional[pulumi.Input['UDPRouteStatusParentsParentRefArgs']] = None):
+                 conditions: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]] = None,
+                 controller_name: pulumi.Input[Optional[_builtins.str]] = None,
+                 parent_ref: pulumi.Input[Optional['UDPRouteStatusParentsParentRefArgs']] = None):
         """
         RouteParentStatus describes the status of a route with respect to an
         associated Parent.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]] conditions: Conditions describes the status of the route with respect to the Gateway.
                Note that the route's availability is also subject to the Gateway's own
                status conditions and listener status.
@@ -9456,7 +9290,7 @@ class UDPRouteStatusParentsArgs:
                
                * The Route refers to a nonexistent parent.
                * The Route is of a type that the controller does not support.
-               * The Route is in a namespace the controller does not have access to.
+               * The Route is in a namespace to which the controller does not have access.
         :param pulumi.Input[_builtins.str] controller_name: ControllerName is a domain/path string that indicates the name of the
                controller that wrote this status. This corresponds with the
                controllerName field on GatewayClass.
@@ -9480,7 +9314,7 @@ class UDPRouteStatusParentsArgs:
 
     @_builtins.property
     @pulumi.getter
-    def conditions(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]]:
+    def conditions(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]]:
         """
         Conditions describes the status of the route with respect to the Gateway.
         Note that the route's availability is also subject to the Gateway's own
@@ -9500,17 +9334,17 @@ class UDPRouteStatusParentsArgs:
 
         * The Route refers to a nonexistent parent.
         * The Route is of a type that the controller does not support.
-        * The Route is in a namespace the controller does not have access to.
+        * The Route is in a namespace to which the controller does not have access.
         """
         return pulumi.get(self, "conditions")
 
     @conditions.setter
-    def conditions(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]]):
+    def conditions(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsConditionsArgs']]]]):
         pulumi.set(self, "conditions", value)
 
     @_builtins.property
     @pulumi.getter(name="controllerName")
-    def controller_name(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def controller_name(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         ControllerName is a domain/path string that indicates the name of the
         controller that wrote this status. This corresponds with the
@@ -9529,50 +9363,48 @@ class UDPRouteStatusParentsArgs:
         return pulumi.get(self, "controller_name")
 
     @controller_name.setter
-    def controller_name(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def controller_name(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "controller_name", value)
 
     @_builtins.property
     @pulumi.getter(name="parentRef")
-    def parent_ref(self) -> Optional[pulumi.Input['UDPRouteStatusParentsParentRefArgs']]:
+    def parent_ref(self) -> pulumi.Input[Optional['UDPRouteStatusParentsParentRefArgs']]:
         return pulumi.get(self, "parent_ref")
 
     @parent_ref.setter
-    def parent_ref(self, value: Optional[pulumi.Input['UDPRouteStatusParentsParentRefArgs']]):
+    def parent_ref(self, value: pulumi.Input[Optional['UDPRouteStatusParentsParentRefArgs']]):
         pulumi.set(self, "parent_ref", value)
 
 
-if not MYPY:
-    class UDPRouteStatusArgsDict(TypedDict):
-        """
-        Status defines the current state of UDPRoute.
-        """
-        parents: NotRequired[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsArgsDict']]]]
-        """
-        Parents is a list of parent resources (usually Gateways) that are
-        associated with the route, and the status of the route with respect to
-        each parent. When this route attaches to a parent, the controller that
-        manages the parent must add an entry to this list when the controller
-        first sees the route and should update the entry as appropriate when the
-        route or gateway is modified.
+class UDPRouteStatusArgsDict(TypedDict):
+    """
+    Status defines the current state of UDPRoute.
+    """
+    parents: NotRequired[pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]]]
+    """
+    Parents is a list of parent resources (usually Gateways) that are
+    associated with the route, and the status of the route with respect to
+    each parent. When this route attaches to a parent, the controller that
+    manages the parent must add an entry to this list when the controller
+    first sees the route and should update the entry as appropriate when the
+    route or gateway is modified.
 
-        Note that parent references that cannot be resolved by an implementation
-        of this API will not be added to this list. Implementations of this API
-        can only populate Route status for the Gateways/parent resources they are
-        responsible for.
+    Note that parent references that cannot be resolved by an implementation
+    of this API will not be added to this list. Implementations of this API
+    can only populate Route status for the Gateways/parent resources they are
+    responsible for.
 
-        A maximum of 32 Gateways will be represented in this list. An empty list
-        means the route has not been attached to any Gateway.
-        """
-elif False:
-    UDPRouteStatusArgsDict: TypeAlias = Mapping[str, Any]
+    A maximum of 32 Gateways will be represented in this list. An empty list
+    means the route has not been attached to any Gateway.
+    """
 
 @pulumi.input_type
 class UDPRouteStatusArgs:
     def __init__(__self__, *,
-                 parents: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]] = None):
+                 parents: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]] = None):
         """
         Status defines the current state of UDPRoute.
+
         :param pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]] parents: Parents is a list of parent resources (usually Gateways) that are
                associated with the route, and the status of the route with respect to
                each parent. When this route attaches to a parent, the controller that
@@ -9593,7 +9425,7 @@ class UDPRouteStatusArgs:
 
     @_builtins.property
     @pulumi.getter
-    def parents(self) -> Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]]:
+    def parents(self) -> pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]]:
         """
         Parents is a list of parent resources (usually Gateways) that are
         associated with the route, and the status of the route with respect to
@@ -9613,46 +9445,44 @@ class UDPRouteStatusArgs:
         return pulumi.get(self, "parents")
 
     @parents.setter
-    def parents(self, value: Optional[pulumi.Input[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]]):
+    def parents(self, value: pulumi.Input[Optional[Sequence[pulumi.Input['UDPRouteStatusParentsArgs']]]]):
         pulumi.set(self, "parents", value)
 
 
-if not MYPY:
-    class UDPRouteArgsDict(TypedDict):
-        """
-        UDPRoute provides a way to route UDP traffic. When combined with a Gateway
-        listener, it can be used to forward traffic on the port specified by the
-        listener to a set of backends specified by the UDPRoute.
-        """
-        api_version: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-        """
-        kind: NotRequired[pulumi.Input[_builtins.str]]
-        """
-        Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-        """
-        metadata: NotRequired[pulumi.Input['_meta.v1.ObjectMetaArgsDict']]
-        """
-        Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
-        """
-        spec: NotRequired[pulumi.Input['UDPRouteSpecArgsDict']]
-        status: NotRequired[pulumi.Input['UDPRouteStatusArgsDict']]
-elif False:
-    UDPRouteArgsDict: TypeAlias = Mapping[str, Any]
+class UDPRouteArgsDict(TypedDict):
+    """
+    UDPRoute provides a way to route UDP traffic. When combined with a Gateway
+    listener, it can be used to forward traffic on the port specified by the
+    listener to a set of backends specified by the UDPRoute.
+    """
+    api_version: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+    """
+    kind: NotRequired[pulumi.Input[Optional[_builtins.str]]]
+    """
+    Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+    """
+    metadata: NotRequired[pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]]
+    """
+    Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+    """
+    spec: NotRequired[pulumi.Input[Optional['UDPRouteSpecArgs']]]
+    status: NotRequired[pulumi.Input[Optional['UDPRouteStatusArgs']]]
 
 @pulumi.input_type
 class UDPRouteArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']] = None,
-                 spec: Optional[pulumi.Input['UDPRouteSpecArgs']] = None,
-                 status: Optional[pulumi.Input['UDPRouteStatusArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']] = None,
+                 spec: pulumi.Input[Optional['UDPRouteSpecArgs']] = None,
+                 status: pulumi.Input[Optional['UDPRouteStatusArgs']] = None):
         """
         UDPRoute provides a way to route UDP traffic. When combined with a Gateway
         listener, it can be used to forward traffic on the port specified by the
         listener to a set of backends specified by the UDPRoute.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -9670,56 +9500,56 @@ class UDPRouteArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['UDPRouteSpecArgs']]:
+    def spec(self) -> pulumi.Input[Optional['UDPRouteSpecArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['UDPRouteSpecArgs']]):
+    def spec(self, value: pulumi.Input[Optional['UDPRouteSpecArgs']]):
         pulumi.set(self, "spec", value)
 
     @_builtins.property
     @pulumi.getter
-    def status(self) -> Optional[pulumi.Input['UDPRouteStatusArgs']]:
+    def status(self) -> pulumi.Input[Optional['UDPRouteStatusArgs']]:
         return pulumi.get(self, "status")
 
     @status.setter
-    def status(self, value: Optional[pulumi.Input['UDPRouteStatusArgs']]):
+    def status(self, value: pulumi.Input[Optional['UDPRouteStatusArgs']]):
         pulumi.set(self, "status", value)
 
 

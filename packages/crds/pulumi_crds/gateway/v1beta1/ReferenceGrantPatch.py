@@ -22,12 +22,13 @@ __all__ = ['ReferenceGrantPatchArgs', 'ReferenceGrantPatch']
 @pulumi.input_type
 class ReferenceGrantPatchArgs:
     def __init__(__self__, *,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']] = None,
-                 spec: Optional[pulumi.Input['ReferenceGrantSpecPatchArgs']] = None):
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']] = None,
+                 spec: pulumi.Input[Optional['ReferenceGrantSpecPatchArgs']] = None):
         """
         The set of arguments for constructing a ReferenceGrantPatch resource.
+
         :param pulumi.Input[_builtins.str] api_version: APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         :param pulumi.Input[_builtins.str] kind: Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         :param pulumi.Input['_meta.v1.ObjectMetaPatchArgs'] metadata: Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
@@ -43,47 +44,47 @@ class ReferenceGrantPatchArgs:
 
     @_builtins.property
     @pulumi.getter(name="apiVersion")
-    def api_version(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def api_version(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
         """
         return pulumi.get(self, "api_version")
 
     @api_version.setter
-    def api_version(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def api_version(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "api_version", value)
 
     @_builtins.property
     @pulumi.getter
-    def kind(self) -> Optional[pulumi.Input[_builtins.str]]:
+    def kind(self) -> pulumi.Input[Optional[_builtins.str]]:
         """
         Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
         """
         return pulumi.get(self, "kind")
 
     @kind.setter
-    def kind(self, value: Optional[pulumi.Input[_builtins.str]]):
+    def kind(self, value: pulumi.Input[Optional[_builtins.str]]):
         pulumi.set(self, "kind", value)
 
     @_builtins.property
     @pulumi.getter
-    def metadata(self) -> Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']]:
+    def metadata(self) -> pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']]:
         """
         Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
         """
         return pulumi.get(self, "metadata")
 
     @metadata.setter
-    def metadata(self, value: Optional[pulumi.Input['_meta.v1.ObjectMetaPatchArgs']]):
+    def metadata(self, value: pulumi.Input[Optional['_meta.v1.ObjectMetaPatchArgs']]):
         pulumi.set(self, "metadata", value)
 
     @_builtins.property
     @pulumi.getter
-    def spec(self) -> Optional[pulumi.Input['ReferenceGrantSpecPatchArgs']]:
+    def spec(self) -> pulumi.Input[Optional['ReferenceGrantSpecPatchArgs']]:
         return pulumi.get(self, "spec")
 
     @spec.setter
-    def spec(self, value: Optional[pulumi.Input['ReferenceGrantSpecPatchArgs']]):
+    def spec(self, value: pulumi.Input[Optional['ReferenceGrantSpecPatchArgs']]):
         pulumi.set(self, "spec", value)
 
 
@@ -93,10 +94,10 @@ class ReferenceGrantPatch(pulumi.CustomResource):
     def __init__(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
-                 spec: Optional[pulumi.Input[Union['ReferenceGrantSpecPatchArgs', 'ReferenceGrantSpecPatchArgsDict']]] = None,
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
+                 spec: pulumi.Input[Optional[Union['ReferenceGrantSpecPatchArgs', 'ReferenceGrantSpecPatchArgsDict']]] = None,
                  __props__=None):
         """
         Patch resources are used to modify existing Kubernetes resources by using
@@ -121,6 +122,7 @@ class ReferenceGrantPatch(pulumi.CustomResource):
         support ReferenceGrant MUST NOT permit cross-namespace references which have
         no grant, and MUST respond to the removal of a grant by revoking the access
         that the grant allowed.
+
 
         :param str resource_name: The name of the resource.
         :param pulumi.ResourceOptions opts: Options for the resource.
@@ -158,6 +160,7 @@ class ReferenceGrantPatch(pulumi.CustomResource):
         no grant, and MUST respond to the removal of a grant by revoking the access
         that the grant allowed.
 
+
         :param str resource_name: The name of the resource.
         :param ReferenceGrantPatchArgs args: The arguments to use to populate this resource's properties.
         :param pulumi.ResourceOptions opts: Options for the resource.
@@ -173,10 +176,10 @@ class ReferenceGrantPatch(pulumi.CustomResource):
     def _internal_init(__self__,
                  resource_name: str,
                  opts: Optional[pulumi.ResourceOptions] = None,
-                 api_version: Optional[pulumi.Input[_builtins.str]] = None,
-                 kind: Optional[pulumi.Input[_builtins.str]] = None,
-                 metadata: Optional[pulumi.Input[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
-                 spec: Optional[pulumi.Input[Union['ReferenceGrantSpecPatchArgs', 'ReferenceGrantSpecPatchArgsDict']]] = None,
+                 api_version: pulumi.Input[Optional[_builtins.str]] = None,
+                 kind: pulumi.Input[Optional[_builtins.str]] = None,
+                 metadata: pulumi.Input[Optional[Union['_meta.v1.ObjectMetaPatchArgs', '_meta.v1.ObjectMetaPatchArgsDict']]] = None,
+                 spec: pulumi.Input[Optional[Union['ReferenceGrantSpecPatchArgs', 'ReferenceGrantSpecPatchArgsDict']]] = None,
                  __props__=None):
         opts = pulumi.ResourceOptions.merge(_utilities.get_resource_opts_defaults(), opts)
         if not isinstance(opts, pulumi.ResourceOptions):
@@ -190,6 +193,8 @@ class ReferenceGrantPatch(pulumi.CustomResource):
             __props__.__dict__["kind"] = 'ReferenceGrant'
             __props__.__dict__["metadata"] = metadata
             __props__.__dict__["spec"] = spec
+        alias_opts = pulumi.ResourceOptions(aliases=[pulumi.Alias(type_="kubernetes:gateway.networking.k8s.io/v1:ReferenceGrantPatch")])
+        opts = pulumi.ResourceOptions.merge(opts, alias_opts)
         super(ReferenceGrantPatch, __self__).__init__(
             'kubernetes:gateway.networking.k8s.io/v1beta1:ReferenceGrantPatch',
             resource_name,
