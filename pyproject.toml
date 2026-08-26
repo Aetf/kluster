@@ -100,15 +100,17 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests", "deploy", "__main__.py"]
-# Generated CRD bindings are not ours to annotate; the two pre-Talos
-# leftovers are rewritten rather than retrofitted (AGENTS.md), and the
-# exclusion goes away with them.
+# Both are workspace packages installed editable, through an import finder the
+# type checker cannot follow; it reads them from the tree instead. Listing
+# `src` is not redundant: naming any extra path makes this the whole search
+# path, so leaving it out resolves `kluster` as an unstubbed third-party
+# library.
+extraPaths = ["src", "packages/crds"]
+# Generated CRD bindings are not ours to annotate.
 exclude = [
     "packages/crds",
     "**/__pycache__",
     ".venv",
-    "src/kluster/kx.py",
-    "src/kluster/base_cluster",
 ]
 # basedpyright-only opinions that fight a Pulumi codebase more than they help:
 # provider SDKs surface Any at every boundary, and Pulumi resources are
