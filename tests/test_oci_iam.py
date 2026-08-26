@@ -99,6 +99,14 @@ class FakeIdentity:
         return Response(policy)
 
     def upload_api_key(self, user_id: str, details: Any) -> Response:
+        # The real service caps a user at three keys (quota.limit.exceeded).
+        if len(self.keys.get(user_id, [])) >= oci_iam.KEY_QUOTA:
+            raise oci.exceptions.ServiceError(
+                status=400,
+                code='IdcsConversionError',
+                headers=dict[str, str](),
+                message='You can not create ApiKey as maximum quota limit of 3 has been reached.',
+            )
         assigned = oci_iam.fingerprint_of_public(details.key)
         self.keys.setdefault(user_id, []).append(assigned)
         self.uploaded[assigned] = details.key
@@ -280,7 +288,9 @@ class LaggingIdentity(FakeIdentity):
     denied: int = 0
 
     def list_api_keys(self, user_id: str) -> Response:
-        if self.denied < self.lag:
+        # What lags is the freshly uploaded key, so listing an empty user
+        # (the pre-mint quota check) answers normally.
+        if self.keys.get(user_id) and self.denied < self.lag:
             self.denied += 1
             raise oci.exceptions.ServiceError(
                 status=401,
@@ -401,3 +411,32 @@ def test_rotation_sweeps_as_the_successor_not_the_predecessor(
     # signs with mid-sweep; the deleting connection must be the successor.
     assert tenancy.connections[-1] == (user_id, current)
     assert tenancy.identity.keys[user_id] == [current]
+
+
+def test_rotation_makes_room_before_minting(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    # Fill the quota with orphans behind the stored key's back.
+    for _ in range(oci_iam.KEY_QUOTA - 1):
+        _, public_pem = oci_iam.generate_key()
+        _ = tenancy.identity.upload_api_key(user_id, oci.identity.models.CreateApiKeyDetails(key=public_pem))
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The orphans were swept to make room, the successor minted, the
+    # predecessor retired: exactly one key stands.
+    assert tenancy.identity.keys[user_id] == [current]
+
+
+def test_a_full_user_no_key_of_which_can_go_names_the_errand(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    tenancy = Tenancy(identity=RefusingIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    for _ in range(oci_iam.KEY_QUOTA - 1):
+        _, public_pem = oci_iam.generate_key()
+        _ = tenancy.identity.upload_api_key(user_id, oci.identity.models.CreateApiKeyDetails(key=public_pem))
+
+    # The sweep is refused wholesale, so rotation must refuse to mint -- with
+    # the fingerprints in hand, not a bare quota 400.
+    with pytest.raises(oci_iam.CredentialRejected, match='delete the superseded ones in the console'):
+        _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
