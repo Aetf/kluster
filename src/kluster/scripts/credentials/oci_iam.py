@@ -65,6 +65,12 @@ SEED_NAME = 'kluster-seed'
 PROPAGATION_DEADLINE = 180.0
 PROPAGATION_INTERVAL = 5.0
 
+#: The identity service caps a user at three API keys, and minting comes
+#: before revoking (a rotation must never stand without a working key) --
+#: so room is made before minting, and a full user none of whose keys can
+#: go is an error naming the console errand rather than a quota 400.
+KEY_QUOTA = 3
+
 #: What the seed may do, and the whole of it. Managing users covers their API
 #: keys, which is what makes the seed self-reproducing; managing groups and
 #: policies is what lets it give a per-stack user the access its stack needs.
@@ -341,6 +347,21 @@ def _sweep(iam: Iam, user_id: str, keep: str) -> None:
             log.warning('could not delete superseded API key %s (%s); delete it in the console', existing, exc.code)
 
 
+def _room_for_one_more(iam: Iam, user_id: str) -> None:
+    """Refuse to mint into a full user, naming the keys in the way.
+
+    Reached only when the sweep could not make room (create-after-loss has no
+    key to sweep with; a sweep's deletions can be refused): the quota 400 the
+    mint would hit names neither the keys nor the fix, so this does.
+    """
+    held = iam.api_keys(user_id)
+    if len(held) >= KEY_QUOTA:
+        raise CredentialRejected(
+            f'{SEED_NAME} already holds {len(held)} API keys (the quota); '
+            f'delete the superseded ones in the console first: {", ".join(held)}'
+        )
+
+
 def _store(kit: KdbxStore, entry: str, *, tenancy: str, user_id: str, private_pem: str) -> None:
     """Write the row: user OCID, PEM attachment, tenancy attribute (§2)."""
     kit.put(entry, user_id, '')
@@ -375,6 +396,7 @@ def create_seed(
     iam.membership(str(user.id), str(group.id))
     _ = iam.policy()
 
+    _room_for_one_more(iam, str(user.id))
     private_pem = _mint_verified(iam, str(user.id))
     _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem)
 
@@ -402,6 +424,10 @@ def rotate_seed(
     tenancy, user_id, previous_pem = load_seed(store, seed_entry)
     iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect)
 
+    # Everything but the signing key is dead weight, and the quota (three)
+    # must have room for the successor before it can be minted.
+    _sweep(iam, user_id, fingerprint(previous_pem))
+    _room_for_one_more(iam, user_id)
     private_pem = _mint_verified(iam, user_id)
     _store(into or store, seed_entry, tenancy=tenancy, user_id=user_id, private_pem=private_pem)
 
