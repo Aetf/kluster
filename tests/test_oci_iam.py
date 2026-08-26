@@ -19,7 +19,7 @@ from typing import Any
 
 import oci
 import pytest
-from conftest import MemoryKit
+from memory_kit import MemoryKit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
