@@ -11,6 +11,12 @@ cluster endpoint, which is the load balancer's address, so the balancer is
 declared before the configuration that names it and before the nodes that
 carry that configuration; the backends pointing back at those nodes come
 last.
+
+**Every domain of the design appears below, implemented or not.** A domain
+that has no implementation yet is still called, and says so by raising with
+its own name: the stack is the inventory, so what is missing is visible in
+the program rather than only in a tracker. This is why a run of the stack
+currently stops partway — deliberately, and at a named place.
 """
 
 from __future__ import annotations
@@ -18,7 +24,8 @@ from __future__ import annotations
 import pulumi
 import pulumi_oci as oci
 
-from kluster import conventions
+from kluster import conventions, gateway
+from kluster.physical import homelab
 from kluster.physical.cloud import CloudNetwork
 from kluster.physical.image import TalosImage
 from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
@@ -69,11 +76,96 @@ async def main() -> None:
     )
 
     # Machine facts only: the downstream stacks read addresses and ids, never
-    # conventions — those they share as code.
+    # conventions — those they share as code. The rest of the census
+    # (kubeconfig, talosconfig, bucket names and endpoints) is exported by the
+    # domains below as they come to exist.
     pulumi.export('cluster_endpoint', load_balancer.address)
     pulumi.export('vip1', nodes.reserved_ip.ip_address)
+    pulumi.export('vip1_private', nodes.secondary_ip.ip_address)
     pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
+
+    # The domains still to be written. Each is called, and each refuses by
+    # name; the first one reached ends the run.
+    _declare_storage(compartment_id=compartment_id, nodes=nodes)
+    _declare_guardrails(compartment_id=compartment_id)
+    _declare_talos_day1(cluster=cluster, nodes=nodes)
+    homelab.declare(
+        conventions.CLUSTER_NAME,
+        cluster=cluster,
+        connection_uri=config.require('libvirtUri'),
+        storage_dir=config.require('libvirtStorageDir'),
+        bridge=conventions.HOMELAB_BRIDGE,
+        vcpus=conventions.HOMELAB_VCPUS,
+        memory_gib=conventions.HOMELAB_MEMORY_GIB,
+        disk_gb=conventions.HOMELAB_DISK_GB,
+        haos_domain_uuid=config.require('haosDomainUuid'),
+    )
+    gateway.declare_estate(
+        conventions.CLUSTER_NAME,
+        host=str(conventions.ZT_UDM),
+        host_key=config.require_secret('gatewayHostKey'),
+        private_key=config.require_secret('gatewayPrivateKey'),
+        bgp_neighbour=conventions.HOMELAB_NODE_IPV4,
+    )
+    gateway.declare_firewall(
+        conventions.CLUSTER_NAME,
+        api_url=config.require('unifiApiUrl'),
+        api_key=config.require_secret('unifiApiKey'),
+        site=conventions.UNIFI_SITE,
+        worker_gua=config.require('workerGua'),
+    )
+    gateway.declare_zerotier(
+        conventions.CLUSTER_NAME,
+        api_token=config.require_secret('zerotierApiToken'),
+        network_id=config.require('zerotierNetworkId'),
+    )
+
+
+def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> None:
+    """§1 and §5: the block volume and both object buckets.
+
+    The augmented node's block volume, the chunk bucket that sits in-region
+    with the cloud nodes, and the backup bucket that deliberately does not —
+    a backup kept at the provider whose loss it insures is not a backup —
+    together with their scoped keys and the version-retention rule that makes
+    a deletion by automation recoverable.
+    """
+    raise NotImplementedError(
+        'physical §1/§5 storage: the block volume, the chunk bucket, the backup bucket and '
+        'their keys are not declared yet — kluster-ops#27, docs/declarative/physical.md §1 '
+        'and §5, docs/cluster/storage.md §4'
+    )
+
+
+def _declare_guardrails(*, compartment_id: str) -> None:
+    """§1: the spend limits.
+
+    Compartment quotas that refuse to create anything outside the free
+    envelope, and a budget whose alerts arrive before a bill does. The quota
+    is the load-bearing half: an alert tells you afterwards.
+    """
+    raise NotImplementedError(
+        'physical §1 guardrails: compartment quotas and the budget alert rules are not '
+        'declared yet — kluster-ops#27, docs/declarative/physical.md §1, '
+        'docs/cluster/nodes.md §3.2'
+    )
+
+
+def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> None:
+    """§2: the tail of the Talos chain.
+
+    Secrets and per-node configuration already stand, and the cloud nodes read
+    that configuration from instance metadata at first boot. What is missing
+    is everything after first boot: applying subsequent configuration changes
+    over the machine API, bootstrapping etcd on one node, gating on cluster
+    health, and surfacing the two credentials the later stacks are built on.
+    """
+    raise NotImplementedError(
+        'physical §2 Talos day-1: configuration apply, bootstrap, the health gate and the '
+        'kubeconfig/talosconfig outputs are not declared yet — kluster-ops#26, '
+        'docs/declarative/physical.md §2'
+    )
 
 
 async def _placements(compartment_id: str) -> list[tuple[str, str]]:
