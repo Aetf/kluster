@@ -20,11 +20,17 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import b2, entries, lifecycle, masters, oci_iam, seeds
+from . import b2, derived, entries, lifecycle, masters, oci_iam, pulumi_config, seeds
 from .kdbx import PATH_ENV, KdbxError, KdbxStore
 from .masters import CredentialRejected
+from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
+
+#: Where `state-backend` leaves the client bundle, and therefore where the URL
+#: of the state backend is read from. Every command that has to reach the
+#: backend takes it as an option defaulting to this.
+BUNDLE_DIR = Path.home() / '.config' / 'kluster' / 'state-backend'
 
 #: Which command runs when. The tree says what exists; this says what to do
 #: with it, because "one subcommand per register row" answers neither "where
@@ -45,6 +51,10 @@ _ORDER = """when to run what (docs/credentials.md §4):
     3. eval "$(credentials derive env)"
          PULUMI_CONFIG_PASSPHRASE (derived, stored nowhere) and
          PULUMI_BACKEND_URL (from the bundle step 2 wrote).
+    4. credentials derived cloudflare zones
+         Mints the zone-scoped Cloudflare token from the seed and writes
+         it into the dns stack's config, which is then committed. One
+         §3 row per command; re-running one rotates it.
 
   on a workstation that develops without the kit
     credentials derive passphrase > .pulumi.secret
@@ -115,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = env.add_argument(
         '--bundle-dir',
         type=Path,
-        default=Path.home() / '.config' / 'kluster' / 'state-backend',
+        default=BUNDLE_DIR,
         help='where `state-backend` wrote the client bundle',
     )
     # `env` is for a shell; this is for a file. A workstation that develops
@@ -157,6 +167,31 @@ def build_parser() -> argparse.ArgumentParser:
             _ = actions.add_parser('rotate', help='have the seed mint and install its successor')
         if seed.repair is not None:
             _ = actions.add_parser(seed.repair[0], help=seed.repair[1])
+
+    # The other half of the register: §3's rows, each minted from a seed and
+    # pushed into the slot its consumer reads. A row joins this family when
+    # that consumer exists -- a mint with nowhere to deliver would park a
+    # secret, which is the one thing the register forbids outright.
+    derived_cmd = families.add_parser('derived', help='the credentials minted from a seed into a slot (§3)')
+    rows = derived_cmd.add_subparsers(dest='member', required=True, metavar='<row>')
+    cloudflare_row = rows.add_parser('cloudflare', help='the tokens the Cloudflare seed mints (§3)')
+    cloudflare_actions = cloudflare_row.add_subparsers(dest='action', required=True, metavar='<token>')
+    zones = cloudflare_actions.add_parser(
+        'zones',
+        help="the zone-scoped provider token, into the dns stack's config secret",
+    )
+    _ = zones.add_argument('--entry', default=derived.SEED_ENTRY, help=f'the seed row (default: {derived.SEED_ENTRY})')
+    _ = zones.add_argument(
+        '--stack',
+        default=derived.ZONES_STACK,
+        help=f'the stack whose config takes the token (default: {derived.ZONES_STACK})',
+    )
+    _ = zones.add_argument(
+        '--bundle-dir',
+        type=Path,
+        default=BUNDLE_DIR,
+        help='where `state-backend` wrote the client bundle',
+    )
 
     # The account roots (§2) are not in the kit and not in any database this
     # repository opens: each lives in the desktop secret store under its own
@@ -272,11 +307,23 @@ def main(argv: list[str] | None = None) -> int:
                 _ = oci_iam.adopt_domain(store, seed_entry=args.entry, root=lifecycle.root('oci', input))
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
+            # §3's rows. The stack's configuration is opened with the same two
+            # variables a `pulumi` run needs, derived from the kit that is
+            # already open rather than expected in the environment: one command
+            # is one credential delivered, not a shell that has to be prepared
+            # first.
+            case ('derived', 'cloudflare', 'zones'):
+                stack = pulumi_config.Stack(
+                    name=args.stack,
+                    directory=pulumi_config.project_dir(),
+                    env=lifecycle.environment(store, args.bundle_dir),
+                )
+                _ = derived.cloudflare_zones(store, stack=stack, seed_entry=args.entry)
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family}')
-    except (KdbxError, CredentialRejected) as exc:
+    except (KdbxError, CredentialRejected, SlotRefused) as exc:
         log.error('%s', exc)
         return 1
     return 0

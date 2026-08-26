@@ -307,6 +307,7 @@ credential family plus the lifecycle commands below.
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
 | `eval "$(credentials derive env)"` | Whenever a shell needs to reach the backend. Derives the passphrase, reads the URL from the bundle. |
+| `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
 | `credentials derive passphrase > .pulumi.secret` | Once per workstation that develops without the kit. Caches the passphrase for `mise.toml` to read, so a local preview does not need the offline database open. |
 | `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
@@ -317,6 +318,22 @@ shaped like the register answers neither "where do I start" nor "which
 of these destroys something". Every
 subcommand is **mint → push to every slot in the map → verify**, and
 therefore idempotent: rotation is a re-run, not a second procedure.
+
+§3's rows are `credentials derived <row> <credential>`, one command per
+row. A row is implemented when its consumer exists: minting a credential
+that has no slot to be delivered into would park a secret, which rule 2
+forbids. The zones token is delivered today; the DNS-01 token and the
+gateway's ACME token join it with cert-manager and the gateway, and the
+CI Environment half of every row joins it with the Environments
+themselves (ci.md §2).
+
+The zones token's scope is not a list in the script: it is the estate's
+zones as `conventions` names them, resolved to zone ids through the seed
+at mint time, so adding a zone there and re-running the command is the
+whole procedure for widening it. The push writes two keys, because a
+provider credential alone does not identify the account that owns those
+zones: `cloudflare:apiToken` as a config secret and
+`kluster:cloudflareAccountId` in plain text.
 
 -   **A slot map, checked in.** A declarative manifest maps each §3 row
     to its target slots: GitHub Environment secret (repo + environment

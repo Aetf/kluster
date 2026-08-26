@@ -106,6 +106,8 @@ def expected(path: list[str]) -> str | None:
             return 'store.describe'
         case ['kdbx', action]:
             return f'store.{action}'
+        case ['derived', row, token]:
+            return f'derived.{row}_{token}'
         case ['derive', 'env']:
             return 'lifecycle.environment'
         case ['derive', 'passphrase']:
@@ -166,6 +168,7 @@ class Dispatch:
             (cli.oci_iam, 'rotate_seed', 'fingerprint'),
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
+            (cli.derived, 'cloudflare_zones', 'account-id'),
         )
         for module, attribute, result in handlers:
             name = f'{module.__name__.rsplit(".", 1)[-1]}.{attribute}'
@@ -244,6 +247,17 @@ def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch,
 
     assert [args[0] for name, args, _ in dispatch.calls if name == 'store.create'] == [successor]
     assert [kwargs['only'] for name, _, kwargs in dispatch.calls if name == 'lifecycle.rotate'] == ['oci']
+
+
+def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'cloudflare', 'zones', '--stack', 'elsewhere']) == 0
+
+    # The slot is built by the dispatch, so the stack it names and the state
+    # the push opens have to arrive at the row's own function.
+    (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'derived.cloudflare_zones']
+    assert not rest
+    assert kwargs['stack'].name == 'elsewhere'
+    assert 'lifecycle.environment' in dispatch.reached
 
 
 def test_seed_create_dispatches_the_row_the_member_names(dispatch: Dispatch) -> None:
