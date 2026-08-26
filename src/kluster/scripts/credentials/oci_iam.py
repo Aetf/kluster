@@ -322,6 +322,25 @@ def _mint_verified(iam: Iam, user_id: str) -> str:
     return private_pem
 
 
+def _sweep(iam: Iam, user_id: str, keep: str) -> None:
+    """Delete every key on the user except `keep`, as the user itself.
+
+    The caller must be authorized as `keep`: an identity-domains tenancy lets
+    a user manage its own credentials while refusing the account root the
+    equivalent legacy call, and a session must not saw off the key it signs
+    with mid-sweep. The kept key being stored and verified already, a
+    deletion the service refuses is a warning naming the console errand, not
+    a failed run -- one undeletable key must not block revoking the rest.
+    """
+    for existing in iam.api_keys(user_id):
+        if existing == keep:
+            continue
+        try:
+            iam.delete_api_key(user_id, existing)
+        except oci.exceptions.ServiceError as exc:
+            log.warning('could not delete superseded API key %s (%s); delete it in the console', existing, exc.code)
+
+
 def _store(kit: KdbxStore, entry: str, *, tenancy: str, user_id: str, private_pem: str) -> None:
     """Write the row: user OCID, PEM attachment, tenancy attribute (§2)."""
     kit.put(entry, user_id, '')
@@ -361,21 +380,9 @@ def create_seed(
 
     # A run that died between upload and store left a key whose private half
     # no longer exists anywhere; a user holds at most three keys, so orphans
-    # eventually block minting. Only the stored key survives -- the same sweep
-    # `rotate_seed` runs, and as the same identity: the seed deletes its own
-    # keys, because an identity-domains tenancy lets a user manage its own
-    # credentials while refusing the account root the equivalent legacy call
-    # (IdcsConversionError). The seed being stored already, a failed sweep is
-    # a warning and a console errand, not a failed bring-up.
+    # eventually block minting. Only the stored key survives (_sweep).
     seed_iam = Iam.authorize(iam.tenancy, str(user.id), private_pem, connect=iam.connect)
-    current = fingerprint(private_pem)
-    for existing in seed_iam.api_keys(str(user.id)):
-        if existing == current:
-            continue
-        try:
-            seed_iam.delete_api_key(str(user.id), existing)
-        except oci.exceptions.ServiceError as exc:
-            log.warning('could not delete superseded API key %s (%s); delete it in the console', existing, exc.code)
+    _sweep(seed_iam, str(user.id), fingerprint(private_pem))
     return str(user.id)
 
 
@@ -400,8 +407,7 @@ def rotate_seed(
 
     previous = fingerprint(previous_pem)
     current = fingerprint(private_pem)
-    for existing in iam.api_keys(user_id):
-        if existing != current:
-            iam.delete_api_key(user_id, existing)
+    successor = Iam.authorize(tenancy, user_id, private_pem, connect=connect)
+    _sweep(successor, user_id, current)
     log.info('seed rotated: %s -> %s', previous, current)
     return current
