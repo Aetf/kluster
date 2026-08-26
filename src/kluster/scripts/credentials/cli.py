@@ -203,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
             return _master(args)
         store = _kit(args)
 
-        match (args.family, getattr(args, 'member', None), args.action):
+        # `bootstrap` and `rotate` have no <action> level, so the attribute
+        # does not exist on their namespaces; the guard mirrors `member`'s.
+        match (args.family, getattr(args, 'member', None), getattr(args, 'action', None)):
             case ('kdbx', _, 'ls'):
                 for entry in store.entries(args.group):
                     print(entry)
@@ -254,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
-                raise ValueError(f'unhandled command {args.family} {args.action}')
+                raise ValueError(f'unhandled command {args.family}')
     except (KdbxError, CredentialRejected) as exc:
         log.error('%s', exc)
         return 1
