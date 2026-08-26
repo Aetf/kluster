@@ -8,6 +8,7 @@ do that -- the diagnosis path.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -279,3 +280,63 @@ def test_the_readiness_probe_closes_its_stdin(monkeypatch: pytest.MonkeyPatch) -
 
     assert provision.wait_for_backend('192.0.2.10', timeout=1) is True
     assert seen['stdin'] is provision.sp.DEVNULL
+
+
+#: The provision stages that outlast an operator's patience, and a word that
+#: has to appear in what the run says *before* each one starts. Announcing on
+#: completion only is what makes a long step indistinguishable from a hang.
+#: The readiness wait announces from inside itself, and has its own test below.
+SLOW_STAGES = {
+    'find_instance': 'comparing',
+    'ensure_image': 'image',
+    'ensure_instance': 'launching',
+}
+
+
+def test_every_slow_stage_announces_itself_before_it_starts(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A run's output has to distinguish a slow step from a stuck one."""
+    caplog.set_level(logging.INFO)
+    converge(_Recorder(instance_exists=False))
+
+    said: dict[str, list[str]] = {}
+
+    def watch(name: str) -> None:
+        wrapped: Callable[..., Any] = getattr(provision, name)
+
+        def call(*args: object, **kwargs: object) -> Any:
+            said[name] = list(caplog.messages)
+            return wrapped(*args, **kwargs)
+
+        monkeypatch.setattr(provision, name, call)
+
+    for stage in SLOW_STAGES:
+        watch(stage)
+
+    assert _run() == 0
+
+    for stage, word in SLOW_STAGES.items():
+        assert any(word in message for message in said[stage]), f'{stage} ran without announcing itself'
+
+
+def test_the_readiness_wait_states_its_condition_before_probing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The longest silence in a provision run is the one after the launch."""
+    caplog.set_level(logging.INFO)
+    said: list[str] = []
+
+    def fake_run(_argv: list[str], **_kwargs: object) -> Any:
+        said.extend(caplog.messages)
+        return type('Completed', (), {'returncode': 0, 'stderr': ''})()
+
+    monkeypatch.setattr(provision.sp, 'run', fake_run)
+
+    assert provision.wait_for_backend('192.0.2.10', timeout=900) is True
+    announcement = next(message for message in said if 'waiting' in message)
+    # The condition, the retry cadence, why it is slow, and the ceiling.
+    assert '192.0.2.10' in announcement
+    assert 'every 15s' in announcement
+    assert 'minutes' in announcement
+    assert '15m00s' in announcement

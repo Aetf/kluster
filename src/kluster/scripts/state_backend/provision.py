@@ -146,7 +146,7 @@ def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> 
     deadline = started + timeout
     last = ''
     announced = 0.0
-    log.info('waiting for %s to reach %s (up to %s)', what, target, _duration(timeout))
+    log.info('waiting for %s to reach %s, polling every 15s (up to %s)', what, target, _duration(timeout))
     while time.monotonic() < deadline:
         try:
             resource = _data(fetch())
@@ -177,6 +177,7 @@ def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> 
 def ensure_network(client: Oci) -> tuple[str, str]:
     """The appliance's VCN, gateway, route and subnet. Returns (vcn, subnet)."""
     network = client.network
+    log.info('converging the VCN, internet gateway, default route and subnet')
 
     vcn = _find(_data(network.list_vcns(client.compartment_id)), _name('vcn'))
     if vcn is None:
@@ -249,6 +250,7 @@ def ensure_security_group(client: Oci, vcn_id: str) -> str:
     home-only rule would simply break CI.
     """
     network = client.network
+    log.info('converging the security group and its rules')
     group = _find(
         _data(network.list_network_security_groups(compartment_id=client.compartment_id, vcn_id=vcn_id)), _name('nsg')
     )
@@ -316,6 +318,7 @@ def ensure_security_group(client: Oci, vcn_id: str) -> str:
 def ensure_reserved_ip(client: Oci) -> tuple[str, str]:
     """The address the server certificate is issued for. Returns (id, address)."""
     network = client.network
+    log.info('looking up the reserved address %s', _name('ip'))
     existing = _data(network.list_public_ips(scope='REGION', compartment_id=client.compartment_id, lifetime='RESERVED'))
     public_ip = _find(existing, _name('ip'))
     if public_ip is None:
@@ -334,6 +337,7 @@ def ensure_reserved_ip(client: Oci) -> tuple[str, str]:
 
 def fcos_artifact() -> tuple[str, str, str]:
     """The pinned stream's qcow2: (release, url, sha256 of the compressed file)."""
+    log.info('fetching the FCOS %s stream metadata from %s', settings.FCOS_STREAM, settings.FCOS_STREAM_URL)
     with urllib.request.urlopen(settings.FCOS_STREAM_URL, timeout=60) as response:
         stream: dict[str, Any] = json.load(response)
     disk = stream['architectures']['x86_64']['artifacts']['oraclecloud']['formats']['qcow2.xz']['disk']
@@ -378,6 +382,7 @@ def ensure_image(client: Oci) -> str:
     release, url, sha256 = fcos_artifact()
     image_name = _name(f'fcos-{release}')
 
+    log.info('looking for an imported image named %s', image_name)
     image = _find(_data(client.compute.list_images(client.compartment_id, display_name=image_name)), image_name)
     if image is not None:
         # An import in flight is not yet a bootable image; launching against
@@ -387,6 +392,7 @@ def ensure_image(client: Oci) -> str:
             _ = _await_state(lambda: client.compute.get_image(image_id), 'AVAILABLE', what=f'image {image_name}')
         return image_id
 
+    log.info('no image for this release yet; checking the image bucket %s', IMAGE_BUCKET)
     namespace = _data(client.object_storage.get_namespace())
     storage = client.object_storage
     try:
@@ -412,6 +418,7 @@ def ensure_image(client: Oci) -> str:
             shutil.copyfileobj(response, out)
 
         # Streamed: the image is most of a gigabyte, and this box has 1 GB.
+        log.info('checking the download against the pinned sha256')
         digest = hashlib.sha256()
         with compressed.open('rb') as check:
             for chunk in iter(lambda: check.read(1 << 20), b''):
@@ -419,13 +426,15 @@ def ensure_image(client: Oci) -> str:
         digest = digest.hexdigest()
         if digest != sha256:
             raise RuntimeError(f'FCOS image digest mismatch: {digest} != {sha256}')
-        log.info('digest verified; decompressing')
+        log.info('digest matches; decompressing the qcow2 (a few minutes)')
 
         qcow = Path(tmp) / 'fcos.qcow2'
         with lzma.open(compressed) as src, qcow.open('wb') as out:
             shutil.copyfileobj(src, out)
 
-        log.info('uploading %s (%.1f GiB)', object_name, qcow.stat().st_size / 2**30)
+        log.info(
+            'uploading %s to %s (%.1f GiB, several minutes)', object_name, IMAGE_BUCKET, qcow.stat().st_size / 2**30
+        )
         oci.object_storage.UploadManager(storage, allow_parallel_uploads=True).upload_file(
             namespace, IMAGE_BUCKET, object_name, str(qcow)
         )
@@ -458,6 +467,7 @@ def _shape_domain(client: Oci, image_id: str) -> str:
     fails as `404 NotAuthorizedOrNotFound` -- an error that names neither the
     shape nor the domain, and reads like a permissions problem.
     """
+    log.info('looking for an availability domain that offers %s', settings.SHAPE)
     domains = [str(domain.name) for domain in _data(client.identity.list_availability_domains(client.compartment_id))]
     for domain in domains:
         offered = oci.pagination.list_call_get_all_results(
@@ -587,6 +597,7 @@ def ensure_instance(
 def attach_reserved_ip(client: Oci, *, instance_id: str, public_ip_id: str) -> None:
     """Point the reserved address at the instance's primary private IP."""
     network = client.network
+    log.info('checking that the reserved address points at the instance')
     attachments = _data(client.compute.list_vnic_attachments(client.compartment_id, instance_id=instance_id))
     vnic_id = attachments[0].vnic_id
     private_ips = _data(network.list_private_ips(vnic_id=vnic_id))
@@ -609,7 +620,8 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
     started = time.monotonic()
     announced = 0.0
     log.info(
-        'waiting for %s:%d to answer — first boot pulls the Postgres image and fetches age (up to %s)',
+        'waiting for a TLS handshake on %s:%d, probing every 15s — first boot pulls the Postgres image '
+        'and fetches age, so this is minutes (up to %s)',
         address,
         settings.PORT,
         _duration(timeout),
@@ -666,6 +678,7 @@ def _image_digest(image: str) -> str:
     repository, tag = image.rsplit(':', 1)
     if repository.startswith('docker.io/'):
         repository = repository.removeprefix('docker.io/')
+    log.info('asking the registry what %s resolves to', image)
 
     token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
     with urllib.request.urlopen(token_url, timeout=60) as response:
@@ -698,6 +711,7 @@ def verify_pins() -> bool:
     """
     ok = True
 
+    log.info('downloading age %s to hash it against its pin: %s', settings.AGE_VERSION, settings.AGE_URL)
     digest = hashlib.sha256()
     with urllib.request.urlopen(settings.AGE_URL, timeout=300) as response:
         for chunk in iter(lambda: response.read(1 << 20), b''):

@@ -109,11 +109,11 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
     # Each stage says what it is starting, not only what it finished: the
     # image import and the first boot are minutes-long, and a log that only
     # speaks on success is indistinguishable from a hang while they run.
-    log.info('[1/6] reading the derivation seed and the B2 seed key')
+    log.info('[1/6] reading the derivation seed and the B2 seed key out of the offline store')
     seed = seeds.load_seed(store)
 
+    log.info('[2/6] authorizing with B2, then converging bucket %s', settings.B2_BUCKET)
     session = b2.Session.from_entry(store, seed_entry)
-    log.info('[2/6] bucket %s', settings.B2_BUCKET)
     bucket_id = b2.ensure_bucket(
         session,
         settings.B2_BUCKET,
@@ -121,23 +121,24 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
         retention_days=settings.B2_RETENTION_DAYS,
     )
 
+    log.info('[3/6] converging the OCI network: VCN, subnet, gateway, security group, reserved address')
     client = provision.Oci.load(compartment)
-    log.info('[3/6] OCI network: VCN, subnet, gateway, security group, reserved address')
     vcn_id, subnet_id = provision.ensure_network(client)
     nsg_id = provision.ensure_security_group(client, vcn_id)
     public_ip_id, address = provision.ensure_reserved_ip(client)
     log.info('appliance address: %s', address)
 
+    log.info('[4/6] comparing the running box against this commit')
     existing = provision.find_instance(client)
     reasons = _drift(seed, session, existing, address=address, bucket_id=bucket_id, replace=replace)
     if existing is not None and not reasons:
-        log.info('[4/6] appliance %s matches the repository; nothing to do', existing.id)
+        log.info('appliance %s matches the repository; nothing to rebuild', existing.id)
         instance_id = str(existing.id)
     else:
         if existing is not None:
             for reason in reasons:
-                log.warning('[4/6] %s', reason)
-            log.warning('[4/6] replacing %s — 5432 goes away until the new box answers', existing.id)
+                log.warning('%s', reason)
+            log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
             provision.terminate_instance(client, str(existing.id))
             provision.forget_host_key(address)
         # Minting is deliberately on this side of the branch. B2 returns an
@@ -146,16 +147,17 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
         # holding: on a run that then leaves the instance alone that breaks
         # the nightly dump silently, until it next fires. The key's lifetime
         # is the instance's.
-        log.info('[4/6] minting the dump key and rendering Ignition for %s', address)
+        log.info('minting the dump key the new box will hold')
         dump_key_id, dump_key = b2.mint_dump_key(
             session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
         )
+        log.info('rendering the Ignition config for %s', address)
         ignition = config.render_ignition(
             seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
         )
-        log.info('[5/6] custom image (imports on first run; several minutes)')
+        log.info('[5/6] converging the custom image — a release not imported yet takes the better part of an hour')
         image_id = provision.ensure_image(client)
-        log.info('[6/6] instance')
+        log.info('[6/6] launching the instance')
         instance_id = provision.ensure_instance(
             client,
             subnet_id=subnet_id,
