@@ -146,6 +146,7 @@ class FakeIdentity:
         return Response([Key(fingerprint=value) for value in self.keys.get(user_id, [])])
 
     def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
+        self.check_delete_flake()
         self.keys[user_id] = [value for value in self.keys.get(user_id, []) if value != key_fingerprint]
         return Response(None)
 
@@ -154,6 +155,10 @@ class FakeIdentity:
 
     def check_read_lag(self) -> None:
         """Overridden by `LaggingIdentity`: a fresh key lags on every endpoint."""
+        return None
+
+    def check_delete_flake(self) -> None:
+        """Overridden by `FlakyDeletes`: a delete refused now and taken later."""
         return None
 
 
@@ -180,6 +185,7 @@ class FakeDomain:
         return Response(DomainKeys(resources=[DomainKey(id=self.key_id(value), fingerprint=value) for value in held]))
 
     def delete_my_api_key(self, my_api_key_id: str) -> Response:
+        self.identity.check_delete_flake()
         held = self.identity.keys.get(self.user_id, [])
         remaining = [value for value in held if self.key_id(value) != my_api_key_id]
         if remaining == held:
@@ -222,6 +228,25 @@ def kit(tmp_path: Path) -> KdbxStore:
 @pytest.fixture
 def tenancy() -> Tenancy:
     return Tenancy()
+
+
+@pytest.fixture(autouse=True)
+def unhurried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every bounded wait in this module happens instantly.
+
+    What those waits wait for is a remote service catching up, which a fake
+    has no way of not having done. The clock still moves -- one interval per
+    reading -- so a deadline is still reachable and a test can still assert
+    that one was reached; only the sleeping is skipped. A test that cares how
+    many intervals were spent patches `sleep` again on top of this.
+    """
+    ticks = itertools.count(0.0, oci_iam.PROPAGATION_INTERVAL)
+
+    def no_nap(_interval: float) -> None:
+        return None
+
+    monkeypatch.setattr(oci_iam.time, 'sleep', no_nap)
+    monkeypatch.setattr(oci_iam.time, 'monotonic', lambda: next(ticks))
 
 
 @pytest.fixture
@@ -491,6 +516,36 @@ class SealedIdentity(RefusingIdentity, HiddenDomains):
     """
 
 
+@dataclass
+class FlakyDeletes(FakeIdentity):
+    """A tenancy that refuses a whole delete attempt and takes the next one.
+
+    Observed live: a sweep running as a key minted seconds earlier could not
+    delete the key it superseded, and the identical delete for the same
+    fingerprint and user succeeded moments later. The refusal carries no
+    `code` at all -- status and message are all it says -- which is why a log
+    line naming only the code says nothing.
+
+    The count is in calls, not attempts, because one attempt is two calls:
+    the domain delete and then the legacy fallback. Two is therefore the
+    smallest refusal that is a refusal of the operation rather than of one of
+    its endpoints -- and the operation is what the live failure lost.
+    """
+
+    refusals: int = 2
+    refused: int = 0
+
+    def check_delete_flake(self) -> None:
+        if self.refused < self.refusals:
+            self.refused += 1
+            raise oci.exceptions.ServiceError(
+                status=401,
+                code=None,
+                headers=dict[str, str](),
+                message='The required information to complete authentication was not provided.',
+            )
+
+
 def _same_tenancy(identity: FakeIdentity) -> FakeIdentity:
     """The same tenancy, seen by a caller that may read its identity domains.
 
@@ -631,6 +686,42 @@ def test_a_refused_sweep_does_not_fail_rotation_either(
     # console errand rather than blocking the rotation.
     _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
     assert oci_iam.fingerprint(private_pem) == current
+
+
+def test_a_transient_refusal_is_outwaited_instead_of_becoming_an_errand(
+    kit: KdbxStore, root: masters.Credential, caplog: pytest.LogCaptureFixture
+) -> None:
+    flaky = FlakyDeletes()
+    tenancy = Tenancy(identity=flaky)
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    caplog.clear()
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The refusal really happened, and the predecessor is gone anyway: a
+    # sweep that gave up on the first answer would have left it standing and
+    # sent an operator to the console for a key the next call would have
+    # taken.
+    assert flaky.refused == flaky.refusals
+    assert flaky.keys[user_id] == [current]
+    assert 'delete it in the console' not in caplog.text
+
+
+def test_a_refusal_that_outlives_the_deadline_is_logged_with_what_it_said(
+    kit: KdbxStore, root: masters.Credential, caplog: pytest.LogCaptureFixture
+) -> None:
+    tenancy = Tenancy(identity=SealedIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    caplog.clear()
+
+    _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Status and message, not the code alone: an identity-domains refusal
+    # carries no code, so a line naming only that one says nothing about what
+    # was refused or why.
+    assert 'delete it in the console' in caplog.text
+    assert 'HTTP 401' in caplog.text
+    assert 'Client is unauthorized' in caplog.text
 
 
 def test_rotation_sweeps_as_the_successor_not_the_predecessor(

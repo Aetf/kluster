@@ -213,6 +213,16 @@ def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url
     return oci.identity.IdentityClient(config, retry_strategy=_retry())
 
 
+def _why(exc: oci.exceptions.ServiceError) -> str:
+    """What the service actually answered, in one phrase.
+
+    The code alone is not enough to act on: an identity-domains refusal
+    carries none (`code` is `None`) and says everything it has to say in the
+    status and the message.
+    """
+    return f'HTTP {exc.status} {exc.code or "-"}: {exc.message}'
+
+
 def _data(response: Any) -> Any:
     """Unwrap an SDK response at the one boundary that is untyped by nature."""
     return response.data
@@ -378,7 +388,7 @@ class Iam:
             except oci.exceptions.ServiceError as exc:
                 # debug, not warning: the verification poll retries through
                 # here every few seconds while a fresh key propagates.
-                log.debug('the identity domain refused to list keys (%s); trying the legacy call', exc.code)
+                log.debug('the identity domain refused to list keys (%s); trying the legacy call', _why(exc))
         return [str(key.fingerprint) for key in _data(self.identity.list_api_keys(user_id))]
 
     def domains(self) -> list[Any]:
@@ -402,8 +412,11 @@ class Iam:
                 try:
                     self.domain.delete_my_api_key(key_id)
                 except oci.exceptions.ServiceError as exc:
-                    log.warning(
-                        'the identity domain refused to delete %s (%s); trying the legacy call', key_id, exc.code
+                    # debug, not warning: the sweep retries through here while
+                    # a refusal may still be transient, and the outcome of the
+                    # whole attempt is logged by the caller either way.
+                    log.debug(
+                        'the identity domain refused to delete %s (%s); trying the legacy call', key_id, _why(exc)
                     )
                 else:
                     log.info('deleted superseded API key %s', key_fingerprint)
@@ -444,23 +457,64 @@ def _mint_verified(iam: Iam, user_id: str, *, domain_url: str | None = None) -> 
     return private_pem
 
 
+def _retire(iam: Iam, user_id: str, key_fingerprint: str) -> None:
+    """Delete one superseded key, outwaiting a refusal that is only transient.
+
+    A sweep usually runs as a key minted seconds earlier, and minting proves
+    only that the key *lists*: authorization for the other endpoints
+    propagates on its own schedule, and the legacy shim refuses
+    intermittently even once it has. Both look identical from here -- a
+    refusal with no way to tell "never" from "not yet" apart -- so the whole
+    attempt is retried, domain lookup and legacy fallback together, on the
+    same bounded-deadline shape verification uses. Retrying one leg would be
+    a guess at which one was lagging.
+
+    Only a refusal that outlives the deadline becomes a console errand: the
+    kept key is stored and verified already, so one key that will not go must
+    not fail the run or block revoking the rest.
+    """
+    deadline = time.monotonic() + PROPAGATION_DEADLINE
+    waiting = False
+    while True:
+        try:
+            iam.delete_api_key(user_id, key_fingerprint)
+            return
+        except oci.exceptions.ServiceError as exc:
+            if time.monotonic() >= deadline:
+                log.warning(
+                    'could not delete superseded API key %s (%s); delete it in the console',
+                    key_fingerprint,
+                    _why(exc),
+                )
+                return
+            if not waiting:
+                waiting = True
+                log.info(
+                    'the service refused to delete %s (%s); retrying until it goes or %.0f seconds pass '
+                    '(a refusal this soon after a mint is usually authorization still propagating, '
+                    'which clears well under a minute)',
+                    key_fingerprint,
+                    _why(exc),
+                    PROPAGATION_DEADLINE,
+                )
+            else:
+                log.debug('the service still refuses to delete %s (%s)', key_fingerprint, _why(exc))
+            time.sleep(PROPAGATION_INTERVAL)
+
+
 def _sweep(iam: Iam, user_id: str, keep: str) -> None:
     """Delete every key on the user except `keep`, as the user itself.
 
     The caller must be authorized as `keep`: the deletion goes through the
     domain's self-service endpoints, which only ever act on the caller's own
     user, and a session must not saw off the key it signs with mid-sweep.
-    The kept key being stored and verified already, a deletion the service
-    refuses is a warning naming the console errand, not a failed run -- one
-    undeletable key must not block revoking the rest.
+    Each key gets its own deadline (`_retire`), because each is its own
+    operation and one that cannot go says nothing about the next.
     """
     for existing in iam.api_keys(user_id):
         if existing == keep:
             continue
-        try:
-            iam.delete_api_key(user_id, existing)
-        except oci.exceptions.ServiceError as exc:
-            log.warning('could not delete superseded API key %s (%s); delete it in the console', existing, exc.code)
+        _retire(iam, user_id, existing)
 
 
 def _room_for_one_more(iam: Iam, user_id: str) -> None:
