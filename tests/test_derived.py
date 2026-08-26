@@ -8,6 +8,9 @@ platform.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
@@ -101,6 +104,51 @@ def test_a_re_run_rotates_the_row_and_leaves_one_live_token(
     second = runner.config[derived.API_TOKEN_KEY]
     assert second != first
     assert _live(api) == [api.values[second]]
+
+
+@pytest.fixture
+def live_project(tmp_path: Path) -> tuple[pulumi_config.Stack, str]:
+    """A stack in a throwaway project driven by the real CLI, and the project's name.
+
+    The name is deliberately not this repository's: what the test pins is that
+    the key lands in whatever namespace the project happens to have, which is
+    the namespace `pulumi.Config()` resolves against inside the program.
+    """
+    if shutil.which('pulumi') is None:
+        pytest.skip('the pinned pulumi CLI is not on PATH')
+    project = tmp_path / 'project'
+    project.mkdir()
+    name = 'namespace-probe'
+    _ = (project / 'Pulumi.yaml').write_text(f'name: {name}\nruntime: nodejs\ndescription: namespace probe\n')
+    state = tmp_path / 'state'
+    state.mkdir()
+    stack = pulumi_config.Stack(
+        name=STACK,
+        directory=project,
+        env={
+            'PULUMI_HOME': str(tmp_path / 'home'),
+            'PULUMI_BACKEND_URL': state.as_uri(),
+            'PULUMI_CONFIG_PASSPHRASE': 'probe-passphrase',
+            'PULUMI_SKIP_UPDATE_CHECK': 'true',
+        },
+    )
+    return stack, name
+
+
+def test_the_account_lands_where_the_program_reads_it(
+    kit: KdbxStore, live_project: tuple[pulumi_config.Stack, str]
+) -> None:
+    slot, project = live_project
+
+    account = derived.cloudflare_zones(kit, stack=slot)
+
+    # The consumer asks `pulumi.Config().require('cloudflareAccountId')`, which
+    # resolves under the project's name. A key this command spelled a namespace
+    # into itself would sit next to that one and never be read, so the push
+    # hands the CLI a bare key and lets it apply the namespace.
+    committed = (slot.directory / f'Pulumi.{STACK}.yaml').read_text()
+    assert f'{project}:cloudflareAccountId: {account}' in committed
+    assert slot.get(f'{project}:cloudflareAccountId') == account
 
 
 def test_a_push_that_fails_is_healed_by_running_it_again(

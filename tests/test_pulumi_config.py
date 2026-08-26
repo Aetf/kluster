@@ -21,6 +21,10 @@ from kluster.scripts.credentials import pulumi_config
 
 STACK = 'dns'
 SECRET = 'a-minted-token'
+#: The throwaway project the live tests write into. Its name is the namespace
+#: `pulumi` gives an unqualified config key, so the tests read it from here
+#: rather than assuming this repository's own project name.
+PROJECT = 'slot-probe'
 
 
 @pytest.fixture
@@ -85,7 +89,7 @@ def live_stack(tmp_path: Path) -> pulumi_config.Stack:
         pytest.skip('the pinned pulumi CLI is not on PATH')
     project = tmp_path / 'project'
     project.mkdir()
-    _ = (project / 'Pulumi.yaml').write_text('name: slot-probe\nruntime: nodejs\ndescription: slot probe\n')
+    _ = (project / 'Pulumi.yaml').write_text(f'name: {PROJECT}\nruntime: nodejs\ndescription: slot probe\n')
     state = tmp_path / 'state'
     state.mkdir()
     return pulumi_config.Stack(
@@ -107,14 +111,16 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     live_stack.ensure()
 
     live_stack.set_secret('cloudflare:apiToken', SECRET)
-    live_stack.set('kluster:cloudflareAccountId', 'account-1')
+    live_stack.set('anIdentifier', 'account-1')
 
     # What the operator commits: ciphertext for the token, plain text for the
-    # identifier, in the stack file this repository carries.
+    # identifier, in the stack file this repository carries. An unqualified key
+    # lands under the project's own namespace, which is why this repository
+    # writes one rather than spelling the project name out.
     committed = (live_stack.directory / f'Pulumi.{STACK}.yaml').read_text()
     assert 'secure:' in committed
     assert SECRET not in committed
-    assert 'kluster:cloudflareAccountId: account-1' in committed
+    assert f'{PROJECT}:anIdentifier: account-1' in committed
     assert live_stack.get('cloudflare:apiToken') == SECRET
 
 
