@@ -99,7 +99,24 @@ empty cluster:
     Cilium.
 
 `packages/crds` is regenerated (`uv run update_crds`) against exactly
-this chart set; the legacy chart list retires with kluster-code.
+this chart set; the legacy chart list retires with kluster-code. The
+register the regeneration reads — every chart, its repository, its
+pinned version, and the floor that pin has to clear — is
+`src/kluster/scripts/update_crds/pins.py`, and the pins there are the
+same ones the stack's `chart:` config carries. Rendering is **offline**:
+a pinned Helm 3 binary renders each chart and the CRDs are filtered out
+of the result, so the bindings describe the pinned chart set rather
+than whatever some cluster happens to have installed. Two consequences
+worth naming. Cilium's chart contains no CRD at all — the agent
+registers its own at runtime — so its definitions are read from the
+checked-in YAML at the matching release tag, and the tag and the chart
+version move together. And the VictoriaMetrics stack installs only
+`operator.victoriametrics.com`: this cluster has no `ServiceMonitor`
+and no `PodMonitor`, so a scrape target is declared as the
+VictoriaMetrics object, never as a prometheus-operator one.
+Because the render never contacts a cluster, it cannot prove the set is
+*complete* — a chart that creates a definition at runtime the way Cilium
+does would simply be missing. The first live `up` is what proves it.
 
 ### 1.1 Secrets placement rules
 
@@ -124,6 +141,63 @@ Two channels, chosen by who consumes the secret:
     issue **separately-scoped tokens per consumer**: one per channel
     above, plus a third, zone-limited token for the UDM caddy's own
     ACME issuance (dns.md §4) delivered as a gw-config device secret.
+
+### 1.2 Installing a chart: `helm.v4.Chart`
+
+The API every component installs through, wrapped as `kx.helm_chart`:
+
+-   **What it is.** `helm.v4.Chart` renders the chart in the provider
+    and hands each rendered object to Pulumi as its own resource. It
+    does not create a Helm release, which is what `helm.sh/v3.Release`
+    does instead. The trade is per-object diffs, drift remediation and
+    Pulumi transforms and policies, against losing `helm list`
+    visibility, release history and `helm rollback`, and the ability to
+    adopt an existing release. This cluster is built from empty and
+    every object in it is Pulumi's, so the losing side is empty too.
+-   **OCI registries.** A chart reference may be a full `oci://` URL in
+    `chart` itself, with no repository options beside it. This is the
+    wall the legacy program hit: it used `helm.v3.Chart`, which cannot
+    read an OCI URL, so the Bitnami catalog's move to OCI forced
+    single charts over to `v3.Release` (kluster-code#100). Private
+    registries need provider ≥4.27 for in-process login; nothing pinned
+    here is private.
+-   **Hooks are dropped.** Any object annotated `helm.sh/hook` is
+    omitted from the rendered output, test hooks unconditionally. The
+    pinned set contains exactly one: cert-manager's `startupapicheck`
+    post-install Job, which blocks until the webhook answers. It is
+    therefore disabled explicitly (`startupapicheck.enabled: false`)
+    rather than left to vanish silently, and the wait it did is covered
+    by the install order — nothing declares an Issuer or a Certificate
+    until cert-manager is up. The provider's `includeHooks` (≥4.33) is
+    not a substitute: it only writes hooks into a rendered directory for
+    some other tool to apply.
+-   **CRDs.** Definitions in a chart's `crds/` directory are installed by
+    default and become Pulumi's resources; `skip_crds` opts out. Helm
+    never upgrades a CRD it installed that way, which is the reason
+    Gateway API is a separate install-order entry rather than something
+    a chart brings along. A chart that ships its definitions as ordinary
+    templates behind a value instead (cert-manager) is unaffected by
+    either switch and needs that value set.
+-   **Values may be Outputs.** Because the render happens in the
+    provider rather than in the language host, a chart value can be an
+    unresolved Output — the limitation that made `v3.Chart` unusable for
+    anything wired to another resource. A preview whose values are
+    genuinely unknown still cannot enumerate what a template branches
+    on.
+-   **Transformations** are the generic `transforms` resource option,
+    not the chart-specific `transformations` of `v3.Chart`; a transform
+    cannot change an object's name or namespace.
+-   **Dependency update** exists (`dependency_update`) and is unused:
+    every pin here resolves to a packaged archive that already carries
+    its dependencies, the VictoriaMetrics stack included — its own
+    dependencies are OCI references, and they are inside the archive.
+-   **A preview needs a reachable cluster**, because the render is
+    server-side dry-run. A preview of this stack cannot succeed before
+    `physical` has converged once (`pulumi-kubernetes` issue 3027).
+-   **The fallback, recorded.** A chart that genuinely needs its hooks
+    to run, or that has to adopt objects it did not create, is installed
+    with `helm.sh/v3.Release` instead — one chart at a time, in the
+    component that owns it, not by moving the stack.
 
 ## 2. Cilium: the load-bearing component
 
