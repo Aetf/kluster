@@ -66,6 +66,16 @@ jobs:
     # Per-stack Environments are the credential partition: the dns job sees
     # only the Cloudflare token, apps never holds the UDM key.
     environment: ${{ matrix.stack }}
+    # The dns preview joins ZeroTier with the dns environment's identity, and
+    # ZeroTier maps a member to one endpoint at a time, so it must never be
+    # live in two jobs at once — including two pull requests' previews, and
+    # including a deploy or drift job elsewhere in the repository. A shared
+    # `zt-dns` group is that lock; every other stack keeps a per-run key so it
+    # is serialized against nothing (framework/ci.md §2). Unlike a job-level
+    # `if`, a job-level `concurrency` may read the matrix context.
+    concurrency:
+      group: ${{ matrix.stack == 'dns' && 'zt-dns' || format('preview-{0}-{1}', github.ref, matrix.stack) }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
 
