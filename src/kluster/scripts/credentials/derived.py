@@ -33,8 +33,15 @@ ZONES_STACK = 'dns'
 #: Where the Cloudflare provider reads its credential, and where the program
 #: reads the account that owns the zones. The provider's key is a secret; the
 #: account id is an identifier the committed file may carry in plain text.
+#:
+#: The provider key is namespaced to the provider, as the provider requires.
+#: The account id belongs to this project's own namespace, and is therefore
+#: written bare: `pulumi config set` prefixes an unqualified key with the
+#: project's name, which is the same name `pulumi.Config()` resolves against
+#: inside the program. Spelling that prefix out here would be a second place
+#: for the project name to live, and the place it could be wrong.
 API_TOKEN_KEY = 'cloudflare:apiToken'
-ACCOUNT_KEY = 'kluster:cloudflareAccountId'
+ACCOUNT_KEY = 'cloudflareAccountId'
 
 SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 
