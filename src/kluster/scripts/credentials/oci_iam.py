@@ -19,6 +19,15 @@ for. The other two are recovered rather than stored — the region is a
 constant in `conventions`, and the fingerprint is a function of the public
 key, so a stored copy could only ever disagree with the key it describes.
 
+The row carries one more attribute, which is not part of the key: the
+tenancy's **identity domain URL**. A tenancy that has identity domains
+refuses the legacy `DELETE /users/{id}/apiKeys/{fingerprint}` outright
+(`IdcsConversionError: Client is unauthorized`), for the account root as
+much as for the key's own user, so retiring a key goes through the
+identity-domains API instead — and that API is addressed by a per-tenancy
+endpoint rather than by region. It is discovered once, with the account root,
+and stored beside the tenancy OCID so that rotation never needs the root.
+
 The password field stays empty here, which no other row does. The alternative
 is a copy of the PEM in a field that KeePassXC will happily reveal in a
 listing, next to the attachment that already holds it.
@@ -33,9 +42,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import time
 
@@ -86,10 +94,18 @@ STATEMENTS: tuple[str, ...] = (
 #: derived: deterministic RSA generation is the footgun §2.2 excludes.
 KEY_SIZE = 2048
 
-#: Builds an identity client for a (tenancy, user, private key PEM). Injected
-#: so a test can drive the whole flow without a tenancy, and so verification
-#: can connect *as the key it just minted*.
-Connect = Callable[[str, str, str], Any]
+
+class Connect(Protocol):
+    """Builds a client for one API key.
+
+    Injected so a test can drive the whole flow without a tenancy, and so
+    verification can connect *as the key it just minted*. `domain_url`
+    selects the API rather than the credential: given one, the client speaks
+    the tenancy's identity-domains endpoints; without one, the legacy
+    identity service.
+    """
+
+    def __call__(self, tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None) -> Any: ...
 
 
 def _fingerprint(public_der: bytes) -> str:
@@ -171,11 +187,15 @@ def _retry() -> Any:
     )
 
 
-def identity_client(tenancy: str, user: str, private_key_pem: str) -> Any:
-    """An identity client for one API key, with no configuration file involved.
+def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None) -> Any:
+    """A client for one API key, with no configuration file involved.
 
     The key never reaches `~/.oci/config` or any other path: it is read out of
     the kit (or the secret store) and handed to the SDK in memory.
+
+    With a `domain_url` this is the identity-domains client for that domain,
+    which is a different service on a per-tenancy endpoint rather than a
+    different credential; the signing key is the same either way.
     """
     config: dict[str, Any] = {
         'tenancy': tenancy,
@@ -188,12 +208,39 @@ def identity_client(tenancy: str, user: str, private_key_pem: str) -> Any:
         oci.config.validate_config(config)
     except oci.exceptions.InvalidConfig as exc:
         raise CredentialRejected(f'the OCI credential is not usable: {exc}') from exc
+    if domain_url is not None:
+        return oci.identity_domains.IdentityDomainsClient(config, service_endpoint=domain_url, retry_strategy=_retry())
     return oci.identity.IdentityClient(config, retry_strategy=_retry())
 
 
 def _data(response: Any) -> Any:
     """Unwrap an SDK response at the one boundary that is untyped by nature."""
     return response.data
+
+
+@dataclass
+class Domain:
+    """One identity domain, seen through the API key's own user.
+
+    Only the self-service half of the API (the `Me` endpoints): those
+    authorize on authentication alone, so a caller needs no policy beyond
+    existing. That is what lets the sweep run as the seed in a tenancy where
+    the legacy delete is refused to everyone, the account root included.
+    """
+
+    client: Any
+
+    def my_api_keys(self) -> dict[str, str]:
+        """This user's API keys, as fingerprint -> the id a delete addresses.
+
+        The domains API names a key by its own id and the legacy one by
+        fingerprint, so this map is what makes a fingerprint deletable here.
+        """
+        listed = _data(self.client.list_my_api_keys())
+        return {str(key.fingerprint): str(key.id) for key in (listed.resources or [])}
+
+    def delete_my_api_key(self, key_id: str) -> None:
+        _ = self.client.delete_my_api_key(key_id)
 
 
 @dataclass
@@ -205,10 +252,27 @@ class Iam:
     #: How to build a client for a *different* key -- verification connects as
     #: the key it just minted, which is the only proof that it works.
     connect: Connect = identity_client
+    #: The identity-domains view of the same key, where the row knows the
+    #: tenancy's domain. Absent for the account root (which never deletes)
+    #: and for a row written before the attribute existed.
+    domain: Domain | None = None
 
     @classmethod
-    def authorize(cls, tenancy: str, user: str, private_key_pem: str, *, connect: Connect = identity_client) -> Iam:
-        return cls(tenancy=tenancy, identity=connect(tenancy, user, private_key_pem), connect=connect)
+    def authorize(
+        cls,
+        tenancy: str,
+        user: str,
+        private_key_pem: str,
+        *,
+        connect: Connect = identity_client,
+        domain_url: str | None = None,
+    ) -> Iam:
+        return cls(
+            tenancy=tenancy,
+            identity=connect(tenancy, user, private_key_pem),
+            connect=connect,
+            domain=Domain(connect(tenancy, user, private_key_pem, domain_url=domain_url)) if domain_url else None,
+        )
 
     def group(self) -> Any:
         """The seed's group, created if absent."""
@@ -296,7 +360,33 @@ class Iam:
     def api_keys(self, user_id: str) -> list[str]:
         return [str(key.fingerprint) for key in _data(self.identity.list_api_keys(user_id))]
 
+    def domains(self) -> list[Any]:
+        """The identity domains of the tenancy compartment."""
+        return list(_data(self.identity.list_domains(compartment_id=self.tenancy)))
+
     def delete_api_key(self, user_id: str, key_fingerprint: str) -> None:
+        """Retire one key, through the identity domain where there is one.
+
+        Domains first, legacy second, rather than the other way round: in a
+        tenancy that has identity domains the legacy call is refused every
+        time and for everyone, so trying it first would spend a guaranteed
+        round trip and log a failure on the path that works. The legacy call
+        stays as the fallback because it is the only one a tenancy without
+        domains has, and because a domain that refuses is not a reason to
+        stop trying to delete.
+        """
+        if self.domain is not None:
+            key_id = self.domain.my_api_keys().get(key_fingerprint)
+            if key_id is not None:
+                try:
+                    self.domain.delete_my_api_key(key_id)
+                except oci.exceptions.ServiceError as exc:
+                    log.warning(
+                        'the identity domain refused to delete %s (%s); trying the legacy call', key_id, exc.code
+                    )
+                else:
+                    log.info('deleted superseded API key %s', key_fingerprint)
+                    return
         _ = self.identity.delete_api_key(user_id, key_fingerprint)
         log.info('deleted superseded API key %s', key_fingerprint)
 
@@ -331,12 +421,12 @@ def _mint_verified(iam: Iam, user_id: str) -> str:
 def _sweep(iam: Iam, user_id: str, keep: str) -> None:
     """Delete every key on the user except `keep`, as the user itself.
 
-    The caller must be authorized as `keep`: an identity-domains tenancy lets
-    a user manage its own credentials while refusing the account root the
-    equivalent legacy call, and a session must not saw off the key it signs
-    with mid-sweep. The kept key being stored and verified already, a
-    deletion the service refuses is a warning naming the console errand, not
-    a failed run -- one undeletable key must not block revoking the rest.
+    The caller must be authorized as `keep`: the deletion goes through the
+    domain's self-service endpoints, which only ever act on the caller's own
+    user, and a session must not saw off the key it signs with mid-sweep.
+    The kept key being stored and verified already, a deletion the service
+    refuses is a warning naming the console errand, not a failed run -- one
+    undeletable key must not block revoking the rest.
     """
     for existing in iam.api_keys(user_id):
         if existing == keep:
@@ -362,11 +452,54 @@ def _room_for_one_more(iam: Iam, user_id: str) -> None:
         )
 
 
-def _store(kit: KdbxStore, entry: str, *, tenancy: str, user_id: str, private_pem: str) -> None:
-    """Write the row: user OCID, PEM attachment, tenancy attribute (§2)."""
+def domain_url(iam: Iam) -> str:
+    """The URL of the identity domain the seed user lives in.
+
+    Discovered rather than configured: it is a property of the tenancy, not
+    of this repository, and a tenancy with one domain has no ambiguity to
+    resolve. A user the legacy `IdentityClient` created lands in the default
+    domain, which is why that is the one picked where there are several.
+    """
+    found = iam.domains()
+    if len(found) == 1:
+        return str(found[0].url)
+    for candidate in found:
+        if str(candidate.type).upper() == oci.identity.models.Domain.TYPE_DEFAULT:
+            return str(candidate.url)
+    raise CredentialRejected(
+        'the tenancy has no default identity domain to retire API keys through '
+        f'(it has: {", ".join(str(candidate.display_name) for candidate in found) or "none"})'
+    )
+
+
+def _discovered_domain(iam: Iam, *, whose: str) -> str | None:
+    """`domain_url`, downgraded to a warning that names the repair.
+
+    Reading the tenancy's domains is an administrator's call: the account
+    root has it, the seed's own policy (users, groups, policies) does not
+    necessarily. Neither a bring-up nor a rotation is worth failing over it,
+    because the only thing lost is the retirement of superseded keys -- which
+    is already a warning of its own.
+    """
+    try:
+        return domain_url(iam)
+    except (oci.exceptions.ServiceError, CredentialRejected) as exc:
+        log.warning(
+            'could not read the tenancy identity domain as the %s (%s); superseded keys may survive this run. '
+            'Run `credentials seed oci domain` once, which reads it with the account root and records it on the row.',
+            whose,
+            exc,
+        )
+        return None
+
+
+def _store(kit: KdbxStore, entry: str, *, tenancy: str, user_id: str, private_pem: str, domain: str | None) -> None:
+    """Write the row: user OCID, PEM attachment, tenancy and domain attributes (§2)."""
     kit.put(entry, user_id, '')
     kit.attach(entry, entries.OCI_KEY_ATTACHMENT, private_pem.encode())
     kit.set_attribute(entry, entries.OCI_TENANCY_ATTRIBUTE, tenancy)
+    if domain:
+        kit.set_attribute(entry, entries.OCI_DOMAIN_ATTRIBUTE, domain)
 
 
 def load_seed(store: KdbxStore, entry: str) -> tuple[str, str, str]:
@@ -376,6 +509,35 @@ def load_seed(store: KdbxStore, entry: str) -> tuple[str, str, str]:
         store.get(entry, attribute='UserName'),
         store.attachment(entry, entries.OCI_KEY_ATTACHMENT).decode(),
     )
+
+
+def load_domain(store: KdbxStore, entry: str) -> str | None:
+    """The row's identity domain URL, or None for a row written before it.
+
+    Absent is a state rather than an error: kits exist that predate the
+    attribute, and rotation must not require the account root to repair one.
+    """
+    if entries.OCI_DOMAIN_ATTRIBUTE not in store.attributes(entry):
+        return None
+    return store.attribute(entry, entries.OCI_DOMAIN_ATTRIBUTE)
+
+
+def adopt_domain(
+    store: KdbxStore, *, seed_entry: str, root: masters.Credential, connect: Connect = identity_client
+) -> str:
+    """Record the tenancy's identity domain on a row that predates it.
+
+    The one-time repair for a kit written before API-key retirement moved to
+    the identity-domains API. It borrows the account root because reading the
+    tenancy's domains is an administrator's call and the seed's policy does
+    not include it -- which is exactly why rotation warns rather than doing
+    this by itself.
+    """
+    iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect)
+    url = domain_url(iam)
+    store.set_attribute(seed_entry, entries.OCI_DOMAIN_ATTRIBUTE, url)
+    log.info('recorded the identity domain on %s', seed_entry)
+    return url
 
 
 def create_seed(
@@ -396,14 +558,19 @@ def create_seed(
     iam.membership(str(user.id), str(group.id))
     _ = iam.policy()
 
+    # The account root is the credential that can read the tenancy's identity
+    # domains, and this is the one moment it is in hand: stored on the row,
+    # rotation retires keys without ever borrowing it again.
+    domain = _discovered_domain(iam, whose='account root')
+
     _room_for_one_more(iam, str(user.id))
     private_pem = _mint_verified(iam, str(user.id))
-    _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem)
+    _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem, domain=domain)
 
     # A run that died between upload and store left a key whose private half
     # no longer exists anywhere; a user holds at most three keys, so orphans
     # eventually block minting. Only the stored key survives (_sweep).
-    seed_iam = Iam.authorize(iam.tenancy, str(user.id), private_pem, connect=iam.connect)
+    seed_iam = Iam.authorize(iam.tenancy, str(user.id), private_pem, connect=iam.connect, domain_url=domain)
     _sweep(seed_iam, str(user.id), fingerprint(private_pem))
     return str(user.id)
 
@@ -422,18 +589,26 @@ def rotate_seed(
     and the retired one must stay exactly as it was.
     """
     tenancy, user_id, previous_pem = load_seed(store, seed_entry)
-    iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect)
+    domain = load_domain(store, seed_entry)
+    iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect, domain_url=domain)
+    if domain is None:
+        # A row from before the attribute existed. The seed may be able to
+        # read the domain itself; where the tenancy refuses it, the warning
+        # names the repair and the run goes on with the legacy delete.
+        domain = _discovered_domain(iam, whose='seed')
+        if domain is not None:
+            iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect, domain_url=domain)
 
     # Everything but the signing key is dead weight, and the quota (three)
     # must have room for the successor before it can be minted.
     _sweep(iam, user_id, fingerprint(previous_pem))
     _room_for_one_more(iam, user_id)
     private_pem = _mint_verified(iam, user_id)
-    _store(into or store, seed_entry, tenancy=tenancy, user_id=user_id, private_pem=private_pem)
+    _store(into or store, seed_entry, tenancy=tenancy, user_id=user_id, private_pem=private_pem, domain=domain)
 
     previous = fingerprint(previous_pem)
     current = fingerprint(private_pem)
-    successor = Iam.authorize(tenancy, user_id, private_pem, connect=connect)
+    successor = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
     _sweep(successor, user_id, current)
     log.info('seed rotated: %s -> %s', previous, current)
     return current

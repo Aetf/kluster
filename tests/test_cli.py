@@ -11,7 +11,9 @@ What each leaf is expected to reach is derived from its own path, not from a
 copy of today's tree: `seed <member> create` must reach the one minting
 entrypoint, `seed <member> rotate` must reach the module that owns that
 member or refuse by name, `master <root> <action>` must reach the account-root
-handler of that name. The handlers themselves are stubbed; what is under test
+handler of that name. A row's `repair` action is the one shape that cannot be
+derived — it exists for one row and does one thing — so it is named here, and
+the walk still proves it is reachable. The handlers themselves are stubbed; what is under test
 is the dispatch, not what the dispatch calls.
 """
 
@@ -117,6 +119,8 @@ def expected(path: list[str]) -> str | None:
         case ['seed', member, 'rotate']:
             module = _module_for(member)
             return None if module is None else f'{module.__name__.rsplit(".", 1)[-1]}.rotate_seed'
+        case ['seed', 'oci', 'domain']:
+            return 'oci_iam.adopt_domain'
         case unknown:  # pragma: no cover - a leaf shape this test has no rule for
             raise AssertionError(f'no expectation for {unknown}; the tree grew a shape the walk does not know')
 
@@ -158,8 +162,9 @@ class Dispatch:
             (cli.masters, 'stored', {}),
             (cli.masters, 'remember', []),
             (cli.masters, 'forget', None),
+            (cli.lifecycle, 'root', None),
             (cli.oci_iam, 'rotate_seed', 'fingerprint'),
-            (cli.cloudflare, 'rotate_seed', 'token-id'),
+            (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
         )
         for module, attribute, result in handlers:
@@ -200,6 +205,8 @@ def test_the_walk_finds_every_register_row() -> None:
     for member, seed in entries.SEEDS.items():
         assert ['seed', member, 'create'] in found
         assert (['seed', member, 'rotate'] in found) == seed.self_reproducing
+        if seed.repair is not None:
+            assert ['seed', member, seed.repair[0]] in found
     for member in masters.ROOTS:
         assert ['master', member, 'remember'] in found
     assert ['bootstrap'] in found

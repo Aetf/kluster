@@ -98,14 +98,14 @@ def test_every_root_has_fields_and_console_steps() -> None:
 
 
 def test_a_remembered_root_is_read_without_asking(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr('getpass.getpass', _answers('the-token'))
-    _ = masters.remember(masters.ROOTS['cloudflare'], _refuse)
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
 
     # Every later use -- bootstrap, a rotation, a minter -- goes through this.
-    credential = masters.load(masters.ROOTS['cloudflare'], _refuse)
+    credential = masters.load(masters.ROOTS['b2'], _refuse)
 
-    assert credential['token'] == 'the-token'
-    assert store.items[(kdbx.KEYRING_SERVICE, 'account-root/cloudflare/token')] == 'the-token'
+    assert credential['key'] == 'master-key'
+    assert store.items[(kdbx.KEYRING_SERVICE, 'account-root/b2/key')] == 'master-key'
 
 
 def test_a_root_the_store_does_not_have_is_asked_for(headless: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,17 +166,17 @@ def test_stored_reports_each_field_without_disclosing_it(store: MemoryKeyring) -
 
 
 def test_forget_removes_every_field(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr('getpass.getpass', _answers('the-token'))
-    _ = masters.remember(masters.ROOTS['cloudflare'], _refuse)
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
 
-    masters.forget(masters.ROOTS['cloudflare'])
+    masters.forget(masters.ROOTS['b2'])
 
     assert store.items == {}
 
 
 def test_forgetting_a_root_that_is_not_there_says_so(store: MemoryKeyring) -> None:
     with pytest.raises(KdbxError, match='not in the secret store'):
-        masters.forget(masters.ROOTS['cloudflare'])
+        masters.forget(masters.ROOTS['b2'])
 
 
 def test_an_empty_answer_is_refused(headless: None, monkeypatch: pytest.MonkeyPatch) -> None:

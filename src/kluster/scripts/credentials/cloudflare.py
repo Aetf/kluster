@@ -1,24 +1,24 @@
 """The Cloudflare credential family (docs/credentials.md §2–§3).
 
-Two credentials, two lifetimes:
+One stored credential, the **seed token**: offline, in the kit, carrying
+*User → API Tokens → Edit*. It mints the zone-scoped provider token, the
+DNS-01 token and the gateway's ACME token.
 
--   the **account root token** — an account root (`masters.py`), carrying
-    *User → API Tokens → Edit* and nothing else. It is created in the
-    dashboard once and used only to create the seed;
--   the **seed token** — offline, in the kit, and the only Cloudflare
-    credential that is ever stored. It mints the zone-scoped provider token,
-    the DNS-01 token and the gateway's ACME token, and — because minting a
-    token is itself an API-token permission — its own successor.
+**The seed is console-made, and there is no Cloudflare account root.** A
+token minted through the API may not carry token-management permissions —
+"sub-token is not allowed to have permissions to manage other tokens", stated
+with the API itself at
+developers.cloudflare.com/fundamentals/api/how-to/create-via-api/ — so
+nothing can mint a credential of the seed's own class. That forbids both the
+root's only job (minting the seed) and the seed minting its own successor:
+each is the dashboard's *Create Additional Tokens* template, pasted into the
+kit, and rotation is deleting the superseded token on the same page.
 
-**A minted token inherits the policies of the token that minted it.** The
-alternative is to name permission groups by id and address the user as a
-resource, which needs the account's user id, which needs a permission the root
-deliberately does not carry. Copying is also the more faithful reading of §2:
-the seed is a *same-permission successor*, and the tokens it goes on to mint
-are limited by the user's own permissions rather than by the minting token's.
-
-What the tokens in §3 look like is not here: they are minted by the stack that
-consumes them, from this seed.
+**A minted token's policies are its caller's, never a copy of the minter's.**
+Copying is what a same-permission successor would need, and it is exactly
+what the platform refuses: the minter carries *API Tokens Write* by
+definition, so a copy of its policies is a sub-token with token permissions.
+What §3's tokens carry is stated by the stack that consumes them.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from typing import Any
 
 import requests
 
-from . import masters
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -37,11 +36,11 @@ log = logging.getLogger(__name__)
 
 API = 'https://api.cloudflare.com/client/v4'
 
-SEED_TOKEN_NAME = 'kluster-seed'
-
-#: The permission the root must carry for any of this to work. Checked by name
-#: before the first mint, because a token that merely reads is refused by the
-#: create call with a message that does not say which permission is missing.
+#: The permission the seed must carry for any of this to work. Checked by name
+#: when the seed is pasted in, because a token that merely reads is refused by
+#: the create call with a message that does not say which permission is
+#: missing -- and a console credential is exactly where the wrong template
+#: gets picked.
 MINTING_PERMISSION = 'API Tokens Write'
 
 
@@ -110,33 +109,29 @@ class Session:
         )
         return _result(resp)
 
-    def policies(self) -> list[dict[str, Any]]:
-        """This token's own policies, in the shape `POST /user/tokens` wants.
+    def granted(self) -> set[str]:
+        """The permission groups this token carries, by name.
 
-        Reading a token requires the same permission as writing one, so a root
-        that cannot do this is a root that could not have minted anything
-        either -- which is why the check for it lives here.
+        Reading a token requires the same permission as writing one, so a
+        token that cannot do this is a token that could not have minted
+        anything either.
         """
         result = self._call('GET', f'/user/tokens/{self.token_id}')
-        policies: list[dict[str, Any]] = list(result.get('policies') or [])
-        groups: list[dict[str, Any]] = []
-        for policy in policies:
-            groups.extend(list[dict[str, Any]](policy.get('permission_groups') or []))
-        granted = {str(group.get('name', '')) for group in groups}
+        return {
+            str(group.get('name', ''))
+            for policy in list[dict[str, Any]](result.get('policies') or [])
+            for group in list[dict[str, Any]](policy.get('permission_groups') or [])
+        }
+
+    def require_minting(self) -> None:
+        """Refuse a token that cannot mint, naming the permission it lacks."""
+        granted = self.granted()
         if MINTING_PERMISSION not in granted:
             raise CredentialRejected(
                 f'this Cloudflare token does not carry {MINTING_PERMISSION!r} '
                 f'(it carries: {", ".join(sorted(granted)) or "nothing"}); '
                 'only that permission can mint a token through the API'
             )
-        return [
-            {
-                'effect': policy['effect'],
-                'resources': policy['resources'],
-                'permission_groups': [{'id': group['id']} for group in policy['permission_groups']],
-            }
-            for policy in policies
-        ]
 
     def tokens(self) -> list[dict[str, Any]]:
         return list(self._call('GET', '/user/tokens'))
@@ -149,28 +144,28 @@ class Session:
         _ = self._call('DELETE', f'/user/tokens/{token_id}')
 
 
-def _mint_verified(session: Session, name: str) -> tuple[str, str, Session]:
-    """Create a token with the minter's own policies and prove it works.
+def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str, Session]:
+    """Create a token with the given policies and prove it works.
 
     The verified session is handed back rather than dropped: the retirement
     below has to run as the *new* token, and this is the session that proves
     it works.
     """
-    log.info("minting %s with the minting token's own policies", name)
-    token_id, token = session.create_token(name, session.policies())
+    log.info('minting %s', name)
+    token_id, token = session.create_token(name, policies)
     minted = Session.authorize(token)
     log.info('minted %s (%s), verified against the API', name, minted.token_id)
     return token_id, token, minted
 
 
 def _retire_superseded(session: Session, name: str, keep: str) -> None:
-    """Delete same-named tokens other than the one just stored.
+    """Delete same-named tokens other than the one just minted.
 
-    Only after the replacement is stored and verified: an interrupted run must
-    leave a working seed either way. `session` must be the kept token's own:
-    a session signing with a token it is about to delete stops working
-    partway through the deletions, and a run that left an orphan behind is
-    exactly the run with more than one deletion to make.
+    Only after the replacement exists and is verified: an interrupted run
+    must leave a working token either way. `session` must be the kept
+    token's own: a session signing with a token it is about to delete stops
+    working partway through the deletions, and a run that left an orphan
+    behind is exactly the run with more than one deletion to make.
     """
     for existing in session.tokens():
         if str(existing.get('name')) == name and str(existing.get('id')) != keep:
@@ -178,37 +173,39 @@ def _retire_superseded(session: Session, name: str, keep: str) -> None:
             session.delete_token(str(existing['id']))
 
 
-def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
-    """Create the seed token from the account root token. Returns its id.
+def mint_token(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
+    """Mint one §3 token from the seed, as (token id, token value).
 
-    Needed once at bring-up, and again only if the seed is lost — routine
-    rotation is `rotate_seed`, which never touches the account root.
+    The unit every per-stack Cloudflare credential is made of, and the reason
+    the seed exists. Rotating such a token is a re-run of this: a same-named
+    predecessor -- or an orphan a lost run left behind, which carries a live
+    permission nobody holds the value of -- is deleted once the replacement
+    is minted and verified.
+
+    `policies` are the caller's, and may not include token permissions: a
+    sub-token carrying them is refused by the platform.
     """
-    session = Session.authorize(root['token'])
-    token_id, token, minted = _mint_verified(session, SEED_TOKEN_NAME)
-    seeds.put(seed_entry, token_id, token)
-
-    # A run that died between minting and storing left a token whose value
-    # exists nowhere -- with the seed's name and the seed's permissions, so a
-    # live credential nobody holds. Only the stored one survives.
-    _retire_superseded(minted, SEED_TOKEN_NAME, keep=token_id)
-    return token_id
+    token_id, token, minted = _mint_verified(session, name, policies)
+    _retire_superseded(minted, name, keep=token_id)
+    return token_id, token
 
 
-def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = None) -> str:
-    """Have the seed mint its successor, store it, and delete the predecessor.
+def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
+    """Store a console-made seed token in the kit. Returns its id.
 
-    `into` is where the successor is written, defaulting to the database the
-    predecessor came from. A whole-kit rotation writes a *new* file (§4.2) and
-    the retired one must stay exactly as it was, so it passes the successor
-    explicitly rather than letting this edit the kit it is reading.
+    Bring-up and rotation are the same act here, because the platform allows
+    no other: the operator makes the token in the dashboard and this verifies
+    it and writes the row. The id is recovered from the token rather than
+    asked for -- `/user/tokens/verify` is the one call every token may make,
+    and a value typed twice is a value that can disagree with itself.
+
+    The superseded token is not deleted from here. Deleting it would mean
+    signing with a credential the retired kit still names as current, at the
+    moment §4.2 requires that kit to stay exactly as it was; the dashboard
+    page the operator is already on is where it goes.
     """
-    session = Session.from_entry(store, seed_entry)
-    previous = session.token_id
-
-    token_id, token, minted = _mint_verified(session, SEED_TOKEN_NAME)
-    (into or store).put(seed_entry, token_id, token)
-
-    _retire_superseded(minted, SEED_TOKEN_NAME, keep=token_id)
-    log.info('seed rotated: %s -> %s', previous, token_id)
-    return token_id
+    session = Session.authorize(token)
+    session.require_minting()
+    seeds.put(seed_entry, session.token_id, token)
+    log.info('stored the Cloudflare seed token (%s)', session.token_id)
+    return session.token_id

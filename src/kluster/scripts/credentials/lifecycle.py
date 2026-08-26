@@ -40,11 +40,30 @@ def root(member: str, prompt: Prompt) -> masters.Credential:
     return masters.load(masters.ROOTS[member], prompt)
 
 
-def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, bytes | None]:
-    """Walk the operator through a credential no API can create."""
+def _announce(seed: entries.Seed) -> None:
+    """Print what a human has to do in a console, at the moment they must."""
     log.warning('%s cannot be minted; it has to be created in a console:', seed.title)
     for line in seed.console.splitlines():
         log.warning('  %s', line)
+
+
+def _read_console_token(seed: entries.Seed) -> str:
+    """A console credential that is one secret and nothing else.
+
+    The row's identifier is not asked for: where a platform can be asked who
+    a token is, asking the operator instead only adds a way for the two to
+    disagree.
+    """
+    _announce(seed)
+    secret = getpass.getpass(f'{seed.title} — the token: ').strip()
+    if not secret:
+        raise KdbxError(f'{seed.title}: the token is required')
+    return secret
+
+
+def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, bytes | None]:
+    """Walk the operator through a credential no API can create."""
+    _announce(seed)
 
     identifier = prompt(f'{seed.title} — {seed.identifier}: ').strip()
     if not identifier:
@@ -75,7 +94,9 @@ def create_seed(seed: entries.Seed, *, kit: KdbxStore, prompt: Prompt, entry: st
         case 'oci':
             _ = oci_iam.create_seed(root=root('oci', prompt), seeds=kit, seed_entry=where)
         case 'cloudflare':
-            _ = cloudflare.create_seed(root=root('cloudflare', prompt), seeds=kit, seed_entry=where)
+            # Console-made, like the rows below, but its identifier is read
+            # off the token and its template is checked before it is stored.
+            _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=kit, seed_entry=where)
         case 'b2':
             _ = b2.create_seed(root=root('b2', prompt), seeds=kit, seed_entry=where)
         case _ if seed.manual:
@@ -150,7 +171,9 @@ def rotate(kit: KdbxStore, successor: KdbxStore, *, prompt: Prompt, only: str | 
             # into the new one, and leaves the retired file untouched.
             _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=successor)
         elif member == 'cloudflare':
-            _ = cloudflare.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+            # The platform allows no minted successor, so rotating is the
+            # same console visit bring-up made, written into the new kit.
+            _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=successor, seed_entry=seed.entry)
         elif member == 'b2':
             _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=successor)
         elif seed.manual:

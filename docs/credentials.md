@@ -31,7 +31,7 @@ facts about them.
     construction* (it must be able to mint its successors), which is
     exactly why nothing consumes a seed at runtime.
 5.  **Every seed mints its own successor where the platform allows**
-    (the table in §2). Rotation is then a script, not a checklist, and the two
+    (the table in §2). Rotation is then a script, not a checklist, and the
     platforms that cannot do it are named rather than forgotten.
 6.  **Storage channels are a closed set.** Offline store (seeds only)
     · Pulumi config secret (provider-credential channel,
@@ -81,12 +81,14 @@ either tier below: it is an account root used from the workstation,
 never minted from a seed and never pushed to a slot, which is exactly
 why that stack is not something CI runs.
 
-Three of them are nonetheless *used* by a script, because the seeds
+Two of them are nonetheless *used* by a script, because the seeds
 they mint cannot be minted by anything smaller: an OCI API key
 belonging to a user who may manage users, groups and policies in the
-tenancy; a Cloudflare token carrying **User → API Tokens → Edit**, the
-one permission that mints a token through the API; and the B2 account
-master key, which re-seeds B2 after a total loss. **Each is handed
+tenancy, and the B2 account master key, which re-seeds B2 after a
+total loss. Cloudflare has no such root: its only job would have been
+minting the seed, and the platform forbids that. A token minted
+through the API may not carry token-management permissions, so
+nothing can mint a credential of the seed's own class. **Each is handed
 over through the desktop secret store, one credential at a time.**
 `credentials master <root> remember` prompts for it and stores it
 there; every later use — `bootstrap`, a seed's `create`, a re-seed —
@@ -106,18 +108,37 @@ that rotation incomplete.
 | Seed | What it mints | Self-reproducing |
 | --- | --- | --- |
 | OCI seed API key (its own user, group and policy: manage users, groups and policies in the tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
-| Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | **Yes** — `POST /user/tokens` mints a successor with the minting token's own policies |
+| Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
 | **Derivation seed** (32 random bytes) | Every locally-generated secret, by derivation (§2.2) | Generated, not minted (§2.2) |
 
-The two "No" rows are the whole manual surface of a rotation: the
+The "No" rows are the whole manual surface of a rotation: the
 rotation script stops, prints what to create in which console, and
-resumes when the new value is handed to it. Both of those pauses need
+resumes when the new value is handed to it. Each of those pauses needs
 an account login, which is the one thing the kit deliberately does not
 carry — so a rotation run by a successor starts in the personal estate
 (§2.1), and the kit's README says so.
+
+Three rows are console-only because the platform has no API for what
+they are: the two GitHub Apps' private keys and the ZeroTier Central
+token. The Cloudflare row is console-only for a different reason,
+and the distinction matters to anyone reading the API and wondering
+why it is not used — the call exists and is refused. A sub-token "is
+not allowed to have permissions to manage other tokens"
+([Cloudflare's own
+documentation](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)),
+and *API Tokens Write* is exactly what the seed carries, so any
+successor minted from the seed would be a token that cannot mint.
+Bring-up and rotation are therefore the same dashboard visit: **User →
+API Tokens → Create Token → Create Additional Tokens**, taken as the
+template comes, and the superseded token deleted on the same page once
+the new kit is written. An operator who already holds a token of that
+template as an "account root" holds the seed: it is the same
+credential, and it is pasted in as-is. What the seed *does* mint is
+§3's tokens, which carry zone permissions and no token permissions —
+the class the platform does allow.
 
 ### 2.1 The offline kit: storage, backup, succession
 
@@ -161,7 +182,10 @@ carry — so a rotation run by a successor starts in the personal estate
     remaining two are recovered rather than stored: the region is a
     constant in the code, and the fingerprint is a function of the
     public key, so a stored copy could only ever disagree with the key
-    it describes.
+    it describes. One further attribute on that row is not part of the
+    key at all: the **identity domain `URL`**, because retiring a
+    superseded API key goes through the identity-domains API and that
+    API is addressed per tenancy rather than per region (§4.3).
 -   **Contents = §2's rows plus a printed README**: the recovery entry
     points (this repo's URL, this document, the reverse-cold-standby
     runbook) written for a **technical reader who has never seen this
@@ -170,8 +194,8 @@ carry — so a rotation run by a successor starts in the personal estate
     provider accounts exist, that their credentials live in the
     personal estate, and that the estate's own succession is arranged
     separately. Without it a successor can open every seed and still
-    not reach the two console-only rotations, or re-seed after a total
-    loss.
+    not reach the console-only rotations (the two Apps, ZeroTier and
+    Cloudflare), or re-seed after a total loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
     rotation (§4.2) — plus the yearly offline day, which opens one kit
     and verifies it against §2's table. It is emphatically **not** a
@@ -280,6 +304,7 @@ credential family plus the lifecycle commands below.
 | `credentials master <root> forget` | Removes one root from the store again. |
 | `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
+| `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
 | `eval "$(credentials derive env)"` | Whenever a shell needs to reach the backend. Derives the passphrase, reads the URL from the bundle. |
 | `credentials derive passphrase > .pulumi.secret` | Once per workstation that develops without the kit. Caches the passphrase for `mise.toml` to read, so a local preview does not need the offline database open. |
@@ -311,7 +336,7 @@ therefore idempotent: rotation is a re-run, not a second procedure.
 
 One command, one master-password prompt, and the cluster's entire
 credential estate exists. **One database is opened: the kit.** The
-account roots the three minters borrow are not in a database this
+account roots the two minters borrow are not in a database this
 repository reads — they come from the **desktop secret store**, one
 credential at a time (§2), or from a prompt where there is no store.
 The kit's own master password is asked of the same store first
@@ -363,8 +388,33 @@ is left byte-for-byte as it was: unseal the old, have each
 seed mint its successor, derive a new derivation seed, write the new
 database, verify every slot against it, then record the old file's
 earliest-destroy date (§2.2's backup-retention rule). The GitHub App
-private key and the ZeroTier token are explicit pauses — the script
-prints the console steps and waits.
+private keys, the ZeroTier token and the Cloudflare seed token are
+explicit pauses — the script prints the console steps and waits.
 
 Rotation cadence lives with the drill program (operations.md §4); the
 yearly offline day verifies the current kit against §2.
+
+### 4.3 Retiring an OCI API key
+
+A tenancy with identity domains refuses `DELETE
+/users/{id}/apiKeys/{fingerprint}` — `IdcsConversionError: Client is
+unauthorized` — to the account root and to the key's own user alike,
+so the legacy call cannot retire anything. Retirement goes through the
+identity domain's **self-service** endpoints instead
+(`list_my_api_keys` / `delete_my_api_key`), which act only on the
+caller's own user and require authentication rather than a policy.
+That is why the sweep of superseded keys runs as the seed and not as
+the root, and why the seed needs no permission beyond the three
+statements in its policy.
+
+Those endpoints live on a per-tenancy URL, which is discovered once —
+`list_identity_domains` in the tenancy compartment, an administrator's
+call — at the moment the account root is already in hand, and stored
+on the row. Rotation reads it there. A row written before that
+attribute existed tries to discover it as the seed and, where the
+tenancy refuses, warns and names `credentials seed oci domain`: the
+one-time repair that borrows the root, records the `URL`, and returns
+routine rotation to needing nothing but the kit. A rotation whose
+retirement is refused is not a failed rotation — the successor is
+minted, verified and stored, and the key that could not go is a
+console errand.
