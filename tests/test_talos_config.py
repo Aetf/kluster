@@ -6,21 +6,48 @@ come up or comes up quietly insecure.
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from kluster import conventions
 from kluster.physical import talos
 
-ENDPOINT = 'https://203.0.113.10:6443'
 SANS = ['203.0.113.10', 'api.example.test']
+SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
+#: The gateway's LAN address, as the only party allowed to speak BGP.
+PEER = '192.0.2.1/32'
 
 
-def documents() -> list[dict[str, Any]]:
-    return [json.loads(patch) for patch in talos.patches(endpoint=ENDPOINT, cert_sans=SANS)]
+def documents(**kwargs: Any) -> list[dict[str, Any]]:
+    kwargs.setdefault('cert_sans', SANS)
+    kwargs.setdefault('secretbox_secret', SECRETBOX)
+    return [json.loads(patch) for patch in talos.patches(**kwargs)]
+
+
+def deep_merge(into: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Talos' strategic merge, as far as these patches use it: maps merge, leaves win."""
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(into.get(key), dict):
+            deep_merge(cast('dict[str, Any]', into[key]), cast('dict[str, Any]', value))
+        else:
+            into[key] = value
+    return into
+
+
+def merged(section: str, **kwargs: Any) -> dict[str, Any]:
+    """The v1alpha1 documents' `machine` or `cluster` section, as Talos merges them."""
+    result: dict[str, Any] = {}
+    for document in documents(**kwargs):
+        if 'kind' not in document:
+            deep_merge(result, document.get(section, {}))
+    return result
+
+
+def firewall(**kwargs: Any) -> list[dict[str, Any]]:
+    return [document for document in documents(**kwargs) if str(document.get('kind', '')).startswith('Network')]
 
 
 def test_kubespan_and_kubeprism_are_on() -> None:
-    machine = documents()[0]['machine']
+    machine = merged('machine')
     assert machine['network']['kubespan']['enabled'] is True
     # No kube-proxy exists to fall back on.
     assert machine['features']['kubePrism']['enabled'] is True
@@ -28,7 +55,7 @@ def test_kubespan_and_kubeprism_are_on() -> None:
 
 
 def test_the_cluster_is_dual_stack_ipv4_first() -> None:
-    network = documents()[0]['cluster']['network']
+    network = merged('cluster')['network']
     assert network['podSubnets'][0] == str(conventions.POD_CIDR_V4)
     assert network['serviceSubnets'][0] == str(conventions.SERVICE_CIDR_V4)
     assert ':' in network['podSubnets'][1]
@@ -37,41 +64,104 @@ def test_the_cluster_is_dual_stack_ipv4_first() -> None:
 
 def test_cilium_installs_itself() -> None:
     # Talos must ship no CNI: nodes stay NotReady until k8s-base lands Cilium.
-    assert documents()[0]['cluster']['network']['cni'] == {'name': 'none'}
+    assert talos.control_plane_patch(cert_sans=SANS)['cluster']['network']['cni'] == {'name': 'none'}
 
 
 def test_control_planes_also_carry_workloads() -> None:
-    assert documents()[0]['cluster']['allowSchedulingOnControlPlanes'] is True
+    assert talos.control_plane_patch(cert_sans=SANS)['cluster']['allowSchedulingOnControlPlanes'] is True
 
 
 def test_the_public_apiserver_is_hardened() -> None:
-    api_server = documents()[0]['cluster']['apiServer']
+    api_server = talos.control_plane_patch(cert_sans=SANS)['cluster']['apiServer']
     assert api_server['certSANs'] == SANS
     assert api_server['extraArgs']['anonymous-auth'] == 'false'
     assert 'audit-log-path' in api_server['extraArgs']
 
 
 def test_the_kubelet_reserves_room_for_the_node() -> None:
-    assert documents()[0]['machine']['kubelet']['extraConfig']['systemReserved'] == talos.SYSTEM_RESERVED
+    assert merged('machine')['kubelet']['extraConfig']['systemReserved'] == talos.SYSTEM_RESERVED
+
+
+def test_kubernetes_secrets_are_encrypted_at_rest() -> None:
+    # etcd sits in a $0-trust tenancy and its snapshots leave the site every
+    # hour (architecture.md §6.5): unencrypted secrets there are the whole
+    # cluster's credentials in someone else's storage.
+    assert (
+        talos.control_plane_patch(cert_sans=SANS, secretbox_secret=SECRETBOX)['cluster']['secretboxEncryptionSecret']
+        == SECRETBOX
+    )
+
+
+def test_a_control_plane_without_a_key_says_nothing_about_encryption() -> None:
+    # Naming an empty key would disable encryption where the generated
+    # configuration would have enabled it; omitting the field leaves Talos'
+    # own generated secret in place.
+    assert 'secretboxEncryptionSecret' not in talos.control_plane_patch(cert_sans=SANS)['cluster']
+
+
+def test_local_path_has_a_directory_to_hand_out() -> None:
+    # The StorageClass is k8s-base's; the kubelet mount underneath it is
+    # machine configuration (storage.md §2).
+    mounts = merged('machine')['kubelet']['extraMounts']
+    assert [mount['destination'] for mount in mounts] == [conventions.LOCAL_PATH_ROOT]
+    assert mounts[0]['source'] == conventions.LOCAL_PATH_ROOT
+    assert mounts[0]['type'] == 'bind'
+    # Without shared propagation a volume mounted into the directory later is
+    # invisible to pods that already have it.
+    assert 'rshared' in mounts[0]['options']
+
+
+def test_the_augmented_node_answers_for_its_second_address() -> None:
+    # OCI assigns the secondary private IP to the VNIC and leaves the guest
+    # alone; unconfigured, the dedicated VIP reaches nothing.
+    interfaces = merged('machine', secondary_address='10.20.0.42')['network']['interfaces']
+    assert interfaces[0]['addresses'] == ['10.20.0.42/32']
+    assert interfaces[0]['dhcp'] is True
+
+
+def test_only_the_augmented_node_gets_an_extra_address() -> None:
+    assert 'interfaces' not in merged('machine').get('network', {})
+
+
+def test_a_worker_carries_no_control_plane_configuration() -> None:
+    cluster = merged('cluster', role='worker')
+    # A worker has no apiserver to harden and no etcd to encrypt; the CNI is
+    # the control plane's business.
+    assert 'apiServer' not in cluster
+    assert 'etcd' not in cluster
+    assert 'secretboxEncryptionSecret' not in cluster
+    assert 'allowSchedulingOnControlPlanes' not in cluster
+    # What it does share: the mesh, the subnets, and the kubelet's reservation.
+    assert cluster['network']['podSubnets'][0] == str(conventions.POD_CIDR_V4)
+    assert merged('machine', role='worker')['network']['kubespan']['enabled'] is True
 
 
 def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:
-    firewall = [doc for doc in documents() if doc.get('kind', '').startswith('Network')]
-    assert firewall[0] == {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'}
+    rules = firewall()
+    assert rules[0] == {'apiVersion': 'v1alpha1', 'kind': 'NetworkDefaultActionConfig', 'ingress': 'block'}
 
-    opened = {port for doc in firewall[1:] for port in doc['portSelector']['ports']}
+    opened = {port for rule in rules[1:] for port in rule['portSelector']['ports']}
     assert opened == set(talos.HOST_PORTS)
     # Service ports are answered by the BPF datapath before nftables sees
     # them, so an app port here would be a cross-stack leak.
     assert not opened & {port for port, _ in conventions.PUBLIC_PORT_CENSUS}
 
 
-def test_the_homelab_worker_can_be_given_bgp() -> None:
-    opened = {
-        port
-        for patch in talos.patches(endpoint=ENDPOINT, cert_sans=SANS, extra_ports=[179])
-        for doc in [json.loads(patch)]
-        if doc.get('kind') == 'NetworkRuleConfig'
-        for port in doc['portSelector']['ports']
-    }
-    assert 179 in opened
+def bgp_rules(**kwargs: Any) -> list[dict[str, Any]]:
+    return [
+        rule
+        for rule in firewall(**kwargs)
+        if rule['kind'] == 'NetworkRuleConfig' and talos.BGP_PORT in rule['portSelector']['ports']
+    ]
+
+
+def test_the_homelab_worker_takes_bgp_from_the_gateway_alone() -> None:
+    rules = bgp_rules(role='worker', bgp_peer=PEER)
+    assert len(rules) == 1
+    # An open BGP port would let anything on the LAN inject routes into the
+    # cluster's own address pools (cluster-infra.md §2).
+    assert rules[0]['ingress'] == [{'subnet': PEER}]
+
+
+def test_nobody_else_speaks_bgp() -> None:
+    assert not bgp_rules()
