@@ -152,6 +152,10 @@ class FakeIdentity:
     def list_domains(self, compartment_id: str) -> Response:
         return Response([DomainSummary(url=DOMAIN_URL, display_name='Default')])
 
+    def check_read_lag(self) -> None:
+        """Overridden by `LaggingIdentity`: a fresh key lags on every endpoint."""
+        return None
+
 
 @dataclass
 class FakeDomain:
@@ -171,6 +175,7 @@ class FakeDomain:
         return f'apikey-{key_fingerprint}'
 
     def list_my_api_keys(self) -> Response:
+        self.identity.check_read_lag()
         held = self.identity.keys.get(self.user_id, [])
         return Response(DomainKeys(resources=[DomainKey(id=self.key_id(value), fingerprint=value) for value in held]))
 
@@ -360,10 +365,11 @@ class LaggingIdentity(FakeIdentity):
     lag: int = 2
     denied: int = 0
 
-    def list_api_keys(self, user_id: str) -> Response:
-        # What lags is the freshly uploaded key, so listing an empty user
-        # (the pre-mint quota check) answers normally.
-        if self.keys.get(user_id) and self.denied < self.lag:
+    def check_read_lag(self) -> None:
+        # What lags is the freshly uploaded key -- on the legacy and the
+        # domains endpoint alike -- so an empty user (the pre-mint quota
+        # check) answers normally.
+        if any(self.keys.values()) and self.denied < self.lag:
             self.denied += 1
             raise oci.exceptions.ServiceError(
                 status=401,
@@ -371,19 +377,24 @@ class LaggingIdentity(FakeIdentity):
                 headers=dict[str, str](),
                 message='required information was not provided',
             )
+
+    def list_api_keys(self, user_id: str) -> Response:
+        self.check_read_lag()
         return super().list_api_keys(user_id)
 
 
 def test_verification_outwaits_key_propagation(
     kit: KdbxStore, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tenancy = Tenancy(identity=LaggingIdentity())
+    # One poll consults the domain and then the legacy fallback, so one
+    # interval of patience clears two denials.
+    tenancy = Tenancy(identity=LaggingIdentity(lag=4))
     naps: list[float] = []
     monkeypatch.setattr(oci_iam.time, 'sleep', naps.append)
 
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    # Each denial cost one interval of patience, and no more.
+    # Four denials, two endpoints consulted per poll: two intervals, no more.
     assert naps == [oci_iam.PROPAGATION_INTERVAL] * 2
     _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
     assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
@@ -432,6 +443,22 @@ class RefusingIdentity(FakeIdentity):
     """
 
     def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
+        raise oci.exceptions.ServiceError(
+            status=401, code='IdcsConversionError', headers=dict[str, str](), message='Client is unauthorized. null'
+        )
+
+
+@dataclass
+class UnreadableIdentity(RefusingIdentity):
+    """A tenancy whose legacy layer refuses even `list_api_keys` to the seed.
+
+    Observed live: the identical listing worked for hours as the key's own
+    user, then answered 401 IdcsConversionError. The domains endpoint kept
+    working throughout, which is why listing goes there when a domain is
+    known.
+    """
+
+    def list_api_keys(self, user_id: str) -> Response:
         raise oci.exceptions.ServiceError(
             status=401, code='IdcsConversionError', headers=dict[str, str](), message='Client is unauthorized. null'
         )
@@ -874,3 +901,19 @@ def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
     _survived(healed, kit)
     _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
     assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+def test_rotation_survives_a_legacy_layer_that_refuses_even_reads(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    tenancy = Tenancy(identity=UnreadableIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    # Listing, verification and retirement all went through the domain: the
+    # legacy layer answered 401 to every read and delete throughout.
+    assert tenancy.identity.keys[user_id] == [current]
+    _, _, private_pem = oci_iam.load_seed(successor, SEED_ENTRY)
+    assert oci_iam.fingerprint(private_pem) == current
