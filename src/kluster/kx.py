@@ -1,196 +1,247 @@
-from pathlib import Path
+"""Kubernetes helpers shared by the `k8s-base` and `apps` stacks.
+
+Only what both stacks need: installing a pinned upstream chart, reaching into
+what one rendered, declaring a SealedSecret in the shape
+[declarative/cluster-infra.md](../../docs/declarative/cluster-infra.md) §1.1
+fixes, and labelling a Service into a Cilium load-balancer pool. Anything
+specific to one component belongs with that component, not here.
+
+These are functions returning provider resources rather than subclasses of
+them. A subclass buys nothing over a call — the resource is the resource — and
+it costs the caller's ability to see, in one place, exactly which arguments
+were passed to the provider.
+"""
+
+from __future__ import annotations
+
 import fnmatch
-import re
-from typing import Any, List, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, TypeVar, cast
 
-from jinja2 import Environment, PackageLoader
 import pulumi
-import pulumi_kubernetes as k8s
 import pulumi_crds as crds
+import pulumi_kubernetes as k8s
 
-from putils import Component
+from kluster import conventions
+from kluster.config import versions
 
-from .config import versions
+__all__ = (
+    'SealingScope',
+    'SecretTemplate',
+    'find_rendered',
+    'helm_chart',
+    'lb_pool_labels',
+    'pick_resource',
+    'sealed_secret',
+)
+
+_Resource = TypeVar('_Resource', bound=pulumi.Resource)
+
+#: An OCI-registry chart carries its registry in the reference itself, so it
+#: takes no repository options.
+_OCI_SCHEME = 'oci://'
 
 
-class Node(k8s.core.v1.NodePatch):
-    @property
-    def hostname_selector(self) -> k8s.core.v1.NodeSelectorTermArgs:
-        return k8s.core.v1.NodeSelectorTermArgs(
-            match_expressions=[
-                k8s.core.v1.NodeSelectorRequirementArgs(
-                    key='kubernetes.io/hostname', operator='In', values=[self.metadata.name]
-                )
-            ]
+def helm_chart(
+    name: str,
+    *,
+    chart: str,
+    namespace: pulumi.Input[str],
+    pin: str | None = None,
+    values: Mapping[str, Any] | None = None,
+    skip_crds: bool = False,
+    opts: pulumi.ResourceOptions | None = None,
+) -> k8s.helm.v4.Chart:
+    """An upstream chart, pinned by stack configuration rather than by code.
+
+    The repository and the version come from the `chart:<key>` config entry of
+    the stack doing the installing (`repo:version`), because that is where
+    renovate can see and bump them: `renovate.json5` groups the pins by the
+    stack file they live in, so a chart bump is reviewable as one in-cluster
+    change. A version written in Python would be a pin nobody bumps.
+
+    :param chart: The chart reference — a name within the pinned repository,
+        or a full ``oci://`` reference.
+    :param pin: The `chart:` config key holding the pin, when it differs from
+        the chart reference (an OCI reference is not a usable config key).
+    :param skip_crds: Leave the chart's bundled CRDs uninstalled. Helm never
+        upgrades a CRD it installed that way, so a component whose CRDs are
+        declared separately sets this and keeps them upgradable.
+    """
+    pinned = versions.chart[pin if pin is not None else chart]
+    return k8s.helm.v4.Chart(
+        name,
+        chart=chart,
+        version=pinned.version,
+        namespace=namespace,
+        repository_opts=None if chart.startswith(_OCI_SCHEME) else k8s.helm.v4.RepositoryOptsArgs(repo=pinned.repo),
+        values=dict(values) if values is not None else None,
+        skip_crds=skip_crds,
+        opts=opts,
+    )
+
+
+def find_rendered(
+    rendered: pulumi.Input[Sequence[Any]],
+    kind: type[_Resource],
+    name_pattern: str = '*',
+) -> pulumi.Output[_Resource]:
+    """The one resource of `kind` a chart rendered whose name matches.
+
+    Takes the chart's `resources` rather than the chart, so the search can be
+    handed any set of resources — including, in a test, one that no chart
+    produced. `pick_resource` says what the search will and will not do.
+    """
+
+    def search(rendered: Sequence[Any]) -> pulumi.Output[_Resource]:
+        candidates = [resource for resource in rendered if isinstance(resource, pulumi.Resource)]
+        urns = pulumi.Output.all(*[candidate.urn for candidate in candidates])
+        return urns.apply(
+            lambda urns: pick_resource(list(zip(candidates, cast('Sequence[str]', urns))), kind, name_pattern)
         )
 
-
-class NamespaceProbe(Component, pulumi_type='kluster:utils:NamespaceProbe'):
-    namespace: pulumi.Output[str]
-
-    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None):
-        super().__init__(name, opts=opts)
-        cm = k8s.core.v1.ConfigMap(
-            name,
-            data={
-                'comment': 'This is a workaround for pulumi not able to get namespace from the provider',
-            },
-            opts=self.child_opts(),
-        )
-        self.namespace = cm.metadata.namespace
-        self.register_outputs({'namespace': self.namespace})
+    return pulumi.Output.from_input(rendered).apply(search)
 
 
-class HelmChart(k8s.helm.v4.Chart):
-    def __init__(
-        self,
-        name: str,
-        chart: str,
-        namespace: pulumi.Input[str],
-        *,
-        version: str | None = None,
-        repository_opts: k8s.helm.v4.RepositoryOptsArgs | None = None,
-        opts: pulumi.ResourceOptions | None = None,
-        **kwargs,
-    ):
-        if repository_opts is None:
-            repository_opts = k8s.helm.v4.RepositoryOptsArgs()
-        repository_opts.repo = versions.chart[chart].repo
+def pick_resource(
+    named: Sequence[tuple[pulumi.Resource, str]],
+    kind: type[_Resource],
+    name_pattern: str = '*',
+) -> _Resource:
+    """The single resource of `kind` whose name matches, out of `(resource, urn)` pairs.
 
-        if version is None:
-            version = versions.chart[chart].version
+    Deliberately strict: no match and more than one match are both errors,
+    because either one means the caller's picture of the chart is wrong, and a
+    silently chosen resource would then be wired somewhere by its address.
 
-        def chart_naming_workaround(args: pulumi.ResourceTransformationArgs):
-            return pulumi.ResourceTransformationResult(
-                props=args.props,
-                opts=pulumi.ResourceOptions.merge(args.opts, pulumi.ResourceOptions(delete_before_replace=True)),
-            )
+    The pattern is matched with shell globbing against the last segment of the
+    URN — the Pulumi name, which Helm renders as ``<namespace>/<object name>``.
+    """
 
-        opts = pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(transformations=[chart_naming_workaround]))
+    def resource_name(urn: str) -> str:
+        return urn.rsplit('::', 1)[-1]
 
-        super().__init__(
-            name,
-            version=version,
-            chart=chart,
+    matched = [
+        resource
+        for resource, urn in named
+        if isinstance(resource, kind) and fnmatch.fnmatch(resource_name(urn), name_pattern)
+    ]
+    if len(matched) == 1:
+        return matched[0]
+    rendered = ', '.join(sorted(resource_name(urn) for _, urn in named)) or 'nothing'
+    raise LookupError(f'{len(matched)} resources match {kind.__name__} {name_pattern!r}; the chart rendered {rendered}')
+
+
+class SealingScope(StrEnum):
+    """How much of a SealedSecret's identity its ciphertext is bound to.
+
+    The scope is sealed *into* the ciphertext by `kubeseal`, so it describes
+    how the value was produced rather than being a switch that can be flipped
+    afterwards: a manifest whose annotation disagrees with the sealing it was
+    given simply fails to decrypt.
+    """
+
+    STRICT = 'strict'
+    """Name and namespace both fixed. `kubeseal`'s own default."""
+
+    NAMESPACE_WIDE = 'namespace-wide'
+    """Namespace fixed, any name. What the legacy cluster's secrets carry, so
+    it stays the default here: the migration restores the legacy sealing key
+    and ports the existing manifests unchanged (cluster/migration.md §0.5),
+    and a different default would re-seal all of them for no gain."""
+
+    CLUSTER_WIDE = 'cluster-wide'
+    """Neither fixed — a secret any namespace can decrypt. Never a default."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class SecretTemplate:
+    """The produced Secret, minus the fields that had to be encrypted.
+
+    This is the `template.data` pattern (cluster-infra.md §1.1) as a type:
+    `data` holds the whole configuration file or connection string in
+    plaintext, with a Go template expression where a decrypted field belongs
+    (`{{ index . "password" }}`). What stays in the repository is therefore
+    reviewable configuration with credential-shaped holes in it.
+    """
+
+    data: Mapping[str, pulumi.Input[str]] | None = None
+    type: str | None = None
+    immutable: bool | None = None
+    labels: Mapping[str, str] | None = None
+    annotations: Mapping[str, str] | None = None
+
+
+def sealed_secret(
+    name: str,
+    *,
+    namespace: pulumi.Input[str],
+    encrypted_data: Mapping[str, pulumi.Input[str]],
+    template: SecretTemplate | None = None,
+    scope: SealingScope = SealingScope.NAMESPACE_WIDE,
+    opts: pulumi.ResourceOptions | None = None,
+) -> crds.bitnami.v1alpha1.SealedSecret:
+    """A Secret whose sensitive fields are the only encrypted part of it.
+
+    The first choice for anything the cluster itself consumes
+    (cluster-infra.md §1.1). Sensitive values arrive as `encrypted_data` —
+    `kubeseal` ciphertext, safe in a public repository — while `template`
+    carries the rest of the Secret in the clear.
+
+    The name is fixed rather than autonamed, because the workload that mounts
+    the resulting Secret names it, and because every scope but `cluster-wide`
+    seals the ciphertext against it. A replacement therefore deletes first:
+    two objects of one name cannot coexist.
+
+    :param namespace: The namespace the ciphertext was sealed for, which is
+        more than where the object lands.
+    :param encrypted_data: Field name to `kubeseal` ciphertext.
+    """
+    template = template if template is not None else SecretTemplate()
+    scope_annotations = {f'sealedsecrets.bitnami.com/{scope.value}': 'true'}
+
+    # The controller reads the scope off the template's metadata and only falls
+    # back to the resource's own, so both carry it — the shape `kubeseal`
+    # writes, which keeps a manifest round-trippable through it.
+    template_metadata: dict[str, Any] = {
+        'name': name,
+        'annotations': {**(template.annotations or {}), **scope_annotations},
+    }
+    if template.labels is not None:
+        template_metadata['labels'] = dict(template.labels)
+
+    return crds.bitnami.v1alpha1.SealedSecret(
+        name,
+        metadata=k8s.meta.v1.ObjectMetaArgs(
+            name=name,
             namespace=namespace,
-            repository_opts=repository_opts,
-            opts=opts,
-            **kwargs,
-        )
-
-    def service(self, name_pattern: str | None = None) -> pulumi.Output[k8s.core.v1.Service]:
-        def to_urns(resources: Sequence[Any] | None = None) -> pulumi.Output[List[tuple[pulumi.Resource, str]]]:
-            if resources is None:
-                return pulumi.Output.all([])
-
-            return pulumi.Output.all([(res, res.urn) for res in resources if isinstance(res, pulumi.Resource)])
-
-        def to_service(urns: List[tuple[pulumi.Resource, str]]) -> pulumi.Output[k8s.core.v1.Service]:
-            if len(urns) == 0:
-                raise ValueError('No service found in the chart')
-            if name_pattern is None:
-                if len(urns) == 1:
-                    assert isinstance(urns[0][0], k8s.core.v1.Service)
-                    return pulumi.Output.from_input(urns[0][0])
-                else:
-                    raise ValueError('Multiple services defined in the chart, specify a selector')
-            for res, urn in urns:
-                if re.search(name_pattern, urn) is not None:
-                    assert isinstance(res, k8s.core.v1.Service)
-                    return pulumi.Output.from_input(res)
-            raise ValueError(f'No service found in the chart with matching name: {",".join(urn for _, urn in urns)}')
-
-        return self.resources.apply(to_urns).apply(to_service)
-
-
-class ConfigMap(k8s.core.v1.ConfigMap):
-    def __init__(
-        self,
-        name: str,
-        package: str,
-        *data_globs: pulumi.Input[str],
-        strip_components: pulumi.Input[int | None] | None = None,
-        tpl_variables: pulumi.Inputs | None = None,
-        **kwargs,
-    ):
-        env = Environment(loader=PackageLoader(package, 'static'))
-
-        def inner(g: Sequence[str], sc: int | None, tv: dict[str, Any] | None) -> dict[str, str]:
-            return self._render_templates(env, g, sc or 0, tv or {})
-
-        data = pulumi.Output.all(g=data_globs, sc=strip_components, tv=tpl_variables).apply(
-            # this way we kind of dodge the type checking
-            lambda kwargs: inner(**kwargs)
-        )
-        super().__init__(name, data=data, **kwargs)
-
-    def _render_templates(
-        self, env: Environment, glob: Sequence[str], strip_components: int, tplVariables: dict[str, Any]
-    ) -> dict[str, str]:
-        def path_strip_components(path: Path, strip_components: int) -> str:
-            return str(Path(*path.parts[strip_components:]))
-
-        names = env.list_templates()
-        # for each pattern, it creates a list of names, which are collected and flattened
-        names = [name for pat in glob for name in fnmatch.filter(names, pat)]
-        return {
-            path_strip_components(Path(name), strip_components): env.get_template(name).render(tplVariables)
-            for name in names
-        }
-
-
-class SealedSecret(crds.bitnami.v1alpha1.SealedSecret):
-    _name: str
-
-    def __init__(
-        self,
-        name: str,
-        encrypted_data: pulumi.Inputs,
-        template: crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs | None = None,
-        metadata: k8s.meta.v1.ObjectMetaArgs | None = None,
-        opts: pulumi.ResourceOptions | None = None,
-    ):
-        # Workaround https://github.com/pulumi/crd2pulumi/issues/26
-        self._name = name
-
-        metadata = k8s.meta.v1.ObjectMetaArgs(
-            **{
-                **metadata.__dict__,
-                'name': name,
-                'annotations': {
-                    'sealedsecrets.bitnami.com/namespace-wide': 'true',
-                },
-            }
-        )
-
-        template = template or crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs()
-        spec = crds.bitnami.v1alpha1.SealedSecretSpecArgs(
-            encrypted_data=encrypted_data,
+            annotations=scope_annotations,
+            labels=dict(template.labels) if template.labels is not None else None,
+        ),
+        spec=crds.bitnami.v1alpha1.SealedSecretSpecArgs(
+            encrypted_data=dict(encrypted_data),
             template=crds.bitnami.v1alpha1.SealedSecretSpecTemplateArgs(
-                **{
-                    **template.__dict__,
-                    'metadata': k8s.meta.v1.ObjectMetaArgs(
-                        **{
-                            **(template.metadata or {}).__dict__,
-                            'annotations': {
-                                'sealedsecrets.bitnami.com/namespace-wide': 'true',
-                            },
-                        }
-                    ),
-                }
+                metadata=template_metadata,
+                data=dict(template.data) if template.data is not None else None,
+                type=template.type,
+                immutable=template.immutable,
             ),
-        )
+        ),
+        opts=pulumi.ResourceOptions.merge(pulumi.ResourceOptions(delete_before_replace=True), opts),
+    )
 
-        # Delete before replace because name is fixed
-        opts = opts or pulumi.ResourceOptions()
-        opts.delete_before_replace = True
 
-        super().__init__(name, metadata=metadata, spec=spec, opts=opts)
+def lb_pool_labels(pool: str) -> dict[str, str]:
+    """The labels that put a Service in a Cilium load-balancer pool.
 
-    def mount(self, dest: pulumi.Input[str], src: pulumi.Input[str] | None = None):
-        raise NotImplementedError('mount')
-
-    def as_secret_ref(self) -> pulumi.Output[k8s.core.v1.SecretEnvSourceArgs]:
-        return pulumi.Output.from_input(k8s.core.v1.SecretEnvSourceArgs(name=self._name))
-
-    # TODO: add other helpers
+    Pool membership is a property of the *Service* here, matched by the pool's
+    `serviceSelector` (cluster-infra.md §2). The legacy cluster decided it on
+    the *node* instead, with k3s `svccontroller` labels — a shape with no
+    successor, because Cilium allocates an address from a pool rather than
+    lending out whichever node happens to be announcing.
+    """
+    if pool not in (conventions.POOL_INTERNET, conventions.POOL_LAN):
+        raise ValueError(f'no such load-balancer pool: {pool}')
+    return {conventions.LB_POOL_LABEL: pool}
