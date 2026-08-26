@@ -59,6 +59,72 @@ VCN_CIDR = IPv4Network('10.20.0.0/16')
 VCN_SUBNET_CIDR = IPv4Network('10.20.0.0/24')
 
 # ---------------------------------------------------------------------------
+# Home site: the LAN, the homelab host, the gateway
+# ---------------------------------------------------------------------------
+
+#: The three home VLANs, as the gateway routes them: br0 untagged (the homelab
+#: host, the worker VM and the BGP session), br2 (Home Assistant and its
+#: devices — the LAN's least-trusted population), br5 (containers). Named here
+#: rather than written out at each use because more than one package addresses
+#: them: the ZeroTier managed routes below, the gateway's firewall groups, and
+#: the worker VM's own subnet.
+VLAN_SERVER = IPv4Network('192.168.80.0/24')
+VLAN_IOT = IPv4Network('192.168.90.0/24')
+VLAN_CONTAINER = IPv4Network('10.0.5.0/24')
+
+#: The homelab worker: one large VM under libvirt on the homelab host, a pure
+#: worker because the control plane is cloud-side (nodes.md §4.2).
+HOMELAB_NODE = 'worker'
+
+#: Its address is a constant rather than a lease: the gateway's FRR names it
+#: as a BGP neighbour, so it is configured statically in machine config on one
+#: side and written into the neighbour statement on the other
+#: (physical/homelab-host.md §2).
+HOMELAB_NODE_IPV4 = IPv4Address('192.168.80.238')
+
+#: Every Talos node this program declares.
+ALL_NODES = (*CLOUD_NODES, HOMELAB_NODE)
+
+#: Bootstrap sizing, deliberately below the 12–16 vCPU / 20 GiB / 100+ GB end
+#: state: the legacy cluster still holds that RAM and that disk, and the VM
+#: grows one wave at a time as legacy workloads stop (migration.md §0.4).
+#: Growing it is an edit here and a previewed apply.
+HOMELAB_VCPUS = 12
+HOMELAB_MEMORY_GIB = 10
+HOMELAB_DISK_GB = 60
+
+#: The host bridge the worker's tap joins. A second bridge on purpose: the
+#: existing `kvmbr0` enslaves the IoT VLAN, which is where the Home Assistant
+#: domain belongs and where a cluster node does not (physical/homelab-host.md §2).
+HOMELAB_BRIDGE = 'kvmbr1'
+
+#: The account the gateway is configured as. It has no other.
+GW_SSH_USER = 'root'
+
+#: The gateway's desired-state root. `/data` is the one directory that survives
+#: a firmware update, which is why the whole estate lives under it
+#: (architecture.md §5.2); `on_boot.d` holds the scripts that re-establish the
+#: estate after one, with no expectation that Pulumi is reachable at boot.
+GW_DATA_ROOT = '/data'
+GW_ON_BOOT_D = f'{GW_DATA_ROOT}/on_boot.d'
+
+#: The nspawn estate on the gateway, by unit name. ZeroTier is the member with
+#: host networking — its interface has to land in the main network namespace
+#: for the gateway to route through it (architecture.md §5.3).
+GW_ESTATE = ('caddy', 'adguard-alice', 'adguard-bob', 'zerotier')
+
+#: The controller site the UniFi resources are declared in. `default` is the
+#: internal name whatever the site is labelled in the interface.
+UNIFI_SITE = 'default'
+
+#: The `lan` pool as controller-side address objects. Two of them for one
+#: subnet because UniFi address groups are single-family, and address groups
+#: at all because the pool is deliberately not a network object — it would
+#: fight the BGP host routes (architecture.md §3.4, physical/gateway.md §4.1).
+UNIFI_GROUP_LAN_POOL_V4 = 'kluster-lan-pool-v4'
+UNIFI_GROUP_LAN_POOL_V6 = 'kluster-lan-pool-v6'
+
+# ---------------------------------------------------------------------------
 # Cluster networking
 # ---------------------------------------------------------------------------
 
@@ -194,6 +260,22 @@ def barman_repo_path(namespace: str, cluster: str) -> str:
 ETCD_SNAPSHOT_PREFIX = 'etcd'
 STATE_DUMP_PREFIX = 'pulumi-state'
 
+#: The two object buckets, on two providers on purpose. The backup bucket must
+#: not live with the provider whose loss it insures (storage.md §4), so it is
+#: on B2; the JuiceFS chunk bucket backs a replica whose other full copy is the
+#: NAS, so provider loss is survivable and it sits in-region with the cloud
+#: nodes, where its traffic rides the $0 service gateway. Both names are
+#: explicit because a B2 bucket name is global and both are addressed from
+#: outside this program.
+BUCKET_BACKUP = 'kluster-backup'
+BUCKET_CHUNKS = 'kluster-chunks'
+
+#: How long the backup bucket keeps a prior version before its lifecycle rule
+#: removes it. Nothing in automation holds a delete capability, so a restic or
+#: barman deletion degrades to a hide — and this is how long that hide has to
+#: be recoverable before it ages out (storage.md §4).
+BACKUP_VERSION_RETENTION_DAYS = 30
+
 # ---------------------------------------------------------------------------
 # DNS (declarative/dns.md)
 # ---------------------------------------------------------------------------
@@ -247,8 +329,8 @@ ZT_ROLE_CI = 2
 
 #: LAN subnets the UDM member routes for ZT clients.
 ZT_MANAGED_ROUTES = (
-    IPv4Network('192.168.80.0/24'),  # server LAN (br0)
-    IPv4Network('192.168.90.0/24'),  # IoT (br2)
-    IPv4Network('10.0.5.0/24'),  # container VLAN (br5)
+    VLAN_SERVER,
+    VLAN_IOT,
+    VLAN_CONTAINER,
     LAN_POOL_V4,  # reached via the UDM's BGP-learned route
 )
