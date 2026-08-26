@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 import requests
-from conftest import MemoryKit
+from memory_kit import MemoryKit
 
 from kluster.scripts.credentials import cloudflare, entries, masters
 from kluster.scripts.credentials.kdbx import KdbxStore
