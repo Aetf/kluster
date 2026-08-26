@@ -25,6 +25,11 @@ dependencies = [
     "pykeepass>=4.2.0",
     "keyring>=25.7.0",
     "pulumi-cloudflare>=6.11.0",
+    "pulumi-libvirt>=0.5.4",
+    "pulumi-b2",
+    "pulumi-unifi",
+    "pulumi-zerotier",
+    "asyncssh>=2.24.0",
 ]
 
 [project.scripts]
@@ -57,8 +62,24 @@ name = "pypi"
 url = "https://pypi.org/simple"
 default = true
 
+# Generated SDKs, committed like `packages/crds` rather than fetched: three of
+# them have no published Python package at all. They are produced by Pulumi's
+# any-Terraform-provider bridge, and regenerating one is a single command run
+# from the repository root (the SDK lands in `sdks/<name>`, from where it
+# replaces `packages/<name>`):
+#
+#   pulumi package add terraform-provider Backblaze/b2   --language python
+#   pulumi package add terraform-provider filipowm/unifi --language python
+#   pulumi package add terraform-provider zerotier/zerotier --language python
+#
+# `--language python` keeps the generator out of `Pulumi.yaml`: the bridge's
+# parameterization (which upstream provider, which version) travels inside the
+# committed SDK's own `pulumi-plugin.json`, so nothing else has to record it.
 [tool.uv.sources]
 pulumi-crds = { workspace = true }
+pulumi-b2 = { workspace = true }
+pulumi-unifi = { workspace = true }
+pulumi-zerotier = { workspace = true }
 
 [tool.uv.workspace]
 members = ["packages/*"]
@@ -78,8 +99,9 @@ packages = ["src/kluster", "src/putils"]
 ##
 [tool.ruff]
 line-length = 120
-# In addition to the standard set of exclusions, omit all tests, plus a specific file.
-extend-exclude = ["lib", "packages/crds"]
+# In addition to the standard set of exclusions: vendored libraries, and
+# `packages/`, whose every member is a generated provider SDK.
+extend-exclude = ["lib", "packages"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -100,15 +122,17 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests", "deploy", "__main__.py"]
-# Both are workspace packages installed editable, through an import finder the
-# type checker cannot follow; it reads them from the tree instead. Listing
-# `src` is not redundant: naming any extra path makes this the whole search
-# path, so leaving it out resolves `kluster` as an unstubbed third-party
-# library.
-extraPaths = ["src", "packages/crds"]
-# Generated CRD bindings are not ours to annotate.
+# All of these are workspace packages installed editable, through an import
+# finder the type checker cannot follow; it reads them from the tree instead.
+# Listing `src` is not redundant: naming any extra path makes this the whole
+# search path, so leaving it out resolves `kluster` as an unstubbed
+# third-party library.
+extraPaths = ["src", "packages/crds", "packages/b2", "packages/unifi", "packages/zerotier"]
+# Generated bindings — CRD schemas and bridged provider SDKs — are not ours to
+# annotate. They are still on the search path above, so code that imports them
+# is checked against them; only their own sources are skipped.
 exclude = [
-    "packages/crds",
+    "packages",
     "**/__pycache__",
     ".venv",
 ]
