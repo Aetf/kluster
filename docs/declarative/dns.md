@@ -24,8 +24,11 @@ The DNSControl census: ZeroTier host records, Google Workspace mail
 (MX/SPF/DKIM/DMARC per zone), site verifications, external hosts
 (abacus), two family zones (jiahui.id / jiahui.love), and two alias
 zones (peifeng.phd, ucw.phd) mirroring the primary
-(unlimited-code.works). unlimitedcodeworks.xyz mirrors the primary as
-well, with mail and site verifications of its own on top (§2). None of
+(unlimited-code.works). unlimitedcodeworks.xyz carries the same shared
+estate block, with mail and site verifications of its own on top (§2);
+its app half is transitional — today it publishes none of the app names
+the other mirrors carry and three of its own, and it becomes a mirror in
+app names as apps migrate and take the default zone set (§2). None of
 that has an app to co-locate with — so it gets its own stack with its own
 (rare) change cadence, and non-cluster DNS edits never touch a cluster
 stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
@@ -81,21 +84,44 @@ Cloudflare set; jiahui.id takes none.
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live
     convention (`archvps.hosts`). **IP literals exist only here**, with
-    low TTLs. New estate: `kluster.hosts` → the NLB (A/AAAA, from
-    physical outputs) and `vip1.hosts` → the dedicated VIP (operator
-    convenience; hath itself needs no DNS). Retired at absorption:
-    `archvps.hosts` (with the legacy VPS) and `abacus.hosts` (machine
-    no longer exists — its dependents in the current file, the Abacus
-    ZT entry and the jupyter/mc records, are dead weight to drop during
-    the import census). The state-backend micro deliberately gets **no
-    anchor**: clients pin its IP (`verify-full`, SAN = IP literal) so
-    the state backend's hot path never depends on this stack
+    low TTLs. New estate: `kluster.hosts` → the NLB, an A *and* an AAAA
+    because the load balancer is dual-stack (architecture.md §3.2), and
+    `vip1.hosts` → the dedicated VIP (operator convenience; hath itself
+    needs no DNS). Both read `physical`'s outputs rather than literals:
+    `cluster_endpoint` and `cluster_endpoint_v6` for the balancer,
+    `vip1` for the VIP. The VIP is A-only by construction — it is a
+    reserved public IPv4 that OCI 1:1-NATs onto a secondary private
+    address, and that mechanism has no IPv6 counterpart. Dropped at
+    import: `abacus.hosts` (the machine no longer exists — its
+    dependents, the Abacus ZT entry and the jupyter/mc records, went
+    with it). `archvps.hosts` is **not** dropped: every app record that
+    has not migrated targets it, and it retires with the VPS in Wave F
+    (§6). The state-backend micro deliberately gets **no anchor**:
+    clients pin its IP (`verify-full`, SAN = IP literal) so the state
+    backend's hot path never depends on this stack
     (physical/state-backend.md §3).
+-   **Anchors are declared in the primary zone only.** An app
+    publishing in several zones gets a CNAME in each, and every one of
+    them targets `kluster.hosts.unlimited-code.works`, so a node
+    rebuild moves one record instead of one per zone. The mirrors do
+    carry an `archvps.hosts` copy of their own — ported with the rest
+    of the live estate — but nothing targets it: the legacy CNAMEs name
+    the primary's copy as well, and the copies retire with the VPS.
+    Declaring the anchors reaches across a StackReference and nothing
+    else in this stack does, so it is written not to await: an address
+    `physical` has not published yet becomes an unresolved record input
+    rather than an error, and `dns` previews the same records before
+    and after `physical` is applied. Applying is the step that needs
+    them real — `physical` must export `cluster_endpoint_v6` (the one
+    of the three outputs it does not export yet) before `dns` can be
+    brought up, which is the same gate as the NLB's dual-stack
+    verification (physical.md §6).
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing
     practice); its contents mirror the ZT member roster
-    (physical/gateway.md §2.1): `udm.zt` added, `abacus.zt` dropped at
-    import, the VPS record retires in Wave F.
+    (physical/gateway.md §2.1): `udm.zt` added, three members dropped at
+    import because ZeroTier Central no longer knows them (Abacus,
+    Aetf-Arch-Mac, Aetf-MacbookPro), the VPS record retires in Wave F.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
@@ -106,14 +132,20 @@ Cloudflare set; jiahui.id takes none.
     zones=PUBLIC_ALL)` once and the helper fans records out across the
     set.
 -   **`PUBLIC_ALL` membership means full mirror**: every zone in the
-    set carries one shared estate block — the anchor namespace, the
+    set carries one shared estate block — the legacy VPS anchor, the
     ZeroTier host records and the web origin
     (`dns/zones.py`, `MIRRORED_ESTATE`) — so a name fanned across the
-    set resolves in all of it, the anchors its CNAMEs target included.
-    A zone joins the set by carrying the block, not by being listed;
-    the two facts are held together by a test. What a mirror may add on
-    top of the block is its own mail and site verifications, which are
-    per-domain by nature.
+    set resolves in all of it. The cluster anchors those names CNAME to
+    are not in the block: they are in the primary alone, per the bullet
+    above. A zone joins the set by carrying the block, not by being
+    listed; the two facts are held together by a test. What a mirror
+    may add on top of the block is its own mail and site verifications,
+    which are per-domain by nature. Membership is also a promise about
+    app names that only the migration makes true: unlimitedcodeworks.xyz
+    is in the set and carries none of the app names the other mirrors
+    do (`dns/legacy.py` — the VPS never served them there), so the
+    fan-out first reaches it when an app moves into `apps` and takes
+    the default zone set.
 -   **Cloudflare proxy is a helper parameter** (default on): the
     existing per-record reasons — large uploads (photos), non-HTTP
     ports (syncthing, matrix, minecraft) — become explicit
@@ -194,18 +226,29 @@ plane names:
 
 ## 5. The one-line helpers
 
+> **Not implemented; the implementation lands with the `apps` stack.**
+> The helpers belong to the app component base, and the stack that
+> would define that base refuses by name until it is written
+> (`stacks/apps.py` raises). This section and workloads.md §1 are the
+> contract that implementation has to satisfy, and nothing in the
+> repository emits a route today — which is also why the route census
+> §3 reads from is empty.
+
 `public_route(host=…, zones=…, proxied=…)` on the app component base
 emits the coherent set: HTTPRoute (to `internet-gw`, `lan-gw`, or both
 per the §3.6 matrix), the CNAMEs across the zone set, and — for
-both-gateway apps — the AdGuard rewrites. `lan_route(host=…)` is the
-LAN-only variant (rewrite + `lan-gw` route, no public record, §4);
-its `iot_reachable=True` parameter attaches `media-gw` instead and
-points the rewrite at the media VIP — the review-visible form of
-"IoT devices may reach this app" (cluster-infra.md §2,
-physical/gateway.md §4.2).
-`public_port(…)` is the raw TCP/UDP analog, additionally emitting the
+both-gateway apps — the route row `dns` writes the AdGuard rewrite
+from. The helper never writes a rewrite itself; that is the split
+§3 describes. `lan_route(host=…)` is the LAN-only variant (route row
+plus a `lan-gw` route, no public record, §4); its
+`iot_reachable=True` parameter attaches `media-gw` instead and marks
+the row so the rewrite answers with the media VIP — the
+review-visible form of "IoT devices may reach this app"
+(cluster-infra.md §2, physical/gateway.md §4.2). `public_port(…)` is
+the raw TCP/UDP analog, and it is the **only** helper that emits an
 NLB listener and its security rule (physical.md §1's
-derived-not-enumerated principle).
+derived-not-enumerated principle) — an HTTP route rides listeners the
+cluster already has.
 
 ## 6. Migration shape
 
