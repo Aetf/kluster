@@ -10,6 +10,11 @@ name: noop-automerge
 # its own log and its own red X. The zero-diff proof is the gate that catches a
 # bump which silently changes rendering.
 #
+# The classification is by path, not by author: renovate is the expected
+# producer, but nothing here checks who opened the pull request. A fork's pull
+# request fails closed instead — the proof needs Environment secrets, which a
+# fork never receives, so it errors and the merge job never runs.
+#
 # The merge does not start deploy.yml — pushes made with GITHUB_TOKEN start no
 # workflow runs. That is correct by construction: the merge happened because
 # the preview was empty, so the skipped apply would have been a no-op.
@@ -66,14 +71,22 @@ jobs:
       matrix:
         stack: [dns, k8s-base, apps]
     environment: ${{ matrix.stack }}
+    # Same lock as the preview's dns job, and the same reason: one ZeroTier
+    # identity, one live endpoint (framework/ci.md §2).
+    concurrency:
+      group: ${{ matrix.stack == 'dns' && 'zt-dns' || format('noop-{0}-{1}', github.ref, matrix.stack) }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
           experimental: true
       - run: mise x uv -- uv sync --locked
+      # dns is the LAN-touching stack: its AdGuard rewrites live on the UDM
+      # (declarative/dns.md §3). apps reaches nothing but the cluster, and an
+      # apps job holding ZeroTier secrets would break that partition.
       - uses: ./.github/actions/zerotier
-        if: matrix.stack == 'apps'
+        if: matrix.stack == 'dns'
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}

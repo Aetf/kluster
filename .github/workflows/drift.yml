@@ -8,8 +8,13 @@ name: drift
 #
 # `--refresh` is load-bearing: a plain preview diffs code against cached state
 # and would report zero for a console hand-edit. The consequence is carried
-# consciously — refreshing adopts the drift into state, so the alert fires
-# first and reconciling is what its playbook demands.
+# consciously — refreshing adopts the drift into state, so reconciling is what
+# the playbook demands as soon as a diff is seen.
+#
+# A diff is a failed run and nothing else: the `actionable` alert leg
+# (cluster/architecture.md §4.3) is not built, so seeing it means reading the
+# Actions tab. Recorded as unbuilt in framework/ci.md §3 rather than papered
+# over with a second, private notification path.
 
 on:
   workflow_dispatch:
@@ -31,17 +36,30 @@ jobs:
           - stack: physical
             environment: physical-plan
             zerotier: true
+            lock: zt-physical
           - stack: dns
             environment: dns
             # The AdGuard rewrites are on the UDM (declarative/dns.md §3).
             zerotier: true
+            lock: zt-dns
           - stack: k8s-base
             environment: k8s-base
             zerotier: false
+            lock: drift-k8s-base
           - stack: apps
             environment: apps
             zerotier: false
+            lock: drift-apps
     environment: ${{ matrix.environment }}
+    # A drift run joins with the very identities the deploy chain uses, so the
+    # workflow's own `drift` group cannot keep them apart: the lock has to be
+    # the identity, shared across workflows (framework/ci.md §2). Each matrix
+    # entry carries a distinct key — two entries of one run sharing a key is
+    # the case GitHub does not serialize reliably — and the non-ZeroTier
+    # stacks get a key that only ever collides with another drift run.
+    concurrency:
+      group: ${{ matrix.lock }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
