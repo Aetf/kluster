@@ -108,7 +108,7 @@ that rotation incomplete.
 | Seed | What it mints | Self-reproducing |
 | --- | --- | --- |
 | OCI seed API key (its own user, group and policy: manage users, groups and policies in the tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
-| Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
+| Cloudflare seed token (**API Tokens Write**, and **Zone Read** on all zones) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
@@ -132,11 +132,18 @@ documentation](https://developers.cloudflare.com/fundamentals/api/how-to/create-
 and *API Tokens Write* is exactly what the seed carries, so any
 successor minted from the seed would be a token that cannot mint.
 Bring-up and rotation are therefore the same dashboard visit: **User →
-API Tokens → Create Token → Create Additional Tokens**, taken as the
-template comes, and the superseded token deleted on the same page once
-the new kit is written. An operator who already holds a token of that
-template as an "account root" holds the seed: it is the same
-credential, and it is pasted in as-is. What the seed *does* mint is
+API Tokens → Create Token → Create Additional Tokens**, with **Zone →
+Zone → Read** on all zones added to the template's own **User → API
+Tokens → Edit**, and the superseded token deleted on the same page once
+the new kit is written. The added permission is what lets the seed turn
+a zone name into the id a minted policy names, so the scripts refuse a
+seed whose zone listing is empty at the moment it is pasted in rather
+than at the first mint. A permission added to a token that already
+exists does not extend the value already in hand, so the way to correct
+a seed's permissions is to make a new token and record it, not to edit
+the old one — an operator who already holds a token of that template as
+an "account root" holds the seed only if it carries both permissions
+already. What the seed *does* mint is
 §3's tokens, which carry zone permissions and no token permissions —
 the class the platform does allow.
 

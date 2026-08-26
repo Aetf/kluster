@@ -48,6 +48,14 @@ def kit(tmp_path: Path) -> KdbxStore:
 
 
 def _seed(api: FakeApi) -> str:
+    """A console-made seed, in an account that has at least one zone.
+
+    Adoption proves the seed can list zones, and an account with no zone in it
+    answers that listing the same way a blind seed does. Giving the account a
+    zone is what makes the refusal below about the token.
+    """
+    if not api.zones:
+        _ = api.add_zone(conventions.ZONE_PRIMARY)
     return console_seed(api)
 
 
@@ -70,6 +78,19 @@ def test_a_seed_from_the_wrong_template_says_which_permission_it_needs(api: Fake
     # `POST /user/tokens` would answer it without naming the permission.
     with pytest.raises(CredentialRejected, match=cloudflare.MINTING_PERMISSION):
         _ = cloudflare.adopt_seed(token=read_only, seeds=kit, seed_entry=SEED_ENTRY)
+    assert not kit.has(SEED_ENTRY)
+
+
+def test_a_seed_that_cannot_see_zones_is_refused_at_adoption(api: FakeApi, kit: KdbxStore) -> None:
+    value = _seed(api)
+    api.seed_sees_zones = False
+
+    # The minting template alone authenticates and mints, so `require_minting`
+    # accepts it; the first zone-scoped mint is where it would otherwise fail,
+    # long after the console visit that fixes it is over. The refusal names the
+    # permission and says the fix is a new token rather than an edited one.
+    with pytest.raises(CredentialRejected, match=cloudflare.ZONE_VISIBILITY_PERMISSION):
+        _ = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
     assert not kit.has(SEED_ENTRY)
 
 
@@ -160,19 +181,31 @@ def test_the_minted_token_is_verified_before_it_is_returned(api: FakeApi) -> Non
     assert api.calls[minted + 1] == ('GET', '/user/tokens/verify')
 
 
-def test_minting_retires_the_predecessor_as_the_new_token(api: FakeApi) -> None:
+def test_minting_retires_the_predecessor_as_the_minting_token(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
     previous, _ = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
     orphan = api.values[api.add(STACK_TOKEN, [ZONE_POLICY])]
 
     current, _ = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
 
-    # Two tokens to delete: a session signing with one of them would stop
-    # working partway through, so the retirement runs as the token that was
-    # just minted. Rotating a §3 token is this same re-run.
+    # Two tokens to delete, and only the seed can delete either: listing and
+    # deleting tokens are token permissions, which a minted §3 token may not
+    # carry, so a retirement signed with the new token is refused outright.
+    # Rotating a §3 token is this same re-run.
     assert _named(api, STACK_TOKEN) == [current]
     assert previous not in api.tokens
     assert orphan not in api.tokens
+
+
+def test_a_minted_token_may_not_manage_tokens_at_all(api: FakeApi) -> None:
+    session = cloudflare.Session.authorize(_seed(api))
+    _, value = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+
+    # The platform rule this module is shaped around, seen from the other side:
+    # the class of token the seed is allowed to mint cannot even enumerate
+    # tokens, so nothing in a §3 credential's own procedure may try to.
+    with pytest.raises(CredentialRejected, match='Unauthorized to access requested resource'):
+        _ = cloudflare.Session.authorize(value).tokens()
 
 
 def _estate(api: FakeApi) -> dict[str, str]:
@@ -227,6 +260,27 @@ def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeAp
     # itself what it can reach, which is the thing the consumer depends on.
     with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
         _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+
+def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
+    zone_ids = _estate(api)
+    session = cloudflare.Session.authorize(_seed(api))
+    working = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+    api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
+
+    with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+    # Scope is confirmed before anything is retired, so a run that mints a
+    # credential it cannot use costs nothing that still works. What it does
+    # leave behind is a same-named stray, and the next run that gets a good
+    # token deletes it by name -- which is how a failed run is recovered from.
+    assert working.token_id in api.tokens
+    api.withholds_zone = None
+
+    replacement = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+    assert _named(api, STACK_TOKEN) == [replacement.token_id]
 
 
 def test_a_renamed_permission_group_is_named_rather_than_guessed(api: FakeApi) -> None:

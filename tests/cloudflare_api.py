@@ -5,7 +5,8 @@ one: test modules import it, and every directory with tests may have a
 `conftest` of its own on `sys.path`.
 
 The fake refuses what the platform refuses — a sub-token may not carry token
-permissions — and it answers zone listings *as the calling token*, which is
+permissions, and a token without them is refused every call that lists or
+deletes tokens — and it answers zone listings *as the calling token*, which is
 what makes a scope check meaningful: a minted token sees the zones its policies
 name, and nothing else.
 """
@@ -68,8 +69,10 @@ class FakeApi:
     posted: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     groups: dict[str, dict[str, Any]] = field(default_factory=lambda: dict(GROUPS))
     #: Whether a token carrying the minting permission may also list zones.
-    #: The dashboard template that makes the seed carries token permissions and
-    #: nothing else, so this is the fact a first live run settles.
+    #: False is the dashboard template taken as it comes: it grants token
+    #: permissions and nothing else, so it authenticates and mints while its
+    #: zone listing is empty. That is why the seed is made with a zone read
+    #: permission beside the minting one, and why adoption proves it.
     seed_sees_zones: bool = True
     #: A zone id the platform silently leaves out of what it creates — the
     #: shape of a mint that reports success and hands back a narrower token
@@ -101,12 +104,26 @@ class FakeApi:
         self.zones[name] = {'id': zone_id, 'name': name, 'account': {'id': account_id, 'name': 'estate'}}
         return zone_id
 
+    def _carried(self, token: dict[str, Any]) -> set[str]:
+        """The permission groups this token holds, by name."""
+        return {
+            str(group['name'])
+            for policy in list[dict[str, Any]](token.get('policies') or [])
+            for group in list[dict[str, Any]](policy['permission_groups'])
+        }
+
+    def _manages_tokens(self, token: dict[str, Any]) -> bool:
+        """Whether this token may list and delete tokens.
+
+        The same permission governs both, and a minted §3 token may not carry
+        it at all, so every token-management call it makes is refused.
+        """
+        return cloudflare.MINTING_PERMISSION in self._carried(token)
+
     def _visible_zones(self, token: dict[str, Any]) -> list[dict[str, Any]]:
         """The zones this token may list — the API's own answer, per credential."""
         policies = list[dict[str, Any]](token.get('policies') or [])
-        carried = {
-            str(group['name']) for policy in policies for group in list[dict[str, Any]](policy['permission_groups'])
-        }
+        carried = self._carried(token)
         if cloudflare.MINTING_PERMISSION in carried:
             return list(self.zones.values()) if self.seed_sees_zones else []
         scoped = {
@@ -130,14 +147,18 @@ class FakeApi:
         response._content = jsonlib.dumps({'success': True, 'errors': [], 'result': result}).encode()  # pyright: ignore[reportPrivateUsage]
         return response
 
-    def _refusal(self, message: str) -> requests.Response:
-        """A refused call: 400 with a populated `errors`, not an exception."""
+    def _refusal(self, message: str, status: int = 400) -> requests.Response:
+        """A refused call: an error status with a populated `errors`, not an exception."""
         response = requests.Response()
-        response.status_code = 400
+        response.status_code = status
         response._content = jsonlib.dumps(  # pyright: ignore[reportPrivateUsage]
             {'success': False, 'errors': [{'code': 1000, 'message': message}], 'result': None}
         ).encode()
         return response
+
+    def _unauthorized(self) -> requests.Response:
+        """What the platform answers a token asked to manage other tokens."""
+        return self._refusal('Unauthorized to access requested resource', status=403)
 
     def get(self, url: str, headers: dict[str, str], timeout: int) -> requests.Response:
         return self.request('GET', url, headers=headers, timeout=timeout, json=None)
@@ -163,6 +184,8 @@ class FakeApi:
             case ('GET', '/user/tokens/verify'):
                 return self._envelope({'id': token['id'], 'status': token['status']})
             case ('GET', '/user/tokens'):
+                if not self._manages_tokens(token):
+                    return self._unauthorized()
                 return self._envelope(list(self.tokens.values()))
             case ('GET', '/user/tokens/permission_groups'):
                 return self._envelope([{'id': group_id, **group} for group_id, group in self.groups.items()])
@@ -190,6 +213,8 @@ class FakeApi:
                 value = self.add(str(json['name']), policies)
                 return self._envelope({'id': self.values[value], 'value': value})
             case ('DELETE', token_path) if token_path.startswith('/user/tokens/'):
+                if not self._manages_tokens(token):
+                    return self._unauthorized()
                 del self.tokens[token_path.removeprefix('/user/tokens/')]
                 return self._envelope(None)
             case ('GET', token_path) if token_path.startswith('/user/tokens/'):
