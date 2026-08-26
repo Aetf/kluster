@@ -22,16 +22,19 @@ encryption identities are derived from the derivation seed, and the B2
 credentials are minted from the seed key:
 
 ```sh
-export KLUSTER_KDBX=~/path/to/kluster.kdbx
 mise x uv -- uv run state-backend provision
 ```
+
+The kit is `.credentials/kit.kdbx` in the checkout unless `$KLUSTER_KDBX`
+names one elsewhere — on removable media, or shared between checkouts.
 
 Idempotent end to end, so this is equally the bring-up command and the
 re-provision command; that is what keeps the rebuild path warm. It creates (or
 converges) the appliance's own VCN, subnet, gateway, security group and
 reserved public IP, imports the pinned Fedora CoreOS release as a custom image,
 renders the Ignition and launches the instance — then writes the operator's
-client bundle to `~/.config/kluster/state-backend/`.
+client bundle to `.credentials/state-backend/` in the checkout, the workstation
+slot for it (docs/credentials.md §4.4).
 
 **It applies the current commit.** A run compares the box to the repository —
 the Butane file, the operator keys, the pins, the certificate identities, the
@@ -66,7 +69,7 @@ bundle's files by absolute path, because nothing on the path expands a
 variable inside a connection string:
 
 ```sh
-postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=/home/you/.config/kluster/state-backend/ca.crt&sslcert=.../client.crt&sslkey=.../client.key
+postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=/home/you/kluster/.credentials/state-backend/ca.crt&sslcert=.../client.crt&sslkey=.../client.key
 ```
 
 Moving the bundle therefore invalidates the URL beside it; re-run

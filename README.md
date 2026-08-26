@@ -46,21 +46,32 @@ mise x -- pulumi preview --stack <layer>
 A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
 written by `state-backend provision` beside the client certificate it names,
 and `PULUMI_CONFIG_PASSPHRASE`, derived from the offline derivation seed and
-stored in no slot at all. `mise.toml` picks up the first from the client bundle
-in `~/.config/kluster/state-backend/`, and the second from a git-ignored
-`.pulumi.secret` — so a workstation without the offline kit needs the bundle
-copied to it and the passphrase cached once:
+stored in no slot at all. Both live in `.credentials/`, a git-ignored directory
+in the checkout holding everything local this repository needs — the seed kit,
+the cached passphrase, the state backend's client bundle, the account roots'
+token files (docs/credentials.md §4.4). `mise.toml` reads them from there, so a
+workstation is set up by copying that directory from one that already has it:
 
 ```sh
-# on the workstation that holds the kit
-rsync -a ~/.config/kluster/state-backend/ <host>:~/.config/kluster/state-backend/
-mise x uv -- uv run credentials derive passphrase | ssh <host> 'umask 077; cat > ~/kluster/.pulumi.secret'
+# on the workstation that holds the kit; leave kit.kdbx behind unless the
+# other machine is meant to hold the offline kit too
+rsync -a --exclude kit.kdbx .credentials/ <host>:<checkout>/.credentials/
 ```
 
+Both checkouts have to sit at the same path for that copy to be complete: the
+connection string names the bundle's certificate files absolutely, because
+nothing on the path expands a variable inside one. A checkout elsewhere needs
+those three paths corrected in `.credentials/state-backend/backend-url`.
+
+On a machine that holds the kit, `credentials derive passphrase` writes the
+passphrase slot itself, and `state-backend bundle operator --address <ip>`
+writes the bundle.
+
 The `github` stack additionally needs `GITHUB_TOKEN`, which `mise.toml` reads
-from a git-ignored `.github.token`. That one is an account root rather than a
-derived secret: nothing here can recreate it, which is deliberate -- that stack
-is applied by hand and never by CI.
+from `.credentials/roots/github.token`. That one is an account root rather than
+a derived secret: nothing here can recreate it, which is deliberate -- that
+stack is applied by hand and never by CI. `credentials master github remember`
+is how the value from the personal estate gets into the slot.
 
 The console scripts — `credentials`, `state-backend`, `update_crds` — are the
 operator-side half of the estate; each one's `--help` is written to say when it
