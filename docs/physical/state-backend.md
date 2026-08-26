@@ -20,7 +20,12 @@ shape nor the domain, which reads like a permissions problem.
 > (which keeps the *decision* — what the backend is and why it lives
 > here — and points at this document for everything about the box).
 > Why-it-moved-off-the-homelab and the OCI-Container-Instances
-> rejection live there. Not implemented.
+> rejection live there. **The appliance is built and serving state**:
+> `deploy/state-backend/` holds the Butane file, the operator keys and
+> the dump script, and the `state-backend` console script renders,
+> provisions and converges the box, checks its pins, writes client
+> bundles, and logs in for diagnosis. Still design-only: the restore
+> and key-rotation scripts of §1, and the playbooks and drills of §7.
 
 ## 1. OS & configuration management
 
