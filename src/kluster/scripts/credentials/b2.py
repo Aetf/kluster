@@ -38,6 +38,11 @@ AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 SEED_KEY_NAME = 'kluster-seed'
 MANAGEMENT_KEY_NAME = 'kluster-management'
 
+#: How many keys to ask for per `b2_list_keys` page. B2 caps a single Class C
+#: transaction at a thousand keys and pages beyond that, so this is a
+#: transaction-size choice rather than a limit on what a listing sees.
+PAGE_SIZE = 1000
+
 #: Bucket and key administration. Managing a bucket never requires touching
 #: its contents, so listFiles/readFiles/writeFiles/deleteFiles are absent;
 #: writeKeys/deleteKeys are what let the seed replace itself and mint the
@@ -118,20 +123,57 @@ class Session:
         return data['applicationKeyId'], data['applicationKey']
 
     def keys(self) -> list[dict[str, Any]]:
-        data = self.post('b2_list_keys', {'accountId': self.account_id, 'maxKeyCount': 1000})
-        return data['keys']
+        """Every application key on the account, following the pages.
+
+        The page size is the server's choice, not the caller's: a listing that
+        stopped at the first answer would report keys that exist as gone --
+        which retires nothing and rebuilds an appliance that was fine.
+        """
+        found: list[dict[str, Any]] = []
+        start: str | None = None
+        while True:
+            body: dict[str, Any] = {'accountId': self.account_id, 'maxKeyCount': PAGE_SIZE}
+            if start is not None:
+                body['startApplicationKeyId'] = start
+            data = self.post('b2_list_keys', body)
+            found.extend(list[dict[str, Any]](data['keys']))
+            start = data.get('nextApplicationKeyId')
+            if not start:
+                return found
 
     def delete_key(self, key_id: str) -> None:
         _ = self.post('b2_delete_key', {'applicationKeyId': key_id})
 
 
-def _mint_verified(session: Session, name: str) -> tuple[str, str]:
-    """Create a key and prove it works before anything depends on it."""
+def _mint_verified(session: Session, name: str) -> tuple[Session, str, str]:
+    """Create a key, prove it works, and hand back a session as that key.
+
+    The session is part of the answer because retirement has to run as a
+    credential that outlives it (`retire_others`).
+    """
     key_id, key = session.create_key(name)
     minted = Session.authorize(key_id, key)
     _ = minted.post('b2_list_buckets', {'accountId': minted.account_id})
     log.info('minted %s (%s), verified against the API', name, key_id)
-    return key_id, key
+    return minted, key_id, key
+
+
+def retire_others(session: Session, name: str, *, keep: str) -> None:
+    """Delete every other key of this name, as a credential that survives it.
+
+    B2 key names are not unique, so what is retired is "everything called
+    this except the one in hand" rather than one known predecessor: a run that
+    died after minting left a key nobody holds the secret of, and the next run
+    is the only thing that can see it.
+
+    `session` must be a credential that is still valid once the deletions are
+    done -- an authorization token is a token *of a key*, so a session that
+    deletes its own key cannot delete the next one.
+    """
+    for existing in session.keys():
+        if existing['keyName'] == name and existing['applicationKeyId'] != keep:
+            log.info('deleting superseded %s %s', name, existing['applicationKeyId'])
+            session.delete_key(str(existing['applicationKeyId']))
 
 
 def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
@@ -145,8 +187,12 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     rotation is `rotate_seed`, which never touches the account root.
     """
     session = Session.authorize(root['account-id'], root['key'])
-    key_id, key = _mint_verified(session, SEED_KEY_NAME)
+    minted, key_id, key = _mint_verified(session, SEED_KEY_NAME)
     seeds.put(seed_entry, key_id, key)
+    # Stored first, retired second: an interrupted run leaves a key the kit does
+    # not name, and this is the only thing that can clear it -- a seed key whose
+    # secret nobody holds is a live permission, not a spare.
+    retire_others(minted, SEED_KEY_NAME, keep=key_id)
     return key_id
 
 
@@ -164,13 +210,12 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     session = Session.from_entry(store, seed_entry)
     previous = store.get(seed_entry, attribute='UserName')
 
-    key_id, key = _mint_verified(session, SEED_KEY_NAME)
+    minted, key_id, key = _mint_verified(session, SEED_KEY_NAME)
     (into or store).put(seed_entry, key_id, key)
 
-    for existing in session.keys():
-        if existing['keyName'] == SEED_KEY_NAME and existing['applicationKeyId'] != key_id:
-            log.info('deleting superseded seed %s', existing['applicationKeyId'])
-            session.delete_key(existing['applicationKeyId'])
+    # As the successor, not as the predecessor: the predecessor is one of the
+    # keys being deleted, and its session stops working the moment it is.
+    retire_others(minted, SEED_KEY_NAME, keep=key_id)
     log.info('seed rotated: %s -> %s', previous, key_id)
     return key_id
 
@@ -183,13 +228,11 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> tuple[str, str]:
     (credentials.md §1 rule 2).
     """
     session = Session.from_entry(store, seed_entry)
-    key_id, key = _mint_verified(session, MANAGEMENT_KEY_NAME)
+    _, key_id, key = _mint_verified(session, MANAGEMENT_KEY_NAME)
     # Retire predecessors only once the replacement works: a failed mint must
-    # leave the running stack's credential alone.
-    for existing in session.keys():
-        if existing['keyName'] == MANAGEMENT_KEY_NAME and existing['applicationKeyId'] != key_id:
-            log.info('deleting superseded management key %s', existing['applicationKeyId'])
-            session.delete_key(existing['applicationKeyId'])
+    # leave the running stack's credential alone. The seed signs it, and the
+    # seed is not among the keys being deleted.
+    retire_others(session, MANAGEMENT_KEY_NAME, keep=key_id)
     return key_id, key
 
 
@@ -272,9 +315,9 @@ def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -
         },
     )
     key_id, key = str(data['applicationKeyId']), str(data['applicationKey'])
-    for existing in session.keys():
-        if existing['keyName'] == name and existing['applicationKeyId'] != key_id:
-            log.info('deleting superseded dump key %s', existing['applicationKeyId'])
-            session.delete_key(str(existing['applicationKeyId']))
+    # Retired by the minter rather than by the new key: a write-only key
+    # carries no `deleteKeys` and could not retire anything, its predecessor
+    # least of all.
+    retire_others(session, name, keep=key_id)
     log.info('minted %s (%s)', name, key_id)
     return key_id, key
