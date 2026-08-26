@@ -12,6 +12,7 @@ shape (§2) is the other half of the same decision.
 from __future__ import annotations
 
 import itertools
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,11 +41,24 @@ class Response:
 
 @dataclass
 class Named:
-    """A stand-in for the SDK models that only ever carry an id and a name."""
+    """A stand-in for the SDK models that only ever carry an id and a name.
+
+    A user or a group in a tenancy with identity domains has two identifiers,
+    not one: the OCID every API speaks (`id`, which is what the legacy service
+    calls it) and the SCIM id the domains API addresses its own resources by.
+    Both are minted here whichever API created the resource, because the real
+    service does the same — the domain is where these live, and the legacy
+    call is a shim over it.
+    """
 
     id: str
     name: str
     statements: list[str] = field(default_factory=list[str])
+    handle: str = ''
+
+
+def _named(kind: str, name: str) -> Named:
+    return Named(id=f'ocid1.{kind}.oc1..{name}', name=name, handle=f'{kind}-{name}-scim-id')
 
 
 @dataclass
@@ -77,6 +91,73 @@ class DomainKeys:
 
 
 @dataclass
+class DomainMember:
+    """One member of a group, as SCIM carries it: inside the group itself."""
+
+    value: str
+
+
+@dataclass
+class DomainResource:
+    """A user or a group as the domains API returns it, under both its names."""
+
+    id: str
+    ocid: str
+    members: list[DomainMember] | None = None
+
+
+@dataclass
+class DomainResources:
+    """The SCIM list envelope a domains search answers with."""
+
+    resources: list[DomainResource]
+
+
+def _refused(what: str) -> oci.exceptions.ServiceError:
+    """What the domains API answers a caller it will not serve.
+
+    No `code` at all, the way a live domains refusal comes back: the status
+    and the message are the whole of what it says.
+    """
+    return oci.exceptions.ServiceError(status=401, code=None, headers=dict[str, str](), message=what)
+
+
+def _filter_value(expression: str) -> str:
+    """The literal out of a SCIM `attribute eq "value"` filter."""
+    matched = re.search(r'"([^"]*)"', expression)
+    assert matched is not None, f'not a filter this fake understands: {expression}'
+    return matched.group(1)
+
+
+@dataclass
+class DomainPolicy:
+    """What the identity domain refuses, and for how long.
+
+    Refusals are per operation because that is how they were met live: one
+    endpoint answering while its neighbour on the same host and the same
+    credential does not.
+    """
+
+    #: Operations refused every time.
+    always: frozenset[str] = frozenset()
+    #: Operations refused the first time and taken afterwards -- the shape
+    #: that makes a one-shot caller give up on a call that would have worked.
+    once: set[str] = field(default_factory=set[str])
+    #: Every operation the domain actually served, in order. Which endpoint
+    #: answered is the whole of what these tests are about, and it is not
+    #: visible in the tenancy state afterwards: both APIs write the same fact.
+    served: list[str] = field(default_factory=list[str])
+
+    def check(self, operation: str) -> None:
+        if operation in self.always:
+            raise _refused(f'the identity domain does not serve {operation} here')
+        if operation in self.once:
+            self.once.discard(operation)
+            raise _refused('The required information to complete authentication was not provided.')
+        self.served.append(operation)
+
+
+@dataclass
 class FakeIdentity:
     """One tenancy's IAM, remembering what was done to it."""
 
@@ -92,7 +173,7 @@ class FakeIdentity:
         return Response([group for group in self.groups.values() if name in (None, group.name)])
 
     def create_group(self, details: Any) -> Response:
-        group = Named(id=f'ocid1.group.oc1..{details.name}', name=details.name)
+        group = _named('group', details.name)
         self.groups[group.id] = group
         return Response(group)
 
@@ -104,7 +185,7 @@ class FakeIdentity:
         # (IdcsConversionError), so the fake does too.
         if not getattr(details, 'email', None):
             raise RuntimeError('the primary email must be specified')
-        user = Named(id=f'ocid1.user.oc1..{details.name}', name=details.name)
+        user = _named('user', details.name)
         self.users[user.id] = user
         return Response(user)
 
@@ -128,7 +209,13 @@ class FakeIdentity:
         policy.statements = list(details.statements)
         return Response(policy)
 
-    def upload_api_key(self, user_id: str, details: Any) -> Response:
+    def register_key(self, user_id: str, public_pem: str) -> str:
+        """Put a key on a user, whichever endpoint asked. Returns the fingerprint.
+
+        One rule for all three ways in (the legacy upload, the domain's
+        administrative create, the domain's self-service create), because the
+        quota is a property of the user rather than of the endpoint.
+        """
         # The real service caps a user at three keys (quota.limit.exceeded).
         if len(self.keys.get(user_id, [])) >= oci_iam.KEY_QUOTA:
             raise oci.exceptions.ServiceError(
@@ -137,10 +224,19 @@ class FakeIdentity:
                 headers=dict[str, str](),
                 message='You can not create ApiKey as maximum quota limit of 3 has been reached.',
             )
-        assigned = oci_iam.fingerprint_of_public(details.key)
+        assigned = oci_iam.fingerprint_of_public(public_pem)
         self.keys.setdefault(user_id, []).append(assigned)
-        self.uploaded[assigned] = details.key
-        return Response(Key(fingerprint=assigned))
+        self.uploaded[assigned] = public_pem
+        return assigned
+
+    def by_handle(self, handle: str, among: dict[str, Named]) -> Named | None:
+        for candidate in among.values():
+            if candidate.handle == handle:
+                return candidate
+        return None
+
+    def upload_api_key(self, user_id: str, details: Any) -> Response:
+        return Response(Key(fingerprint=self.register_key(user_id, details.key)))
 
     def list_api_keys(self, user_id: str) -> Response:
         return Response([Key(fingerprint=value) for value in self.keys.get(user_id, [])])
@@ -167,25 +263,44 @@ class FakeDomain:
     """The identity-domains endpoint, as one authenticated user sees it.
 
     A separate object from `FakeIdentity` because it is a separate service on
-    a separate endpoint, and because its whole point is that it acts only on
-    the caller's own user: `Me` endpoints take no user id, so a fake that
-    accepted one could not tell a correct caller from an incorrect one.
+    a separate endpoint, over the same tenancy state: what the legacy shim
+    shows and what the domain shows are two views of one account, which is
+    why this fake writes into `identity` rather than keeping a store of its
+    own.
+
+    It enforces the two authorization rules that decide which endpoint a call
+    may use. The self-service (`Me`) endpoints take no user id at all, so they
+    can only ever act on `user_id` — a fake that accepted one could not tell a
+    correct caller from an incorrect one. The administrative endpoints take an
+    explicit resource and are refused unless the caller holds domain-admin
+    rights, which here means being the account root.
     """
 
     identity: FakeIdentity
     user_id: str
+    admin: bool = False
+    policy: DomainPolicy = field(default_factory=DomainPolicy)
 
     @staticmethod
     def key_id(key_fingerprint: str) -> str:
         return f'apikey-{key_fingerprint}'
 
+    def _administrative(self, operation: str) -> None:
+        if not self.admin:
+            raise _refused(f'{operation} needs domain administrator rights')
+        self.policy.check(operation)
+
+    # -- the self-service half ---------------------------------------------
+
     def list_my_api_keys(self) -> Response:
         self.identity.check_read_lag()
+        self.policy.check('list_my_api_keys')
         held = self.identity.keys.get(self.user_id, [])
         return Response(DomainKeys(resources=[DomainKey(id=self.key_id(value), fingerprint=value) for value in held]))
 
     def delete_my_api_key(self, my_api_key_id: str) -> Response:
         self.identity.check_delete_flake()
+        self.policy.check('delete_my_api_key')
         held = self.identity.keys.get(self.user_id, [])
         remaining = [value for value in held if self.key_id(value) != my_api_key_id]
         if remaining == held:
@@ -194,6 +309,99 @@ class FakeDomain:
             )
         self.identity.keys[self.user_id] = remaining
         return Response(None)
+
+    def create_my_api_key(self, my_api_key: Any) -> Response:
+        self.policy.check('create_my_api_key')
+        assert oci_iam.API_KEY_SCHEMA in my_api_key.schemas, 'a SCIM payload names its own schema'
+        return Response(Key(fingerprint=self.identity.register_key(self.user_id, my_api_key.key)))
+
+    # -- the administrative half -------------------------------------------
+
+    def list_groups(self, filter: str) -> Response:  # noqa: A002 -- the SDK's parameter name
+        self._administrative('list_groups')
+        wanted = _filter_value(filter)
+        return Response(
+            DomainResources(
+                resources=[
+                    DomainResource(id=group.handle, ocid=group.id)
+                    for group in self.identity.groups.values()
+                    if group.name == wanted
+                ]
+            )
+        )
+
+    def create_group(self, group: Any) -> Response:
+        self._administrative('create_group')
+        assert oci_iam.GROUP_SCHEMA in group.schemas, 'a SCIM payload names its own schema'
+        made = _named('group', group.display_name)
+        self.identity.groups[made.id] = made
+        return Response(DomainResource(id=made.handle, ocid=made.id))
+
+    def list_users(self, filter: str) -> Response:  # noqa: A002 -- the SDK's parameter name
+        self._administrative('list_users')
+        wanted = _filter_value(filter)
+        return Response(
+            DomainResources(
+                resources=[
+                    DomainResource(id=user.handle, ocid=user.id)
+                    for user in self.identity.users.values()
+                    if user.name == wanted
+                ]
+            )
+        )
+
+    def create_user(self, user: Any) -> Response:
+        self._administrative('create_user')
+        assert oci_iam.USER_SCHEMA in user.schemas, 'a SCIM payload names its own schema'
+        # The domain demands more of a user than IAM does, and refusing here
+        # is the whole reason the legacy CreateUser could not be used: it has
+        # nowhere to put either of these.
+        if not (user.name and user.name.family_name):
+            raise _refused('the family name is required')
+        addresses: list[Any] = list(user.emails or [])
+        if not any(address.primary for address in addresses):
+            raise _refused('a primary email address is required')
+        made = _named('user', user.user_name)
+        self.identity.users[made.id] = made
+        return Response(DomainResource(id=made.handle, ocid=made.id))
+
+    def get_group(self, group_id: str, attributes: str) -> Response:
+        self._administrative('get_group')
+        group = self.identity.by_handle(group_id, self.identity.groups)
+        if group is None:
+            raise oci.exceptions.ServiceError(
+                status=404, code='NotFound', headers=dict[str, str](), message=f'no group {group_id}'
+            )
+        assert 'members' in attributes, 'membership is only returned when it is asked for'
+        members = [
+            DomainMember(value=user.handle)
+            for user in self.identity.users.values()
+            if (user.id, group.id) in self.identity.memberships
+        ]
+        return Response(DomainResource(id=group.handle, ocid=group.id, members=members))
+
+    def patch_group(self, group_id: str, patch_op: Any) -> Response:
+        self._administrative('patch_group')
+        group = self.identity.by_handle(group_id, self.identity.groups)
+        assert group is not None, f'no group {group_id}'
+        for operation in patch_op.operations:
+            assert (operation.op, operation.path) == (oci.identity_domains.models.Operations.OP_ADD, 'members')
+            for member in operation.value:
+                user = self.identity.by_handle(str(member['value']), self.identity.users)
+                if user is None:
+                    # A member named by an OCID rather than by the SCIM id the
+                    # domain assigned: the shape a legacy-made principal has.
+                    raise _refused(f'no user {member["value"]} in this domain')
+                self.identity.memberships.add((user.id, group.id))
+        return Response(None)
+
+    def create_api_key(self, api_key: Any) -> Response:
+        self._administrative('create_api_key')
+        assert oci_iam.API_KEY_SCHEMA in api_key.schemas, 'a SCIM payload names its own schema'
+        user = self.identity.by_handle(str(api_key.user.value), self.identity.users)
+        if user is None:
+            raise _refused(f'no user {api_key.user.value} in this domain')
+        return Response(Key(fingerprint=self.identity.register_key(user.id, api_key.key)))
 
 
 @dataclass
@@ -209,13 +417,17 @@ class Tenancy:
     identity: FakeIdentity = field(default_factory=FakeIdentity)
     connections: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     domain_connections: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
+    #: What this tenancy's domain refuses, and to whom. Domain-admin rights
+    #: belong to the account root; every other caller gets the self-service
+    #: half and nothing more.
+    policy: DomainPolicy = field(default_factory=DomainPolicy)
 
     def __call__(
         self, tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None
     ) -> FakeIdentity | FakeDomain:
         if domain_url is not None:
             self.domain_connections.append((domain_url, user, oci_iam.fingerprint(private_key_pem)))
-            return FakeDomain(identity=self.identity, user_id=user)
+            return FakeDomain(identity=self.identity, user_id=user, admin=user == ROOT_USER, policy=self.policy)
         self.connections.append((user, oci_iam.fingerprint(private_key_pem)))
         return self.identity
 
@@ -832,7 +1044,7 @@ class FaultyTenancy:
     ) -> Interruptible:
         self.connections.append((user, oci_iam.fingerprint(private_key_pem)))
         if domain_url is not None:
-            return Interruptible(FakeDomain(identity=self.identity, user_id=user), self.ledger)
+            return Interruptible(FakeDomain(identity=self.identity, user_id=user, admin=user == ROOT_USER), self.ledger)
         return Interruptible(self.identity, self.ledger)
 
     @property
@@ -992,6 +1204,188 @@ def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
     _survived(healed, kit)
     _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
     assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+@dataclass
+class ShimlessIdentity(FakeIdentity):
+    """A tenancy whose legacy identity layer answers nothing the domain owns.
+
+    Users, groups, memberships and API keys live in the identity domain, and
+    the legacy endpoints for them are a conversion shim over it that a live
+    bring-up found unreliable in every direction. This is that tenancy with
+    the shim taken away entirely: whatever still works here worked through the
+    domain, which is what makes it worth asserting.
+
+    Policies, compartments and `list_domains` are IAM's own concepts rather
+    than the domain's, so they keep answering.
+    """
+
+    def _shim(self, endpoint: str) -> Response:
+        raise oci.exceptions.ServiceError(
+            status=401,
+            code='IdcsConversionError',
+            headers=dict[str, str](),
+            message=f'Client is unauthorized. null ({endpoint})',
+        )
+
+    def list_users(self, compartment_id: str, name: str | None = None) -> Response:
+        return self._shim('ListUsers')
+
+    def create_user(self, details: Any) -> Response:
+        return self._shim('CreateUser')
+
+    def list_groups(self, compartment_id: str, name: str | None = None) -> Response:
+        return self._shim('ListGroups')
+
+    def create_group(self, details: Any) -> Response:
+        return self._shim('CreateGroup')
+
+    def list_user_group_memberships(self, compartment_id: str, user_id: str, group_id: str) -> Response:
+        return self._shim('ListUserGroupMemberships')
+
+    def add_user_to_group(self, details: Any) -> Response:
+        return self._shim('AddUserToGroup')
+
+    def upload_api_key(self, user_id: str, details: Any) -> Response:
+        return self._shim('UploadApiKey')
+
+    def list_api_keys(self, user_id: str) -> Response:
+        return self._shim('ListApiKeys')
+
+    def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
+        return self._shim('DeleteApiKey')
+
+
+def test_the_seed_is_built_in_the_identity_domain(kit: KdbxStore, root: masters.Credential) -> None:
+    tenancy = Tenancy(identity=ShimlessIdentity())
+
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Nothing the domain owns could have come from the legacy layer here, so
+    # the user, the group, the membership and the first key are each proof
+    # that the call went to the domain -- named one by one, because each is a
+    # separate endpoint that has to be right on its own.
+    assert tenancy.policy.served.count('create_user') == 1
+    assert tenancy.policy.served.count('create_group') == 1
+    assert tenancy.policy.served.count('patch_group') == 1
+    assert tenancy.policy.served.count('create_api_key') == 1
+    assert [user.name for user in tenancy.identity.users.values()] == [oci_iam.SEED_NAME]
+    assert (user_id, next(iter(tenancy.identity.groups))) in tenancy.identity.memberships
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+    # The policy is IAM's own concept, not the domain's, and stays legacy.
+    assert [policy.statements for policy in tenancy.identity.policies.values()] == [list(oci_iam.STATEMENTS)]
+
+
+def test_the_seed_is_reused_rather_than_remade_in_the_domain(kit: KdbxStore, root: masters.Credential) -> None:
+    tenancy = Tenancy(identity=ShimlessIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The domain search is what makes the second run a no-op, so it has to
+    # find what the first run made rather than collide with it.
+    assert tenancy.policy.served.count('create_user') == 1
+    assert tenancy.policy.served.count('create_group') == 1
+    assert len(tenancy.identity.users) == len(tenancy.identity.groups) == 1
+
+
+def test_rotation_registers_the_successor_as_the_seed_itself(kit: KdbxStore, root: masters.Credential) -> None:
+    tenancy = Tenancy(identity=ShimlessIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The seed is not a domain administrator, so the administrative create
+    # would be refused it and the legacy upload does not exist here: the only
+    # way a successor can stand is the self-service endpoint, which takes no
+    # subject because it can only ever mean the caller.
+    assert tenancy.policy.served.count('create_my_api_key') == 1
+    # And the administrative endpoint was used once in the whole story: by the
+    # account root at bring-up, for a user that was not its own.
+    assert tenancy.policy.served.count('create_api_key') == 1
+    assert tenancy.identity.keys[user_id] == [current]
+
+
+def test_a_tenancy_without_identity_domains_uses_the_legacy_calls(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    # `HiddenDomains` answers no domain to anyone, which is also what a
+    # tenancy that simply has none looks like from here.
+    tenancy = Tenancy(identity=HiddenDomains())
+
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    # Every call fell back to the legacy service and the whole flow still
+    # completes: no domain endpoint was ever addressed, and the user, group,
+    # membership, key and rotation are all there.
+    assert tenancy.domain_connections == []
+    assert tenancy.policy.served == []
+    assert [user.name for user in tenancy.identity.users.values()] == [oci_iam.SEED_NAME]
+    assert [group.name for group in tenancy.identity.groups.values()] == [oci_iam.SEED_NAME]
+    assert (user_id, next(iter(tenancy.identity.groups))) in tenancy.identity.memberships
+    assert tenancy.identity.keys[user_id] == [current]
+    assert entries.OCI_DOMAIN_ATTRIBUTE not in successor.attributes(SEED_ENTRY)
+
+
+def test_a_domain_that_refuses_a_call_falls_back_to_the_legacy_one(kit: KdbxStore, root: masters.Credential) -> None:
+    # The refusal seen live runs both ways: the domain has answered 401 to a
+    # call the legacy shim then took. Refusing user creation is the sharpest
+    # case, because everything downstream is then named the legacy way.
+    tenancy = Tenancy(policy=DomainPolicy(always=frozenset({'create_user'})))
+
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The user came from the legacy call, so it is known only by its OCID --
+    # which the domain will not accept as a group member or as a key's
+    # subject, so those fall back in turn and the seed still stands.
+    assert [user.name for user in tenancy.identity.users.values()] == [oci_iam.SEED_NAME]
+    assert (user_id, next(iter(tenancy.identity.groups))) in tenancy.identity.memberships
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+def test_a_domain_that_refuses_once_is_not_given_up_on(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    # The refusal that is not an answer: the identical call, same credential
+    # and same subject, taken moments later. A run that treated the first 401
+    # as final would leave the tenancy half legacy for good.
+    tenancy = Tenancy(policy=DomainPolicy(once={'create_group', 'create_api_key'}))
+
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
+    user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Both refusals really happened and the legacy call carried the first run;
+    # the second run found the domain willing and used it.
+    assert tenancy.policy.once == set()
+    assert tenancy.policy.served.count('create_api_key') == 1
+    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+def test_the_self_service_listing_is_not_used_for_another_users_keys(tenancy: Tenancy) -> None:
+    # `Me` endpoints report the caller and nobody else, so a session asking
+    # about a different user has to take the legacy read however good its
+    # domain is. Answering with the caller's own keys would be worse than
+    # failing: the quota check would pass on the wrong user's count.
+    private_pem, _ = oci_iam.generate_key()
+    tenancy.identity.keys[ROOT_USER] = ['the:root:key']
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, private_pem, connect=tenancy, domain_url=DOMAIN_URL)
+
+    assert iam.api_keys('ocid1.user.oc1..kluster-seed') == []
+    assert iam.api_keys(ROOT_USER) == ['the:root:key']
+
+
+def test_a_domain_resource_without_an_ocid_is_refused() -> None:
+    # The OCID goes into the row and into every signing configuration that
+    # follows; a SCIM id in its place would be stored, would look like an
+    # answer, and would fail at the next authentication.
+    with pytest.raises(oci_iam.CredentialRejected, match='without an OCID'):
+        _ = oci_iam.Principal.domain(DomainResource(id='user-scim-id', ocid=''), kind='user')
 
 
 def test_rotation_survives_a_legacy_layer_that_refuses_even_reads(
