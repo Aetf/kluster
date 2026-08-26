@@ -24,7 +24,7 @@ What §3's tokens carry is stated by the stack that consumes them.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -48,6 +48,12 @@ PAGE_SIZE = 50
 #: missing -- and a console credential is exactly where the wrong template
 #: gets picked.
 MINTING_PERMISSION = 'API Tokens Write'
+
+#: The seed's second permission, written the way the dashboard's own tree spells
+#: it -- the string an operator has to find on the page, rather than the API's
+#: `Zone Read`. The minting template does not include it, and without it the
+#: seed cannot turn a zone name into the id a policy names.
+ZONE_VISIBILITY_PERMISSION = 'Zone → Zone → Read'
 
 #: What the zones token (§3) carries, by permission-group name. Editing records
 #: is the job; reading the zone is what the Cloudflare provider does before
@@ -151,6 +157,25 @@ class Session:
                 'only that permission can mint a token through the API'
             )
 
+    def require_zone_visibility(self) -> None:
+        """Refuse a seed that authenticates and can mint but sees no zone.
+
+        Behaviour rather than permission names, because the listing is what the
+        seed is used for: a token may carry zone read and still be scoped to
+        zones this account does not have. Non-empty is the whole test -- which
+        zones the estate expects is `conventions`' business, and adoption comes
+        before any of it.
+        """
+        if not self.zones():
+            raise CredentialRejected(
+                'this Cloudflare token can mint tokens but can see no zone, so it cannot '
+                'turn a zone name into the id a minted policy names: it is missing '
+                f'{ZONE_VISIBILITY_PERMISSION}, with Zone Resources at all zones. Adding '
+                'that permission to this token in the dashboard does not extend the value '
+                'already in hand -- create a fresh token carrying both permissions, record '
+                'it with `credentials seed cloudflare create`, and delete this one'
+            )
+
     def tokens(self) -> list[dict[str, Any]]:
         return list(self._call('GET', '/user/tokens'))
 
@@ -200,49 +225,64 @@ class Session:
         _ = self._call('DELETE', f'/user/tokens/{token_id}')
 
 
-def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str, Session]:
-    """Create a token with the given policies and prove it works.
+def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
+    """Create a token with the given policies and prove it authenticates.
 
-    The verified session is handed back rather than dropped: the retirement
-    below has to run as the *new* token, and this is the session that proves
-    it works.
+    Verification is a call the new token makes as itself: a value that cannot
+    authenticate must not reach a consumer's slot, and nothing later in the
+    procedure would notice.
     """
     log.info('minting %s', name)
     token_id, token = session.create_token(name, policies)
     minted = Session.authorize(token)
     log.info('minted %s (%s), verified against the API', name, minted.token_id)
-    return token_id, token, minted
+    return token_id, token
 
 
 def _retire_superseded(session: Session, name: str, keep: str) -> None:
     """Delete same-named tokens other than the one just minted.
 
-    Only after the replacement exists and is verified: an interrupted run
-    must leave a working token either way. `session` must be the kept
-    token's own: a session signing with a token it is about to delete stops
-    working partway through the deletions, and a run that left an orphan
-    behind is exactly the run with more than one deletion to make.
+    `session` is the *minter's*, not the new token's. Listing and deleting
+    tokens are token-management permissions, and the platform allows a minted
+    §3 token none of them, so a session signing with the new token is refused
+    this outright. The minter cannot saw off the credential it signs with
+    either: it is the seed, whose name is not a stack token's, and its own id
+    is skipped regardless.
+
+    Only after the replacement exists, authenticates and carries the scope it
+    was asked for: every earlier stop must leave a working predecessor behind.
     """
     for existing in session.tokens():
-        if str(existing.get('name')) == name and str(existing.get('id')) != keep:
-            log.info('deleting superseded token %s', existing['id'])
-            session.delete_token(str(existing['id']))
+        token_id = str(existing.get('id'))
+        if str(existing.get('name')) == name and token_id not in (keep, session.token_id):
+            log.info('deleting superseded token %s', token_id)
+            session.delete_token(token_id)
 
 
-def mint_token(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
+def mint_token(
+    session: Session,
+    name: str,
+    policies: list[dict[str, Any]],
+    confirm: Callable[[str], None] | None = None,
+) -> tuple[str, str]:
     """Mint one §3 token from the seed, as (token id, token value).
 
     The unit every per-stack Cloudflare credential is made of, and the reason
     the seed exists. Rotating such a token is a re-run of this: a same-named
     predecessor -- or an orphan a lost run left behind, which carries a live
-    permission nobody holds the value of -- is deleted once the replacement
-    is minted and verified.
+    permission nobody holds the value of -- is deleted once the replacement is
+    minted, verified and accepted by `confirm`, which is handed the new value
+    and raises if the credential is not the one that was asked for. Retirement
+    comes last so that no check can fail after the predecessor is already
+    gone.
 
     `policies` are the caller's, and may not include token permissions: a
     sub-token carrying them is refused by the platform.
     """
-    token_id, token, minted = _mint_verified(session, name, policies)
-    _retire_superseded(minted, name, keep=token_id)
+    token_id, token = _mint_verified(session, name, policies)
+    if confirm is not None:
+        confirm(token)
+    _retire_superseded(session, name, keep=token_id)
     return token_id, token
 
 
@@ -311,8 +351,9 @@ def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> Zon
 
     One policy with one resource per zone, carrying `ZONE_PERMISSIONS` and no
     token permission — the class the platform allows a sub-token to have. The
-    result is proven against the API as the minted token before it is handed
-    back, so a credential that cannot do the job never reaches a slot.
+    result is proven against the API as the minted token before anything is
+    retired, so a credential that cannot do the job never reaches a slot and
+    never costs the predecessor that still could.
     """
     log.info('resolving %d estate zones through the Cloudflare seed', len(zones))
     account_id, zone_ids = _resolve_zones(session, zones)
@@ -323,8 +364,7 @@ def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> Zon
             'permission_groups': session.permission_groups(ZONE_PERMISSIONS),
         }
     ]
-    token_id, value = mint_token(session, name, policies)
-    _confirm_scope(value, zones)
+    token_id, value = mint_token(session, name, policies, confirm=lambda minted: _confirm_scope(minted, zones))
     return ZoneToken(token_id=token_id, value=value, account_id=account_id, zone_ids=zone_ids)
 
 
@@ -337,6 +377,11 @@ def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
     asked for -- `/user/tokens/verify` is the one call every token may make,
     and a value typed twice is a value that can disagree with itself.
 
+    Both of the seed's permissions are proven here, while the operator is still
+    on the dashboard page that fixes either one. Minting alone would let a seed
+    that cannot list zones into the kit, and its first symptom would be a
+    failed mint one command and one console visit later.
+
     The superseded token is not deleted from here. Deleting it would mean
     signing with a credential the retired kit still names as current, at the
     moment §4.2 requires that kit to stay exactly as it was; the dashboard
@@ -344,6 +389,7 @@ def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
     """
     session = Session.authorize(token)
     session.require_minting()
+    session.require_zone_visibility()
     seeds.put(seed_entry, session.token_id, token)
     log.info('stored the Cloudflare seed token (%s)', session.token_id)
     return session.token_id

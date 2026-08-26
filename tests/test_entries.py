@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import entries, masters, seeds
+from kluster.scripts.credentials import cloudflare, entries, masters, seeds
 from kluster.scripts.credentials.cli import main
 from kluster.scripts.credentials.kdbx import KdbxStore
 
@@ -39,6 +39,17 @@ def test_console_only_seeds_are_the_manual_surface() -> None:
     # credential able to mint the seed. The derivation seed is generated
     # rather than minted, so it is not one of them.
     assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger', 'zerotier'}
+
+
+def test_the_cloudflare_console_text_asks_for_both_of_the_seed_s_permissions() -> None:
+    console = entries.SEEDS['cloudflare'].console
+
+    # The console text is the only instruction the operator gets, and the seed
+    # is used for two things: minting tokens and resolving zone names to the
+    # ids a minted policy carries. A text naming only the first mints a seed
+    # that adoption refuses.
+    assert 'API Tokens → Edit' in console
+    assert cloudflare.ZONE_VISIBILITY_PERMISSION in console
 
 
 def test_every_member_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
