@@ -195,7 +195,7 @@ is the named alternate if B2's 3×-stored egress allowance ever bites.
 **Placement rule added (2026-08-22)**: the **backup** bucket must not
 live with the provider whose loss it insures — OCI tenancy termination is
 an enumerated risk (nodes.md §3.1), so cluster backups stay on B2
-regardless of where the cloud node lands. The **JuiceFS chunk bucket**
+regardless of where the cloud pool lands. The **JuiceFS chunk bucket**
 (§6) is different: it backs a *replica* whose other full copy is the
 homelab NAS, so provider-loss is survivable — with the cloud site on
 OCI (nodes.md §3.1), its chunks live on same-region OCI Object Storage:

@@ -9,7 +9,13 @@ the *how* for the `physical` stack of
 
 > **Status**: designed 2026-08-22; provider choices verified against
 > current releases (pulumiverse-talos 0.8.1 wrapping the official
-> siderolabs terraform-provider 0.11). Not implemented.
+> siderolabs terraform-provider 0.11). **Implemented in part, applied
+> nowhere.** `src/kluster/stacks/physical.py` and `src/kluster/physical/`
+> declare the OCI network, the Talos image, the load balancer, the day-1
+> chain and the cloud nodes (§1, §2); the libvirt worker and adopted HAOS
+> domain (§3), the UDM resources (§4) and the B2 buckets (§5) are not
+> written yet. Nothing described here has been provisioned: the stack has
+> never been applied, so §6's bootstrap gate is entirely ahead of it.
 
 ## 0. Scope and outputs
 
@@ -237,9 +243,9 @@ Pulumi-managed via the bridged zerotier provider (architecture.md
 §5.3); only if that bridge proves unusable do those settings fall
 back to hand-kept manual preconditions.
 
-Bootstrap-time verifications (carried from README #6 + this doc; note
-that several items exercise Cilium and therefore run only after
-`k8s-base` is up — the gate's place in the sequence is
+Bootstrap-time verifications, the gate itself (several items exercise
+Cilium and therefore run only after `k8s-base` is up — the gate's place
+in the sequence is
 migration.md §1): LB IPAM pool containing node primary IPs; NLB dual-stack listeners +
 source-preservation semantics; etcd fsync latency on OCI block volumes;
 A1 capacity at creation; Egress Gateway under the chosen routing mode +

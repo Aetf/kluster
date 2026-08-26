@@ -1,8 +1,8 @@
 # Node & Provider Selection
 
 Objective: Pick the concrete machines for the architecture fixed in
-[architecture.md](architecture.md) — which cloud provider and instance for the
-internet-facing worker, how the Homelab VM is sized, and what "high
+[architecture.md](architecture.md) — which cloud provider and which instances
+for the internet-facing pool, how the Homelab VM is sized, and what "high
 availability" means for a two-site, budget-capped cluster. Price-driven;
 baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 
@@ -11,7 +11,11 @@ baseline to beat is the legacy Vultr VPS at $30/mo all-in.
 > homelab VM is a pure worker (§4); Vultr is the scripted fallback. All
 > prices are as-of August 2026, USD, verified against official price
 > pages/APIs, and must be re-verified in the provider calculators before
-> commit. Nothing here is implemented yet. (Decision history: AWS →
+> commit. The cloud pool's shape is declared in code — the node names,
+> OCPU/RAM/boot-volume numbers of §3.1 live in `kluster.conventions` and
+> the `physical` stack builds instances from them — but no node has been
+> provisioned, and the homelab VM of §4 is not declared at all.
+> (Decision history: AWS →
 > GCP (2026-04) → tentatively Hetzner (2026-08-21, voided by its
 > 2026-06-15 US price hike) → OCI.)
 
