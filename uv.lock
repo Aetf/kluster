@@ -10,7 +10,10 @@ resolution-markers = [
 [manifest]
 members = [
     "kluster",
+    "pulumi-b2",
     "pulumi-crds",
+    "pulumi-unifi",
+    "pulumi-zerotier",
 ]
 
 [[package]]
@@ -75,6 +78,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/be/a5/8e3f9b6771b0b408517c82d97aed8f2036509bc247d46114925e32fe33f0/asttokens-3.0.1.tar.gz", hash = "sha256:71a4ee5de0bde6a31d64f6b13f2293ac190344478f081c3d1bccfcf5eacb0cb7", size = 62308, upload-time = "2025-11-15T16:43:48.578Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d2/39/e7eaf1799466a4aef85b6a4fe7bd175ad2b1c6345066aa33f1f58d4b18d0/asttokens-3.0.1-py3-none-any.whl", hash = "sha256:15a3ebc0f43c2d0a50eeafea25e19046c68398e487b9f1f5b517f7c0f40f976a", size = 27047, upload-time = "2025-11-15T16:43:16.109Z" },
+]
+
+[[package]]
+name = "asyncssh"
+version = "2.24.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/7f/2d79247bacc562104f312d27efe541673aa177feac89de291bd61bca52be/asyncssh-2.24.0.tar.gz", hash = "sha256:4064c590e59ce2e8d82a2f66d35f3120d765828b4df5e3dbfb07b4a8c24686c9", size = 550148, upload-time = "2026-06-27T20:34:44.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/29/908ce0ca5e8cae76662e354a0f08df552d6d221844748b9e5ca06051cc44/asyncssh-2.24.0-py3-none-any.whl", hash = "sha256:9abd46300adcb6d4b73269b34c53cd0d17a138b9a22b5b38008ce7d5808734b7", size = 381237, upload-time = "2026-06-27T20:34:43.198Z" },
 ]
 
 [[package]]
@@ -639,17 +655,22 @@ name = "kluster"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "asyncssh" },
     { name = "cryptography" },
     { name = "jinja2" },
     { name = "keyring" },
     { name = "oci" },
     { name = "pulumi" },
+    { name = "pulumi-b2" },
     { name = "pulumi-cloudflare" },
     { name = "pulumi-crds" },
     { name = "pulumi-github" },
     { name = "pulumi-kubernetes" },
     { name = "pulumi-kubernetes-cert-manager" },
+    { name = "pulumi-libvirt" },
     { name = "pulumi-oci" },
+    { name = "pulumi-unifi" },
+    { name = "pulumi-zerotier" },
     { name = "pulumiverse-talos" },
     { name = "pykeepass" },
     { name = "requests" },
@@ -668,17 +689,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asyncssh", specifier = ">=2.24.0" },
     { name = "cryptography", specifier = ">=50.0.0" },
     { name = "jinja2", specifier = ">=3.1.4" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "oci", specifier = ">=2.184.2" },
     { name = "pulumi", specifier = ">=3.254.0" },
+    { name = "pulumi-b2", editable = "packages/b2" },
     { name = "pulumi-cloudflare", specifier = ">=6.11.0" },
     { name = "pulumi-crds", editable = "packages/crds" },
     { name = "pulumi-github", specifier = ">=6.4.0" },
     { name = "pulumi-kubernetes", specifier = ">=4.23.0" },
     { name = "pulumi-kubernetes-cert-manager", specifier = ">=0.2.0" },
+    { name = "pulumi-libvirt", specifier = ">=0.5.4" },
     { name = "pulumi-oci", specifier = ">=4.20.0" },
+    { name = "pulumi-unifi", editable = "packages/unifi" },
+    { name = "pulumi-zerotier", editable = "packages/zerotier" },
     { name = "pulumiverse-talos", specifier = ">=0.8.1" },
     { name = "pykeepass", specifier = ">=4.2.0" },
     { name = "requests", specifier = ">=2.32.3" },
@@ -1170,6 +1196,24 @@ wheels = [
 ]
 
 [[package]]
+name = "pulumi-b2"
+version = "0.13.2"
+source = { editable = "packages/b2" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "parver", specifier = ">=0.2.1" },
+    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "semver", specifier = ">=2.8.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
+]
+
+[[package]]
 name = "pulumi-cloudflare"
 version = "6.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1250,6 +1294,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pulumi-libvirt"
+version = "0.5.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/0b/6d07868ce000d2f525d590f0886ff267552f7c79b0aa727c54fcbfe63777/pulumi_libvirt-0.5.4.tar.gz", hash = "sha256:a51f4893217b2d0b388ce7c14273b41b276d26a16252f067dc6cc574cb6cfdc6", size = 48194, upload-time = "2025-01-02T17:15:58.823Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/bf/4d15b92f387adbb795dd0202eb402b4a6fa0ec9769269dd2e1033b7aa0a7/pulumi_libvirt-0.5.4-py3-none-any.whl", hash = "sha256:c27e31f34ab07c82bd839d50575d96581e140cc38fbd11ff2cf2a22f18fbfe2e", size = 61768, upload-time = "2025-01-02T17:15:55.65Z" },
+]
+
+[[package]]
 name = "pulumi-oci"
 version = "4.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1261,6 +1319,42 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f4/3e/61adc45fdb68e1697bf426a6a40c0e64ada32d2e0792d5e3d8940f9c4d6d/pulumi_oci-4.20.0.tar.gz", hash = "sha256:51d4aa2ce6e8120c4cdf5f688ff974827e734f4042a340f47e50c64ae85f71ab", size = 11809685, upload-time = "2026-07-15T06:02:57.636Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ed/d1/75e0661391d7d7c492c363b43f76d31dd4995527be2d06ab5815a801b5ad/pulumi_oci-4.20.0-py3-none-any.whl", hash = "sha256:72675609ee39f2e0b40aa33439f995318a6468fe26227f54d0b2e9c8325c157b", size = 16715425, upload-time = "2026-07-15T06:02:53.546Z" },
+]
+
+[[package]]
+name = "pulumi-unifi"
+version = "1.1.0"
+source = { editable = "packages/unifi" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "parver", specifier = ">=0.2.1" },
+    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "semver", specifier = ">=2.8.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
+]
+
+[[package]]
+name = "pulumi-zerotier"
+version = "1.6.0"
+source = { editable = "packages/zerotier" }
+dependencies = [
+    { name = "parver" },
+    { name = "pulumi" },
+    { name = "semver" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "parver", specifier = ">=0.2.1" },
+    { name = "pulumi", specifier = ">=3.247.0,<4.0.0" },
+    { name = "semver", specifier = ">=2.8.1" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.11,<5" },
 ]
 
 [[package]]
