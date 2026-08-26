@@ -65,7 +65,9 @@ def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, by
     """Walk the operator through a credential no API can create."""
     _announce(seed)
 
-    identifier = prompt(f'{seed.title} — {seed.identifier}: ').strip()
+    # The secret comes second and is asked hidden; saying so here is what
+    # keeps a token value from being typed into the identifier, echoed.
+    identifier = prompt(f'{seed.title} — {seed.identifier} (the secret itself is asked next, hidden): ').strip()
     if not identifier:
         raise KdbxError(f'{seed.title}: {seed.identifier} is required')
 
