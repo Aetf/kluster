@@ -147,6 +147,26 @@ already. What the seed *does* mint is
 §3's tokens, which carry zone permissions and no token permissions —
 the class the platform does allow.
 
+**Which OCI identity API touches the OCI row.** A tenancy with identity
+domains keeps users, groups, group membership and user credentials in
+the domain; the legacy endpoints for them are a conversion shim over it,
+and the shim refuses — sometimes always, sometimes intermittently, and
+sometimes only for a field it cannot represent. So everything the domain
+owns goes through the identity-domains client, and the legacy identity
+client keeps two jobs and only those: the concepts that are IAM's own
+rather than the domain's — policies, compartments, `list_domains` — and
+being the whole of the identity API in a tenancy that has no domains,
+where every call falls back to it unchanged. The fallback runs **both
+ways**: either side has been seen to refuse a call that the other side
+then accepted, so a refusal is a reason to try the other client rather
+than to stop, and the direction only says which one is tried first.
+Within the domains API
+a call reaches the caller's own user through the self-service endpoints,
+which authorize on authentication alone, and anybody else's through the
+administrative ones, which need domain-admin rights — the account root
+has those and the seed does not, which is why everything the seed does to
+itself is self-service (§4.3).
+
 ### 2.1 The offline kit: storage, backup, succession
 
 -   **Form**: one **kit** in a sealed tamper-evident envelope — a USB
@@ -227,14 +247,17 @@ stable label:
 | Label | Derived secret |
 | --- | --- |
 | `pulumi/passphrase` | Pulumi state passphrase |
+| `alertmanager/read` | Bearer token the issue-sync poller presents (§3) |
 | `state-backend/ca` | State-backend CA private key |
 | `state-backend/cert/<name>` | Server and client key material under that CA |
 | `backup/age/<generation>` | age identity for pg_dump encryption |
 
 Consequences, all deliberate:
 
--   **Every label here is consumed offline.** The four derivations
-    happen during bring-up, rotation, or provisioning; no running
+-   **Every label here is derived offline.** The derivation happens
+    during bring-up, rotation, or provisioning, and the value goes from
+    there into the slot §3 names for it — the Alertmanager token is read
+    by a running poller, the seed it comes from never is. No running
     program holds the derivation seed, which is what keeps §1's rule 4
     ("nothing consumes a seed at runtime") true rather than aspirational.
     Secrets a *program* generates — restic repository passwords among
@@ -260,9 +283,9 @@ Consequences, all deliberate:
     which is why no offline export of it exists.
 -   **A retired derivation seed outlives its rotation.** Rotating it
     re-derives everything going forward but cannot retroactively
-    re-encrypt existing backups, so the previous seed stays in the kit
-    (marked with its earliest-destroy date) until the last backup
-    encrypted under it has expired.
+    re-encrypt existing backups, so the retired kit — the database file
+    the rotation superseded (§4.2) — is kept until the last backup
+    encrypted under its seed has expired.
 
 ## 3. Derived credentials
 
@@ -318,7 +341,7 @@ credential family plus the lifecycle commands below.
 | `credentials derive passphrase > .pulumi.secret` | Once per workstation that develops without the kit. Caches the passphrase for `mise.toml` to read, so a local preview does not need the offline database open. |
 | `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
-| `credentials kdbx remember` | Once per machine, so a run opening two databases asks for nothing. |
+| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored; `forget` removes it again. |
 
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
@@ -339,8 +362,12 @@ zones as `conventions` names them, resolved to zone ids through the seed
 at mint time, so adding a zone there and re-running the command is the
 whole procedure for widening it. The push writes two keys, because a
 provider credential alone does not identify the account that owns those
-zones: `cloudflare:apiToken` as a config secret and
-`kluster:cloudflareAccountId` in plain text.
+zones: `cloudflare:apiToken` as a config secret and the account id in
+plain text. The script writes the account id under the unqualified key
+`cloudflareAccountId`, which `pulumi config set` and `pulumi.Config()`
+both resolve against the project's own name — so the committed file reads
+`kluster-py:cloudflareAccountId`, and the project name lives in
+`Pulumi.yaml` rather than a second time in the script.
 
 -   **A slot map, checked in.** A declarative manifest maps each §3 row
     to its target slots: GitHub Environment secret (repo + environment
@@ -356,48 +383,69 @@ zones: `cloudflare:apiToken` as a config secret and
     the expiry/destroy-date tripwires, operations.md §4) replaces the
     calendar register-review.
 
-### 4.1 `credentials bringup`
+### 4.1 Bring-up
 
-One command, one master-password prompt, and the cluster's entire
-credential estate exists. **One database is opened: the kit.** The
-account roots the two minters borrow are not in a database this
-repository reads — they come from the **desktop secret store**, one
-credential at a time (§2), or from a prompt where there is no store.
-The kit's own master password is asked of the same store first
-(`credentials kdbx remember` puts it there), because a run that then
-goes on for minutes should not be guarded by a password typed into a
-process nobody is watching. Nothing is ever written to the store
-implicitly: a `remember` command is the only thing that puts a value
-there.
+Bring-up is a sequence of commands rather than one command: each stage
+leaves behind the artifact the next one reads, and each is separately
+re-runnable. `credentials --help` prints the same order.
 
-Stages run in dependency order, each pushing
-into slots that exist by the time it runs:
+**One database is opened: the kit.** The account roots the two minters
+borrow are not in a database this repository reads — they come from the
+**desktop secret store**, one credential at a time (§2), or from a
+prompt where there is no store. The kit's own master password is asked
+of the same store first (`credentials kdbx remember` puts it there),
+because a run that then goes on for minutes should not be guarded by a
+password typed into a process nobody is watching. Nothing is ever
+written to the store implicitly: a `remember` command is the only thing
+that puts a value there.
 
-1.  **Local derivations** — passphrase, state-backend CA and certs,
-    age identity: derived from the derivation seed (§2.2), no network.
-2.  **State backend** — the micro's Ignition carries the server cert
-    and the B2 dump key; the `ci`/`operator` client certs go to their
-    slots. The backend must exist before any stack config does.
-3.  **Provider credentials** — OCI per-stack keys, Cloudflare tokens,
-    B2 management key: minted from their seeds into Pulumi config
-    secrets and GitHub Environment secrets.
-4.  **Device credentials** — UDM SSH key, libvirt identity, UniFi API
-    key, AdGuard credentials.
-5.  **In-cluster secrets** — only after `k8s-base` brings the
-    sealed-secrets controller up: DNS-01 token, writer keys, sealed
-    and committed. Restic passwords are not here: `backed_pvc`
-    generates its own into state and seals it, so a new volume needs
-    no credentials run (rule 6).
+1.  `credentials master <root> remember` — once per machine and root,
+    for the two account roots the mints borrow (§2). Skipping it costs a
+    prompt rather than a failure, which is also how a headless run works.
+2.  `credentials bootstrap` — fills the kit with every §2 seed, creating
+    the kit if it is absent. A row whose platform can mint it is minted;
+    the rest stop and print their console steps. This command touches the
+    seed layer and nothing else.
+3.  `state-backend provision` — the Pulumi state backend, which every
+    stack needs before it can act, and the first consumer of §2.2's
+    derivations: the appliance's Ignition carries the state-backend
+    server certificate and the age identity's public half, both derived
+    from the kit's derivation seed, plus a B2 dump key minted from the B2
+    seed. The run ends by writing the `operator` client bundle to
+    `~/.config/kluster/state-backend`.
+4.  `eval "$(credentials derive env)"` — the two variables a `pulumi`
+    run needs: `PULUMI_CONFIG_PASSPHRASE`, derived and stored in no slot,
+    and `PULUMI_BACKEND_URL`, read from the bundle the previous stage
+    wrote.
+5.  `credentials derived cloudflare zones` — mints the zone-scoped
+    Cloudflare token from the seed into the `dns` stack's config, which
+    is then committed. One §3 row per command, and re-running one rotates
+    that row.
 
-A stage that fails is re-run; nothing is parked. Once the last stage
-verifies, the kit goes back in its envelope.
+A stage that fails is re-run; nothing is parked. Once the last one is
+done, the kit goes back in its envelope.
 
-**Resumable by probing, not by bookkeeping.** Each stage asks whether
-its output exists and skips if it does, so an interrupted bootstrap is
-resumed by re-running the same command, and `--only <member>` is the
-repair path when a single seed is lost. A checkpoint file would record
-"this ran" — which stops being true the moment someone deletes a key in
-a console, and the run after that would skip the repair.
+**What is not built yet** (`kluster-ops#1`): everything in §3 except the
+zones token, and every slot that is not a Pulumi config secret. The
+per-stack OCI keys and the B2 management key have minting
+code but no command that pushes them; the device credentials (UDM SSH
+key, libvirt identity, UniFi API key, AdGuard credentials), the
+in-cluster secrets (the DNS-01 token and the writer keys, sealable only
+once `k8s-base` has the sealed-secrets controller up) and the CI
+Environment half of every row (ci.md §2) have neither. Restic passwords
+will not join them: `backed_pvc` generates its own into state and seals
+it, so a new volume needs no credentials run (rule 6). Until those
+commands exist, a bring-up delivers the seed kit, the state backend and
+the zones token, and the rest of §3 is design rather than procedure.
+
+**Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
+each row is already in the kit and skips it if so, so an interrupted run
+is resumed by re-running the same command, and `--only <member>` is the
+repair path when a single seed is lost. `state-backend provision`
+compares the running appliance against the repository the same way. A
+checkpoint file would record "this ran" — which stops being true the
+moment someone deletes a key in a console, and the run after that would
+skip the repair.
 
 **The console steps live in the register, not in a runbook.** Each §2
 row that no API can create carries the instructions for creating it
@@ -408,12 +456,30 @@ rather than sending the operator to look for a document.
 
 `--only <member>` re-runs one row; the default rotates the whole seed
 set. It **writes a new database file** (`--into`), and the retired one
-is left byte-for-byte as it was: unseal the old, have each
-seed mint its successor, derive a new derivation seed, write the new
-database, verify every slot against it, then record the old file's
-earliest-destroy date (§2.2's backup-retention rule). The GitHub App
-private keys, the ZeroTier token and the Cloudflare seed token are
-explicit pauses — the script prints the console steps and waits.
+is left byte-for-byte as it was: unseal the old, have each seed mint its
+successor, generate a fresh derivation seed, and write all of it into
+the new database. The GitHub App private keys, the ZeroTier token and
+the Cloudflare seed token are explicit pauses — the script prints the
+console steps and waits.
+
+**What a run proves is that the new kit's seeds work, one row at a
+time.** A seed that mints its own successor (OCI, B2) authenticates *as*
+that successor before the predecessor's key is retired, so a run
+interrupted anywhere leaves a working seed in one kit or the other; the
+console-made Cloudflare token is checked for both permissions the seed
+needs (§2) while the operator is still on the page that fixes either.
+The rows that are only pasted in — the two App private keys and the
+ZeroTier token — are stored as given, so a wrong value there surfaces at
+its first use rather than during the rotation.
+
+Nothing beyond the seed layer is touched. The §3 credentials minted from
+the retired seeds keep working, and each is replaced by re-running its
+own command against the new kit: rotation neither re-mints them nor
+inspects a slot, and the slot verification §4's slot map describes is
+not built either (`kluster-ops#1`). Nor does anything record a destroy
+date. The command prints the reminder to keep the retired file until the
+last secret derived from it has expired (§2.2); acting on it is the
+operator's job.
 
 Rotation cadence lives with the drill program (operations.md §4); the
 yearly offline day verifies the current kit against §2.
@@ -432,9 +498,9 @@ the root, and why the seed needs no permission beyond the three
 statements in its policy.
 
 Those endpoints live on a per-tenancy URL, which is discovered once —
-`list_identity_domains` in the tenancy compartment, an administrator's
-call — at the moment the account root is already in hand, and stored
-on the row. Rotation reads it there. A row written before that
+`list_domains` in the tenancy compartment, an administrator's call on
+the legacy identity client (§2) — at the moment the account root is
+already in hand, and stored on the row. Rotation reads it there. A row written before that
 attribute existed tries to discover it as the seed and, where the
 tenancy refuses, warns and names `credentials seed oci domain`: the
 one-time repair that borrows the root, records the `URL`, and returns

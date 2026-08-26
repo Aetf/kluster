@@ -143,8 +143,9 @@ def build_parser() -> argparse.ArgumentParser:
     _ = ls.add_argument('group', nargs='?', default='/')
     show = kdbx_actions.add_parser('show', help="an entry's non-secret attributes")
     _ = show.add_argument('entry')
-    # Bring-up opens the kit and the estate and then runs for minutes; being
-    # asked for both passwords at the start of that is what this avoids.
+    # The kit is the one database a run opens, and a bring-up holds it open
+    # for minutes; guarding that with a password typed into an unwatched
+    # process is what this avoids.
     _ = kdbx_actions.add_parser('remember', help="store this database's master password in the desktop secret store")
     _ = kdbx_actions.add_parser('forget', help='remove it from the secret store')
 
