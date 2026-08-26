@@ -26,20 +26,20 @@ USER root
 
 COPY --from=pgvecto-binary /pgvecto-rs-binary-release.deb /tmp/vectors.deb
 
-RUN <<EOF
-set -eux
-apt-get update
-apt-get install -y --no-install-recommends wget
-apt-get install -y --no-install-recommends /tmp/vectors.deb
-wget -q -O /tmp/vchord.deb \
-    "https://github.com/tensorchord/VectorChord/releases/download/${VECTORCHORD_SEMVER}/postgresql-${PG_MAJOR}-vchord_${VECTORCHORD_SEMVER}-1_${TARGETARCH}.deb"
-dpkg -i /tmp/vchord.deb
-rm -f /tmp/vectors.deb /tmp/vchord.deb
-apt-get purge -y wget
-apt-get autoremove -y
-apt-get clean -y
-rm -rf /var/lib/apt/lists/*
-EOF
+# One `sh -c` line rather than a heredoc: the buildah on the runners parses the
+# heredoc form as instructions and fails on the first shell builtin.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends wget; \
+    apt-get install -y --no-install-recommends /tmp/vectors.deb; \
+    wget -q -O /tmp/vchord.deb \
+      "https://github.com/tensorchord/VectorChord/releases/download/${VECTORCHORD_SEMVER}/postgresql-${PG_MAJOR}-vchord_${VECTORCHORD_SEMVER}-1_${TARGETARCH}.deb"; \
+    dpkg -i /tmp/vchord.deb; \
+    rm -f /tmp/vectors.deb /tmp/vchord.deb; \
+    apt-get purge -y wget; \
+    apt-get autoremove -y; \
+    apt-get clean -y; \
+    rm -rf /var/lib/apt/lists/*
 
 # The base of this line runs postgres under a different uid than the operator
 # expects; the extensions are installed as root, the server is not.
