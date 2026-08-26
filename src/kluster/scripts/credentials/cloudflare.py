@@ -151,6 +151,7 @@ class Session:
 
 def _mint_verified(session: Session, name: str) -> tuple[str, str]:
     """Create a token with the minter's own policies and prove it works."""
+    log.info("minting %s with the minting token's own policies", name)
     token_id, token = session.create_token(name, session.policies())
     minted = Session.authorize(token)
     log.info('minted %s (%s), verified against the API', name, minted.token_id)

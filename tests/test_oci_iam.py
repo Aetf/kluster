@@ -6,12 +6,16 @@ Oracle does with it. The kit half is a real KeePass file, because the row
 shape (§2) is the other half of the same decision.
 """
 
+# The SDK ships no stubs; the same waiver `oci_iam.py` itself carries.
+# pyright: reportMissingTypeStubs=false
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import oci
 import pytest
 
 from kluster.scripts.credentials import entries, masters, oci_iam
@@ -262,3 +266,73 @@ def test_rotation_defaults_to_the_database_it_read(kit: KdbxStore, tenancy: Tena
     _, _, after = oci_iam.load_seed(kit, SEED_ENTRY)
     assert after != before
     assert oci_iam.fingerprint(after) == current
+
+
+@dataclass
+class LaggingIdentity(FakeIdentity):
+    """An identity endpoint the new key has not reached yet.
+
+    Listing keys as the freshly minted user fails with 401 for a while, the
+    way the real service does before the key propagates.
+    """
+
+    lag: int = 2
+    denied: int = 0
+
+    def list_api_keys(self, user_id: str) -> Response:
+        if self.denied < self.lag:
+            self.denied += 1
+            raise oci.exceptions.ServiceError(
+                status=401,
+                code='NotAuthenticated',
+                headers=dict[str, str](),
+                message='required information was not provided',
+            )
+        return super().list_api_keys(user_id)
+
+
+def test_verification_outwaits_key_propagation(
+    kit: KdbxStore, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenancy = Tenancy(identity=LaggingIdentity())
+    naps: list[float] = []
+    monkeypatch.setattr(oci_iam.time, 'sleep', naps.append)
+
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Each denial cost one interval of patience, and no more.
+    assert naps == [oci_iam.PROPAGATION_INTERVAL] * 2
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
+
+
+def test_a_persistent_401_is_raised_when_the_deadline_passes(
+    kit: KdbxStore, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenancy = Tenancy(identity=LaggingIdentity(lag=10_000))
+    clock = iter(float(tick) for tick in range(0, 10_000, 60))
+    monkeypatch.setattr(oci_iam.time, 'monotonic', lambda: next(clock))
+
+    def no_nap(_interval: float) -> None:
+        return None
+
+    monkeypatch.setattr(oci_iam.time, 'sleep', no_nap)
+
+    with pytest.raises(oci.exceptions.ServiceError):
+        _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+
+def test_an_orphaned_key_is_swept_when_the_seed_is_recreated(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
+) -> None:
+    # A run that died between upload and store: the key exists at OCI, its
+    # private half exists nowhere.
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
+
+    user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Only the key whose private half was just stored survives; a user holds
+    # at most three keys, so orphans would eventually block minting.
+    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
