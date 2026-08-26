@@ -4,7 +4,13 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 lib/crds/build
-# The derived Pulumi passphrase, cached for local previews (mise.toml).
+# Every workstation slot: the seed kit, the cached Pulumi passphrase, the
+# account roots' token files, the state backend's client bundle
+# (docs/credentials.md §1 rule 6). One directory, one line, one thing on this
+# machine that is secret.
+.credentials/
+# The two slots' pre-`.credentials/` locations, still read by mise.toml on a
+# workstation that predates the move.
+# TODO(kluster-ops#34): delete with that fallback.
 .pulumi.secret
-# The github stack's admin token, held in the personal estate (mise.toml).
 .github.token

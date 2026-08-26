@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import entries, lifecycle, masters, seeds
+from kluster.scripts.credentials import entries, lifecycle, masters, seeds, workstation
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 PASSWORD = 'kit-password'
@@ -143,6 +143,44 @@ def test_the_environment_derives_the_passphrase_and_reads_the_url(kit: KdbxStore
     # read, which is why there was no way to obtain it before.
     assert values['PULUMI_CONFIG_PASSPHRASE'] == seeds.pulumi_passphrase(seeds.load_seed(kit))
     assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
+
+
+def test_a_bundle_left_where_it_used_to_live_is_read_once_and_loudly(
+    kit: KdbxStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The bundle became a workstation slot inside the checkout; a machine that
+    # still has one under ~/.config keeps working, and is told where it now
+    # belongs rather than being left to wonder why nothing changed.
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    _ = (legacy / lifecycle.URL_FILE).write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    slot = tmp_path / '.credentials' / 'state-backend'
+    monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
+    monkeypatch.setattr(workstation, 'bundle_dir', lambda: slot)
+
+    values = lifecycle.environment(kit, slot)
+
+    assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
+    assert 'state-backend bundle operator' in caplog.text
+
+
+def test_the_moved_bundle_is_only_looked_for_under_the_default(
+    kit: KdbxStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `--bundle-dir somewhere-else` means that directory and no other: a
+    # fallback that fired for an explicit path would answer a question the
+    # operator did not ask.
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+    legacy = tmp_path / 'legacy'
+    legacy.mkdir()
+    _ = (legacy / lifecycle.URL_FILE).write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
+    monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
+    monkeypatch.setattr(workstation, 'bundle_dir', lambda: tmp_path / '.credentials' / 'state-backend')
+
+    values = lifecycle.environment(kit, tmp_path / 'asked-for')
+
+    assert 'PULUMI_BACKEND_URL' not in values
 
 
 def test_a_missing_bundle_still_yields_the_passphrase(kit: KdbxStore, tmp_path: Path) -> None:

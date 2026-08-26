@@ -11,14 +11,12 @@ import logging
 import sys
 from pathlib import Path
 
-from kluster.scripts.credentials import b2, entries, seeds
+from kluster.scripts.credentials import b2, entries, seeds, workstation
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 from . import config, provision, settings
 
 log = logging.getLogger(__name__)
-
-DEFAULT_BUNDLE_DIR = Path.home() / '.config' / 'kluster' / 'state-backend'
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -57,7 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     bundle = actions.add_parser('bundle', help='write a client bundle (ca/cert/key/url)')
     _ = bundle.add_argument('name', choices=['ci', 'operator'])
     _ = bundle.add_argument('--address', required=True)
-    _ = bundle.add_argument('--directory', type=Path, default=DEFAULT_BUNDLE_DIR)
+    _ = bundle.add_argument('--directory', type=Path, default=workstation.bundle_dir())
 
     return parser
 
@@ -169,8 +167,9 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
         )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 
-    config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), DEFAULT_BUNDLE_DIR)
-    log.info('operator certificate bundle written to %s', DEFAULT_BUNDLE_DIR)
+    bundle_dir = workstation.bundle_dir()
+    config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), bundle_dir)
+    log.info('operator certificate bundle written to %s', bundle_dir)
 
     if not provision.wait_for_backend(address):
         log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)

@@ -1,4 +1,9 @@
-"""The account roots: stored once, read on every use, prompted for when absent.
+"""The account roots and the one chain that finds them.
+
+Every root is looked up the same way — desktop secret store, token file,
+environment variable, prompt — so the tests are mostly about *order*: which
+layer answers when more than one could, and what a run asks for when the
+layers between them hold half a root.
 
 Driven against a real `keyring` backend held in memory rather than against a
 desktop session, so the code under test is the code that runs on a workstation
@@ -16,7 +21,7 @@ import keyring.backends.fail
 import keyring.errors
 import pytest
 
-from kluster.scripts.credentials import kdbx, masters
+from kluster.scripts.credentials import kdbx, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError
 
 
@@ -53,6 +58,22 @@ def _current() -> keyring.backend.KeyringBackend:
         return keyring.get_keyring()
     except Exception:  # noqa: BLE001 - an unresolvable backend is "no backend"
         return keyring.backends.fail.Keyring()
+
+
+@pytest.fixture(autouse=True)
+def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The two layers that are not the secret store, moved out of the checkout.
+
+    The file layer is a path inside the repository and the environment layer is
+    this process's own environment, so without this a test would read — and
+    `forget` would delete — whatever the operator running it happens to hold.
+    """
+    directory = tmp_path / '.credentials'
+    monkeypatch.setattr(workstation, 'directory', lambda: directory)
+    for root in masters.ROOTS.values():
+        for field in root.fields:
+            monkeypatch.delenv(field.env, raising=False)
+    return directory
 
 
 @pytest.fixture
@@ -95,6 +116,29 @@ def test_every_root_has_fields_and_console_steps() -> None:
         assert root.fields
         assert root.console
         assert len({field.name for field in root.fields}) == len(root.fields)
+
+
+def test_every_field_names_its_file_and_its_variable() -> None:
+    # The chain is register-driven: a field with no file name and no variable
+    # name has two of its four layers missing, and nothing would say so.
+    files = [field.file for root in masters.ROOTS.values() for field in root.fields]
+    variables = [field.env for root in masters.ROOTS.values() for field in root.fields]
+
+    assert all(files) and len(set(files)) == len(files)
+    assert all(variables) and len(set(variables)) == len(variables)
+
+
+def test_the_github_admin_token_is_a_root_like_the_others() -> None:
+    # It used to stand outside: a hand-written file and a mise template, with
+    # no `master` subcommand and no place in the register's own machinery.
+    root = masters.ROOTS['github']
+
+    assert [field.name for field in root.fields] == ['token']
+    # mise materializes this one for `pulumi up -s github`, and a template can
+    # open neither a keyring nor a prompt -- so the file layer is where
+    # `remember` puts it.
+    assert root.field('token').env == 'GITHUB_TOKEN'
+    assert root.field('token').materialized
 
 
 def test_a_remembered_root_is_read_without_asking(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,6 +186,109 @@ def test_a_half_remembered_root_asks_only_for_the_rest(store: MemoryKeyring, mon
     assert credential['key'] == 'master-key'
 
 
+def test_the_secret_store_wins_over_the_file_and_the_file_over_the_variable(
+    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The whole chain, on one field at a time, with every layer holding a
+    # different value: the order is the point, so a test that only ever has
+    # one layer filled proves nothing about it.
+    store.items[(kdbx.KEYRING_SERVICE, 'account-root/b2/account-id')] = 'from-the-store'
+    _ = workstation.write(local / 'roots' / 'b2.account-id', 'from-the-file')
+    _ = workstation.write(local / 'roots' / 'b2.key', 'from-the-file')
+    monkeypatch.setenv('KLUSTER_B2_ACCOUNT_ID', 'from-the-environment')
+    monkeypatch.setenv('KLUSTER_B2_KEY', 'from-the-environment')
+
+    credential = masters.load(masters.ROOTS['b2'], _refuse)
+
+    assert credential['account-id'] == 'from-the-store'
+    assert credential['key'] == 'from-the-file'
+
+
+def test_the_variable_answers_when_neither_the_store_nor_the_file_does(
+    headless: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The layer a CI job and a one-off shell use: handed in, written nowhere.
+    monkeypatch.setenv('KLUSTER_B2_ACCOUNT_ID', 'from-the-environment')
+    monkeypatch.setenv('KLUSTER_B2_KEY', 'from-the-environment')
+
+    credential = masters.load(masters.ROOTS['b2'], _refuse)
+
+    assert credential['key'] == 'from-the-environment'
+
+
+def test_a_root_half_held_by_two_layers_asks_for_nothing(
+    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Layers are consulted per field, so a root can be spread across them --
+    # the OCI PEM in a file, its OCIDs in the store -- and still be complete.
+    store.items[(kdbx.KEYRING_SERVICE, 'account-root/oci/tenancy')] = 'ocid1.tenancy.oc1..aaa'
+    store.items[(kdbx.KEYRING_SERVICE, 'account-root/oci/user')] = 'ocid1.user.oc1..bbb'
+    pem = '-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n'
+    _ = workstation.write(local / 'roots' / 'oci.private-key', pem)
+    monkeypatch.setattr('getpass.getpass', _refuse)
+
+    credential = masters.load(masters.ROOTS['oci'], _refuse)
+
+    # A PEM's line structure is the value, so the file layer hands it back
+    # exactly as written rather than stripped like a pasted token.
+    assert credential['private-key'] == pem
+
+
+def test_a_half_written_file_is_treated_as_absent(headless: None, monkeypatch: pytest.MonkeyPatch, local: Path) -> None:
+    # An empty file costs a prompt; storing the empty string would instead
+    # make the next run skip the prompt and fail against the provider.
+    _ = workstation.write(local / 'roots' / 'b2.key', '\n')
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+
+    credential = masters.load(masters.ROOTS['b2'], _answers('account-id'))
+
+    assert credential['key'] == 'master-key'
+
+
+def test_a_materialized_root_is_kept_in_its_file_where_a_template_can_read_it(
+    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr('getpass.getpass', _answers('ghp_token'))
+
+    _ = masters.remember(masters.ROOTS['github'], _refuse)
+
+    slot = local / 'roots' / 'github.token'
+    assert slot.read_text() == 'ghp_token\n'
+    assert slot.stat().st_mode & 0o777 == 0o600
+    # One layer, not two: a second copy in the secret store would be exposure
+    # bought for nothing, since no script reads this root interactively.
+    assert store.items == {}
+    assert masters.load(masters.ROOTS['github'], _refuse)['token'] == 'ghp_token'
+
+
+def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
+    headless: None, local: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # `remember` has to mean something on a headless box too: the file layer
+    # is the one place such a machine can keep a root at all.
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+
+    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+
+    assert (local / 'roots' / 'b2.key').read_text() == 'master-key\n'
+    assert 'no desktop secret store' in caplog.text
+    assert masters.load(masters.ROOTS['b2'], _refuse)['key'] == 'master-key'
+
+
+def test_forget_removes_the_token_file_as_well_as_the_store_entry(
+    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr('getpass.getpass', _answers('ghp_token'))
+    _ = masters.remember(masters.ROOTS['github'], _refuse)
+
+    masters.forget(masters.ROOTS['github'])
+
+    # Forgetting a root leaves nothing behind on the machine; the environment
+    # layer is the caller's shell and not this command's to unset.
+    assert not (local / 'roots' / 'github.token').exists()
+    assert store.items == {}
+
+
 def test_a_file_field_is_read_from_the_path_it_is_given(
     store: MemoryKeyring, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -159,10 +306,22 @@ def test_a_file_field_is_read_from_the_path_it_is_given(
     assert credential['user'] == 'ocid1.user.oc1..bbb'
 
 
-def test_stored_reports_each_field_without_disclosing_it(store: MemoryKeyring) -> None:
+def test_stored_reports_the_layer_of_each_field_without_disclosing_it(
+    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store.items[(kdbx.KEYRING_SERVICE, 'account-root/oci/tenancy')] = 'ocid1.tenancy.oc1..aaa'
+    _ = workstation.write(local / 'roots' / 'oci.user', 'ocid1.user.oc1..bbb')
+    monkeypatch.setenv('KLUSTER_OCI_PRIVATE_KEY', '-----BEGIN PRIVATE KEY-----\n')
 
-    assert masters.stored(masters.ROOTS['oci']) == {'tenancy': True, 'user': False, 'private-key': False}
+    # Which layer answered is the useful half of "will this run ask me
+    # anything": a field the environment is holding up is one that disappears
+    # with the shell it was exported in.
+    assert masters.stored(masters.ROOTS['oci']) == {
+        'tenancy': masters.STORE,
+        'user': masters.FILE,
+        'private-key': masters.ENVIRONMENT,
+    }
+    assert masters.stored(masters.ROOTS['b2']) == {'account-id': None, 'key': None}
 
 
 def test_forget_removes_every_field(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:

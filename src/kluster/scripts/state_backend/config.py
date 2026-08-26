@@ -20,7 +20,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from kluster.scripts.credentials import age, pki
+from kluster.scripts.credentials import age, pki, workstation
 
 from . import settings
 
@@ -217,8 +217,13 @@ def client_bundle(seed: bytes, *, name: str, address: str) -> ClientBundle:
 
 
 def write_client_bundle(bundle: ClientBundle, directory: Path) -> None:
-    """Place a bundle on disk with the permissions libpq insists on."""
-    directory.mkdir(parents=True, exist_ok=True)
+    """Place a bundle on disk with the permissions libpq insists on.
+
+    libpq refuses a client key that anyone but its owner can read, so that one
+    is `0600`; the directory is `0700` for the same reason one level up, which
+    is what `workstation.secret_dir` gives every slot.
+    """
+    _ = workstation.secret_dir(directory)
     _ = (directory / CA_FILE).write_bytes(bundle.ca_cert)
     _ = (directory / CERT_FILE).write_bytes(bundle.cert)
     key_path = directory / KEY_FILE

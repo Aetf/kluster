@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -175,6 +176,30 @@ def test_a_box_that_matches_the_commit_is_left_alone(converge: Any) -> None:
     assert _run() == 0
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
+
+
+def test_the_operator_bundle_lands_in_the_workstation_slot(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # It used to land in ~/.config/kluster/state-backend, the one local
+    # artefact outside the convention (credentials.md §1 rule 6). Everything
+    # a checkout needs locally is now in the checkout.
+    from kluster.scripts.credentials import workstation
+    from kluster.scripts.state_backend import config
+
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+    written: list[Path] = []
+
+    def record(_bundle: object, directory: Path) -> None:
+        written.append(directory)
+
+    monkeypatch.setattr(config, 'write_client_bundle', record)
+    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
+
+    assert _run() == 0
+
+    assert written == [tmp_path / '.credentials' / 'state-backend']
 
 
 def test_a_changed_machine_definition_replaces_the_box(converge: Any) -> None:

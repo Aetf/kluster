@@ -13,7 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials import workstation
+from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxError, KdbxStore
 
 PASSWORD = 'correct horse battery staple'
 
@@ -28,6 +29,31 @@ def test_created_database_round_trips_a_secret(store: KdbxStore) -> None:
 
     assert store.get('seeds/B2 seed key') == 'key-secret'
     assert store.get('seeds/B2 seed key', attribute='UserName') == 'key-id'
+
+
+def test_the_kit_defaults_to_the_checkouts_own_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A checkout carries everything local it needs: no environment wiring is
+    # the difference between a second machine working and a second machine
+    # needing a note somewhere about which variable to set.
+    monkeypatch.delenv(PATH_ENV, raising=False)
+    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
+    _ = KdbxStore.create(workstation.kit_path(), PASSWORD)
+
+    assert KdbxStore.from_env().path == tmp_path / '.credentials' / 'kit.kdbx'
+    # Created by the kit itself, and no wider than the operator: everything
+    # else in there is a workstation slot.
+    assert (tmp_path / '.credentials').stat().st_mode & 0o777 == 0o700
+
+
+def test_the_environment_overrides_the_default_kit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A kit on removable media, or shared between checkouts, is the case the
+    # variable stays for.
+    elsewhere = tmp_path / 'stick' / 'kluster.kdbx'
+    _ = KdbxStore.create(elsewhere, PASSWORD)
+    monkeypatch.setenv(PATH_ENV, str(elsewhere))
+    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
+
+    assert KdbxStore.from_env().path == elsewhere
 
 
 def test_create_refuses_an_existing_file(tmp_path: Path) -> None:
