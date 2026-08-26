@@ -23,8 +23,9 @@ shape nor the domain, which reads like a permissions problem.
 > rejection live there. **The appliance is built and serving state**:
 > `deploy/state-backend/` holds the Butane file, the operator keys and
 > the dump script, and the `state-backend` console script renders,
-> provisions and converges the box, checks its pins, writes client
-> bundles, and logs in for diagnosis. Still design-only: the restore
+> provisions and converges the box, checks its pins, writes the client
+> bundle into its workstation slot (§3), and logs in for diagnosis.
+> Still design-only: the restore
 > and key-rotation scripts of §1, and the playbooks and drills of §7.
 
 ## 1. OS & configuration management
@@ -131,8 +132,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     matches IP SANs), keeping the state-backend hot path free of any
     DNS dependency — the backend stays reachable when Cloudflare or
     the `dns` stack is itself the thing being repaired.
--   **Two client certs — `ci` and `operator`**; keys held as CI
-    Environment secrets / local mise env respectively.
+-   **Two client certs — `ci` and `operator`**. The `ci` key is a CI
+    Environment secret; the `operator` key is a **workstation slot**
+    (credentials.md §1 rule 6) — `.credentials/state-backend/` in the
+    checkout, written by `state-backend provision` and by `state-backend
+    bundle operator`, alongside the connection string that names it.
+    libpq refuses a client key anything but its owner can read, so the
+    key is `0600` and the directory `0700`; and libpq expands no
+    variables, so the string names its three files by absolute path
+    rather than through a placeholder.
 -   **No CRL/OCSP.** At three certificates, revocation infrastructure
     is standing rent for nothing: the compromise response is
     "regenerate the CA, reissue all three, re-provision" — playbook

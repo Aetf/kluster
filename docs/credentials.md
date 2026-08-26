@@ -38,9 +38,25 @@ facts about them.
     cluster-infra.md §1.1) · **Pulumi state** · SealedSecret
     (in-cluster consumption) · CI Environment secret (the per-stack
     GitHub Environments and the `drill` Environment, ci.md §2) ·
-    ops-repo secret · on-box (delivered by provisioning, e.g.
-    Butane-embedded). A row names its channel(s); a credential living
-    anywhere else is misplaced.
+    ops-repo secret · **workstation slot** · on-box (delivered by
+    provisioning, e.g. Butane-embedded). A row names its channel(s); a
+    credential living anywhere else is misplaced.
+
+    A **workstation slot** is the local half of a credential: a file
+    under the checkout's git-ignored `.credentials/` (§4.4), written by
+    a `credentials` or `state-backend` command and read
+    non-interactively afterward — by `mise.toml` building a `pulumi`
+    run's environment, or by a script that must not stop to ask. It is
+    the channel for what CI holds as an Environment secret and a
+    workstation needs anyway: the Pulumi passphrase, the state
+    backend's `operator` bundle, the `github` stack's admin token.
+    Deliberately not the desktop secret store, which is where account
+    roots go (§2) — a root is interactive and rare, so a store that
+    asks a session to unlock suits it, while these are read on *every*
+    `pulumi` run by a template that can neither prompt nor unlock a
+    keyring. A slot holds only what a command can write again — the
+    passphrase is re-derived, the bundle re-issued, the token re-pasted
+    — so losing one costs a command and never a credential.
 
     The two Pulumi channels are separate rows because their exposure
     is opposite. **Config secret** lives in `Pulumi.<stack>.yaml` and
@@ -81,23 +97,46 @@ either tier below: it is an account root used from the workstation,
 never minted from a seed and never pushed to a slot, which is exactly
 why that stack is not something CI runs.
 
-Two of them are nonetheless *used* by a script, because the seeds
-they mint cannot be minted by anything smaller: an OCI API key
-belonging to a user who may manage users, groups and policies in the
-tenancy, and the B2 account master key, which re-seeds B2 after a
-total loss. Cloudflare has no such root: its only job would have been
-minting the seed, and the platform forbids that. A token minted
-through the API may not carry token-management permissions, so
-nothing can mint a credential of the seed's own class. **Each is handed
-over through the desktop secret store, one credential at a time.**
-`credentials master <root> remember` prompts for it and stores it
-there; every later use — `bootstrap`, a seed's `create`, a re-seed —
-looks it up and falls back to a prompt when the machine has no secret
-store or has not been told this one. Neither the estate database nor
-its master password is ever opened by anything in this repository, and
-no account root reaches a file, an environment variable or a shell
-history. `credentials master ls` says which roots are stored, without
-printing a value.
+Three of them are nonetheless *used* from the workstation. Two by a
+script, because the seeds they mint cannot be minted by anything
+smaller: an OCI API key belonging to a user who may manage users,
+groups and policies in the tenancy, and the B2 account master key,
+which re-seeds B2 after a total loss. The third by a provider — the
+GitHub admin token, which a `pulumi up -s github` reaches for. (Cloudflare
+has no such root: its only job would have been minting the seed, and
+the platform forbids that. A token minted through the API may not carry
+token-management permissions, so nothing can mint a credential of the
+seed's own class.)
+
+**One acquisition chain serves all three**, consulted per field rather
+than per root, first hit wins:
+
+1.  the **desktop secret store**, one credential at a time;
+2.  the root's **token file**, a workstation slot (§1 rule 6) — the
+    layer a non-interactive reader can use;
+3.  the root's **environment variable**, which is how CI or a one-off
+    shell hands a value in without writing it anywhere;
+4.  a **console prompt**, which names the credential and prints how it
+    is created.
+
+Because the chain runs per field, a root half-held asks for the half
+that is missing and nothing else, and the file and variable names are
+recorded in the register itself (`masters.py`) rather than being
+conventions a reader has to reconstruct.
+
+`credentials master <root> remember` is the only thing that ever writes
+a root, and which layer it writes follows from who reads it. A root a
+*script* asks for goes to the secret store, so a value that can stay
+out of the filesystem does — falling back to the token file on a machine
+that has no store at all, which is what makes `remember` meaningful on a
+headless box. The GitHub token goes to its file, because what reads it
+is a `mise.toml` template that can open neither a keyring nor a prompt;
+a second copy in the store would be exposure bought for nothing.
+`credentials master ls` says which roots this machine holds and which
+layer each came from, printing no values, and `credentials master
+<root> forget` removes both writable layers. Neither the estate
+database nor its master password is ever opened by anything in this
+repository.
 
 Keeping them out is what makes §2.1's argument true rather than
 aspirational: every row below has a designed
@@ -304,8 +343,8 @@ offline; none of it is copied by hand.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
 | ZT CI member identities (`ci-deploy`, `ci-preview`) | generated in-state (`zerotier_identity`) | One per concurrency domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
-| Pulumi state passphrase | derivation seed | Decrypts state secrets | CI env (all stacks) | every `pulumi` run |
-| State-backend CA + certs (`ci`, `operator`) | derivation seed | postgres:// mTLS | on-box (server) · CI env · operator machine | Pulumi state access |
+| Pulumi state passphrase | derivation seed | Decrypts state secrets | CI env (all stacks) · workstation slot | every `pulumi` run |
+| State-backend CA + certs (`ci`, `operator`) | derivation seed | postgres:// mTLS | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
 | age backup identity | derivation seed | Decrypts state-backend pg_dumps | on-box (public half) · ops-repo `drill` Environment (private half, latest-dump-only) | micro cron, drill workflow |
 | restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state · SealedSecret (via `backed_pvc`) | VolSync |
 | Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state · CI env · ops-repo secret | Talos ops, etcd snapshot workflow |
@@ -329,16 +368,18 @@ credential family plus the lifecycle commands below.
 
 | Command | When |
 | --- | --- |
-| `credentials master <root> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Stores one account root (§2) in the desktop secret store. Skipping it costs a prompt, not a failure. |
-| `credentials master ls` | Which roots the store holds. Prints no values. |
-| `credentials master <root> forget` | Removes one root from the store again. |
+| `credentials master <root> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Keeps one account root (§2) where its readers reach it. Skipping it costs a prompt, not a failure. |
+| `credentials master ls` | Which roots this machine holds, and which layer of the chain each comes from. Prints no values. |
+| `credentials master <root> forget` | Removes one root from the secret store and from its token file. |
+| `credentials master github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
 | `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
 | `eval "$(credentials derive env)"` | Whenever a shell needs to reach the backend. Derives the passphrase, reads the URL from the bundle. |
 | `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
-| `credentials derive passphrase > .pulumi.secret` | Once per workstation that develops without the kit. Caches the passphrase for `mise.toml` to read, so a local preview does not need the offline database open. |
+| `credentials derive passphrase` | Once per workstation that develops without the kit. Writes the passphrase into its slot (§4.4) for `mise.toml` to read, so a local preview does not need the offline database open. `--stdout` prints it instead, for a pipe into another machine. |
+| `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
 | `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
 | `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored; `forget` removes it again. |
@@ -389,18 +430,19 @@ Bring-up is a sequence of commands rather than one command: each stage
 leaves behind the artifact the next one reads, and each is separately
 re-runnable. `credentials --help` prints the same order.
 
-**One database is opened: the kit.** The account roots the two minters
+**One database is opened: the kit.** The account roots the minters
 borrow are not in a database this repository reads — they come from the
-**desktop secret store**, one credential at a time (§2), or from a
-prompt where there is no store. The kit's own master password is asked
-of the same store first (`credentials kdbx remember` puts it there),
+chain in §2: the **desktop secret store**, a token file, an environment
+variable, or a prompt where a machine has none of them. The kit's own
+master password is asked of the same store first
+(`credentials kdbx remember` puts it there),
 because a run that then goes on for minutes should not be guarded by a
 password typed into a process nobody is watching. Nothing is ever
 written to the store implicitly: a `remember` command is the only thing
 that puts a value there.
 
 1.  `credentials master <root> remember` — once per machine and root,
-    for the two account roots the mints borrow (§2). Skipping it costs a
+    for the account roots the mints borrow (§2). Skipping it costs a
     prompt rather than a failure, which is also how a headless run works.
 2.  `credentials bootstrap` — fills the kit with every §2 seed, creating
     the kit if it is absent. A row whose platform can mint it is minted;
@@ -411,8 +453,8 @@ that puts a value there.
     derivations: the appliance's Ignition carries the state-backend
     server certificate and the age identity's public half, both derived
     from the kit's derivation seed, plus a B2 dump key minted from the B2
-    seed. The run ends by writing the `operator` client bundle to
-    `~/.config/kluster/state-backend`.
+    seed. The run ends by writing the `operator` client bundle into its
+    workstation slot (§4.4).
 4.  `eval "$(credentials derive env)"` — the two variables a `pulumi`
     run needs: `PULUMI_CONFIG_PASSPHRASE`, derived and stored in no slot,
     and `PULUMI_BACKEND_URL`, read from the bundle the previous stage
@@ -508,3 +550,48 @@ routine rotation to needing nothing but the kit. A rotation whose
 retirement is refused is not a failed rotation — the successor is
 minted, verified and stored, and the key that could not go is a
 console errand.
+
+### 4.4 What a workstation keeps, and where
+
+Everything local a checkout needs lives in one git-ignored directory
+beside `mise.toml`, so a second machine is a clone plus a copy and
+never a hunt for per-machine environment wiring:
+
+| `.credentials/` | What it is | Written by |
+| --- | --- | --- |
+| `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials bootstrap` |
+| `pulumi.passphrase` | The state passphrase (§2.2), cached so a local preview needs neither the kit nor an `eval`. | `credentials derive passphrase` |
+| `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials master <root> remember` |
+| `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
+
+The directory is `0700` and its files are `0600`. Only the kit is
+irreplaceable, and it is irreplaceable in the envelopes rather than
+here; every other entry is re-derived, re-issued or re-pasted by the
+command in the right-hand column, so a lost `.credentials/` costs a
+few commands and no credential.
+
+`mise.toml` reads three of them — the passphrase, the backend URL and
+the GitHub token — falling back to whatever the environment already
+holds, which is how the same file serves CI, where all three arrive as
+Environment secrets. Because each is read by template rather than by a
+program, nothing on that path can prompt: that is the whole reason
+these are files and not secret-store entries (§1 rule 6).
+
+**Moving to another workstation** is copying the directory (`rsync -a`),
+minus `kit.kdbx` unless that machine is meant to hold the kit — one
+copy in place of the mixture of an `rsync` under `~/.config`, a piped
+passphrase and a handwritten token file that it replaces. The one
+thing the copy assumes is that both checkouts sit at the same path:
+libpq expands nothing, so the bundle's URL names its three certificate
+files absolutely, and a checkout somewhere else needs those paths in
+`state-backend/backend-url` corrected — three edits in a plain string,
+or a re-run of `state-backend bundle operator` on a machine that holds
+the kit.
+
+Two of these slots had other homes before, and both old locations are
+still read — the bundle by `credentials`, with a warning naming the
+move; the passphrase and token files by `mise.toml`, silently, because
+a template has no way to warn. A workstation that predates the move
+therefore keeps working untouched, and converges by running the
+commands above once. The fallbacks are marked in the code and in
+`.gitignore` for deletion (`kluster-ops#34`).

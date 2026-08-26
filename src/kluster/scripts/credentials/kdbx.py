@@ -48,8 +48,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The seed kit (credentials.md §2.1). Named by environment variable so the
-#: path is configurable and never hard-coded to one machine's layout.
+#: The seed kit (credentials.md §2.1). The default is a workstation slot in
+#: the checkout (`workstation.py`), so a machine needs no environment wiring to
+#: have one; this variable overrides it, which is how a kit kept on removable
+#: media or shared between checkouts is used.
 PATH_ENV = 'KLUSTER_KDBX'
 
 #: Secret Service collection entries are keyed by (service, account); the
@@ -107,6 +109,19 @@ def unstore(account: str) -> None:
     log.info('removed %s from the secret store', account)
 
 
+def default_path() -> Path:
+    """Where the kit is when nobody says otherwise: `$KLUSTER_KDBX`, or the slot.
+
+    `workstation` is imported here rather than at module scope because it
+    raises this module's error type; the cycle is one import deep and this is
+    the only place that needs it.
+    """
+    from . import workstation
+
+    raw = os.environ.get(PATH_ENV)
+    return Path(raw).expanduser() if raw else workstation.kit_path()
+
+
 def _path(entry: str) -> list[str]:
     """An entry path as pykeepass addresses it: `'seeds/B2 seed key'` -> `['seeds', 'B2 seed key']`."""
     return [part for part in entry.strip('/').split('/') if part]
@@ -127,12 +142,9 @@ class KdbxStore:
     @classmethod
     def from_env(cls, path: Path | None = None) -> KdbxStore:
         if path is None:
-            raw = os.environ.get(PATH_ENV)
-            if not raw:
-                raise KdbxError(f'pass --kdbx or set {PATH_ENV} to the KeePassXC database')
-            path = Path(raw).expanduser()
+            path = default_path()
         if not path.is_file():
-            raise KdbxError(f'no database at {path}')
+            raise KdbxError(f'no database at {path} (pass --kdbx or set {PATH_ENV} for one held elsewhere)')
         return cls(path=path)
 
     @classmethod
@@ -143,9 +155,13 @@ class KdbxStore:
         one stays until its last derived secret has expired (§2.2), so
         overwriting is never the intent.
         """
+        from . import workstation
+
         if path.exists():
             raise KdbxError(f'{path} already exists; rotation writes a new file rather than replacing one')
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # A directory this makes is the operator's alone; one that already
+        # exists is left as the operator set it up.
+        _ = workstation.secret_dir(path.parent)
         return cls(path=path, _db=create_database(str(path), password=password))
 
     def unlock(self) -> None:

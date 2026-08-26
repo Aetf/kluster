@@ -169,6 +169,10 @@ class Dispatch:
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
             (cli.derived, 'cloudflare_zones', 'account-id'),
+            # Slots are files in the checkout this test is running from, so
+            # the writer is stubbed: a dispatch test must not leave a
+            # placeholder passphrase where mise would then read it.
+            (cli.workstation, 'write', Path('placeholder')),
         )
         for module, attribute, result in handlers:
             name = f'{module.__name__.rsplit(".", 1)[-1]}.{attribute}'
@@ -258,6 +262,26 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
     assert not rest
     assert kwargs['stack'].name == 'elsewhere'
     assert 'lifecycle.environment' in dispatch.reached
+
+
+def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:
+    assert cli.main(['derive', 'passphrase']) == 0
+
+    # The command owns the file, so it is 0600 from the moment it exists
+    # instead of whatever the shell's umask happened to be.
+    (_, args, _), *rest = [call for call in dispatch.calls if call[0] == 'workstation.write']
+    assert not rest
+    assert args[0] == cli.workstation.passphrase_path()
+    assert args[1] == 'passphrase'
+
+
+def test_the_passphrase_can_still_be_piped_to_another_machine(
+    dispatch: Dispatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(['derive', 'passphrase', '--stdout']) == 0
+
+    assert 'workstation.write' not in dispatch.reached
+    assert capsys.readouterr().out.strip() == 'passphrase'
 
 
 def test_seed_create_dispatches_the_row_the_member_names(dispatch: Dispatch) -> None:

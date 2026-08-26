@@ -24,11 +24,16 @@ import getpass
 import logging
 from pathlib import Path
 
-from . import b2, cloudflare, entries, masters, oci_iam, seeds
+from . import b2, cloudflare, entries, masters, oci_iam, seeds, workstation
 from .kdbx import KdbxError, KdbxStore
 from .masters import Prompt
 
 log = logging.getLogger(__name__)
+
+#: The file inside a client bundle that names the backend. Duplicated from
+#: `state_backend.config` rather than imported: that package depends on this
+#: one, and one string is a cheaper price than the cycle.
+URL_FILE = 'backend-url'
 
 
 def root(member: str, prompt: Prompt) -> masters.Credential:
@@ -110,6 +115,31 @@ def create_seed(seed: entries.Seed, *, kit: KdbxStore, prompt: Prompt, entry: st
             raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
 
 
+def backend_url_file(bundle_dir: Path) -> Path | None:
+    """The bundle's URL file, or None when this machine has no bundle at all.
+
+    The bundle is a workstation slot (`workstation.py`). A machine that still
+    has one where it used to live keeps working, once and loudly: the URL
+    written there names the certificates beside it by absolute path, so the
+    older bundle is a complete, working answer.
+
+    TODO(kluster-ops#34): delete the fallback once every workstation has
+    re-run `state-backend bundle operator`.
+    """
+    current = bundle_dir / URL_FILE
+    if current.is_file():
+        return current
+    legacy = workstation.LEGACY_BUNDLE_DIR / URL_FILE
+    if bundle_dir == workstation.bundle_dir() and legacy.is_file():
+        log.warning(
+            'using the client bundle in %s: it now belongs in %s, which `state-backend bundle operator` writes',
+            workstation.LEGACY_BUNDLE_DIR,
+            bundle_dir,
+        )
+        return legacy
+    return None
+
+
 def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
     """The variables a Pulumi run needs, derived and read rather than stored.
 
@@ -121,11 +151,14 @@ def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
     one command.
     """
     values = {'PULUMI_CONFIG_PASSPHRASE': seeds.pulumi_passphrase(seeds.load_seed(kit))}
-    url = bundle_dir / 'backend-url'
-    if url.is_file():
+    url = backend_url_file(bundle_dir)
+    if url is not None:
         values['PULUMI_BACKEND_URL'] = url.read_text().strip()
     else:
-        log.warning('no %s; run `state-backend provision` (or `state-backend bundle operator`) first', url)
+        log.warning(
+            'no %s; run `state-backend provision` (or `state-backend bundle operator`) first',
+            bundle_dir / URL_FILE,
+        )
     return values
 
 

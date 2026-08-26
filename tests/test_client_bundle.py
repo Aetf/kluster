@@ -47,3 +47,15 @@ def test_the_private_key_is_not_world_readable(tmp_path: Path) -> None:
     config.write_client_bundle(config.client_bundle(SEED, name='operator', address='192.0.2.10'), tmp_path)
 
     assert (tmp_path / config.KEY_FILE).stat().st_mode & 0o077 == 0
+
+
+def test_the_directory_it_lands_in_is_the_operators_alone(tmp_path: Path) -> None:
+    # The bundle is a workstation slot now (credentials.md §1 rule 6), so it
+    # is created like one: a 0755 directory over a 0600 key still tells
+    # anybody with a shell that the key is there and what it is called.
+    directory = tmp_path / 'made' / 'here'
+
+    config.write_client_bundle(config.client_bundle(SEED, name='operator', address='192.0.2.10'), directory)
+
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert directory.parent.stat().st_mode & 0o777 == 0o700

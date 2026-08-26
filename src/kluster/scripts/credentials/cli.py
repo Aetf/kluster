@@ -15,22 +15,16 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
-import os
 import shlex
 import sys
 from pathlib import Path
 
-from . import b2, derived, entries, lifecycle, masters, oci_iam, pulumi_config, seeds
-from .kdbx import PATH_ENV, KdbxError, KdbxStore
+from . import b2, derived, entries, lifecycle, masters, oci_iam, pulumi_config, seeds, workstation
+from .kdbx import PATH_ENV, KdbxError, KdbxStore, default_path
 from .masters import CredentialRejected
 from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
-
-#: Where `state-backend` leaves the client bundle, and therefore where the URL
-#: of the state backend is read from. Every command that has to reach the
-#: backend takes it as an option defaulting to this.
-BUNDLE_DIR = Path.home() / '.config' / 'kluster' / 'state-backend'
 
 #: Which command runs when. The tree says what exists; this says what to do
 #: with it, because "one subcommand per register row" answers neither "where
@@ -39,9 +33,11 @@ _ORDER = """when to run what (docs/credentials.md §4):
 
   bring-up, from nothing
     0. credentials master <root> remember
-         Puts an account root (§2) in the desktop secret store, once per
-         machine, so the mints below ask for nothing. Skip it and they
-         prompt instead, which is how a headless run works.
+         Keeps an account root (§2) on this machine, once, so the mints
+         below ask for nothing. Every root is looked up the same way:
+         desktop secret store, then its token file, then its environment
+         variable, then a prompt -- so skipping this costs a prompt rather
+         than a failure, which is how a headless run works.
     1. credentials bootstrap
          Fills a kit with every seed in §2, creating the kit if it is absent.
          Stops at each credential no API can create and prints the console
@@ -57,10 +53,11 @@ _ORDER = """when to run what (docs/credentials.md §4):
          §3 row per command; re-running one rotates it.
 
   on a workstation that develops without the kit
-    credentials derive passphrase > .pulumi.secret
-         Caches the passphrase where mise.toml reads it, so a local
-         `pulumi preview` needs neither the kit nor an eval. The client
-         bundle has to be copied to that machine too.
+    credentials derive passphrase
+         Caches the passphrase in its workstation slot, where mise.toml
+         reads it, so a local `pulumi preview` needs neither the kit nor
+         an eval. Copy the whole .credentials directory from a machine
+         that has one and this is done too, client bundle included.
 
   day to day
     Nothing. No runtime credential is in the kit, so no operation outside
@@ -85,7 +82,8 @@ _ORDER = """when to run what (docs/credentials.md §4):
 
   looking without changing
     credentials kdbx ls | show <entry>
-    credentials master ls        which account roots the secret store holds
+    credentials master ls        which account roots this machine holds, and
+                                 which layer of the chain each comes from
     credentials kdbx remember    stores the kit's master password in the
                                  desktop secret store, so a long run is not
                                  guarded by a password typed into it
@@ -109,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
         '--kdbx',
         type=Path,
         default=None,
-        help=f'the seed kit (default: ${PATH_ENV})',
+        help=f'the seed kit (default: ${PATH_ENV}, else {workstation.kit_path()})',
     )
     families = parser.add_subparsers(dest='family', required=True, metavar='<family>')
 
@@ -125,13 +123,20 @@ def build_parser() -> argparse.ArgumentParser:
     _ = env.add_argument(
         '--bundle-dir',
         type=Path,
-        default=BUNDLE_DIR,
+        default=workstation.bundle_dir(),
         help='where `state-backend` wrote the client bundle',
     )
     # `env` is for a shell; this is for a file. A workstation that develops
     # against the backend needs the passphrase on every `pulumi preview`, and
-    # the kit is not on every workstation (§2.1).
-    _ = der_actions.add_parser('passphrase', help='the passphrase alone, for a workstation cache file')
+    # the kit is not on every workstation (§2.1). The command writes the slot
+    # itself rather than being redirected into it, so the file is `0600` from
+    # the moment it exists instead of whatever the shell's umask says.
+    passphrase = der_actions.add_parser('passphrase', help='cache the passphrase in its workstation slot')
+    _ = passphrase.add_argument(
+        '--stdout',
+        action='store_true',
+        help='print it instead, for a pipe into another machine',
+    )
 
     rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
     _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
@@ -190,38 +195,51 @@ def build_parser() -> argparse.ArgumentParser:
     _ = zones.add_argument(
         '--bundle-dir',
         type=Path,
-        default=BUNDLE_DIR,
+        default=workstation.bundle_dir(),
         help='where `state-backend` wrote the client bundle',
     )
 
     # The account roots (§2) are not in the kit and not in any database this
-    # repository opens: each lives in the desktop secret store under its own
-    # key, and a machine without one prompts. This family is how they get
-    # there, and the only thing that ever writes them.
-    master_cmd = families.add_parser('master', help='the account roots the mints borrow (§2)')
+    # repository opens: each is looked up through one chain -- desktop secret
+    # store, token file, environment variable, prompt (`masters.py`). This
+    # family is how they get onto a machine, and the only thing that writes
+    # them.
+    master_cmd = families.add_parser('master', help='the account roots the workstation borrows (§2)')
     roots = master_cmd.add_subparsers(dest='member', required=True, metavar='<root>')
-    listing = roots.add_parser('ls', help='which roots the secret store holds; prints no values')
+    listing = roots.add_parser('ls', help='which roots this machine holds, and where; prints no values')
     listing.set_defaults(action='ls')
     for account in masters.ROOTS.values():
         root_cmd = roots.add_parser(account.member, help=account.title)
         root_actions = root_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
-        _ = root_actions.add_parser('remember', help='prompt for it and store it in the desktop secret store')
-        _ = root_actions.add_parser('forget', help='remove it from the secret store')
+        _ = root_actions.add_parser('remember', help='prompt for it and keep it on this machine')
+        _ = root_actions.add_parser('forget', help='remove it from the secret store and from its token file')
 
     return parser
+
+
+def _layers(held: dict[str, str | None]) -> str:
+    """One root's line in `master ls`: where its fields are, never what they are.
+
+    A root whose fields all come from the same layer is one phrase, because
+    that is the ordinary case and a field-by-field listing would bury it. The
+    mixed case is worth spelling out — a field answered by the environment
+    while its siblings sit in the store is usually a shell that will not be
+    there next time.
+    """
+    missing = [name for name, layer in held.items() if layer is None]
+    if missing:
+        return 'missing: ' + ', '.join(missing)
+    layers = {layer for layer in held.values() if layer is not None}
+    if len(layers) == 1:
+        return f'in {layers.pop()}'
+    return ', '.join(f'{name} in {layer}' for name, layer in held.items() if layer is not None)
 
 
 def _master(args: argparse.Namespace) -> int:
     """The account-root commands, which need no kit and open no database."""
     if args.action == 'ls':
         for account in masters.ROOTS.values():
-            held = masters.stored(account)
-            state = (
-                'in the secret store'
-                if all(held.values())
-                else 'missing: ' + ', '.join(name for name, present in held.items() if not present)
-            )
-            print(f'{account.member}: {state}')
+            print(f'{account.member}: {_layers(masters.stored(account))}')
         return 0
     account = masters.ROOTS[args.member]
     if args.action == 'remember':
@@ -238,8 +256,8 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     because a path was mistyped, would look like an empty kit rather than a
     missing one.
     """
-    path = args.kdbx or (Path(raw).expanduser() if (raw := os.environ.get(PATH_ENV)) else None)
-    if args.family == 'bootstrap' and path is not None and not path.exists():
+    path = args.kdbx or default_path()
+    if args.family == 'bootstrap' and not path.exists():
         log.info('no kit at %s; creating it', path)
         return KdbxStore.create(path, getpass.getpass(f'new master password for {path.name}: '))
     return KdbxStore.from_env(args.kdbx)
@@ -281,10 +299,15 @@ def main(argv: list[str] | None = None) -> int:
                 for name, value in lifecycle.environment(store, args.bundle_dir).items():
                     print(f'export {name}={shlex.quote(value)}')
             case ('derive', _, 'passphrase'):
-                if sys.stdout.isatty():
-                    log.error('this prints a passphrase; redirect it: credentials derive passphrase > .pulumi.secret')
+                passphrase = seeds.pulumi_passphrase(seeds.load_seed(store))
+                if not args.stdout:
+                    _ = workstation.write(workstation.passphrase_path(), passphrase)
+                    log.info('mise.toml reads it from there on every pulumi run')
+                elif sys.stdout.isatty():
+                    log.error('--stdout prints a passphrase; pipe it, or drop the flag to write the slot')
                     return 1
-                print(seeds.pulumi_passphrase(seeds.load_seed(store)))
+                else:
+                    print(passphrase)
             case ('bootstrap', _, _):
                 created = lifecycle.bootstrap(store, prompt=input, only=args.only)
                 log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
