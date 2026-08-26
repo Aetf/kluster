@@ -256,6 +256,9 @@ class Iam:
     #: tenancy's domain. Absent for the account root (which never deletes)
     #: and for a row written before the attribute existed.
     domain: Domain | None = None
+    #: The URL `domain` was built from, kept so a session can hand its domain
+    #: on to the session of a key it just minted.
+    domain_url: str | None = None
 
     @classmethod
     def authorize(
@@ -272,6 +275,7 @@ class Iam:
             identity=connect(tenancy, user, private_key_pem),
             connect=connect,
             domain=Domain(connect(tenancy, user, private_key_pem, domain_url=domain_url)) if domain_url else None,
+            domain_url=domain_url,
         )
 
     def group(self) -> Any:
@@ -358,6 +362,23 @@ class Iam:
         return str(key.fingerprint)
 
     def api_keys(self, user_id: str) -> list[str]:
+        """The user's key fingerprints, through the domain where there is one.
+
+        Same reasoning as `delete_api_key`, hardened by observation: the
+        legacy read is not merely refused to other callers, it is refused
+        *intermittently* to the key's own user (a key listed fine for hours,
+        then 401 IdcsConversionError on the identical call). Where a domain
+        is known, the self-service listing is the reliable one; the legacy
+        read stays for sessions without a domain (the account root, a
+        pre-attribute row, a tenancy without domains).
+        """
+        if self.domain is not None:
+            try:
+                return list(self.domain.my_api_keys())
+            except oci.exceptions.ServiceError as exc:
+                # debug, not warning: the verification poll retries through
+                # here every few seconds while a fresh key propagates.
+                log.debug('the identity domain refused to list keys (%s); trying the legacy call', exc.code)
         return [str(key.fingerprint) for key in _data(self.identity.list_api_keys(user_id))]
 
     def domains(self) -> list[Any]:
@@ -391,17 +412,22 @@ class Iam:
         log.info('deleted superseded API key %s', key_fingerprint)
 
 
-def _mint_verified(iam: Iam, user_id: str) -> str:
+def _mint_verified(iam: Iam, user_id: str, *, domain_url: str | None = None) -> str:
     """Put a new key on the user and prove it signs before anything depends on it.
 
     Returns the private key PEM; the fingerprint is a function of it.
+    `domain_url` gives the *minted* session its domain when `iam` itself has
+    none -- the root minting the seed's key must still verify it the way the
+    seed will use it.
     """
     private_pem, public_pem = generate_key()
     log.info('uploading a new API key for %s', SEED_NAME)
     assigned = iam.upload_key(user_id, public_pem)
     if assigned != fingerprint(private_pem):
         raise CredentialRejected(f'OCI registered fingerprint {assigned}, which is not the one this key computes to')
-    minted = Iam.authorize(iam.tenancy, user_id, private_pem, connect=iam.connect)
+    minted = Iam.authorize(
+        iam.tenancy, user_id, private_pem, connect=iam.connect, domain_url=domain_url or iam.domain_url
+    )
     log.info(
         'waiting for %s to authenticate (propagation is eventually consistent, usually well under a minute)', assigned
     )
@@ -444,7 +470,14 @@ def _room_for_one_more(iam: Iam, user_id: str) -> None:
     key to sweep with; a sweep's deletions can be refused): the quota 400 the
     mint would hit names neither the keys nor the fix, so this does.
     """
-    held = iam.api_keys(user_id)
+    try:
+        held = iam.api_keys(user_id)
+    except oci.exceptions.ServiceError as exc:
+        # The check exists to turn a quota 400 into an error naming the keys;
+        # a caller whose read is refused (the root's legacy view of a domain
+        # user) just loses the nicety and lets the mint speak for itself.
+        log.debug('could not read the key count (%s); minting without the pre-check', exc.code)
+        return
     if len(held) >= KEY_QUOTA:
         raise CredentialRejected(
             f'{SEED_NAME} already holds {len(held)} API keys (the quota); '
@@ -564,7 +597,7 @@ def create_seed(
     domain = _discovered_domain(iam, whose='account root')
 
     _room_for_one_more(iam, str(user.id))
-    private_pem = _mint_verified(iam, str(user.id))
+    private_pem = _mint_verified(iam, str(user.id), domain_url=domain)
     _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem, domain=domain)
 
     # A run that died between upload and store left a key whose private half
