@@ -10,8 +10,8 @@ lock-in, and declarative management using Pulumi.
 > provider; HAOS adopted into the physical layer). Superseded approaches
 > and their reasoning live in §6; sizing, provider pricing, and HA tiers
 > live in [nodes.md](nodes.md); storage in [storage.md](storage.md). The
-> code in `src/kluster/physical/aws.py` predates all of this and will be
-> replaced during implementation.
+> code that declares this layer is `src/kluster/physical/`, wired into a
+> stack by `src/kluster/stacks/physical.py`.
 
 ## 1. Architecture Overview
 
@@ -555,8 +555,6 @@ Costs and facts on record:
     concern is resolved structurally: the 60-day rule applies to
     public repos, every scheduled workflow lives in the private ops
     repo, and the public kluster repo keeps none — ci.md §3.)
--   A GitHub App was considered and rejected as ceremony for one
-    endpoint.
 
 **Issues live in the dedicated private ops repo (2026-08-24).**
 This repo is public (2026-08-25), so alert issues must never live
@@ -772,8 +770,10 @@ already lives:
 -   **ZT Central config joins Pulumi**: network managed routes, member
     authorizations (including the CI ephemeral-member pre-auth), and
     **tag-based flow rules confining CI members** to exactly their
-    targets — UDM SSH, the AdGuard APIs, the homelab host's libvirt
-    SSH — so a leaked CI join credential does not buy general LAN
+    four targets — UDM SSH, the UDM's UniFi Network API on 443 (the
+    UniFi OS proxy the bridged unifi provider calls,
+    declarative/physical.md §4), the AdGuard APIs, the homelab host's
+    libvirt SSH — so a leaked CI join credential does not buy general LAN
     access (necessary because ZT-forwarded traffic rides the UDM's
     default ACCEPT, above: Central rules are the only policing layer).
     All via the official `zerotier/zerotier` Terraform provider through
