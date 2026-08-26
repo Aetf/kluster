@@ -81,6 +81,22 @@ either tier below: it is an account root used from the workstation,
 never minted from a seed and never pushed to a slot, which is exactly
 why that stack is not something CI runs.
 
+Three of them are nonetheless *used* by a script, because the seeds
+they mint cannot be minted by anything smaller: an OCI API key
+belonging to a user who may manage users, groups and policies in the
+tenancy; a Cloudflare token carrying **User → API Tokens → Edit**, the
+one permission that mints a token through the API; and the B2 account
+master key, which re-seeds B2 after a total loss. **Each is handed
+over through the desktop secret store, one credential at a time.**
+`credentials master <root> remember` prompts for it and stores it
+there; every later use — `bootstrap`, a seed's `create`, a re-seed —
+looks it up and falls back to a prompt when the machine has no secret
+store or has not been told this one. Neither the estate database nor
+its master password is ever opened by anything in this repository, and
+no account root reaches a file, an environment variable or a shell
+history. `credentials master ls` says which roots are stored, without
+printing a value.
+
 Keeping them out is what makes §2.1's argument true rather than
 aspirational: every row below has a designed
 rotate-on-compromise path, so a compromised kit is answered by one
@@ -89,8 +105,8 @@ that rotation incomplete.
 
 | Seed | What it mints | Self-reproducing |
 | --- | --- | --- |
-| OCI seed API key (IAM-manage in tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
-| Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | **Yes** — `POST /user/tokens` mints a same-permission successor |
+| OCI seed API key (its own user, group and policy: manage users, groups and policies in the tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
+| Cloudflare seed token (**API Tokens Write**) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | **Yes** — `POST /user/tokens` mints a successor with the minting token's own policies |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
@@ -132,6 +148,20 @@ carry — so a rotation run by a successor starts in the personal estate
     database lives on the operator workstation, where the
     `credentials` scripts read and write it; re-issuing the kit is a
     copy onto both sticks.
+-   **Row shape**: `seeds/<name>`, one group deep. `UserName` holds the
+    credential's public identifier — the half that appears in a console
+    and is not a secret — and `Password` holds the secret, and nothing
+    else does. Key material that is a *file* is an attachment: the two
+    GitHub App PEM files, and the OCI API key. The OCI row is the one
+    that needs more than those two fields, an API key there being five
+    things: `UserName` is the user `OCID`, the PEM is the attachment,
+    and the **tenancy `OCID` is a protected custom attribute** — the
+    same protection class as the password field, because an `OCID` is
+    an account identifier and a listing has no reason to hand it out. The
+    remaining two are recovered rather than stored: the region is a
+    constant in the code, and the fingerprint is a function of the
+    public key, so a stored copy could only ever disagree with the key
+    it describes.
 -   **Contents = §2's rows plus a printed README**: the recovery entry
     points (this repo's URL, this document, the reverse-cold-standby
     runbook) written for a **technical reader who has never seen this
@@ -245,6 +275,9 @@ credential family plus the lifecycle commands below.
 
 | Command | When |
 | --- | --- |
+| `credentials master <root> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Stores one account root (§2) in the desktop secret store. Skipping it costs a prompt, not a failure. |
+| `credentials master ls` | Which roots the store holds. Prints no values. |
+| `credentials master <root> forget` | Removes one root from the store again. |
 | `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
@@ -277,12 +310,16 @@ therefore idempotent: rotation is a re-run, not a second procedure.
 ### 4.1 `credentials bringup`
 
 One command, one master-password prompt, and the cluster's entire
-credential estate exists. The prompt is asked of the **desktop secret
-store** first (`credentials kdbx remember` puts it there; nothing else
-writes to it, and a machine without a Secret Service simply falls
-through to typing it). Bring-up holds two databases open — the kit and
-the estate, §2 — and then runs for minutes, so the alternative is two
-typed passwords guarding a process nobody is watching.
+credential estate exists. **One database is opened: the kit.** The
+account roots the three minters borrow are not in a database this
+repository reads — they come from the **desktop secret store**, one
+credential at a time (§2), or from a prompt where there is no store.
+The kit's own master password is asked of the same store first
+(`credentials kdbx remember` puts it there), because a run that then
+goes on for minutes should not be guarded by a password typed into a
+process nobody is watching. Nothing is ever written to the store
+implicitly: a `remember` command is the only thing that puts a value
+there.
 
 Stages run in dependency order, each pushing
 into slots that exist by the time it runs:

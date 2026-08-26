@@ -18,7 +18,12 @@ The rule, in full:
     empty and never a secret.
 -   **Password** is the secret itself, and nothing else is.
 -   **Attachments** carry key material that is a file rather than a string
-    (the GitHub App private keys).
+    (the GitHub App private keys, the OCI API key).
+-   **Protected custom attributes** carry what is left over when a credential
+    is more than an identifier and a secret: the OCI row's tenancy OCID, which
+    cannot go in UserName because the user OCID is there. Protected rather
+    than plain because an OCID is an account identifier, and the entry has no
+    reason to hand it out in a listing.
 
 Adding a seed means adding a row here and a row in §2, in the same change.
 """
@@ -28,6 +33,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 GROUP = 'seeds'
+
+#: The OCI row's parts that are not fields. Named here, with the row, and used
+#: by the minter that writes them.
+OCI_KEY_ATTACHMENT = 'api-key.pem'
+OCI_TENANCY_ATTRIBUTE = 'Tenancy OCID'
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,11 @@ class Seed:
     #: A file the platform hands over once, stored as an attachment (§2.1)
     #: rather than in the password field.
     attachment: str = ''
+
+    #: Protected custom attributes the row carries beyond UserName and
+    #: Password. Enumerated so a kit can be checked against the register
+    #: rather than against someone's memory of it.
+    attributes: tuple[str, ...] = ()
 
     @property
     def entry(self) -> str:
@@ -80,6 +95,8 @@ SEEDS: dict[str, Seed] = {
             identifier='the user OCID',
             mints='the per-stack OCI users and their API keys',
             self_reproducing=True,
+            attachment=OCI_KEY_ATTACHMENT,
+            attributes=(OCI_TENANCY_ATTRIBUTE,),
         ),
         Seed(
             member='cloudflare',

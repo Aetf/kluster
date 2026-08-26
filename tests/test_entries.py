@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import entries, seeds
+from kluster.scripts.credentials import entries, masters, seeds
 from kluster.scripts.credentials.cli import main
 from kluster.scripts.credentials.kdbx import KdbxStore
 
@@ -47,22 +47,45 @@ def test_every_member_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture
         assert member in printed
 
 
-@pytest.mark.parametrize('member', ['oci', 'cloudflare', 'zerotier'])
-def test_a_registered_but_unwritten_action_says_so(
-    member: str, tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_every_account_root_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    # The roots are a register too (§2): one `master <root>` command each, so
+    # a root the scripts borrow has a place to be put and to be listed.
+    with pytest.raises(SystemExit):
+        _ = main(['master', '--help'])
+
+    printed = capsys.readouterr().out
+    for member in masters.ROOTS:
+        assert member in printed
+
+
+def test_listing_the_roots_needs_no_kit_and_prints_no_value(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The gap is the point: these rows exist in §2, so they exist in the tree
-    # and fail loudly rather than being absent.
+    monkeypatch.delenv('KLUSTER_KDBX', raising=False)
+
+    def held(_account: str) -> str | None:
+        return 'a-secret'
+
+    monkeypatch.setattr('kluster.scripts.credentials.kdbx.remembered', held)
+
+    assert main(['master', 'ls']) == 0
+
+    printed = capsys.readouterr().out
+    assert 'a-secret' not in printed
+    for member in masters.ROOTS:
+        assert f'{member}: in the secret store' in printed
+
+
+def test_a_row_no_api_can_create_stops_rather_than_inventing_one(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ZeroTier has no token API, so the tree still carries the command and the
+    # command still stops -- with the console steps, not with a stack trace.
     kit = KdbxStore.create(tmp_path / 'kit.kdbx', 'pw')
+    monkeypatch.setattr('builtins.input', lambda _prompt='': '')
 
-    argv = ['--kdbx', str(kit.path), 'seed', member, 'create']
-    if member not in entries.MANUAL:
-        # Minting from an account root needs the estate; the paths are never
-        # opened, because the action refuses before it would reach them.
-        argv += ['--master-entry', 'unused', '--master-kdbx', str(kit.path)]
-
-    assert main(argv) == 1
-    assert 'not yet implemented' in caplog.text
+    assert main(['--kdbx', str(kit.path), 'seed', 'zerotier', 'create']) == 1
+    assert 'my.zerotier.com' in caplog.text
 
 
 def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> None:

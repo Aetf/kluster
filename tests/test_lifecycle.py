@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import entries, lifecycle, seeds
+from kluster.scripts.credentials import entries, lifecycle, masters, seeds
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 PASSWORD = 'kit-password'
@@ -41,36 +41,31 @@ def kit(tmp_path: Path) -> KdbxStore:
     return KdbxStore.create(tmp_path / 'kit.kdbx', PASSWORD)
 
 
-@pytest.fixture
-def estate() -> lifecycle.Estate:
-    return lifecycle.Estate(store=None, entries_by_member={})
-
-
-def test_the_derivation_seed_is_generated_without_asking_anyone(kit: KdbxStore, estate: lifecycle.Estate) -> None:
-    created = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+def test_the_derivation_seed_is_generated_without_asking_anyone(kit: KdbxStore) -> None:
+    created = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
 
     assert created == ['derivation']
     assert len(seeds.load_seed(kit)) == seeds.SEED_LENGTH
 
 
-def test_bootstrap_resumes_rather_than_repeating(kit: KdbxStore, estate: lifecycle.Estate) -> None:
-    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+def test_bootstrap_resumes_rather_than_repeating(kit: KdbxStore) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
     before = seeds.load_seed(kit)
 
     # The second run must not overwrite it: everything derived from the old
     # seed -- the backups above all -- would be orphaned (§2.2).
-    created = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+    created = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
 
     assert created == []
     assert seeds.load_seed(kit) == before
 
 
 def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
-    kit: KdbxStore, estate: lifecycle.Estate, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr('getpass.getpass', _answers('zt-token-value'))
 
-    created = lifecycle.bootstrap(kit, estate=estate, prompt=_answers('zerotier-central'), only='zerotier')
+    created = lifecycle.bootstrap(kit, prompt=_answers('zerotier-central'), only='zerotier')
 
     assert created == ['zerotier']
     entry = entries.SEEDS['zerotier'].entry
@@ -78,11 +73,11 @@ def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
     assert kit.get(entry, attribute='UserName') == 'zerotier-central'
 
 
-def test_a_key_file_is_stored_as_an_attachment(kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path) -> None:
+def test_a_key_file_is_stored_as_an_attachment(kit: KdbxStore, tmp_path: Path) -> None:
     pem = tmp_path / 'app.pem'
     _ = pem.write_bytes(b'-----BEGIN PRIVATE KEY-----\n')
 
-    created = lifecycle.bootstrap(kit, estate=estate, prompt=_answers('Iv1.clientid', str(pem)), only='github-dispatch')
+    created = lifecycle.bootstrap(kit, prompt=_answers('Iv1.clientid', str(pem)), only='github-dispatch')
 
     assert created == ['github-dispatch']
     entry = entries.SEEDS['github-dispatch'].entry
@@ -93,30 +88,37 @@ def test_a_key_file_is_stored_as_an_attachment(kit: KdbxStore, estate: lifecycle
     assert kit.get(entry, attribute='UserName') == 'Iv1.clientid'
 
 
-def test_a_seed_needing_an_account_root_says_which_one_is_missing(kit: KdbxStore, estate: lifecycle.Estate) -> None:
-    with pytest.raises(KdbxError, match='no personal estate given'):
-        _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='b2')
+def test_an_account_root_is_read_at_the_moment_it_is_needed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A mint borrows its account root from the desktop secret store, or from
+    # the operator when there is none (§2). No database but the kit is opened
+    # for it, and nothing is read before the row that needs it is reached.
+    def nothing_remembered(_account: str) -> str | None:
+        return None
+
+    monkeypatch.setattr('kluster.scripts.credentials.kdbx.remembered', nothing_remembered)
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+
+    credential = lifecycle.root('b2', _answers('account-id'))
+
+    assert (credential['account-id'], credential['key']) == ('account-id', 'master-key')
 
 
-def test_an_unimplemented_minter_names_itself(kit: KdbxStore, tmp_path: Path) -> None:
-    estate = lifecycle.Estate(
-        store=KdbxStore.create(tmp_path / 'estate.kdbx', PASSWORD),
-        entries_by_member={'oci': 'accounts/OCI'},
-    )
+def test_every_seed_that_needs_a_root_has_one_registered() -> None:
+    # A minter whose account root is not in the register is one that can only
+    # fail at the moment it is reached.
+    for member, seed in entries.SEEDS.items():
+        if member == 'derivation' or seed.manual:
+            continue
+        assert member in masters.ROOTS
 
-    with pytest.raises(KdbxError, match='oci.*not yet implemented'):
-        _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='oci')
 
-
-def test_an_unknown_member_is_refused(kit: KdbxStore, estate: lifecycle.Estate) -> None:
+def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
     with pytest.raises(KdbxError, match='no seed named'):
-        _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='nonesuch')
+        _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
 
 
-def test_rotation_writes_a_new_seed_and_leaves_the_retired_kit_untouched(
-    kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path
-) -> None:
-    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+def test_rotation_writes_a_new_seed_and_leaves_the_retired_kit_untouched(kit: KdbxStore, tmp_path: Path) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
     retired = seeds.load_seed(kit)
 
     successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
@@ -129,10 +131,8 @@ def test_rotation_writes_a_new_seed_and_leaves_the_retired_kit_untouched(
     assert seeds.load_seed(kit) == retired
 
 
-def test_the_environment_derives_the_passphrase_and_reads_the_url(
-    kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path
-) -> None:
-    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+def test_the_environment_derives_the_passphrase_and_reads_the_url(kit: KdbxStore, tmp_path: Path) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
     bundle = tmp_path / 'bundle'
     bundle.mkdir()
     _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
@@ -145,8 +145,8 @@ def test_the_environment_derives_the_passphrase_and_reads_the_url(
     assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
 
 
-def test_a_missing_bundle_still_yields_the_passphrase(kit: KdbxStore, estate: lifecycle.Estate, tmp_path: Path) -> None:
-    _ = lifecycle.bootstrap(kit, estate=estate, prompt=_refuse, only='derivation')
+def test_a_missing_bundle_still_yields_the_passphrase(kit: KdbxStore, tmp_path: Path) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
 
     values = lifecycle.environment(kit, tmp_path / 'absent')
 
