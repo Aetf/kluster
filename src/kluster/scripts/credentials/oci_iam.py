@@ -433,6 +433,23 @@ class Domain:
         )
         return str(created.fingerprint)
 
+    def api_keys(self, user_ocid: str) -> dict[str, str]:
+        """Somebody else's API keys, as fingerprint -> the id a delete addresses.
+
+        The administrative counterpart of `my_api_keys`, and the reason a
+        session that is not the key's own user need not fall back to the
+        legacy listing. The subject is named by OCID because that is the name
+        the row, the policy and every signing configuration carry; naming it
+        by SCIM id would need a user lookup first, which is another call
+        through the same API this one is already making.
+        """
+        listed = _data(self.client.list_api_keys(filter=f'user.ocid eq "{user_ocid}"'))
+        return {str(key.fingerprint): str(key.id) for key in (listed.resources or [])}
+
+    def delete_api_key(self, key_id: str) -> None:
+        """Retire somebody else's key, named by the id the listing gave it."""
+        _ = self.client.delete_api_key(key_id)
+
 
 @dataclass
 class Iam:
@@ -627,22 +644,41 @@ class Iam:
         key = _data(self.identity.upload_api_key(user.ocid, oci.identity.models.CreateApiKeyDetails(key=public_pem)))
         return str(key.fingerprint)
 
+    def _domain_keys(self, domain: Domain, user_id: str) -> dict[str, str]:
+        """A user's keys through the domain, as fingerprint -> deletable id.
+
+        The subject decides which half of the domains API answers: the
+        caller's own user is self-service, which authorizes on authentication
+        alone, and anybody else's is administrative, which needs domain-admin
+        rights. Both return the same map, so everything above this asks one
+        question rather than two.
+
+        The self-service endpoint takes no subject and therefore cannot be
+        used for somebody else: it would answer about the caller, and an
+        answer about the wrong user is worse than a refusal — the quota check
+        would pass on the wrong count and the sweep would retire the wrong
+        keys.
+        """
+        if user_id == self.caller:
+            return domain.my_api_keys()
+        return domain.api_keys(user_id)
+
     def api_keys(self, user_id: str) -> list[str]:
         """The user's key fingerprints, through the domain where there is one.
 
         Same reasoning as `delete_api_key`, hardened by observation: the
         legacy read is not merely refused to other callers, it is refused
         *intermittently* to the key's own user (a key listed fine for hours,
-        then 401 IdcsConversionError on the identical call). Where a domain
-        is known, the self-service listing is the reliable one; the legacy
-        read stays for sessions without a domain (a pre-attribute row, a
-        tenancy without domains) and for a session asking about somebody
-        else's user, which the self-service listing cannot answer: it reports
-        the caller's own keys and nothing else.
+        then 401 IdcsConversionError on the identical call), and a live
+        rotation drill has failed on exactly that. Both halves of the domains
+        API can answer this, so the subject is no reason to take the legacy
+        read: it stays as the fallback and as the whole of the call in a
+        session without a domain (a pre-attribute row, a tenancy without
+        domains).
         """
-        if self.domain is not None and user_id == self.caller:
+        if self.domain is not None:
             try:
-                return list(self.domain.my_api_keys())
+                return list(self._domain_keys(self.domain, user_id))
             except oci.exceptions.ServiceError as exc:
                 # debug, not warning: the verification poll retries through
                 # here every few seconds while a fresh key propagates.
@@ -664,25 +700,35 @@ class Iam:
         domains has, and because a domain that refuses is not a reason to
         stop trying to delete.
 
-        Self-service only, hence the caller check: a sweep runs as the user
-        whose keys it is retiring (`_sweep`), and the endpoint would delete
-        the caller's own key rather than the named user's if it did not.
+        Two calls, because the two APIs name a key differently: the domain
+        addresses it by its own id and the legacy service by fingerprint, so
+        the listing that translates one into the other is part of the
+        deletion. A listing that refuses falls through to the legacy delete
+        rather than failing, on the same reasoning.
         """
-        if self.domain is not None and user_id == self.caller:
-            key_id = self.domain.my_api_keys().get(key_fingerprint)
-            if key_id is not None:
-                try:
-                    self.domain.delete_my_api_key(key_id)
-                except oci.exceptions.ServiceError as exc:
-                    # debug, not warning: the sweep retries through here while
-                    # a refusal may still be transient, and the outcome of the
-                    # whole attempt is logged by the caller either way.
-                    log.debug(
-                        'the identity domain refused to delete %s (%s); trying the legacy call', key_id, _why(exc)
-                    )
-                else:
-                    log.info('deleted superseded API key %s', key_fingerprint)
-                    return
+        if self.domain is not None:
+            try:
+                key_id = self._domain_keys(self.domain, user_id).get(key_fingerprint)
+            except oci.exceptions.ServiceError as exc:
+                log.debug('the identity domain refused to list keys (%s); trying the legacy delete', _why(exc))
+            else:
+                if key_id is not None:
+                    try:
+                        if user_id == self.caller:
+                            self.domain.delete_my_api_key(key_id)
+                        else:
+                            self.domain.delete_api_key(key_id)
+                    except oci.exceptions.ServiceError as exc:
+                        # debug, not warning: the sweep retries through here
+                        # while a refusal may still be transient, and the
+                        # outcome of the whole attempt is logged by the caller
+                        # either way.
+                        log.debug(
+                            'the identity domain refused to delete %s (%s); trying the legacy call', key_id, _why(exc)
+                        )
+                    else:
+                        log.info('deleted superseded API key %s', key_fingerprint)
+                        return
         _ = self.identity.delete_api_key(user_id, key_fingerprint)
         log.info('deleted superseded API key %s', key_fingerprint)
 
@@ -767,11 +813,12 @@ def _retire(iam: Iam, user_id: str, key_fingerprint: str) -> None:
 def _sweep(iam: Iam, user_id: str, keep: str) -> None:
     """Delete every key on the user except `keep`, as the user itself.
 
-    The caller must be authorized as `keep`: the deletion goes through the
-    domain's self-service endpoints, which only ever act on the caller's own
-    user, and a session must not saw off the key it signs with mid-sweep.
-    Each key gets its own deadline (`_retire`), because each is its own
-    operation and one that cannot go says nothing about the next.
+    The caller is authorized as `keep` rather than as an administrator: the
+    self-service endpoints need no rights beyond authentication, so the sweep
+    asks nothing of the seed's policy, and a session must not saw off the key
+    it signs with mid-sweep. Each key gets its own deadline (`_retire`),
+    because each is its own operation and one that cannot go says nothing
+    about the next.
     """
     for existing in iam.api_keys(user_id):
         if existing == keep:
@@ -790,8 +837,8 @@ def _room_for_one_more(iam: Iam, user_id: str) -> None:
         held = iam.api_keys(user_id)
     except oci.exceptions.ServiceError as exc:
         # The check exists to turn a quota 400 into an error naming the keys;
-        # a caller whose read is refused (the root's legacy view of a domain
-        # user) just loses the nicety and lets the mint speak for itself.
+        # a caller both of whose listings are refused just loses the nicety
+        # and lets the mint speak for itself.
         log.debug('could not read the key count (%s); minting without the pre-check', exc.code)
         return
     if len(held) >= KEY_QUOTA:
