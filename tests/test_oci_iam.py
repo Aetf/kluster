@@ -29,6 +29,7 @@ from kluster.scripts.credentials.kdbx import KdbxStore
 PASSWORD = 'kit-password'
 TENANCY = 'ocid1.tenancy.oc1..tenancy'
 ROOT_USER = 'ocid1.user.oc1..root'
+DOMAIN_URL = 'https://idcs-000.identity.oraclecloud.com:443'
 SEED_ENTRY = entries.SEEDS['oci'].entry
 
 
@@ -49,6 +50,30 @@ class Named:
 @dataclass
 class Key:
     fingerprint: str
+
+
+@dataclass
+class DomainSummary:
+    """One identity domain, as `list_domains` describes it."""
+
+    url: str
+    display_name: str
+    type: str = 'DEFAULT'
+
+
+@dataclass
+class DomainKey:
+    """An API key as the domains API names it: by its own id, not its fingerprint."""
+
+    id: str
+    fingerprint: str
+
+
+@dataclass
+class DomainKeys:
+    """The SCIM list envelope `list_my_api_keys` answers with."""
+
+    resources: list[DomainKey]
 
 
 @dataclass
@@ -124,19 +149,62 @@ class FakeIdentity:
         self.keys[user_id] = [value for value in self.keys.get(user_id, []) if value != key_fingerprint]
         return Response(None)
 
+    def list_domains(self, compartment_id: str) -> Response:
+        return Response([DomainSummary(url=DOMAIN_URL, display_name='Default')])
+
+
+@dataclass
+class FakeDomain:
+    """The identity-domains endpoint, as one authenticated user sees it.
+
+    A separate object from `FakeIdentity` because it is a separate service on
+    a separate endpoint, and because its whole point is that it acts only on
+    the caller's own user: `Me` endpoints take no user id, so a fake that
+    accepted one could not tell a correct caller from an incorrect one.
+    """
+
+    identity: FakeIdentity
+    user_id: str
+
+    @staticmethod
+    def key_id(key_fingerprint: str) -> str:
+        return f'apikey-{key_fingerprint}'
+
+    def list_my_api_keys(self) -> Response:
+        held = self.identity.keys.get(self.user_id, [])
+        return Response(DomainKeys(resources=[DomainKey(id=self.key_id(value), fingerprint=value) for value in held]))
+
+    def delete_my_api_key(self, my_api_key_id: str) -> Response:
+        held = self.identity.keys.get(self.user_id, [])
+        remaining = [value for value in held if self.key_id(value) != my_api_key_id]
+        if remaining == held:
+            raise oci.exceptions.ServiceError(
+                status=404, code='NotFound', headers=dict[str, str](), message=f'no api key {my_api_key_id}'
+            )
+        self.identity.keys[self.user_id] = remaining
+        return Response(None)
+
 
 @dataclass
 class Tenancy:
     """A connect function that hands every caller the same fake IAM.
 
     It records who connected with which key, which is how "the minted key was
-    verified by using it" is checked rather than assumed.
+    verified by using it" is checked rather than assumed. Domain connections
+    are recorded apart from legacy ones, since which service a call went to
+    is the whole of one defect.
     """
 
     identity: FakeIdentity = field(default_factory=FakeIdentity)
     connections: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    domain_connections: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
 
-    def __call__(self, tenancy: str, user: str, private_key_pem: str) -> FakeIdentity:
+    def __call__(
+        self, tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None
+    ) -> FakeIdentity | FakeDomain:
+        if domain_url is not None:
+            self.domain_connections.append((domain_url, user, oci_iam.fingerprint(private_key_pem)))
+            return FakeDomain(identity=self.identity, user_id=user)
         self.connections.append((user, oci_iam.fingerprint(private_key_pem)))
         return self.identity
 
@@ -355,7 +423,13 @@ def test_an_orphaned_key_is_swept_when_the_seed_is_recreated(
 
 @dataclass
 class RefusingIdentity(FakeIdentity):
-    """A tenancy whose IDCS layer refuses key deletion outright."""
+    """A tenancy whose legacy identity layer refuses key deletion outright.
+
+    What an identity-domains tenancy does with
+    `DELETE /users/{id}/apiKeys/{fingerprint}`: refused for the account root
+    and for the key's own user alike, every time. Its domains endpoint still
+    works, which is the whole reason deletion goes there.
+    """
 
     def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
         raise oci.exceptions.ServiceError(
@@ -363,8 +437,135 @@ class RefusingIdentity(FakeIdentity):
         )
 
 
-def test_a_refused_sweep_does_not_fail_the_bring_up(kit: KdbxStore, root: masters.Credential, tmp_path: Path) -> None:
+@dataclass
+class HiddenDomains(FakeIdentity):
+    """A tenancy that will not name its identity domains to this caller.
+
+    Reading them is an administrator's call; a seed whose policy covers
+    users, groups and policies need not have it. This is what a kit written
+    before the domain attribute meets when it tries to discover one.
+    """
+
+    def list_domains(self, compartment_id: str) -> Response:
+        raise oci.exceptions.ServiceError(
+            status=404,
+            code='NotAuthorizedOrNotFound',
+            headers=dict[str, str](),
+            message='Authorization failed or requested resource not found',
+        )
+
+
+@dataclass
+class SealedIdentity(RefusingIdentity, HiddenDomains):
+    """Both refusals at once: no legacy delete, and no domain to reach.
+
+    The only state in which a superseded key really cannot be retired, and
+    the one the console errand exists for.
+    """
+
+
+def _same_tenancy(identity: FakeIdentity) -> FakeIdentity:
+    """The same tenancy, seen by a caller that may read its identity domains.
+
+    State is shared rather than copied: what differs between the two views is
+    the caller, not the account.
+    """
+    return FakeIdentity(
+        groups=identity.groups,
+        users=identity.users,
+        policies=identity.policies,
+        memberships=identity.memberships,
+        keys=identity.keys,
+        uploaded=identity.uploaded,
+    )
+
+
+def test_the_row_records_the_identity_domain(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> None:
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Discovered with the account root, at the one moment it is in hand, and
+    # stored beside the tenancy OCID: rotation retires keys through the
+    # domains API and must never need the root to find it.
+    assert kit.attribute(SEED_ENTRY, entries.OCI_DOMAIN_ATTRIBUTE) == DOMAIN_URL
+    assert oci_iam.load_domain(kit, SEED_ENTRY) == DOMAIN_URL
+
+
+def test_keys_are_retired_through_the_domain_not_the_legacy_call(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
     tenancy = Tenancy(identity=RefusingIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
+
+    user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The legacy delete is refused for everyone in this tenancy, so the
+    # orphan can only have gone through the domain's self-service endpoint --
+    # authorized as the seed's own new key.
+    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+    assert tenancy.domain_connections[-1] == (DOMAIN_URL, user_id, oci_iam.fingerprint(private_pem))
+
+
+def test_rotation_retires_through_the_domain_the_row_names(
+    kit: KdbxStore, root: masters.Credential, tmp_path: Path
+) -> None:
+    tenancy = Tenancy(identity=RefusingIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    # No account root is borrowed: the URL comes off the row, and the
+    # predecessor goes even though the legacy call would refuse it.
+    assert tenancy.identity.keys[user_id] == [current]
+    assert successor.attribute(SEED_ENTRY, entries.OCI_DOMAIN_ATTRIBUTE) == DOMAIN_URL
+
+
+def test_a_row_written_before_the_domain_finds_it_at_rotation(kit: KdbxStore, root: masters.Credential) -> None:
+    hidden = HiddenDomains()
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=Tenancy(identity=hidden))
+    assert entries.OCI_DOMAIN_ATTRIBUTE not in kit.attributes(SEED_ENTRY)
+
+    tenancy = Tenancy(identity=_same_tenancy(hidden))
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Where the tenancy will tell the seed, no repair is needed: rotation
+    # discovers the domain, retires through it, and writes it onto the row.
+    assert tenancy.identity.keys[user_id] == [current]
+    assert kit.attribute(SEED_ENTRY, entries.OCI_DOMAIN_ATTRIBUTE) == DOMAIN_URL
+
+
+def test_a_domain_that_cannot_be_discovered_names_the_repair(
+    kit: KdbxStore, root: masters.Credential, caplog: pytest.LogCaptureFixture
+) -> None:
+    tenancy = Tenancy(identity=SealedIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    caplog.clear()
+
+    _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The one thing a rotation must not do is require the account root, so a
+    # tenancy that will not answer the seed gets a warning naming the errand
+    # rather than a failure -- and the successor still stands.
+    assert 'credentials seed oci domain' in caplog.text
+    assert entries.OCI_DOMAIN_ATTRIBUTE not in kit.attributes(SEED_ENTRY)
+
+
+def test_the_repair_reads_the_domain_with_the_account_root(kit: KdbxStore, root: masters.Credential) -> None:
+    sealed = SealedIdentity()
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=Tenancy(identity=sealed))
+
+    url = oci_iam.adopt_domain(kit, seed_entry=SEED_ENTRY, root=root, connect=Tenancy(identity=_same_tenancy(sealed)))
+
+    # One command, one borrowing of the root, and the row can retire its own
+    # keys from then on.
+    assert url == DOMAIN_URL
+    assert oci_iam.load_domain(kit, SEED_ENTRY) == DOMAIN_URL
+
+
+def test_a_refused_sweep_does_not_fail_the_bring_up(kit: KdbxStore, root: masters.Credential, tmp_path: Path) -> None:
+    tenancy = Tenancy(identity=SealedIdentity())
     _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
 
@@ -394,7 +595,7 @@ def test_the_sweep_runs_as_the_seed_itself(kit: KdbxStore, root: masters.Credent
 def test_a_refused_sweep_does_not_fail_rotation_either(
     kit: KdbxStore, root: masters.Credential, tmp_path: Path
 ) -> None:
-    tenancy = Tenancy(identity=RefusingIdentity())
+    tenancy = Tenancy(identity=SealedIdentity())
     _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
     current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
@@ -435,7 +636,7 @@ def test_rotation_makes_room_before_minting(kit: KdbxStore, tenancy: Tenancy, ro
 def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     kit: KdbxStore, root: masters.Credential, tmp_path: Path
 ) -> None:
-    tenancy = Tenancy(identity=RefusingIdentity())
+    tenancy = Tenancy(identity=SealedIdentity())
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     for _ in range(oci_iam.KEY_QUOTA - 1):
         _, public_pem = oci_iam.generate_key()
@@ -451,8 +652,23 @@ class Interrupted(RuntimeError):
     """A run that stopped mid-flight, the way a lost process or a 500 does."""
 
 
+@dataclass
+class Ledger:
+    """One run's remote calls, and where it is to stop.
+
+    Shared by every client a run is handed, because "the k-th call" has to
+    mean the k-th call of the run: the legacy service and the identity domain
+    are two endpoints of one operation, and a sweep that counted them apart
+    would leave the crossing between them uncovered.
+    """
+
+    fail_at: int | None = None
+    when: str = 'after'
+    calls: list[str] = field(default_factory=list[str])
+
+
 class Interruptible:
-    """A tenancy that counts remote calls and stops the run at the k-th.
+    """A client that counts remote calls and stops the run at the k-th.
 
     Two ways to stop, because they leave different worlds behind: `before`
     never reaches the service, `after` lets the service act and loses the
@@ -460,23 +676,21 @@ class Interruptible:
     caller never got to store.
     """
 
-    def __init__(self, identity: FakeIdentity, *, fail_at: int | None = None, when: str = 'after') -> None:
-        self.identity: FakeIdentity = identity
-        self.fail_at: int | None = fail_at
-        self.when: str = when
-        self.calls: list[str] = []
+    def __init__(self, target: Any, ledger: Ledger) -> None:
+        self.target: Any = target
+        self.ledger: Ledger = ledger
 
     def __getattr__(self, name: str) -> Any:
-        target = getattr(self.identity, name)
+        target = getattr(self.target, name)
 
         def counted(*args: Any, **kwargs: Any) -> Any:
-            self.calls.append(name)
-            fatal = len(self.calls) == self.fail_at
-            if fatal and self.when == 'before':
-                raise Interrupted(f'call {self.fail_at} ({name}) never reached the service')
+            self.ledger.calls.append(name)
+            fatal = len(self.ledger.calls) == self.ledger.fail_at
+            if fatal and self.ledger.when == 'before':
+                raise Interrupted(f'call {self.ledger.fail_at} ({name}) never reached the service')
             result = target(*args, **kwargs)
             if fatal:
-                raise Interrupted(f'call {self.fail_at} ({name}) reached the service; the answer was lost')
+                raise Interrupted(f'call {self.ledger.fail_at} ({name}) reached the service; the answer was lost')
             return result
 
         return counted
@@ -484,26 +698,28 @@ class Interruptible:
 
 @dataclass
 class FaultyTenancy:
-    """`Tenancy`, with every client it hands out wired through one interrupter."""
+    """`Tenancy`, with every client it hands out wired through one ledger."""
 
     identity: FakeIdentity = field(default_factory=FakeIdentity)
     connections: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     fail_at: int | None = None
     when: str = 'after'
-    faulty: Interruptible | None = None
+    ledger: Ledger = field(default_factory=Ledger)
 
     def __post_init__(self) -> None:
-        self.faulty = Interruptible(self.identity, fail_at=self.fail_at, when=self.when)
+        self.ledger = Ledger(fail_at=self.fail_at, when=self.when)
 
-    def __call__(self, tenancy: str, user: str, private_key_pem: str) -> Interruptible:
+    def __call__(
+        self, tenancy: str, user: str, private_key_pem: str, *, domain_url: str | None = None
+    ) -> Interruptible:
         self.connections.append((user, oci_iam.fingerprint(private_key_pem)))
-        assert self.faulty is not None
-        return self.faulty
+        if domain_url is not None:
+            return Interruptible(FakeDomain(identity=self.identity, user_id=user), self.ledger)
+        return Interruptible(self.identity, self.ledger)
 
     @property
     def counted(self) -> int:
-        assert self.faulty is not None
-        return len(self.faulty.calls)
+        return len(self.ledger.calls)
 
 
 def _kit_never_lies(kit: KdbxStore, identity: FakeIdentity) -> None:

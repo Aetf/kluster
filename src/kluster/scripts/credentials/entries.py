@@ -21,9 +21,11 @@ The rule, in full:
     (the GitHub App private keys, the OCI API key).
 -   **Protected custom attributes** carry what is left over when a credential
     is more than an identifier and a secret: the OCI row's tenancy OCID, which
-    cannot go in UserName because the user OCID is there. Protected rather
-    than plain because an OCID is an account identifier, and the entry has no
-    reason to hand it out in a listing.
+    cannot go in UserName because the user OCID is there, and the identity
+    domain its keys are retired through, which is a property of the tenancy
+    rather than of the key. Protected rather than plain because both are
+    account identifiers, and the entry has no reason to hand one out in a
+    listing.
 
 Adding a seed means adding a row here and a row in §2, in the same change.
 """
@@ -38,6 +40,11 @@ GROUP = 'seeds'
 #: by the minter that writes them.
 OCI_KEY_ATTACHMENT = 'api-key.pem'
 OCI_TENANCY_ATTRIBUTE = 'Tenancy OCID'
+#: Where the identity-domains API for this tenancy answers. Retiring an API
+#: key goes through it (`oci_iam.py`), and its endpoint is a property of the
+#: tenancy rather than of the region, so it cannot be recovered from a
+#: constant the way the region is.
+OCI_DOMAIN_ATTRIBUTE = 'Identity domain URL'
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,13 @@ class Seed:
     #: rather than against someone's memory of it.
     attributes: tuple[str, ...] = ()
 
+    #: An action this row needs beyond `create` and `rotate`, as (name,
+    #: help). A row that grew an attribute after kits were already in the
+    #: field needs an explicit way to fill it in on an old one -- explicit
+    #: because the repair borrows an account root, and routine rotation must
+    #: not quietly start needing one.
+    repair: tuple[str, str] | None = None
+
     @property
     def entry(self) -> str:
         return f'{GROUP}/{self.title}'
@@ -96,14 +110,26 @@ SEEDS: dict[str, Seed] = {
             mints='the per-stack OCI users and their API keys',
             self_reproducing=True,
             attachment=OCI_KEY_ATTACHMENT,
-            attributes=(OCI_TENANCY_ATTRIBUTE,),
+            attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
+            repair=('domain', 'record the tenancy identity domain on a row that predates it'),
         ),
         Seed(
             member='cloudflare',
             title='Cloudflare seed token',
             identifier='the token id',
             mints='the zone-scoped provider token, the DNS-01 token, the gateway ACME token',
-            self_reproducing=True,
+            self_reproducing=False,
+            console=(
+                'dash.cloudflare.com → My Profile → API Tokens → Create Token\n'
+                '  → "Create Additional Tokens" template, named "kluster-seed".\n'
+                '  Take the template as it comes: User → API Tokens → Edit and\n'
+                '  nothing else. Cloudflare refuses to let a token mint a token\n'
+                '  carrying token permissions, so this one cannot be minted and\n'
+                '  cannot mint its successor -- rotation is this same visit again,\n'
+                '  and the superseded token is deleted on the same page.\n'
+                '  If an account-root token with this permission is already held\n'
+                '  elsewhere, that same value is the seed: it is the same token.'
+            ),
         ),
         Seed(
             member='b2',

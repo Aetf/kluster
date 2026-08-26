@@ -20,7 +20,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import b2, cloudflare, entries, lifecycle, masters, oci_iam, seeds
+from . import b2, entries, lifecycle, masters, oci_iam, seeds
 from .kdbx import PATH_ENV, KdbxError, KdbxStore
 from .masters import CredentialRejected
 
@@ -59,6 +59,13 @@ _ORDER = """when to run what (docs/credentials.md §4):
   when one seed is lost
     credentials bootstrap --only <member>
          Re-creates that row alone; the rest of the kit is untouched.
+
+  one-time repair
+    credentials seed oci domain
+         Records the tenancy's identity domain on an OCI row written before
+         that attribute existed. Without it a rotation mints a successor and
+         cannot retire what it supersedes, because the legacy delete call is
+         refused. Borrows the account root, once.
 
   rotation (§4.2)
     credentials rotate --into <new kit>
@@ -148,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if seed.self_reproducing:
             _ = actions.add_parser('rotate', help='have the seed mint and install its successor')
+        if seed.repair is not None:
+            _ = actions.add_parser(seed.repair[0], help=seed.repair[1])
 
     # The account roots (§2) are not in the kit and not in any database this
     # repository opens: each lives in the desktop secret store under its own
@@ -255,8 +264,12 @@ def main(argv: list[str] | None = None) -> int:
                 lifecycle.create_seed(entries.SEEDS[member], kit=store, prompt=input, entry=args.entry)
             case ('seed', 'oci', 'rotate'):
                 _ = oci_iam.rotate_seed(store, seed_entry=args.entry)
-            case ('seed', 'cloudflare', 'rotate'):
-                _ = cloudflare.rotate_seed(store, seed_entry=args.entry)
+            # The one-time repair for a kit written before the OCI row
+            # carried its identity domain: reading the tenancy's domains is
+            # the account root's call, so this is the only seed command that
+            # borrows one.
+            case ('seed', 'oci', 'domain'):
+                _ = oci_iam.adopt_domain(store, seed_entry=args.entry, root=lifecycle.root('oci', input))
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
             case ('seed', member, action) if member in entries.SEEDS:

@@ -3,9 +3,11 @@
 `docs/credentials.md` §2 puts the account roots deliberately outside the seed
 kit — they are a precondition of the system rather than a credential it
 manages, and they have no designed rotate-on-compromise path. Two of them are
-nonetheless *used* by scripts: minting the OCI and Cloudflare seeds needs a
-credential with more reach than any seed has, and re-seeding B2 after a total
-loss needs the account master key.
+nonetheless *used* by scripts: minting the OCI seed needs a credential with
+more reach than any seed has, and re-seeding B2 after a total loss needs the
+account master key. Cloudflare is not among them — the platform refuses to
+let any token mint a token that carries token permissions, so its seed is
+made in the dashboard and there is nothing left for a root to do.
 
 Handing those over is what this module is. Two properties decide its shape:
 
@@ -138,7 +140,8 @@ ROOTS: dict[str, Root] = {
                 'cloud.oracle.com → Identity → Users → your own user → API keys → Add.\n'
                 '  The user must be in Administrators, or carry policies to manage\n'
                 '  users, groups and policies in the tenancy: minting the seed means\n'
-                '  creating a user, its group, its policy and its API key.\n'
+                '  creating a user, its group, its policy and its API key, and\n'
+                '  reading the tenancy identity domain the seed retires keys through.\n'
                 '  Download the private key; the console shows the tenancy and user\n'
                 '  OCIDs in the configuration-file preview beside it.'
             ),
@@ -147,18 +150,6 @@ ROOTS: dict[str, Root] = {
                 Field('user', 'the OCID of the user the key belongs to', kind='identifier'),
                 Field('private-key', 'the API private key (PEM)', kind='file'),
             ),
-        ),
-        Root(
-            member='cloudflare',
-            title='Cloudflare account root token',
-            console=(
-                'dash.cloudflare.com → My Profile → API Tokens → Create Token.\n'
-                '  It needs User → API Tokens → Edit, and nothing else: that\n'
-                '  permission is the only thing that can mint a token through the\n'
-                '  API. The Global API Key is not an alternative — it is the\n'
-                '  credential class this design exists to avoid.'
-            ),
-            fields=(Field('token', 'the token value (shown once, at creation)'),),
         ),
         Root(
             member='b2',

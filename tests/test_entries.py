@@ -33,9 +33,12 @@ def test_the_derivation_seed_entry_has_one_definition() -> None:
 
 
 def test_console_only_seeds_are_the_manual_surface() -> None:
-    # §2's two "No" rows plus the two Apps: everything a rotation must stop
-    # for. The derivation seed is generated, not minted, so it is not one.
-    assert set(entries.MANUAL) == {'github-dispatch', 'github-trigger', 'zerotier'}
+    # Everything a rotation must stop for: the two Apps, whose key generation
+    # is console-only; ZeroTier, which has no token API; and Cloudflare, which
+    # forbids a minted token from carrying token permissions and so has no
+    # credential able to mint the seed. The derivation seed is generated
+    # rather than minted, so it is not one of them.
+    assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger', 'zerotier'}
 
 
 def test_every_member_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
