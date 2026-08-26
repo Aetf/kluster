@@ -129,6 +129,59 @@ def _filter_value(expression: str) -> str:
     return matched.group(1)
 
 
+def _shim_refusal(endpoint: str) -> oci.exceptions.ServiceError:
+    """What the legacy conversion shim answers when it will not convert.
+
+    401 `IdcsConversionError` with a message that names nothing: the refusal
+    a live bring-up met on `DeleteApiKey` every time and on `ListApiKeys`
+    intermittently, minutes after the same endpoint and the same credential
+    had served the identical call.
+    """
+    return oci.exceptions.ServiceError(
+        status=401,
+        code='IdcsConversionError',
+        headers=dict[str, str](),
+        message=f'Client is unauthorized. null ({endpoint})',
+    )
+
+
+#: Every legacy endpoint that is a conversion shim over the identity domain,
+#: under the name the shim answers with. These are the calls the domains API
+#: also serves, and therefore the ones a refusal must be survivable on.
+#: `ListPolicies`, `CreatePolicy`, `UpdatePolicy` and `ListDomains` are absent
+#: because they are IAM's own concepts: no domain endpoint answers them, so a
+#: refusal there has nowhere to fall back to.
+SHIMMED_ENDPOINTS = (
+    'ListUsers',
+    'CreateUser',
+    'ListGroups',
+    'CreateGroup',
+    'ListUserGroupMemberships',
+    'AddUserToGroup',
+    'UploadApiKey',
+    'ListApiKeys',
+    'DeleteApiKey',
+)
+
+#: Every identity-domains operation this module makes, under the SDK's name
+#: for it. Each one has a legacy counterpart, which is what makes a refusal on
+#: any single one survivable rather than fatal.
+DOMAIN_OPERATIONS = (
+    'list_groups',
+    'create_group',
+    'list_users',
+    'create_user',
+    'get_group',
+    'patch_group',
+    'list_api_keys',
+    'create_api_key',
+    'delete_api_key',
+    'list_my_api_keys',
+    'create_my_api_key',
+    'delete_my_api_key',
+)
+
+
 @dataclass
 class DomainPolicy:
     """What the identity domain refuses, and for how long.
@@ -168,19 +221,37 @@ class FakeIdentity:
     keys: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     #: Every key the fake has ever seen uploaded, as fingerprint -> public PEM.
     uploaded: dict[str, str] = field(default_factory=dict[str, str])
+    #: Every shim-converted endpoint this tenancy was asked for, in order.
+    #: Which of the two services answered a call is not visible in the tenancy
+    #: state afterwards -- both write the same fact -- so it is recorded here.
+    shim_calls: list[str] = field(default_factory=list[str])
+
+    def check_shim(self, endpoint: str) -> None:
+        """Note a call to an endpoint the identity domain also serves.
+
+        One guard rather than nine overrides, because the set of
+        shim-converted endpoints is one fact about the service:
+        `ShimlessIdentity` and `FlakyShim` refuse here, and a test that asserts
+        a call never reached the shim reads `shim_calls`.
+        """
+        self.shim_calls.append(endpoint)
 
     def list_groups(self, compartment_id: str, name: str | None = None) -> Response:
+        self.check_shim('ListGroups')
         return Response([group for group in self.groups.values() if name in (None, group.name)])
 
     def create_group(self, details: Any) -> Response:
+        self.check_shim('CreateGroup')
         group = _named('group', details.name)
         self.groups[group.id] = group
         return Response(group)
 
     def list_users(self, compartment_id: str, name: str | None = None) -> Response:
+        self.check_shim('ListUsers')
         return Response([user for user in self.users.values() if name in (None, user.name)])
 
     def create_user(self, details: Any) -> Response:
+        self.check_shim('CreateUser')
         # An identity-domains tenancy refuses a user without a primary email
         # (IdcsConversionError), so the fake does too.
         if not getattr(details, 'email', None):
@@ -190,9 +261,11 @@ class FakeIdentity:
         return Response(user)
 
     def list_user_group_memberships(self, compartment_id: str, user_id: str, group_id: str) -> Response:
+        self.check_shim('ListUserGroupMemberships')
         return Response([(user_id, group_id)] if (user_id, group_id) in self.memberships else [])
 
     def add_user_to_group(self, details: Any) -> Response:
+        self.check_shim('AddUserToGroup')
         self.memberships.add((details.user_id, details.group_id))
         return Response(None)
 
@@ -236,12 +309,15 @@ class FakeIdentity:
         return None
 
     def upload_api_key(self, user_id: str, details: Any) -> Response:
+        self.check_shim('UploadApiKey')
         return Response(Key(fingerprint=self.register_key(user_id, details.key)))
 
     def list_api_keys(self, user_id: str) -> Response:
+        self.check_shim('ListApiKeys')
         return Response([Key(fingerprint=value) for value in self.keys.get(user_id, [])])
 
     def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
+        self.check_shim('DeleteApiKey')
         self.check_delete_flake()
         self.keys[user_id] = [value for value in self.keys.get(user_id, []) if value != key_fingerprint]
         return Response(None)
@@ -402,6 +478,33 @@ class FakeDomain:
         if user is None:
             raise _refused(f'no user {api_key.user.value} in this domain')
         return Response(Key(fingerprint=self.identity.register_key(user.id, api_key.key)))
+
+    def list_api_keys(self, filter: str) -> Response:  # noqa: A002 -- the SDK's parameter name
+        """Any user's keys, named by the OCID in the filter.
+
+        The administrative listing, which is what lets a session read a user
+        that is not its own without the legacy shim. Only `user.ocid eq` is
+        understood, because it is the only filter the caller has the input
+        for: the row carries an OCID and the SCIM id would itself need a
+        lookup.
+        """
+        self._administrative('list_api_keys')
+        self.identity.check_read_lag()
+        held = self.identity.keys.get(_filter_value(filter), [])
+        return Response(DomainKeys(resources=[DomainKey(id=self.key_id(value), fingerprint=value) for value in held]))
+
+    def delete_api_key(self, api_key_id: str) -> Response:
+        """Retire any user's key. The id names the key, so no subject is given."""
+        self._administrative('delete_api_key')
+        self.identity.check_delete_flake()
+        for user_id, held in self.identity.keys.items():
+            remaining = [value for value in held if self.key_id(value) != api_key_id]
+            if remaining != held:
+                self.identity.keys[user_id] = remaining
+                return Response(None)
+        raise oci.exceptions.ServiceError(
+            status=404, code='NotFound', headers=dict[str, str](), message=f'no api key {api_key_id}'
+        )
 
 
 @dataclass
@@ -670,7 +773,34 @@ def test_an_orphaned_key_is_swept_when_the_seed_is_recreated(
 
 
 @dataclass
-class RefusingIdentity(FakeIdentity):
+class ShimRefusals(FakeIdentity):
+    """A legacy layer that refuses some of the endpoints the domain also serves.
+
+    Which ones is a parameter because live runs have met several shapes of the
+    same defect: `DeleteApiKey` refused to everyone every time, `ListApiKeys`
+    refused intermittently to the key's own user minutes after serving the
+    identical call, and `CreateUser` refused for a field it cannot represent.
+    The domains endpoints keep working throughout, which is the whole reason
+    those calls go there.
+    """
+
+    #: Endpoints refused every time.
+    refuses: frozenset[str] = frozenset()
+    #: Endpoints refused the first time and taken afterwards -- the shape a
+    #: caller that treats one 401 as final gives up on for good.
+    refuses_once: set[str] = field(default_factory=set[str])
+
+    def check_shim(self, endpoint: str) -> None:
+        super().check_shim(endpoint)
+        if endpoint in self.refuses_once:
+            self.refuses_once.discard(endpoint)
+            raise _shim_refusal(endpoint)
+        if endpoint in self.refuses:
+            raise _shim_refusal(endpoint)
+
+
+@dataclass
+class RefusingIdentity(ShimRefusals):
     """A tenancy whose legacy identity layer refuses key deletion outright.
 
     What an identity-domains tenancy does with
@@ -679,10 +809,7 @@ class RefusingIdentity(FakeIdentity):
     works, which is the whole reason deletion goes there.
     """
 
-    def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
-        raise oci.exceptions.ServiceError(
-            status=401, code='IdcsConversionError', headers=dict[str, str](), message='Client is unauthorized. null'
-        )
+    refuses: frozenset[str] = frozenset({'DeleteApiKey'})
 
 
 @dataclass
@@ -695,10 +822,7 @@ class UnreadableIdentity(RefusingIdentity):
     known.
     """
 
-    def list_api_keys(self, user_id: str) -> Response:
-        raise oci.exceptions.ServiceError(
-            status=401, code='IdcsConversionError', headers=dict[str, str](), message='Client is unauthorized. null'
-        )
+    refuses: frozenset[str] = frozenset({'DeleteApiKey', 'ListApiKeys'})
 
 
 @dataclass
@@ -1207,7 +1331,7 @@ def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
 
 
 @dataclass
-class ShimlessIdentity(FakeIdentity):
+class ShimlessIdentity(ShimRefusals):
     """A tenancy whose legacy identity layer answers nothing the domain owns.
 
     Users, groups, memberships and API keys live in the identity domain, and
@@ -1220,40 +1344,7 @@ class ShimlessIdentity(FakeIdentity):
     than the domain's, so they keep answering.
     """
 
-    def _shim(self, endpoint: str) -> Response:
-        raise oci.exceptions.ServiceError(
-            status=401,
-            code='IdcsConversionError',
-            headers=dict[str, str](),
-            message=f'Client is unauthorized. null ({endpoint})',
-        )
-
-    def list_users(self, compartment_id: str, name: str | None = None) -> Response:
-        return self._shim('ListUsers')
-
-    def create_user(self, details: Any) -> Response:
-        return self._shim('CreateUser')
-
-    def list_groups(self, compartment_id: str, name: str | None = None) -> Response:
-        return self._shim('ListGroups')
-
-    def create_group(self, details: Any) -> Response:
-        return self._shim('CreateGroup')
-
-    def list_user_group_memberships(self, compartment_id: str, user_id: str, group_id: str) -> Response:
-        return self._shim('ListUserGroupMemberships')
-
-    def add_user_to_group(self, details: Any) -> Response:
-        return self._shim('AddUserToGroup')
-
-    def upload_api_key(self, user_id: str, details: Any) -> Response:
-        return self._shim('UploadApiKey')
-
-    def list_api_keys(self, user_id: str) -> Response:
-        return self._shim('ListApiKeys')
-
-    def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
-        return self._shim('DeleteApiKey')
+    refuses: frozenset[str] = frozenset(SHIMMED_ENDPOINTS)
 
 
 def test_the_seed_is_built_in_the_identity_domain(kit: KdbxStore, root: masters.Credential) -> None:
@@ -1368,16 +1459,50 @@ def test_a_domain_that_refuses_once_is_not_given_up_on(
 
 
 def test_the_self_service_listing_is_not_used_for_another_users_keys(tenancy: Tenancy) -> None:
-    # `Me` endpoints report the caller and nobody else, so a session asking
-    # about a different user has to take the legacy read however good its
-    # domain is. Answering with the caller's own keys would be worse than
-    # failing: the quota check would pass on the wrong user's count.
+    # `Me` endpoints report the caller and nobody else, so the subject decides
+    # which half of the domains API answers. Answering about a different user
+    # with the caller's own keys would be worse than failing: the quota check
+    # would pass on the wrong user's count and the sweep would retire the
+    # wrong keys.
     private_pem, _ = oci_iam.generate_key()
     tenancy.identity.keys[ROOT_USER] = ['the:root:key']
+    tenancy.identity.keys['ocid1.user.oc1..kluster-seed'] = ['the:seed:key']
     iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, private_pem, connect=tenancy, domain_url=DOMAIN_URL)
 
-    assert iam.api_keys('ocid1.user.oc1..kluster-seed') == []
+    assert iam.api_keys('ocid1.user.oc1..kluster-seed') == ['the:seed:key']
     assert iam.api_keys(ROOT_USER) == ['the:root:key']
+    # Administrative for somebody else, self-service for the caller, and the
+    # legacy shim for neither.
+    assert tenancy.policy.served == ['list_api_keys', 'list_my_api_keys']
+    assert tenancy.identity.shim_calls == []
+
+
+def test_another_users_keys_are_read_through_the_domain_not_the_shim(kit: KdbxStore, root: masters.Credential) -> None:
+    # The live rotation drill failed here, on a read: the legacy listing
+    # answered 401 IdcsConversionError minutes after serving the identical
+    # call. Both halves of the domains API can list keys, so the subject
+    # being somebody else is no reason to be exposed to the shim.
+    tenancy = Tenancy(identity=UnreadableIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy, domain_url=DOMAIN_URL)
+
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert iam.api_keys(user_id) == [oci_iam.fingerprint(private_pem)]
+
+
+def test_another_users_key_is_retired_through_the_domain_not_the_shim(kit: KdbxStore, root: masters.Credential) -> None:
+    # The administrative delete names the key by the id the administrative
+    # listing gave it, so the two are one operation; the legacy delete is
+    # refused to everyone in a tenancy with domains.
+    tenancy = Tenancy(identity=RefusingIdentity())
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy, domain_url=DOMAIN_URL)
+    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+
+    iam.delete_api_key(user_id, oci_iam.fingerprint(private_pem))
+
+    assert tenancy.identity.keys[user_id] == []
+    assert tenancy.policy.served[-2:] == ['list_api_keys', 'delete_api_key']
 
 
 def test_a_domain_resource_without_an_ocid_is_refused() -> None:
@@ -1402,3 +1527,76 @@ def test_rotation_survives_a_legacy_layer_that_refuses_even_reads(
     assert tenancy.identity.keys[user_id] == [current]
     _, _, private_pem = oci_iam.load_seed(successor, SEED_ENTRY)
     assert oci_iam.fingerprint(private_pem) == current
+
+
+def test_a_healthy_domain_is_never_asked_through_the_shim(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
+) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    # A bring-up and two rotations' worth of reads and writes, and not one of
+    # them touched a conversion-shim endpoint: users, groups, membership and
+    # every API-key read, write and delete were served by the domain. This is
+    # what "the legacy client is for IAM-native concepts only" means when a
+    # domain answers -- the shim is a fallback, never a step on the happy path.
+    assert tenancy.identity.shim_calls == []
+    assert tenancy.identity.keys[user_id] == [current]
+    # Policies are IAM's own concept and are not shim-converted, so the legacy
+    # client is still the one that wrote them.
+    assert [policy.statements for policy in tenancy.identity.policies.values()] == [list(oci_iam.STATEMENTS)]
+
+
+def _survives_a_bring_up_and_a_rotation(tenancy: Tenancy) -> None:
+    """Build the seed and rotate it, and assert exactly one key is left standing.
+
+    The whole flow rather than a single call, because which endpoint answers
+    decides what shape the principal downstream has: a user found the legacy
+    way is known only by its OCID, which the domain then refuses as a group
+    member and as a key's subject. A refusal is survivable only if everything
+    after it survives too.
+    """
+    kit = MemoryKit()
+    user_id = oci_iam.create_seed(root=_fresh_root(), seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    assert tenancy.identity.keys[user_id] == [current]
+    assert oci_iam.fingerprint(oci_iam.load_seed(kit, SEED_ENTRY)[2]) == current
+
+
+@pytest.mark.parametrize('endpoint', SHIMMED_ENDPOINTS)
+@pytest.mark.parametrize('shape', ('always', 'once'))
+def test_a_refused_shim_endpoint_does_not_stop_the_seed(endpoint: str, shape: str, pooled_keys: None) -> None:
+    """No conversion-shim endpoint is load-bearing while the domain answers.
+
+    The scan is over every shim-converted endpoint and both shapes the refusal
+    takes live: refused for good, and refused once and served on the next
+    identical call. A tenancy whose domain answers owes the shim nothing, so
+    each of these is either never reached at all or falls back onto a call
+    that is -- which is what the live drill's failed verification was not.
+    """
+    once = shape == 'once'
+    refusals = ShimRefusals(
+        refuses=frozenset() if once else frozenset({endpoint}),
+        refuses_once={endpoint} if once else set[str](),
+    )
+
+    _survives_a_bring_up_and_a_rotation(Tenancy(identity=refusals))
+
+
+@pytest.mark.parametrize('operation', DOMAIN_OPERATIONS)
+def test_a_refused_domain_operation_falls_back_to_the_legacy_call(operation: str, pooled_keys: None) -> None:
+    """The fallback runs the other way too, one domain operation at a time.
+
+    Either side has been seen to refuse a call the other then accepted, so the
+    direction only says which client is tried first. The scan is what keeps
+    that true as endpoints are added: a domains call whose legacy counterpart
+    is missing strands the flow here rather than in a bring-up.
+    """
+    tenancy = Tenancy(policy=DomainPolicy(always=frozenset({operation})))
+
+    _survives_a_bring_up_and_a_rotation(tenancy)
+
+    assert operation not in tenancy.policy.served

@@ -65,18 +65,24 @@ def _authorized(kit: KdbxStore) -> tuple[oci_iam.Iam, str, str]:
     Returns the client, the seed's user OCID and the stored key's fingerprint.
     Building this at all is half the assertion: a kit whose key the tenancy
     will not accept cannot get past `authorize`.
+
+    The session carries the identity domain off the row, which is what the
+    rotation being drilled does and therefore what the drill has to do too. A
+    session without it reaches users and keys only through the legacy
+    conversion shim, whose intermittent 401 would fail the drill for a
+    rotation that in fact succeeded.
     """
     tenancy, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
-    iam = oci_iam.Iam.authorize(tenancy, user_id, private_pem)
+    iam = oci_iam.Iam.authorize(tenancy, user_id, private_pem, domain_url=oci_iam.load_domain(kit, SEED_ENTRY))
     return iam, user_id, oci_iam.fingerprint(private_pem)
 
 
 def _one_usable_key(iam: oci_iam.Iam, user_id: str, current: str) -> list[str]:
     """Assert the invariant and return the fingerprints the service refused to drop.
 
-    `iam` must be authorized as `current`: an identity-domains tenancy lets a
-    user manage its own credentials and refuses the account root the
-    equivalent call, which is also why this call proves the stored key works.
+    `iam` must be authorized as `current`: it is the caller's own credentials
+    the self-service endpoints act on, which is also why this call proves the
+    stored key works.
     """
     held = iam.api_keys(user_id)
     assert current in held, f'the kit holds {current}, which the tenancy does not list among {held}'
