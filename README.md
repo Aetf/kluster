@@ -27,6 +27,7 @@ Managed with [uv](https://github.com/astral-sh/uv) and
 | `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. |
 | `src/kluster/` | The program itself: `physical/` declares the OCI and Talos layer, `stacks/` dispatches, `scripts/` holds the console scripts. |
 | `deploy/` | Deployment material that is not library code — the state-backend appliance's Butane file, its dump script, its operator keys. |
+| `docker/` | The self-built container images: per image, a build file plus a `.conf` holding its build args and tag. Published by the `images` workflow. |
 | `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (still the legacy cluster's chart set). |
 | `docs/` | Design docs. |
 | `tests/` | Unit tests: the framework layer against Pulumi mocks, the scripts against real files. No cloud access. |
@@ -86,10 +87,13 @@ a rebuild from nothing.
 ## Status
 
 Under construction, in the open. Built and running: the framework (RFC-001
-Rev 3), the stack dispatch, the credential scripts, and the state-backend
+Rev 3), the stack dispatch, the credential scripts, the state-backend
 appliance — a Fedora CoreOS box in OCI serving Pulumi's Postgres state over
-mutual TLS, whose only apply path is re-provisioning it from this repository.
-The CI workflow set and renovate are wired.
+mutual TLS, whose only apply path is re-provisioning it from this repository
+— and the `dns` stack, which declares the estate's Cloudflare zones and
+records and is applied against them. The CI workflow set and renovate are
+wired, and the `images` workflow builds and publishes the self-built
+container images in `docker/` to ghcr, multi-arch on native runners.
 
 What is *not* built announces itself rather than being listed here: an
 unimplemented stack raises from its entrypoint, and a seed the register names
