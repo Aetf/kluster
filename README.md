@@ -93,10 +93,9 @@ The CI workflow set and renovate are wired.
 
 What is *not* built announces itself rather than being listed here: an
 unimplemented stack raises from its entrypoint, and a seed the register names
-without an implementation is a subcommand that refuses with its own name. Two
-pre-Talos leftovers (`kx.py`, `base_cluster/`) are excluded from lint and
-types until they are rewritten rather than retrofitted. Implementation issues
-are tracked in a separate ops repository, deliberately not here.
+without an implementation is a subcommand that refuses with its own name.
+Implementation issues are tracked in a separate ops repository, deliberately
+not here.
 
 ## License
 
