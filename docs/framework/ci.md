@@ -83,30 +83,84 @@ Central flow rules** (managed with the rest of the ZT config,
 architecture.md §5.3) to exactly the four targets in the table
 (UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a
 leaked join credential does not buy general LAN access. Residual on
-record (audit L11): the AdGuard credential in `apps` is full-admin
-(AdGuard has no scoped API), so LAN-DNS control rides the apps tier —
-accepted alongside the kubeconfig that tier already holds.
+record (audit L11): the AdGuard credential is full-admin (AdGuard has
+no scoped API), so LAN-DNS control rides the `dns` tier — the tier
+that already holds the Cloudflare token, and therefore the whole of
+the estate's naming rather than only its LAN half. `apps`, the tier
+that changes daily, holds neither that credential nor a ZeroTier
+identity.
 
-Join mechanics (2026-08-24): **two CI identities** — `ci-deploy` for
-the merge chain, `ci-preview` for PR `preview-apps` — one per
-concurrency domain, each domain serialized (the deploy workflow's
-`concurrency` group, wanted for state-lock sanity anyway; a
-`zt-preview` job group). A join cannot span jobs (per-job runner VMs)
-and one identity must never be live twice (ZT maps a node ID to one
-endpoint). Design, rejected alternatives, and the join-latency
-expectation: physical/gateway.md §2.6.
+**Join mechanics, and why they need a lock of their own.** The
+identity a job joins with is whatever its Environment's
+`ZEROTIER_IDENTITY` holds, so the Environment is the identity's
+carrier, and the jobs that join are exactly those whose Environment
+has one: `plan-physical` and `up-physical` on the merge chain, `up-dns`
+beside them, the `preview (dns)` and `prove (dns)` jobs a pull request
+runs, and the `physical` and `dns` entries of the drift matrix. A join
+cannot span jobs — each is its own runner VM — and ZeroTier maps a
+member to one endpoint at a time, so **one identity must never be live
+in two jobs at once**; two that share it flap.
+
+No workflow-level setting arranges that. The deploy chain's
+`concurrency: deploy` group serializes deploys against deploys, but a
+drift run joins with the very same Environments' identities, and any
+pull request's preview joins with the `dns` one. The lock therefore has
+to name the identity rather than the workflow: every joining job takes
+a **job-level `concurrency` group named for its identity domain** —
+`zt-dns` or `zt-physical` — and because a concurrency group is
+repository-wide, that one name serializes previews, proofs, drift and
+the merge chain against each other. The two physical Environments share
+`zt-physical`: the plan and the apply are separate credential
+partitions but are meant to carry the same member. A job-level group
+may read the `matrix` context, which a job-level `if` cannot, so the
+matrix jobs key on their own stack; their non-joining entries take a
+per-run key that collides with nothing, because two entries of one run
+sharing a key is the case GitHub does not serialize reliably.
+
+What that buys, and what it costs:
+
+-   At most one joining job per domain runs; a second waits.
+-   A **third supersedes the second**: GitHub keeps one pending entry
+    per group and cancels the older one. For a preview or a proof this
+    is a re-run button rather than a correctness problem — pull
+    requests are not cumulative, and `preview` is deliberately not a
+    required check (github.md §3).
+-   Residual, accepted: a *deploy* job that is waiting on a domain can
+    be superseded the same way, and a cancelled job is neither success
+    nor failure, so that layer would silently not apply. The window is
+    small — drift fires weekly, previews last minutes — and the next
+    merge applies the same code again. Making it impossible would mean
+    a second identity per domain, which is credential surface bought to
+    close a rare and self-healing hole.
+
+Rejected alternatives and the join-latency expectation:
+physical/gateway.md §2.6. Its §2.1 roster still describes the CI
+members in terms of an `apps` preview and a `zt-preview` group, which
+predates the LAN work moving into `dns`; the roster is that document's
+to correct.
 
 ## 3. Pipeline shape
 
+Job names below are the ones the checks tab shows.
+
 ```
-PR:    detect-changes ─→ preview-{dns, k8s-base, apps} (parallel;
-                          physical has no PR preview — its credentials
-                          are main-only, see partitioning below)
-                            └─ all zero-diff → noop-automerge (ported)
-merge: plan-physical ──zero diff──→ (up-physical skipped)
-            └────────── diff ────→ up-physical [approval gate]
-       ──→ up-k8s-base ──needs──→ up-apps
-       ──→ up-dns (parallel to k8s-base)
+PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
+                              (parallel, report-only; physical has no PR
+                               preview — its credentials are main-only,
+                               see partitioning below)
+
+        noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps)
+                              ─→ merge          (its own workflow, not a
+                                                 reader of preview's verdict)
+
+merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
+                                   └───────── diff ────→ up-physical [gate]
+                            ──→ up-k8s-base ──needs──→ up-apps
+                            ──→ up-dns (parallel to k8s-base)
+                            any of the five failed ──→ notify-failure
+
+weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
+                              (workflow_dispatch only, fired from the ops repo)
 ```
 
 -   **Merge side runs `up` only — except `physical`, which gets a plan
@@ -140,9 +194,30 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
     benign drift between review and merge. Revisit if
     reviewed-vs-applied divergence ever actually bites.
--   Ported unchanged from kluster-code: rebase-merge (not squash —
-    committer identity), zero-diff **noop-automerge** for renovate-class
-    PRs, Home Assistant push notification on deploy failure.
+-   Ported from kluster-code: rebase-merge (not squash — committer
+    identity), the zero-diff **noop-automerge**, and the **Home
+    Assistant push on a failed deploy**. The push is the one that
+    changed shape: there the workflow was a single job and the alert
+    was an `if: failure()` step inside it, here the chain is five jobs
+    and the alert is a sixth (`notify-failure`) that fires when any of
+    them failed. Its payload is the legacy one — title, message naming
+    the commit, link to the run. It reads a **repository** secret
+    `HAOS_DEPLOY_WEBHOOK_URL`, empty for now (below): an empty URL logs
+    a warning and the job passes, so a missing credential loses the
+    alert instead of manufacturing a red run. A repository secret,
+    rather than an Environment one, because the job belongs to no
+    stack; every workflow here can read it, same-repo previews
+    included, which is acceptable for a URL whose only power is to
+    raise a phone notification.
+
+    This is an interim shape, not the designed one. The design has CI
+    hold no Home Assistant credential at all: one shared producer step
+    posts a `repository_dispatch` to the ops repo, which owns tier
+    semantics, payload formatting, deduplication and the GitHub-issue
+    leg (cluster/architecture.md §4.3). That producer step, and the
+    dispatch App whose token it would use, are **not built**. When they
+    are, this job becomes the dispatch call and the webhook secret
+    leaves the repository.
 -   **Weekly drift check (2026-08-24)**: a `workflow_dispatch`
     workflow in this repo runs
     `pulumi preview --refresh --expect-no-changes`
@@ -153,11 +228,16 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     App, installed on this repo alone and carrying **Actions: write
     only**, so it can start runs and never push code. Two Apps
     rather than one because GitHub scopes permissions per App
-    (register rows in credentials.md). Any diff raises an
-    `actionable` alert through the standard producer step; playbook:
-    human review, then reconcile reality or deploy — drift here
+    (register rows in credentials.md). The playbook a diff calls for
+    is human review, then reconcile reality or deploy — drift here
     means something changed behind Pulumi's back, the gw-config
     estate and the OCI console being the realistic sources.
+    **How the human learns of it is not built**: the intended route is
+    the same `actionable` alert the producer step raises
+    (architecture.md §4.3), and neither exists, so today a diff is a
+    failed workflow run and nothing more. The workflow has also never
+    run: its trigger lives in the ops repo, behind the trigger App and
+    an Environment layout that is still to be created.
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
@@ -203,14 +283,31 @@ merge: plan-physical ──zero diff──→ (up-physical skipped)
     (`pull_request`; fork PRs get no secrets, `pull_request_target` is
     never used): a preview **executes the PR's Python with provider
     credentials**, so who can trigger one is a security boundary, not
-    a convenience setting. noop-automerge stays scoped to renovate
-    lockfile/pin PRs; repo secret scanning + push protection on.
+    a convenience setting. **noop-automerge classifies by path, not by
+    author**: any pull request touching neither `src/` nor `Pulumi.*`
+    is a candidate, which is renovate's lockfile and pin traffic in
+    practice but is not restricted to it — the gate that matters is the
+    zero-diff proof, and an `expect-changes` label opts a pull request
+    out of the whole path. A fork's pull request fails closed rather
+    than merging: the proof needs Environment secrets, which a fork
+    never receives. Repo secret scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
     drill workflows run** — carries the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
     age key) with **no reviewer gate — the scope is the gate**
-    (credentials.md §4); Environment secrets are populated by
-    the `deploy/credentials/` distribution scripts, not by hand.
+    (credentials.md §4).
+-   **Every secret this section names is an empty slot today.** The
+    register's executable form is the `credentials` console script
+    (`src/kluster/scripts/credentials/`), and the only slot kind it
+    implements is a stack's Pulumi config: there is no
+    GitHub-Environment sink, so nothing populates
+    `ZEROTIER_IDENTITY`, `PULUMI_BACKEND_URL` or the rest, and the
+    lone repository-level slot (`HAOS_DEPLOY_WEBHOOK_URL`) is
+    unpopulated too. The partitioning above is therefore a design the
+    workflows already obey while the forge does not yet enforce it, and
+    no job in this repository has run against a real credential: a
+    deploy on `main` today fails in its first ZeroTier join, on an
+    empty identity.
 -   **Everything on a clock lives in the ops repo; this repo is
     event-driven only** (2026-08-24, amending the 2026-08-23 "one
     scheduled workflow here" decision): once public, this repo's

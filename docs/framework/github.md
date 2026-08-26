@@ -69,7 +69,7 @@ gives, not because the plan forbids it.
 ## 3. What is declared
 
 -   **Repositories**: `kluster` (public) and `kluster-ops` (private;
-    the notification and drill repo, ci.md §5) — visibility, the merge
+    the notification and drill repo, ci.md §3) — visibility, the merge
     strategy, issue/wiki/project surface, vulnerability alerts, and
     secret scanning with push protection on the public one. Secret
     scanning is a public-or-paid feature, so asking for it on
@@ -102,7 +102,8 @@ gives, not because the plan forbids it.
     request forever. The `preview` matrix is deliberately **not**
     required: its check names carry the stack (`preview (dns)`), so
     pinning them freezes the stack list into a setting that no longer
-    moves with the code, and its verdict is what noop-automerge reads
+    moves with the code, and its verdict is advisory — noop-automerge
+    runs a zero-diff proof of its own rather than reading it
     (ci.md §3). `enforce_admins` is on, including for the account
     owner: a gate the only person who can open it walks around is a
     suggestion, and this one is why a merge to `main` implies a

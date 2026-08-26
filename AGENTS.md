@@ -21,9 +21,9 @@
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
-  `pyproject.toml` (`update_crds`, `credentials`), the same way for every
-  script; `just` recipes or symlinks are for convenience on top, never the
-  home of the logic.
+  `pyproject.toml` (`update_crds`, `credentials`, `state-backend`), the
+  same way for every script; `just` recipes or symlinks are for
+  convenience on top, never the home of the logic.
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint, and a register row

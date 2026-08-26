@@ -194,7 +194,9 @@ The framework is implemented in the library `src/putils` (stable; verified by
 ## 3. Layering & Stack Structure
 
 > **Status**: decided 2026-08-22 (interactive review; `dns` added the
-> same day). Four stacks in one project, one environment. The earlier
+> same day). Five stacks in one project, one environment: the four CI
+> deploys, plus the `github` stack that declares the forge those four
+> are deployed by and is applied by hand. The earlier
 > proposal (infra-homelab / infra-cloud / k8s-base / applications) is
 > superseded: splitting the physical layer by site bought nothing (same
 > change cadence, mutual references), while the apps/base split earned
@@ -208,7 +210,7 @@ The framework is implemented in the library `src/putils` (stable; verified by
 | `dns` | Zones + estate records that belong to no app (mail, ZT hosts, verifications, family/alias zones) + the anchors (declarative/dns.md) | low (rare, and independent of the cluster) |
 | `k8s-base` | Everything cluster-scoped speaking the k8s API: Cilium (LB pools, BGP peering, Gateway API, gateways), VolSync, cert-manager, CNPG operator, sealed-secrets controller, VictoriaMetrics + grafana | medium (renovate chart bumps) |
 | `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (CNAMEs to the dns stack's anchors, declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
-| `github` | The forge the other four are deployed by: both repositories, the Environments and their gates, branch protection, App installations ([github.md](github.md)) | lowest — and the only stack CI does not apply |
+| `github` | The forge the other four are deployed by: both repositories, the Environments and their gates, branch protection ([github.md](github.md)). The Apps and their installations stay console state, audited rather than declared (github.md §4) | lowest — and the only stack CI does not apply |
 
 Boundary rules:
 
