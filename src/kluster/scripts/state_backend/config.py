@@ -122,6 +122,7 @@ def render_ignition(seed: bytes, *, address: str, dump_key_id: str, dump_key: st
     butane = environment.get_template(TEMPLATE).render(
         **machine(seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id)
     )
+    log.info('handing %s to butane for validation and conversion to Ignition', TEMPLATE)
     proc = sp.run(
         ['butane', '--strict', '--pretty'],
         input=butane,
