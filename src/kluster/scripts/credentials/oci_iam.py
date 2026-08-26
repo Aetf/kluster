@@ -31,6 +31,28 @@ and stored beside the tenancy OCID so that rotation never needs the root.
 The password field stays empty here, which no other row does. The alternative
 is a copy of the PEM in a field that KeePassXC will happily reveal in a
 listing, next to the attachment that already holds it.
+
+**Which identity API a call uses.** A tenancy with identity domains keeps
+users, groups and user credentials in the domain; the legacy endpoints for
+them are a conversion shim over it, and the shim refuses — sometimes always,
+sometimes intermittently, and sometimes only for fields it cannot represent.
+So anything the domain owns goes through `IdentityDomainsClient`: users,
+groups, group membership and API keys. The legacy `IdentityClient` keeps two
+jobs, and only those: the concepts that are IAM's own rather than the
+domain's — policies, compartments, `list_domains` — and being the whole of the
+identity API in a tenancy that has no domains, where every call below falls
+back to it unchanged.
+
+The fallback is bidirectional rather than a one-way migration. Both sides have
+been seen to refuse a call the other then took, so a refusal from the domain
+is a reason to try the legacy call, not a reason to stop; the direction only
+says which one is tried first.
+
+Within the domains API, a call acts on the caller's own user through the
+self-service (`My*`) endpoints, which authorize on authentication alone, and
+on anybody else's through the administrative ones, which need domain-admin
+rights. The account root has those rights; the seed does not, which is why
+everything the seed does to itself is self-service.
 """
 
 # The OCI SDK is generated and ships no type information; this module is the
@@ -93,6 +115,19 @@ STATEMENTS: tuple[str, ...] = (
 #: OCI requires RSA for API keys, which is why these are generated rather than
 #: derived: deterministic RSA generation is the footgun §2.2 excludes.
 KEY_SIZE = 2048
+
+#: The domains API is SCIM, and a SCIM payload names its own schema. The SDK
+#: models cover the fields but not this, so the URNs are spelled out here.
+USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User'
+GROUP_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:Group'
+GROUP_EXTENSION_SCHEMA = 'urn:ietf:params:scim:schemas:oracle:idcs:extension:group:Group'
+API_KEY_SCHEMA = 'urn:ietf:params:scim:schemas:oracle:idcs:apikey'
+PATCH_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:PatchOp'
+
+#: What the seed's user and group are for, written where a console reader will
+#: find it. The register (§2) is the long version.
+USER_DESCRIPTION = 'The kluster seed API key (credentials.md §2)'
+GROUP_DESCRIPTION = 'Holds the kluster seed user (credentials.md §2)'
 
 
 class Connect(Protocol):
@@ -228,17 +263,63 @@ def _data(response: Any) -> Any:
     return response.data
 
 
+@dataclass(frozen=True)
+class Principal:
+    """A user or a group, under both of the names identity gives it.
+
+    An OCID is what a signing configuration, a policy and the kit's row all
+    speak, and it is the only name the legacy API has. The domains API assigns
+    a second one — a SCIM id — and addresses its own resources by that, so a
+    session that found a principal through the domain has to remember which
+    name it may hand back to which call.
+
+    A principal read through the legacy API has one name in both fields: there
+    the OCID *is* the handle.
+    """
+
+    #: The tenancy-wide identifier: `ocid1.user.oc1..`, `ocid1.group.oc1..`.
+    ocid: str
+    #: What the domains API calls it, where that is known.
+    handle: str
+
+    @classmethod
+    def legacy(cls, resource: Any) -> Principal:
+        return cls(ocid=str(resource.id), handle=str(resource.id))
+
+    @classmethod
+    def domain(cls, resource: Any, *, kind: str) -> Principal:
+        """A domains resource, refused if it will not say its OCID.
+
+        The OCID is not a nicety here: it is what goes into the row and into
+        the signing configuration of every session that follows. A SCIM id put
+        in its place would be stored, would look like an answer, and would
+        fail at the next authentication.
+        """
+        ocid = getattr(resource, 'ocid', None)
+        if not ocid:
+            raise CredentialRejected(
+                f'the identity domain returned a {kind} without an OCID, which is the name the kit and '
+                'the signing configuration need'
+            )
+        return cls(ocid=str(ocid), handle=str(resource.id))
+
+
 @dataclass
 class Domain:
-    """One identity domain, seen through the API key's own user.
+    """One identity domain, seen through one API key.
 
-    Only the self-service half of the API (the `Me` endpoints): those
-    authorize on authentication alone, so a caller needs no policy beyond
-    existing. That is what lets the sweep run as the seed in a tenancy where
-    the legacy delete is refused to everyone, the account root included.
+    Two halves, told apart by whose resources they touch. The self-service
+    (`Me`) endpoints act on the caller's own user and authorize on
+    authentication alone, so a caller needs no policy beyond existing — that
+    is what lets the sweep run as the seed in a tenancy where the legacy
+    delete is refused to everyone, the account root included. The
+    administrative endpoints take an explicit resource and need domain-admin
+    rights, which the account root holds and the seed does not.
     """
 
     client: Any
+
+    # -- the self-service half: the caller's own user, no rights required ---
 
     def my_api_keys(self) -> dict[str, str]:
         """This user's API keys, as fingerprint -> the id a delete addresses.
@@ -252,6 +333,106 @@ class Domain:
     def delete_my_api_key(self, key_id: str) -> None:
         _ = self.client.delete_my_api_key(key_id)
 
+    def create_my_api_key(self, public_pem: str) -> str:
+        """Register a key on the caller's own user. Returns the fingerprint assigned."""
+        created = _data(
+            self.client.create_my_api_key(
+                my_api_key=oci.identity_domains.models.MyApiKey(schemas=[API_KEY_SCHEMA], key=public_pem)
+            )
+        )
+        return str(created.fingerprint)
+
+    # -- the administrative half: anybody's resources, domain-admin rights ---
+
+    def group(self, name: str) -> Principal | None:
+        listed = _data(self.client.list_groups(filter=f'displayName eq "{name}"'))
+        for resource in listed.resources or []:
+            return Principal.domain(resource, kind='group')
+        return None
+
+    def create_group(self, name: str, description: str) -> Principal:
+        created = _data(
+            self.client.create_group(
+                group=oci.identity_domains.models.Group(
+                    schemas=[GROUP_SCHEMA, GROUP_EXTENSION_SCHEMA],
+                    display_name=name,
+                    urn_ietf_params_scim_schemas_oracle_idcs_extension_group_group=(
+                        oci.identity_domains.models.ExtensionGroupGroup(description=description)
+                    ),
+                )
+            )
+        )
+        return Principal.domain(created, kind='group')
+
+    def user(self, name: str) -> Principal | None:
+        listed = _data(self.client.list_users(filter=f'userName eq "{name}"'))
+        for resource in listed.resources or []:
+            return Principal.domain(resource, kind='user')
+        return None
+
+    def create_user(self, name: str, description: str, email: str) -> Principal:
+        """Create a user in the domain.
+
+        The domain wants more of a user than IAM does — a family name and a
+        primary email address are both mandatory, and there is nobody to ask
+        for them, so the seed's own name and the register's address stand in.
+        This is the shape the legacy `CreateUser` could not express, which is
+        why it refused in a tenancy with domains.
+        """
+        created = _data(
+            self.client.create_user(
+                user=oci.identity_domains.models.User(
+                    schemas=[USER_SCHEMA],
+                    user_name=name,
+                    display_name=name,
+                    description=description,
+                    name=oci.identity_domains.models.UserName(family_name=name, given_name=name),
+                    emails=[
+                        oci.identity_domains.models.UserEmails(value=email, type='work', primary=True),
+                        oci.identity_domains.models.UserEmails(value=email, type='recovery'),
+                    ],
+                )
+            )
+        )
+        return Principal.domain(created, kind='user')
+
+    def members(self, group: Principal) -> list[str]:
+        """The handles of the group's members.
+
+        Membership is an attribute of the group in SCIM rather than a resource
+        of its own, so reading it is reading the group.
+        """
+        read = _data(self.client.get_group(group.handle, attributes='members'))
+        return [str(member.value) for member in (read.members or [])]
+
+    def add_member(self, group: Principal, user: Principal) -> None:
+        _ = self.client.patch_group(
+            group.handle,
+            patch_op=oci.identity_domains.models.PatchOp(
+                schemas=[PATCH_SCHEMA],
+                operations=[
+                    oci.identity_domains.models.Operations(
+                        op=oci.identity_domains.models.Operations.OP_ADD,
+                        path='members',
+                        value=[{'value': user.handle, 'type': 'User'}],
+                    )
+                ],
+            ),
+        )
+
+    def create_api_key(self, user: Principal, public_pem: str) -> str:
+        """Register a key on somebody else's user. Returns the fingerprint assigned."""
+        created = _data(
+            self.client.create_api_key(
+                api_key=oci.identity_domains.models.ApiKey(
+                    schemas=[API_KEY_SCHEMA],
+                    key=public_pem,
+                    user=oci.identity_domains.models.ApiKeyUser(value=user.handle, ocid=user.ocid),
+                )
+            )
+        )
+        return str(created.fingerprint)
+
 
 @dataclass
 class Iam:
@@ -263,12 +444,16 @@ class Iam:
     #: the key it just minted, which is the only proof that it works.
     connect: Connect = identity_client
     #: The identity-domains view of the same key, where the row knows the
-    #: tenancy's domain. Absent for the account root (which never deletes)
-    #: and for a row written before the attribute existed.
+    #: tenancy's domain. Absent in a tenancy without domains, and for a row
+    #: written before the attribute existed.
     domain: Domain | None = None
     #: The URL `domain` was built from, kept so a session can hand its domain
     #: on to the session of a key it just minted.
     domain_url: str | None = None
+    #: The OCID this session signs as. It decides which half of the domains
+    #: API a call belongs to: its own user is self-service, anyone else's is
+    #: administrative.
+    caller: str = ''
 
     @classmethod
     def authorize(
@@ -286,51 +471,106 @@ class Iam:
             connect=connect,
             domain=Domain(connect(tenancy, user, private_key_pem, domain_url=domain_url)) if domain_url else None,
             domain_url=domain_url,
+            caller=user,
         )
 
-    def group(self) -> Any:
-        """The seed's group, created if absent."""
+    def group(self) -> Principal:
+        """The seed's group, created if absent.
+
+        A group is a domain resource where there is a domain, so that is where
+        it is looked for and made; the legacy call is what a tenancy without
+        domains has, and what answers when the domain will not.
+        """
+        if self.domain is not None:
+            try:
+                found = self.domain.group(SEED_NAME)
+                if found is not None:
+                    return found
+                created = self.domain.create_group(SEED_NAME, GROUP_DESCRIPTION)
+            except oci.exceptions.ServiceError as exc:
+                log.debug('the identity domain refused to provide the group (%s); trying the legacy call', _why(exc))
+            else:
+                log.info('created group %s in the identity domain', SEED_NAME)
+                return created
         for existing in _data(self.identity.list_groups(compartment_id=self.tenancy, name=SEED_NAME)):
-            return existing
-        created = _data(
+            return Principal.legacy(existing)
+        legacy = _data(
             self.identity.create_group(
                 oci.identity.models.CreateGroupDetails(
                     compartment_id=self.tenancy,
                     name=SEED_NAME,
-                    description='Holds the kluster seed user (credentials.md §2)',
+                    description=GROUP_DESCRIPTION,
                 )
             )
         )
         log.info('created group %s', SEED_NAME)
-        return created
+        return Principal.legacy(legacy)
 
-    def user(self) -> Any:
-        """The seed's user, created if absent."""
+    def user(self) -> Principal:
+        """The seed's user, created if absent.
+
+        Through the domain first for the reason the group is, and for one
+        more: the legacy `CreateUser` in a tenancy with domains refuses
+        outright, because the domain demands fields the legacy request has
+        nowhere to put.
+        """
+        if self.domain is not None:
+            try:
+                found = self.domain.user(SEED_NAME)
+                if found is not None:
+                    return found
+                created = self.domain.create_user(SEED_NAME, USER_DESCRIPTION, OCI_SEED_USER_EMAIL)
+            except oci.exceptions.ServiceError as exc:
+                log.debug('the identity domain refused to provide the user (%s); trying the legacy call', _why(exc))
+            else:
+                log.info('created user %s in the identity domain', SEED_NAME)
+                return created
         for existing in _data(self.identity.list_users(compartment_id=self.tenancy, name=SEED_NAME)):
-            return existing
-        created = _data(
+            return Principal.legacy(existing)
+        legacy = _data(
             self.identity.create_user(
                 oci.identity.models.CreateUserDetails(
                     compartment_id=self.tenancy,
                     name=SEED_NAME,
-                    description='The kluster seed API key (credentials.md §2)',
+                    description=USER_DESCRIPTION,
                     email=OCI_SEED_USER_EMAIL,
                 )
             )
         )
         log.info('created user %s', SEED_NAME)
-        return created
+        return Principal.legacy(legacy)
 
-    def membership(self, user_id: str, group_id: str) -> None:
+    def membership(self, user: Principal, group: Principal) -> None:
+        """Put the seed's user in the seed's group, if it is not there already.
+
+        In the domain the membership is an attribute of the group rather than
+        a resource of its own, so the read is a read of the group and the
+        write is a patch of it. The legacy pair (`list_user_group_memberships`
+        and `add_user_to_group`) says the same thing about the same fact.
+        """
+        if self.domain is not None:
+            try:
+                if user.handle in self.domain.members(group):
+                    return
+                self.domain.add_member(group, user)
+            except oci.exceptions.ServiceError as exc:
+                log.debug(
+                    'the identity domain refused to record the membership (%s); trying the legacy call', _why(exc)
+                )
+            else:
+                log.info('added %s to the %s group in the identity domain', SEED_NAME, SEED_NAME)
+                return
         memberships = _data(
-            self.identity.list_user_group_memberships(compartment_id=self.tenancy, user_id=user_id, group_id=group_id)
+            self.identity.list_user_group_memberships(
+                compartment_id=self.tenancy, user_id=user.ocid, group_id=group.ocid
+            )
         )
         if memberships:
             return
         _ = self.identity.add_user_to_group(
-            oci.identity.models.AddUserToGroupDetails(user_id=user_id, group_id=group_id)
+            oci.identity.models.AddUserToGroupDetails(user_id=user.ocid, group_id=group.ocid)
         )
-        log.info('added %s to %s', SEED_NAME, SEED_NAME)
+        log.info('added %s to the %s group', SEED_NAME, SEED_NAME)
 
     def policy(self) -> Any:
         """The seed's policy, created if absent and corrected if it has drifted.
@@ -366,9 +606,25 @@ class Iam:
         log.info('created policy %s', SEED_NAME)
         return created
 
-    def upload_key(self, user_id: str, public_pem: str) -> str:
-        """Register a public key on the user. Returns the fingerprint OCI assigned."""
-        key = _data(self.identity.upload_api_key(user_id, oci.identity.models.CreateApiKeyDetails(key=public_pem)))
+    def upload_key(self, user: Principal, public_pem: str) -> str:
+        """Register a public key on the user. Returns the fingerprint OCI assigned.
+
+        An API key is a user credential, so the domain owns it: a rotation
+        registers its own successor through the self-service endpoint, and a
+        bring-up registers the seed's first key through the administrative one
+        because the account root is signing and the seed is the subject.
+        """
+        if self.domain is not None:
+            try:
+                if user.ocid == self.caller:
+                    assigned = self.domain.create_my_api_key(public_pem)
+                else:
+                    assigned = self.domain.create_api_key(user, public_pem)
+            except oci.exceptions.ServiceError as exc:
+                log.debug('the identity domain refused to register the key (%s); trying the legacy call', _why(exc))
+            else:
+                return assigned
+        key = _data(self.identity.upload_api_key(user.ocid, oci.identity.models.CreateApiKeyDetails(key=public_pem)))
         return str(key.fingerprint)
 
     def api_keys(self, user_id: str) -> list[str]:
@@ -379,10 +635,12 @@ class Iam:
         *intermittently* to the key's own user (a key listed fine for hours,
         then 401 IdcsConversionError on the identical call). Where a domain
         is known, the self-service listing is the reliable one; the legacy
-        read stays for sessions without a domain (the account root, a
-        pre-attribute row, a tenancy without domains).
+        read stays for sessions without a domain (a pre-attribute row, a
+        tenancy without domains) and for a session asking about somebody
+        else's user, which the self-service listing cannot answer: it reports
+        the caller's own keys and nothing else.
         """
-        if self.domain is not None:
+        if self.domain is not None and user_id == self.caller:
             try:
                 return list(self.domain.my_api_keys())
             except oci.exceptions.ServiceError as exc:
@@ -405,8 +663,12 @@ class Iam:
         stays as the fallback because it is the only one a tenancy without
         domains has, and because a domain that refuses is not a reason to
         stop trying to delete.
+
+        Self-service only, hence the caller check: a sweep runs as the user
+        whose keys it is retiring (`_sweep`), and the endpoint would delete
+        the caller's own key rather than the named user's if it did not.
         """
-        if self.domain is not None:
+        if self.domain is not None and user_id == self.caller:
             key_id = self.domain.my_api_keys().get(key_fingerprint)
             if key_id is not None:
                 try:
@@ -425,7 +687,7 @@ class Iam:
         log.info('deleted superseded API key %s', key_fingerprint)
 
 
-def _mint_verified(iam: Iam, user_id: str, *, domain_url: str | None = None) -> str:
+def _mint_verified(iam: Iam, user: Principal, *, domain_url: str | None = None) -> str:
     """Put a new key on the user and prove it signs before anything depends on it.
 
     Returns the private key PEM; the fingerprint is a function of it.
@@ -435,11 +697,11 @@ def _mint_verified(iam: Iam, user_id: str, *, domain_url: str | None = None) -> 
     """
     private_pem, public_pem = generate_key()
     log.info('uploading a new API key for %s', SEED_NAME)
-    assigned = iam.upload_key(user_id, public_pem)
+    assigned = iam.upload_key(user, public_pem)
     if assigned != fingerprint(private_pem):
         raise CredentialRejected(f'OCI registered fingerprint {assigned}, which is not the one this key computes to')
     minted = Iam.authorize(
-        iam.tenancy, user_id, private_pem, connect=iam.connect, domain_url=domain_url or iam.domain_url
+        iam.tenancy, user.ocid, private_pem, connect=iam.connect, domain_url=domain_url or iam.domain_url
     )
     log.info(
         'waiting for %s to authenticate (propagation is eventually consistent, usually well under a minute)', assigned
@@ -447,7 +709,7 @@ def _mint_verified(iam: Iam, user_id: str, *, domain_url: str | None = None) -> 
     deadline = time.monotonic() + PROPAGATION_DEADLINE
     while True:
         try:
-            _ = minted.api_keys(user_id)
+            _ = minted.api_keys(user.ocid)
             break
         except oci.exceptions.ServiceError as exc:
             if exc.status != 401 or time.monotonic() >= deadline:
@@ -639,27 +901,32 @@ def create_seed(
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
     """
-    iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect)
-    group = iam.group()
-    user = iam.user()
-    iam.membership(str(user.id), str(group.id))
-    _ = iam.policy()
-
     # The account root is the credential that can read the tenancy's identity
     # domains, and this is the one moment it is in hand: stored on the row,
-    # rotation retires keys without ever borrowing it again.
+    # rotation retires keys without ever borrowing it again. It is also read
+    # first, because the domain is where the user, the group and the key are
+    # made -- the root is the domain administrator, and a session that does
+    # not know its domain can only reach them through the legacy shim.
+    iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect)
     domain = _discovered_domain(iam, whose='account root')
+    if domain is not None:
+        iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect, domain_url=domain)
 
-    _room_for_one_more(iam, str(user.id))
-    private_pem = _mint_verified(iam, str(user.id), domain_url=domain)
-    _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem, domain=domain)
+    group = iam.group()
+    user = iam.user()
+    iam.membership(user, group)
+    _ = iam.policy()
+
+    _room_for_one_more(iam, user.ocid)
+    private_pem = _mint_verified(iam, user, domain_url=domain)
+    _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=user.ocid, private_pem=private_pem, domain=domain)
 
     # A run that died between upload and store left a key whose private half
     # no longer exists anywhere; a user holds at most three keys, so orphans
     # eventually block minting. Only the stored key survives (_sweep).
-    seed_iam = Iam.authorize(iam.tenancy, str(user.id), private_pem, connect=iam.connect, domain_url=domain)
-    _sweep(seed_iam, str(user.id), fingerprint(private_pem))
-    return str(user.id)
+    seed_iam = Iam.authorize(iam.tenancy, user.ocid, private_pem, connect=iam.connect, domain_url=domain)
+    _sweep(seed_iam, user.ocid, fingerprint(private_pem))
+    return user.ocid
 
 
 def rotate_seed(
@@ -690,7 +957,10 @@ def rotate_seed(
     # must have room for the successor before it can be minted.
     _sweep(iam, user_id, fingerprint(previous_pem))
     _room_for_one_more(iam, user_id)
-    private_pem = _mint_verified(iam, user_id)
+    # The row stores the OCID and nothing else, which is all a rotation needs:
+    # the key it registers goes on its own user, and the self-service endpoint
+    # takes no subject at all.
+    private_pem = _mint_verified(iam, Principal(ocid=user_id, handle=user_id))
     _store(into or store, seed_entry, tenancy=tenancy, user_id=user_id, private_pem=private_pem, domain=domain)
 
     previous = fingerprint(previous_pem)
