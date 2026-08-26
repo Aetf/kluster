@@ -11,12 +11,17 @@ shape (§2) is the other half of the same decision.
 
 from __future__ import annotations
 
+import itertools
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import oci
 import pytest
+from conftest import MemoryKit
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -440,3 +445,216 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     # the fingerprints in hand, not a bare quota 400.
     with pytest.raises(oci_iam.CredentialRejected, match='delete the superseded ones in the console'):
         _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+
+class Interrupted(RuntimeError):
+    """A run that stopped mid-flight, the way a lost process or a 500 does."""
+
+
+class Interruptible:
+    """A tenancy that counts remote calls and stops the run at the k-th.
+
+    Two ways to stop, because they leave different worlds behind: `before`
+    never reaches the service, `after` lets the service act and loses the
+    answer -- which is the one that strands a key whose private half the
+    caller never got to store.
+    """
+
+    def __init__(self, identity: FakeIdentity, *, fail_at: int | None = None, when: str = 'after') -> None:
+        self.identity: FakeIdentity = identity
+        self.fail_at: int | None = fail_at
+        self.when: str = when
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        target = getattr(self.identity, name)
+
+        def counted(*args: Any, **kwargs: Any) -> Any:
+            self.calls.append(name)
+            fatal = len(self.calls) == self.fail_at
+            if fatal and self.when == 'before':
+                raise Interrupted(f'call {self.fail_at} ({name}) never reached the service')
+            result = target(*args, **kwargs)
+            if fatal:
+                raise Interrupted(f'call {self.fail_at} ({name}) reached the service; the answer was lost')
+            return result
+
+        return counted
+
+
+@dataclass
+class FaultyTenancy:
+    """`Tenancy`, with every client it hands out wired through one interrupter."""
+
+    identity: FakeIdentity = field(default_factory=FakeIdentity)
+    connections: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    fail_at: int | None = None
+    when: str = 'after'
+    faulty: Interruptible | None = None
+
+    def __post_init__(self) -> None:
+        self.faulty = Interruptible(self.identity, fail_at=self.fail_at, when=self.when)
+
+    def __call__(self, tenancy: str, user: str, private_key_pem: str) -> Interruptible:
+        self.connections.append((user, oci_iam.fingerprint(private_key_pem)))
+        assert self.faulty is not None
+        return self.faulty
+
+    @property
+    def counted(self) -> int:
+        assert self.faulty is not None
+        return len(self.faulty.calls)
+
+
+def _kit_never_lies(kit: KdbxStore, identity: FakeIdentity) -> None:
+    """Whatever the kit holds must be a key the tenancy would accept.
+
+    The invariant an interrupted run is most likely to break: a row written
+    before the key works, or left behind after the key was deleted, is a kit
+    that answers a question wrongly rather than not at all.
+    """
+    if not kit.has(SEED_ENTRY):
+        return
+    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert oci_iam.fingerprint(private_pem) in identity.keys.get(user_id, []), 'the kit holds a key the tenancy has not'
+
+
+def _keys_are_bounded(identity: FakeIdentity) -> None:
+    """No user may collect more keys than it can hold; the quota is three."""
+    for user_id, held in identity.keys.items():
+        assert len(held) <= oci_iam.KEY_QUOTA, f'{user_id} holds {len(held)} keys'
+
+
+def _cheap_key() -> tuple[str, str]:
+    """A key pair the sweep can afford, as (private PEM, public PEM).
+
+    Short, and generated here rather than by `generate_key`, because the
+    sweep's cost is dominated by *reading* a PEM back: the fingerprint is a
+    function of the key and is recomputed on every use (§2), so the sweep
+    parses one a few hundred times. A production key is 2048 bits
+    (`oci_iam.KEY_SIZE`) and that is what the rest of this file mints; what a
+    fault sweep is about is the order of the calls around a key, not the
+    arithmetic inside one.
+    """
+    private = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    return (
+        private.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode(),
+        private.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode(),
+    )
+
+
+#: Generated once and cycled. Eight is more than any single test draws, so
+#: the keys one test sees are all distinct.
+_KEY_POOL = [_cheap_key() for _ in range(8)]
+
+
+@pytest.fixture
+def pooled_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys = itertools.cycle(_KEY_POOL)
+    monkeypatch.setattr(oci_iam, 'generate_key', lambda: next(keys))
+
+
+def _fresh_root() -> masters.Credential:
+    private_pem, _ = oci_iam.generate_key()
+    return masters.Credential(
+        root=masters.ROOTS['oci'],
+        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},
+    )
+
+
+def _create(tenancy: FaultyTenancy, kit: KdbxStore) -> None:
+    _ = oci_iam.create_seed(root=_fresh_root(), seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+
+def _rotate(tenancy: FaultyTenancy, kit: KdbxStore) -> None:
+    _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+
+def _calls_made(operation: Callable[[FaultyTenancy, KdbxStore], None], *, prepared: bool) -> int:
+    """How many remote calls one uninterrupted run of `operation` makes.
+
+    Measured rather than written down, so the sweep below covers exactly the
+    calls the operation makes today and widens by itself when it grows one.
+    """
+    tenancy = FaultyTenancy()
+    kit = MemoryKit()
+    if prepared:
+        _create(tenancy, kit)
+    before = tenancy.counted
+    operation(tenancy, kit)
+    return tenancy.counted - before
+
+
+CREATE_CALLS = _calls_made(_create, prepared=False)
+ROTATE_CALLS = _calls_made(_rotate, prepared=True)
+
+#: Both ways a run can stop at call k: without the service having acted, and
+#: with the service having acted and the answer lost on the way back. The
+#: second is the one that strands a key nobody holds the private half of.
+CRASH_POINTS = 'before', 'after'
+
+
+def _survived(tenancy: FaultyTenancy, kit: KdbxStore) -> None:
+    """The invariants an interrupted run has to leave standing.
+
+    Checked after the crash and again after the re-run, because a kit that
+    lies is just as wrong while the operator is still deciding whether to
+    re-run it.
+    """
+    _kit_never_lies(kit, tenancy.identity)
+    _keys_are_bounded(tenancy.identity)
+
+
+@pytest.mark.parametrize('when', CRASH_POINTS)
+@pytest.mark.parametrize('failing_call', range(1, CREATE_CALLS + 1))
+def test_creating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str, pooled_keys: None) -> None:
+    identity = FakeIdentity()
+    kit = MemoryKit()
+    crashed = FaultyTenancy(identity=identity, fail_at=failing_call, when=when)
+
+    with pytest.raises(Interrupted):
+        _create(crashed, kit)
+    _survived(crashed, kit)
+
+    # 'Idempotent by probing' (docs/credentials.md) means exactly this: the
+    # repair is the same command, with nothing remembered about where it
+    # stopped.
+    healed = FaultyTenancy(identity=identity)
+    _create(healed, kit)
+
+    _survived(healed, kit)
+    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    # And the orphan a lost run left behind is gone, not merely tolerated:
+    # the user holds one key, the one the kit holds the private half of.
+    assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+@pytest.mark.parametrize('when', CRASH_POINTS)
+@pytest.mark.parametrize('failing_call', range(1, ROTATE_CALLS + 1))
+def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, when: str, pooled_keys: None) -> None:
+    identity = FakeIdentity()
+    kit = MemoryKit()
+    _create(FaultyTenancy(identity=identity), kit)
+    crashed = FaultyTenancy(identity=identity, fail_at=failing_call, when=when)
+
+    with pytest.raises(Interrupted):
+        _rotate(crashed, kit)
+    # A rotation interrupted anywhere leaves a working seed: whichever key the
+    # kit holds afterwards, predecessor or successor, still authenticates.
+    _survived(crashed, kit)
+
+    healed = FaultyTenancy(identity=identity)
+    _rotate(healed, kit)
+
+    _survived(healed, kit)
+    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
