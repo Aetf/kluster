@@ -17,12 +17,14 @@ a library call cannot leak a secret into an argv another process can read.
 untyped surface -- everything it exports is annotated.
 
 A master password is taken from the desktop secret store (the freedesktop
-Secret Service, or the platform equivalent) before anyone is prompted for it.
-Bring-up opens two databases -- the kit and the personal estate (§2) -- and
-`bootstrap` was going to mean typing two passwords into a script that then
-runs for minutes. Nothing is ever written to the store implicitly: `kdbx
-remember` is the only thing that puts one there, so a machine that has not
-opted in behaves exactly as before.
+Secret Service, or the platform equivalent) before anyone is prompted for it,
+so a `bootstrap` that opens the kit and then runs for minutes is not guarded
+by a password typed into a process nobody is watching. The store is reached
+through three module functions rather than through the database class alone,
+because the account roots (`masters.py`) live in the same store under their
+own keys and there is to be one mechanism, not two. Nothing is ever written
+implicitly: a `remember` command is the only thing that puts a value there, so
+a machine that has not opted in behaves exactly as before.
 """
 
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
@@ -55,11 +57,6 @@ PATH_ENV = 'KLUSTER_KDBX'
 #: a database moved to a new path simply stops matching.
 KEYRING_SERVICE = 'kluster-credentials'
 
-#: The operator's personal estate, which holds the account roots. Read at
-#: bring-up and at re-seeding, never otherwise: the two databases are separate
-#: so that everything in the kit is rotatable (§2).
-MASTER_PATH_ENV = 'KLUSTER_MASTER_KDBX'
-
 #: The attributes an entry carries natively; anything else is a custom
 #: property, which is how a seed records what it is without spending a field.
 _NATIVE = ('Title', 'UserName', 'Password', 'URL', 'Notes')
@@ -67,6 +64,47 @@ _NATIVE = ('Title', 'UserName', 'Password', 'URL', 'Notes')
 
 class KdbxError(RuntimeError):
     pass
+
+
+def remembered(account: str) -> str | None:
+    """A secret from the desktop store, or None if there is none to have.
+
+    A machine with no Secret Service is not an error -- it is the case every
+    caller falls back from, so a backend that is absent, locked or broken is
+    reported the same way as a key that was never stored.
+    """
+    try:
+        import keyring
+
+        return keyring.get_password(KEYRING_SERVICE, account)
+    except Exception as exc:  # noqa: BLE001 - any backend failure is a miss
+        log.debug('no secret store for %s: %s', account, exc)
+        return None
+
+
+def store(account: str, secret: str) -> None:
+    """Put a secret in the desktop store under `account`.
+
+    Every write to the store is one of these, and every one of them is
+    something the operator asked for by name (`kdbx remember`, `master
+    remember`): nothing lands there as a side effect of a run.
+    """
+    import keyring
+
+    keyring.set_password(KEYRING_SERVICE, account, secret)
+    log.info('stored %s in %s', account, keyring.get_keyring().name)
+
+
+def unstore(account: str) -> None:
+    """Remove it again."""
+    import keyring
+    import keyring.errors
+
+    try:
+        keyring.delete_password(KEYRING_SERVICE, account)
+    except keyring.errors.PasswordDeleteError as exc:
+        raise KdbxError(f'nothing stored for {account}') from exc
+    log.info('removed %s from the secret store', account)
 
 
 def _path(entry: str) -> list[str]:
@@ -87,11 +125,11 @@ class KdbxStore:
     _db: PyKeePass | None = field(default=None, repr=False)
 
     @classmethod
-    def from_env(cls, path: Path | None = None, *, env: str = PATH_ENV, flag: str = '--kdbx') -> KdbxStore:
+    def from_env(cls, path: Path | None = None) -> KdbxStore:
         if path is None:
-            raw = os.environ.get(env)
+            raw = os.environ.get(PATH_ENV)
             if not raw:
-                raise KdbxError(f'pass {flag} or set {env} to the KeePassXC database')
+                raise KdbxError(f'pass --kdbx or set {PATH_ENV} to the KeePassXC database')
             path = Path(raw).expanduser()
         if not path.is_file():
             raise KdbxError(f'no database at {path}')
@@ -131,47 +169,26 @@ class KdbxStore:
         self.unlock_with(getpass.getpass(f'master password for {self.path.name}: '))
 
     def _remembered(self) -> str | None:
-        """The stored master password, or None if there is no store at all.
-
-        A headless machine has no Secret Service, and that is not an error --
-        it is the case this falls back from.
-        """
-        try:
-            import keyring
-
-            return keyring.get_password(KEYRING_SERVICE, str(self.path))
-        except Exception as exc:  # noqa: BLE001 - any backend failure is a miss
-            log.debug('no secret store for %s: %s', self.path, exc)
-            return None
+        """The stored master password, or None if there is no store at all."""
+        return remembered(str(self.path))
 
     def remember(self, password: str) -> None:
-        """Put the master password in the desktop secret store.
-
-        Explicit by design: nothing else in this module writes to the store,
-        so a password is only there because someone asked for it to be.
-        """
-        import keyring
-
-        keyring.set_password(KEYRING_SERVICE, str(self.path), password)
-        log.info('stored the master password for %s in %s', self.path.name, keyring.get_keyring().name)
+        """Put the master password in the desktop secret store."""
+        store(str(self.path), password)
 
     def forget(self) -> None:
         """Remove it again."""
-        import keyring
-        import keyring.errors
-
         try:
-            keyring.delete_password(KEYRING_SERVICE, str(self.path))
-        except keyring.errors.PasswordDeleteError as exc:
+            unstore(str(self.path))
+        except KdbxError as exc:
             raise KdbxError(f'no stored password for {self.path}') from exc
-        log.info('removed the stored password for %s', self.path.name)
 
     def unlock_with(self, password: str) -> None:
         """Open with a password already in hand.
 
-        Bring-up holds two databases open at once (the kit and the estate,
-        §2), and a caller that has prompted for itself should not be made to
-        prompt again through this class.
+        A caller that has prompted for itself -- `kdbx remember` proves the
+        password before storing it, `rotate` creates the successor -- should
+        not be made to prompt again through this class.
         """
         if self._db is not None:
             return
@@ -268,6 +285,27 @@ class KdbxStore:
     def attachments(self, entry: str) -> list[str]:
         """The names of an entry's attachments."""
         return sorted(str(a.filename) for a in self._entry(entry).attachments)
+
+    def set_attribute(self, entry: str, name: str, value: str, *, protect: bool = True) -> None:
+        """Write a custom attribute, protected like the password field by default.
+
+        A row whose credential is more than an identifier and a secret records
+        the rest here: the OCI seed's tenancy OCID has nowhere else to go once
+        UserName holds the user OCID (§2). Protected because an OCID is an
+        account identifier, and a listing has no reason to hand it out.
+        """
+        found = self._entry(entry)
+        found.set_custom_property(name, value, protect=protect)
+        self._open.save()
+        log.info('kdbx: set %s on %s', name, entry)
+
+    def attribute(self, entry: str, name: str) -> str:
+        """One custom attribute's value."""
+        return self.get(entry, attribute=name)
+
+    def attributes(self, entry: str) -> list[str]:
+        """The names of an entry's custom attributes."""
+        return sorted(str(name) for name in self._entry(entry).custom_properties)
 
     def has(self, entry: str) -> bool:
         """Whether the entry exists, without raising when it does not."""

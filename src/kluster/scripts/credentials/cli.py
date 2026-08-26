@@ -20,8 +20,9 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import b2, entries, lifecycle, seeds
-from .kdbx import MASTER_PATH_ENV, PATH_ENV, KdbxError, KdbxStore
+from . import b2, cloudflare, entries, lifecycle, masters, oci_iam, seeds
+from .kdbx import PATH_ENV, KdbxError, KdbxStore
+from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +32,11 @@ log = logging.getLogger(__name__)
 _ORDER = """when to run what (docs/credentials.md §4):
 
   bring-up, from nothing
-    1. credentials bootstrap --master-kdbx <estate> --master-entry b2=<entry>
+    0. credentials master <root> remember
+         Puts an account root (§2) in the desktop secret store, once per
+         machine, so the mints below ask for nothing. Skip it and they
+         prompt instead, which is how a headless run works.
+    1. credentials bootstrap
          Fills a kit with every seed in §2, creating the kit if it is absent.
          Stops at each credential no API can create and prints the console
          steps. Re-run it to resume: it skips what is already there.
@@ -63,9 +68,10 @@ _ORDER = """when to run what (docs/credentials.md §4):
 
   looking without changing
     credentials kdbx ls | show <entry>
-    credentials kdbx remember    stores the master password in the desktop
-                                 secret store, so a run that opens two
-                                 databases asks nothing
+    credentials master ls        which account roots the secret store holds
+    credentials kdbx remember    stores the kit's master password in the
+                                 desktop secret store, so a long run is not
+                                 guarded by a password typed into it
 """
 
 
@@ -88,14 +94,6 @@ def _parser() -> argparse.ArgumentParser:
     # skips what is already there, so an interrupted run is resumed by
     # re-running it rather than by remembering where it stopped.
     boot = families.add_parser('bootstrap', help='fill a kit with every seed (§4.1); creates the kit if absent')
-    _ = boot.add_argument('--master-kdbx', type=Path, default=None, help=f'the personal estate (${MASTER_PATH_ENV})')
-    _ = boot.add_argument(
-        '--master-entry',
-        action='append',
-        default=[],
-        metavar='<member>=<entry>',
-        help='where an account root lives in the estate, e.g. b2="accounts/Backblaze"',
-    )
     _ = boot.add_argument('--only', default=None, metavar='<member>', help='create just this seed (repair, seed loss)')
 
     der = families.add_parser('derive', help='the secrets computed from the derivation seed (§2.2)')
@@ -136,30 +134,50 @@ def _parser() -> argparse.ArgumentParser:
         member = members.add_parser(seed.member, help=f'mints {seed.mints}')
         _ = member.add_argument('--entry', default=seed.entry, help=f'entry holding it (default: {seed.entry})')
         actions = member.add_subparsers(dest='action', required=True, metavar='<action>')
-        create = actions.add_parser(
+        _ = actions.add_parser(
             'create',
             help='generate it (bring-up, once)'
             if seed.member == 'derivation'
             else 'mint it from the account root (bring-up, or seed loss)',
         )
-        if seed.member not in ('derivation', *entries.MANUAL):
-            # The account roots live in the personal estate, not in the kit
-            # (§2), so minting is the one action that opens two databases.
-            _ = create.add_argument(
-                '--master-entry',
-                required=True,
-                help='entry holding the account master key (id as username, key as password)',
-            )
-            _ = create.add_argument(
-                '--master-kdbx',
-                type=Path,
-                default=None,
-                help=f'the database holding it (default: ${MASTER_PATH_ENV})',
-            )
         if seed.self_reproducing:
             _ = actions.add_parser('rotate', help='have the seed mint and install its successor')
 
+    # The account roots (§2) are not in the kit and not in any database this
+    # repository opens: each lives in the desktop secret store under its own
+    # key, and a machine without one prompts. This family is how they get
+    # there, and the only thing that ever writes them.
+    master_cmd = families.add_parser('master', help='the account roots the mints borrow (§2)')
+    roots = master_cmd.add_subparsers(dest='member', required=True, metavar='<root>')
+    listing = roots.add_parser('ls', help='which roots the secret store holds; prints no values')
+    listing.set_defaults(action='ls')
+    for account in masters.ROOTS.values():
+        root_cmd = roots.add_parser(account.member, help=account.title)
+        root_actions = root_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
+        _ = root_actions.add_parser('remember', help='prompt for it and store it in the desktop secret store')
+        _ = root_actions.add_parser('forget', help='remove it from the secret store')
+
     return parser
+
+
+def _master(args: argparse.Namespace) -> int:
+    """The account-root commands, which need no kit and open no database."""
+    if args.action == 'ls':
+        for account in masters.ROOTS.values():
+            held = masters.stored(account)
+            state = (
+                'in the secret store'
+                if all(held.values())
+                else 'missing: ' + ', '.join(name for name, present in held.items() if not present)
+            )
+            print(f'{account.member}: {state}')
+        return 0
+    account = masters.ROOTS[args.member]
+    if args.action == 'remember':
+        log.info('remembered %s for %s', ', '.join(masters.remember(account, input)), account.member)
+    else:
+        masters.forget(account)
+    return 0
 
 
 def _kit(args: argparse.Namespace) -> KdbxStore:
@@ -176,26 +194,13 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     return KdbxStore.from_env(args.kdbx)
 
 
-def _estate(args: argparse.Namespace) -> lifecycle.Estate:
-    """The personal estate, opened only if a seed actually needs an account root."""
-    by_member: dict[str, str] = {}
-    for pair in args.master_entry:
-        member, _, entry = str(pair).partition('=')
-        if not entry:
-            raise KdbxError(f'--master-entry wants <member>=<entry>, not {pair!r}')
-        by_member[member] = entry
-
-    store = None
-    if args.master_kdbx is not None or os.environ.get(MASTER_PATH_ENV):
-        store = KdbxStore.from_env(args.master_kdbx, env=MASTER_PATH_ENV, flag='--master-kdbx')
-    return lifecycle.Estate(store=store, entries_by_member=by_member)
-
-
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     args = _parser().parse_args(argv)
 
     try:
+        if args.family == 'master':
+            return _master(args)
         store = _kit(args)
 
         match (args.family, getattr(args, 'member', None), args.action):
@@ -228,35 +233,29 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 print(seeds.pulumi_passphrase(seeds.load_seed(store)))
             case ('bootstrap', _, _):
-                created = lifecycle.bootstrap(
-                    store,
-                    estate=_estate(args),
-                    prompt=input,
-                    only=args.only,
-                )
+                created = lifecycle.bootstrap(store, prompt=input, only=args.only)
                 log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
             case ('rotate', _, _):
                 successor = KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: '))
                 rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only)
                 log.info('rotated %s into %s', ', '.join(rotated), args.into)
                 log.warning('keep %s until the last secret derived from it has expired (§2.2)', store.path)
-            case ('seed', 'derivation', 'create'):
-                seeds.init_seed(store, args.entry)
-            case ('seed', 'b2', 'create'):
-                master = KdbxStore.from_env(args.master_kdbx, env=MASTER_PATH_ENV, flag='--master-kdbx')
-                _ = b2.create_seed(
-                    master=master,
-                    seeds=store,
-                    master_entry=args.master_entry,
-                    seed_entry=args.entry,
-                )
+            # One row at a time, through the same dispatch `bootstrap` walks:
+            # a single-row repair and a whole-kit fill must not be able to
+            # write a row two different ways.
+            case ('seed', member, 'create') if member in entries.SEEDS:
+                lifecycle.create_seed(entries.SEEDS[member], kit=store, prompt=input, entry=args.entry)
+            case ('seed', 'oci', 'rotate'):
+                _ = oci_iam.rotate_seed(store, seed_entry=args.entry)
+            case ('seed', 'cloudflare', 'rotate'):
+                _ = cloudflare.rotate_seed(store, seed_entry=args.entry)
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family} {args.action}')
-    except (KdbxError, b2.CredentialRejected) as exc:
+    except (KdbxError, CredentialRejected) as exc:
         log.error('%s', exc)
         return 1
     return 0

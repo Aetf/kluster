@@ -2,8 +2,8 @@
 
 Three credentials, three lifetimes:
 
--   the **account master key** — an account root, held offline, used only to
-    create the seed if it is ever lost;
+-   the **account master key** — an account root (`masters.py`), held outside
+    the kit and used only to create the seed if it is ever lost;
 -   the **seed key** — offline, and the only B2 credential that ever gets
     stored: it mints the management key and, because `b2_create_key` needs
     nothing but `writeKeys`, its own successor, which is what makes B2
@@ -26,13 +26,11 @@ from typing import Any
 
 import requests
 
+from . import masters
 from .kdbx import KdbxStore
+from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
-
-
-class CredentialRejected(RuntimeError):
-    pass
 
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
@@ -136,18 +134,17 @@ def _mint_verified(session: Session, name: str) -> tuple[str, str]:
     return key_id, key
 
 
-def create_seed(*, master: KdbxStore, seeds: KdbxStore, master_entry: str, seed_entry: str) -> str:
+def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
     """Create the seed key from the account master key. Returns its key id.
 
-    Two stores, because the account master key is not part of the seed kit
-    (credentials.md §2): it is read from the personal estate and the seed it
-    mints is written to the kit. They are the same file only if the operator
-    points both at it.
+    The account master key is not part of the seed kit (credentials.md §2): it
+    comes from the desktop secret store or a prompt (`masters.py`), is held
+    for the length of this call, and the seed it mints is what the kit gets.
 
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
     """
-    session = Session.from_entry(master, master_entry)
+    session = Session.authorize(root['account-id'], root['key'])
     key_id, key = _mint_verified(session, SEED_KEY_NAME)
     seeds.put(seed_entry, key_id, key)
     return key_id

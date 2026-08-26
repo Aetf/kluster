@@ -11,52 +11,33 @@ Two properties are the point:
     output exists and skips if it does. A checkpoint file would record "this
     ran", which stops being true the moment someone deletes a key in a
     console -- and the run after that would skip the repair.
--   **One master password.** The kit and the personal estate are opened once
-    and passed down, so a bootstrap that pauses for two console visits does
-    not ask again on the way back.
+-   **One password, and only for the kit.** The kit is unlocked once and
+    passed down, so a bootstrap that pauses for two console visits does not
+    ask again on the way back. The account roots a mint needs are not in a
+    database at all: they come from the desktop secret store, or from a
+    prompt when there is none (`masters.py`).
 """
 
 from __future__ import annotations
 
 import getpass
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
-from . import b2, entries, seeds
+from . import b2, cloudflare, entries, masters, oci_iam, seeds
 from .kdbx import KdbxError, KdbxStore
+from .masters import Prompt
 
 log = logging.getLogger(__name__)
 
-#: Reading a secret from the operator. Injected so tests do not need a
-#: terminal, and so a future non-interactive mode has one place to change.
-Prompt = Callable[[str], str]
 
+def root(member: str, prompt: Prompt) -> masters.Credential:
+    """The account root a mint needs, read at the moment it is needed.
 
-@dataclass
-class Estate:
-    """Where the account roots live (§2), opened only if something needs one.
-
-    Account roots are not in the kit, so minting a seed from one crosses two
-    databases. Bootstrap is the only operation that does.
+    Late rather than up front: a bootstrap that has to stop for a console
+    visit should not have asked for credentials it never reached.
     """
-
-    store: KdbxStore | None
-    entries_by_member: dict[str, str]
-
-    def master_entry(self, member: str) -> str:
-        entry = self.entries_by_member.get(member)
-        if entry is None:
-            raise KdbxError(
-                f'no account-root entry given for {member}; pass --master-entry {member}=<entry in the estate>'
-            )
-        return entry
-
-    def opened(self) -> KdbxStore:
-        if self.store is None:
-            raise KdbxError('no personal estate given; pass --master-kdbx or set KLUSTER_MASTER_KDBX')
-        return self.store
+    return masters.load(masters.ROOTS[member], prompt)
 
 
 def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, bytes | None]:
@@ -81,26 +62,29 @@ def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, by
     return identifier, secret, payload
 
 
-def create_seed(seed: entries.Seed, *, kit: KdbxStore, estate: Estate, prompt: Prompt) -> None:
-    """Create one §2 row in the kit. Assumes it is not there yet."""
-    if seed.member == 'derivation':
-        seeds.init_seed(kit, seed.entry)
-        return
-    if seed.member == 'b2':
-        _ = b2.create_seed(
-            master=estate.opened(),
-            seeds=kit,
-            master_entry=estate.master_entry('b2'),
-            seed_entry=seed.entry,
-        )
-        return
-    if seed.manual:
-        identifier, secret, payload = _read_console_seed(seed, prompt)
-        kit.put(seed.entry, identifier, secret)
-        if payload is not None and seed.attachment:
-            kit.attach(seed.entry, seed.attachment, payload)
-        return
-    raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
+def create_seed(seed: entries.Seed, *, kit: KdbxStore, prompt: Prompt, entry: str | None = None) -> None:
+    """Create one §2 row in the kit. Assumes it is not there yet.
+
+    `entry` overrides where the row is written, which is what `seed <member>
+    create --entry` passes; the register's own path is the default.
+    """
+    where = entry or seed.entry
+    match seed.member:
+        case 'derivation':
+            seeds.init_seed(kit, where)
+        case 'oci':
+            _ = oci_iam.create_seed(root=root('oci', prompt), seeds=kit, seed_entry=where)
+        case 'cloudflare':
+            _ = cloudflare.create_seed(root=root('cloudflare', prompt), seeds=kit, seed_entry=where)
+        case 'b2':
+            _ = b2.create_seed(root=root('b2', prompt), seeds=kit, seed_entry=where)
+        case _ if seed.manual:
+            identifier, secret, payload = _read_console_seed(seed, prompt)
+            kit.put(where, identifier, secret)
+            if payload is not None and seed.attachment:
+                kit.attach(where, seed.attachment, payload)
+        case _:  # pragma: no cover - every §2 row is one of the above
+            raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
 
 
 def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
@@ -122,7 +106,7 @@ def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
     return values
 
 
-def bootstrap(kit: KdbxStore, *, estate: Estate, prompt: Prompt, only: str | None = None) -> list[str]:
+def bootstrap(kit: KdbxStore, *, prompt: Prompt, only: str | None = None) -> list[str]:
     """Fill the kit with every §2 row. Returns the members it created.
 
     Idempotent by probing: a row already in the kit is left alone, so an
@@ -136,7 +120,7 @@ def bootstrap(kit: KdbxStore, *, estate: Estate, prompt: Prompt, only: str | Non
         if kit.has(seed.entry):
             log.info('%s: already in the kit', seed.title)
             continue
-        create_seed(seed, kit=kit, estate=estate, prompt=prompt)
+        create_seed(seed, kit=kit, prompt=prompt)
         created.append(member)
     if only is not None and only not in entries.SEEDS:
         raise KdbxError(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}')
@@ -160,9 +144,13 @@ def rotate(kit: KdbxStore, successor: KdbxStore, *, prompt: Prompt, only: str | 
         if member == 'derivation':
             # Generated, not minted: the successor is fresh random bytes.
             seeds.store_seed(successor, seeds.generate_seed(), seed.entry)
-        elif member == 'b2':
+        elif member == 'oci':
             # Reads the predecessor from the retired kit, writes the successor
             # into the new one, and leaves the retired file untouched.
+            _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+        elif member == 'cloudflare':
+            _ = cloudflare.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+        elif member == 'b2':
             _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=successor)
         elif seed.manual:
             identifier, secret, payload = _read_console_seed(seed, prompt)
