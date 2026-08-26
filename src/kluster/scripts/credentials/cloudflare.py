@@ -149,20 +149,28 @@ class Session:
         _ = self._call('DELETE', f'/user/tokens/{token_id}')
 
 
-def _mint_verified(session: Session, name: str) -> tuple[str, str]:
-    """Create a token with the minter's own policies and prove it works."""
+def _mint_verified(session: Session, name: str) -> tuple[str, str, Session]:
+    """Create a token with the minter's own policies and prove it works.
+
+    The verified session is handed back rather than dropped: the retirement
+    below has to run as the *new* token, and this is the session that proves
+    it works.
+    """
     log.info("minting %s with the minting token's own policies", name)
     token_id, token = session.create_token(name, session.policies())
     minted = Session.authorize(token)
     log.info('minted %s (%s), verified against the API', name, minted.token_id)
-    return token_id, token
+    return token_id, token, minted
 
 
 def _retire_superseded(session: Session, name: str, keep: str) -> None:
     """Delete same-named tokens other than the one just stored.
 
-    Only after the replacement is stored and verified: an interrupted rotation
-    must leave a working seed either way.
+    Only after the replacement is stored and verified: an interrupted run must
+    leave a working seed either way. `session` must be the kept token's own:
+    a session signing with a token it is about to delete stops working
+    partway through the deletions, and a run that left an orphan behind is
+    exactly the run with more than one deletion to make.
     """
     for existing in session.tokens():
         if str(existing.get('name')) == name and str(existing.get('id')) != keep:
@@ -177,8 +185,13 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     rotation is `rotate_seed`, which never touches the account root.
     """
     session = Session.authorize(root['token'])
-    token_id, token = _mint_verified(session, SEED_TOKEN_NAME)
+    token_id, token, minted = _mint_verified(session, SEED_TOKEN_NAME)
     seeds.put(seed_entry, token_id, token)
+
+    # A run that died between minting and storing left a token whose value
+    # exists nowhere -- with the seed's name and the seed's permissions, so a
+    # live credential nobody holds. Only the stored one survives.
+    _retire_superseded(minted, SEED_TOKEN_NAME, keep=token_id)
     return token_id
 
 
@@ -193,9 +206,9 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     session = Session.from_entry(store, seed_entry)
     previous = session.token_id
 
-    token_id, token = _mint_verified(session, SEED_TOKEN_NAME)
+    token_id, token, minted = _mint_verified(session, SEED_TOKEN_NAME)
     (into or store).put(seed_entry, token_id, token)
 
-    _retire_superseded(session, SEED_TOKEN_NAME, keep=token_id)
+    _retire_superseded(minted, SEED_TOKEN_NAME, keep=token_id)
     log.info('seed rotated: %s -> %s', previous, token_id)
     return token_id
