@@ -169,7 +169,7 @@ SEEDS: dict[str, Seed] = {
         Seed(
             member='zerotier',
             title='ZeroTier Central API token',
-            identifier='zerotier-central',
+            identifier='a name for this token (Central shows it beside the value)',
             mints='nothing; it is itself the provider credential',
             self_reproducing=False,
             console=(
