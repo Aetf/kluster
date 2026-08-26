@@ -9,11 +9,14 @@ name: deploy
 on:
   push:
     branches: [main]
-  # The weekly drift check and manual re-runs enter here too.
+  # Manual re-runs enter here. The weekly drift check is its own workflow
+  # (drift.yml) — it previews, it never applies.
   workflow_dispatch:
 
-# Serialized: one chain at a time, which state locking wants anyway and which
-# is what makes a single ZeroTier identity per domain safe.
+# Serialized: one chain at a time, which state locking wants anyway. It is not
+# by itself enough to keep a ZeroTier identity from being live twice — drift.yml
+# joins with the same environments' identities — so every job that joins also
+# takes a `zt-<domain>` group of its own (framework/ci.md §2).
 concurrency:
   group: deploy
   cancel-in-progress: false
@@ -27,6 +30,12 @@ jobs:
     # Ungated on purpose: reading the diff is the approval moment, so the
     # reading itself must not need approval.
     environment: physical-plan
+    # Both physical environments are one ZeroTier domain: the plan and the
+    # apply are meant to carry the same pre-authorized member, so they share a
+    # key even though they are separate credential partitions.
+    concurrency:
+      group: zt-physical
+      cancel-in-progress: false
     outputs:
       diff: ${{ steps.plan.outputs.diff }}
     steps:
@@ -57,6 +66,9 @@ jobs:
     runs-on: ubuntu-latest
     # Reviewer-gated: this is the layer that can root the gateway.
     environment: physical
+    concurrency:
+      group: zt-physical
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
@@ -79,6 +91,11 @@ jobs:
     if: always() && needs.up-physical.result != 'failure' && needs.plan-physical.result == 'success'
     runs-on: ubuntu-latest
     environment: dns
+    # Shared with every other job that joins on the dns environment's identity:
+    # a preview, a noop-automerge proof, a drift check.
+    concurrency:
+      group: zt-dns
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
@@ -130,3 +147,52 @@ jobs:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
           PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi up --stack apps --yes --diff
+
+  notify-failure:
+    # Nothing stands between a merge and a live apply, so a broken chain is
+    # otherwise entirely silent: you would believe main was deployed when it
+    # is not. Ported from kluster-code, where the same step ran inside the
+    # single deploy job; here the chain is five jobs, so it is one job that
+    # fires when any of them failed.
+    #
+    # Interim shape. The designed end state routes every CI alert through one
+    # `repository_dispatch` to the ops repo, which owns tier semantics, payload
+    # formatting and the GitHub-issue leg (cluster/architecture.md §4.3); that
+    # producer step does not exist yet, and neither does the App whose token it
+    # would use. Until it does, this posts the payload to Home Assistant
+    # directly, exactly as the legacy repository did.
+    needs: [plan-physical, up-physical, up-dns, up-k8s-base, up-apps]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push a Home Assistant notification
+        env:
+          # Repository secret, not an Environment one: this job belongs to no
+          # stack. Any workflow in this repository can therefore read it,
+          # same-repo previews included — acceptable for a URL whose only
+          # power is to raise a phone notification, and it leaves CI entirely
+          # once the dispatch producer replaces it.
+          WEBHOOK_URL: ${{ secrets.HAOS_DEPLOY_WEBHOOK_URL }}
+          # Via env, not `${{ }}` inline, so a commit message cannot break out
+          # into the shell.
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo '::warning::HAOS_DEPLOY_WEBHOOK_URL is unset; no alert sent'
+            exit 0
+          fi
+          # Absent on a workflow_dispatch run, which has no head commit.
+          subject=$(printf '%s' "${COMMIT_MSG:-}" | head -1)
+          jq -n \
+            --arg sha "${GITHUB_SHA:0:8}" \
+            --arg msg "${subject:-manual run}" \
+            --arg url "$RUN_URL" \
+            '{
+               title: "kluster deploy failed",
+               message: "the deploy chain failed on \($sha): \($msg)",
+               url: $url,
+             }' \
+            | curl -sS --fail -m 15 -X POST "$WEBHOOK_URL" \
+                -H 'Content-Type: application/json' --data @-
