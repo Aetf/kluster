@@ -75,7 +75,13 @@ _ORDER = """when to run what (docs/credentials.md §4):
 """
 
 
-def _parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
+    """The whole command tree, as data.
+
+    Public because the tree is generated rather than written out: a test walks
+    it and drives every leaf through `main`, so a register row that `main`
+    cannot dispatch fails there rather than on an operator's first run.
+    """
     parser = argparse.ArgumentParser(
         prog='credentials',
         description=__doc__,
@@ -196,7 +202,7 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
 
     try:
         if args.family == 'master':
