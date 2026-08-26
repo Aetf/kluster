@@ -32,14 +32,49 @@ stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
 
 The `dns` stack owns: zone resources, the estate records above, the
 **anchors** (§2), a reusable per-zone mail component
-(MX/SPF/DKIM/DMARC), and — per zone — **CAA records (issuance pinned
-to Let's Encrypt) and DNSSEC enablement** (2026-08-23: the entire cert
-story is DNS-01, which makes both cheap and worth having). Verified 2026-08-22: no ready-made Pulumi
+(MX/SPF/DKIM/DMARC), and — per zone — **CAA records (§1.1) and DNSSEC
+enablement**. Verified 2026-08-22: no ready-made Pulumi
 SPF/DMARC tooling exists — the ecosystem offers only raw record
 resources and officially recommends wrapping your own component — and
 none is needed: the current SPF is a single include (no flattening) and
 DMARC a static TXT. One implementation gotcha on record: quote TXT
 values so SPF strings don't get split on spaces.
+
+### 1.1 CAA is per zone, set by who issues
+
+A CAA record set speaks for every name under the apex, so it has to
+name every certificate authority that issues for any of them. Who
+those are differs by zone, which makes the classification declared
+data (`dns/zones.py`, `ZONE_ISSUERS`) rather than something derived
+from the records:
+
+-   **Certificates the cluster obtains are all DNS-01 from Let's
+    Encrypt** (cluster-infra.md §1.1). A zone whose names nothing but
+    the cluster serves pins `letsencrypt.org` alone.
+-   **A zone holding a Cloudflare-proxied name is served at the edge by
+    a Cloudflare-issued certificate**, drawn from Cloudflare's partner
+    set and not from the cluster's account. Such a zone authorizes that
+    whole set — `letsencrypt.org`, `pki.goog` (Google Trust Services,
+    with `cansignhttpexchanges=yes`), `ssl.com` and `sectigo.com` — or
+    Universal SSL stops renewing. Let's Encrypt is a member, so those
+    same records also cover the names in the zone that the proxy does
+    not front, which the cluster serves itself. Cloudflare injects
+    this set into responses
+    for any zone carrying at least one CAA record, invisibly and only
+    while it holds the certificate; declaring it is what makes the
+    authorization outlive the edge.
+-   **A zone whose names something outside this estate serves gets no
+    pin invented for it.** jiahui.id is a Google Site, its certificates
+    come from `pki.goog`, and it carries no CAA — so it keeps none. A
+    pin that current issuance does not satisfy is an outage at the next
+    renewal, and no CAA is not a regression from no CAA.
+
+Both tags are written out: `issuewild` does not inherit from `issue`,
+and the LAN-only names are covered by per-zone wildcards (§4).
+
+The estate as classified: unlimited-code.works, unlimitedcodeworks.xyz,
+peifeng.phd, ucw.phd and jiahui.love hold proxied names and take the
+Cloudflare set; jiahui.id takes none.
 
 ## 2. Naming hierarchy (formalizing the existing conventions)
 

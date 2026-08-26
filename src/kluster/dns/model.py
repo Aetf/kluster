@@ -118,10 +118,15 @@ def srv(label: str, *, priority: int, weight: int, port: int, target: str, comme
 
 
 def caa(label: str, *, tag: str, value: str, flags: int = 0, comment: str = '') -> Record:
+    # The key names the certificate authority alone, not the whole value: the
+    # `;`-separated parameters (`cansignhttpexchanges`) are modifiers on the
+    # same authorization, so keying on them would replace the record whenever
+    # one is added or dropped.
+    authority = value.split(';')[0].strip()
     return Record(
         label=label,
         type='CAA',
         data={'flags': flags, 'tag': tag, 'value': value},
         comment=comment,
-        key=f'caa-{tag}-{value}'.replace('.', '-'),
+        key=f'caa-{tag}-{authority}'.replace('.', '-').lower(),
     )

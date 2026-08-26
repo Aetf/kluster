@@ -25,7 +25,16 @@ from collections.abc import Mapping, Sequence
 from kluster import conventions
 from kluster.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
 
-__all__ = ('ESTATE', 'ZT_ROSTER', 'zt_label', 'zt_records')
+__all__ = (
+    'CLOUDFLARE_ISSUERS',
+    'CLUSTER_ISSUERS',
+    'ESTATE',
+    'MIRROR_ZONES',
+    'ZONE_ISSUERS',
+    'ZT_ROSTER',
+    'zt_label',
+    'zt_records',
+)
 
 #: The legacy VPS, still the origin of every record that has not migrated.
 IP_ARCHVPS = '45.77.144.92'
@@ -126,17 +135,51 @@ def _verifications(*tokens: str) -> tuple[Record, ...]:
     )
 
 
-def _caa_records() -> tuple[Record, ...]:
-    """Issuance pinned to Let's Encrypt, the only CA this estate asks.
+#: The CA set Cloudflare issues its edge certificates from, as CAA values
+#: (developers.cloudflare.com/ssl/reference/certificate-authorities/). A zone
+#: with even one proxied name is served at the edge by a certificate from one
+#: of these, so its CAA must name them all or Universal SSL stops renewing.
+#: Let's Encrypt is a member, which is why a proxied zone needs no separate
+#: entry for the certificates the cluster obtains itself.
+CLOUDFLARE_ISSUERS: tuple[str, ...] = (
+    'letsencrypt.org',
+    'pki.goog; cansignhttpexchanges=yes',
+    'sectigo.com',
+    'ssl.com',
+)
 
-    Every certificate the cluster and the gateway hold is issued over DNS-01
-    against this account (cluster-infra.md §1.1), so the pin costs nothing
-    and turns a mis-issuance elsewhere into a refusal.
+#: The only CA that issues for a name nothing but the cluster serves: every
+#: certificate cert-manager and the gateway hold comes over DNS-01 from a
+#: Let's Encrypt account (cluster-infra.md §1.1).
+CLUSTER_ISSUERS: tuple[str, ...] = ('letsencrypt.org',)
+
+#: The alias zones that mirror the primary record for record.
+MIRROR_ZONES: tuple[str, ...] = ('peifeng.phd', 'ucw.phd')
+
+#: Zone → the CA set its CAA names, keyed by who actually issues for names in
+#: it (dns.md §1). A zone absent from this table carries no CAA at all, which
+#: is the only safe answer for a zone something outside this estate issues
+#: for: a pin that current issuance does not satisfy is an outage on the next
+#: renewal.
+ZONE_ISSUERS: Mapping[str, tuple[str, ...]] = {
+    conventions.ZONE_PRIMARY: CLOUDFLARE_ISSUERS,
+    'unlimitedcodeworks.xyz': CLOUDFLARE_ISSUERS,
+    'peifeng.phd': CLOUDFLARE_ISSUERS,
+    'ucw.phd': CLOUDFLARE_ISSUERS,
+    'jiahui.love': CLOUDFLARE_ISSUERS,
+    # jiahui.id is deliberately absent: its apex and `www` are a Google Site,
+    # its certificates come from pki.goog, and it carries no CAA today.
+}
+
+
+def _caa_records(issuers: Sequence[str]) -> tuple[Record, ...]:
+    """Both tags for each authorized CA; no CA means no record.
+
+    `issuewild` is spelled out rather than left to inherit from `issue`
+    because the LAN-only names are covered by per-zone wildcards (dns.md §4),
+    and a zone that authorizes `issue` alone forbids exactly those.
     """
-    return (
-        caa('@', tag='issue', value='letsencrypt.org'),
-        caa('@', tag='issuewild', value='letsencrypt.org'),
-    )
+    return tuple(caa('@', tag=tag, value=value) for tag in ('issue', 'issuewild') for value in issuers)
 
 
 def _web_origin() -> tuple[Record, ...]:
@@ -163,7 +206,6 @@ def _mirrored_estate() -> tuple[Record, ...]:
         ),
         *zt_records(),
         *_web_origin(),
-        *_caa_records(),
     )
 
 
@@ -183,7 +225,6 @@ def _unlimitedcodeworks_xyz() -> tuple[Record, ...]:
     # namespaces.
     return (
         *_web_origin(),
-        *_caa_records(),
         *_mail_records(dkim_google=DKIM_GOOGLE_XYZ),
         *_verifications(
             'N74Krrj_GYGUYgHSXUBX735CRdKwNKw736bDUnE-V2U',
@@ -198,7 +239,6 @@ def _jiahui_id() -> tuple[Record, ...]:
     return (
         a('@', IP_JIAHUI_SITE),
         a('www', IP_JIAHUI_SITE),
-        *_caa_records(),
         *_verifications(
             'PyY9W6ikS_voZGQE3i_JGRNPvMUw5o2QNyGxpnRxSoU',
             'y6Df9QsIorwAdC8bsyCBMtlu3HpzPqppgM7syZsBTyo',
@@ -217,7 +257,6 @@ def _jiahui_love() -> tuple[Record, ...]:
     # origin, so a repoint touches one record.
     return (
         a('@', IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
-        *_caa_records(),
         *(cname(label, 'jiahui.love', proxied=True) for label in ('www', 'gift', 'ji', 'peifeng')),
     )
 
@@ -229,9 +268,12 @@ def _estate() -> Mapping[str, Sequence[Record]]:
         'jiahui.id': _jiahui_id(),
         'jiahui.love': _jiahui_love(),
     }
-    for zone in ('peifeng.phd', 'ucw.phd'):
+    for zone in MIRROR_ZONES:
         census[zone] = _mirrored_estate()
-    return census
+    # CAA is appended per zone rather than built into the record blocks: the
+    # policy is a property of the zone (who issues for its names), not of the
+    # block, and the mirrors share a block with the primary.
+    return {zone: (*records, *_caa_records(ZONE_ISSUERS.get(zone, ()))) for zone, records in census.items()}
 
 
 #: Zone → the estate records it carries. Every zone this program knows about

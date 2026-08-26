@@ -12,7 +12,7 @@ from kluster import conventions
 from kluster.dns.legacy import LEGACY
 from kluster.dns.model import Record
 from kluster.dns.routes import Exposure, Rewrite, Route, rewrites
-from kluster.dns.zones import ESTATE, ZT_ROSTER, zt_label
+from kluster.dns.zones import CLOUDFLARE_ISSUERS, CLUSTER_ISSUERS, ESTATE, ZONE_ISSUERS, ZT_ROSTER, zt_label
 
 
 def _records(zone: str) -> tuple[Record, ...]:
@@ -79,12 +79,62 @@ def test_the_spf_record_is_quoted() -> None:
     assert spf.content == '"v=spf1 include:_spf.google.com ~all"'
 
 
-def test_issuance_is_pinned_on_every_zone() -> None:
-    for zone in ESTATE:
-        issuers = {
-            str(record.data['value']) for record in ESTATE[zone] if record.type == 'CAA' and record.data is not None
-        }
-        assert issuers == {'letsencrypt.org'}, zone
+def _issuers(zone: str, tag: str) -> set[str]:
+    return {
+        str(record.data['value'])
+        for record in ESTATE[zone]
+        if record.type == 'CAA' and record.data is not None and record.data['tag'] == tag
+    }
+
+
+@pytest.mark.parametrize('zone', sorted(ZONE_ISSUERS))
+def test_a_cloudflare_served_zone_authorizes_the_edge_ca_set(zone: str) -> None:
+    """A proxied name is served by a Cloudflare-issued certificate.
+
+    Authorizing only the CA the cluster itself uses would leave the edge
+    unable to renew, so the whole partner set is named -- and Let's Encrypt is
+    in it, which covers the cluster's own DNS-01 certificates too.
+    """
+    assert _issuers(zone, 'issue') == set(CLOUDFLARE_ISSUERS)
+    assert _issuers(zone, 'issuewild') == set(CLOUDFLARE_ISSUERS)
+
+
+def test_the_cluster_ca_is_authorized_everywhere_caa_is_declared() -> None:
+    """Whatever else a pinned zone allows, cert-manager must still issue."""
+    for zone in ZONE_ISSUERS:
+        assert set(CLUSTER_ISSUERS) <= _issuers(zone, 'issue'), zone
+        assert set(CLUSTER_ISSUERS) <= _issuers(zone, 'issuewild'), zone
+
+
+def test_an_externally_issued_zone_carries_no_caa() -> None:
+    """jiahui.id is a Google Site: nothing here knows what may issue for it.
+
+    It has no CAA in production, and inventing a pin that current issuance
+    does not satisfy would break the site at its next renewal.
+    """
+    assert 'jiahui.id' not in ZONE_ISSUERS
+    assert [record for record in ESTATE['jiahui.id'] if record.type == 'CAA'] == []
+
+
+def test_every_zone_is_classified_or_deliberately_unpinned() -> None:
+    """A new zone must not silently inherit someone else's issuance policy."""
+    assert set(ZONE_ISSUERS) <= set(ESTATE)
+    assert set(ESTATE) - set(ZONE_ISSUERS) == {'jiahui.id'}
+
+
+def test_caa_keys_survive_a_value_with_parameters() -> None:
+    """`pki.goog; cansignhttpexchanges=yes` must not become a state name.
+
+    The key names the authority alone, so adding or dropping a parameter is
+    an update rather than a replace.
+    """
+    record = next(
+        record
+        for record in ESTATE[conventions.ZONE_PRIMARY]
+        if record.type == 'CAA' and record.data is not None and str(record.data['value']).startswith('pki.goog')
+    )
+
+    assert record.resource_key == 'caa-issue-pki-goog'
 
 
 @pytest.mark.parametrize('label', ['photos', 'matrix', 'syncapi'])
