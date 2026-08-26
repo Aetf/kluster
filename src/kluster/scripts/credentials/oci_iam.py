@@ -362,11 +362,20 @@ def create_seed(
     # A run that died between upload and store left a key whose private half
     # no longer exists anywhere; a user holds at most three keys, so orphans
     # eventually block minting. Only the stored key survives -- the same sweep
-    # `rotate_seed` runs.
+    # `rotate_seed` runs, and as the same identity: the seed deletes its own
+    # keys, because an identity-domains tenancy lets a user manage its own
+    # credentials while refusing the account root the equivalent legacy call
+    # (IdcsConversionError). The seed being stored already, a failed sweep is
+    # a warning and a console errand, not a failed bring-up.
+    seed_iam = Iam.authorize(iam.tenancy, str(user.id), private_pem, connect=iam.connect)
     current = fingerprint(private_pem)
-    for existing in iam.api_keys(str(user.id)):
-        if existing != current:
-            iam.delete_api_key(str(user.id), existing)
+    for existing in seed_iam.api_keys(str(user.id)):
+        if existing == current:
+            continue
+        try:
+            seed_iam.delete_api_key(str(user.id), existing)
+        except oci.exceptions.ServiceError as exc:
+            log.warning('could not delete superseded API key %s (%s); delete it in the console', existing, exc.code)
     return str(user.id)
 
 

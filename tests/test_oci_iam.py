@@ -336,3 +336,41 @@ def test_an_orphaned_key_is_swept_when_the_seed_is_recreated(
     # at most three keys, so orphans would eventually block minting.
     _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+@dataclass
+class RefusingIdentity(FakeIdentity):
+    """A tenancy whose IDCS layer refuses key deletion outright."""
+
+    def delete_api_key(self, user_id: str, key_fingerprint: str) -> Response:
+        raise oci.exceptions.ServiceError(
+            status=401, code='IdcsConversionError', headers=dict[str, str](), message='Client is unauthorized. null'
+        )
+
+
+def test_a_refused_sweep_does_not_fail_the_bring_up(kit: KdbxStore, root: masters.Credential, tmp_path: Path) -> None:
+    tenancy = Tenancy(identity=RefusingIdentity())
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
+
+    # The seed is stored and returned; the orphan stays behind as a console
+    # errand rather than a crash.
+    user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
+    assert len(tenancy.identity.keys[user_id]) == 2
+
+
+def test_the_sweep_runs_as_the_seed_itself(kit: KdbxStore, root: masters.Credential, tmp_path: Path) -> None:
+    tenancy = Tenancy()
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    second = KdbxStore.create(tmp_path / 'second.kdbx', PASSWORD)
+
+    user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The deleting connection is the seed's own key, not the account root's:
+    # an identity-domains tenancy allows self-management and refuses the root.
+    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    assert tenancy.connections[-1] == (user_id, oci_iam.fingerprint(private_pem))
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
