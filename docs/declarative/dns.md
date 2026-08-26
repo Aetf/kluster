@@ -9,7 +9,14 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 
 > **Status**: designed 2026-08-22, after a survey of the live
 > dnsconfig.js (6 zones; roughly half the records are not
-> cluster-related). Not implemented.
+> cluster-related). Declared since 2026-08-25: `src/kluster/dns/`
+> holds the record model (`model.py`), the estate census
+> (`zones.py`), the app records the legacy VPS still serves
+> (`legacy.py`, transitional — §6), the route rows `apps` and `dns`
+> share (`routes.py`), and the two components that turn data into
+> resources (`zone.py`, `adguard.py`). Not yet applied: the zones
+> exist at Cloudflare and are imported into state before the first
+> `up`.
 
 ## 1. Why a fourth stack
 

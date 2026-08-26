@@ -24,6 +24,7 @@ dependencies = [
     "pulumiverse-talos>=0.8.1",
     "pykeepass>=4.2.0",
     "keyring>=25.7.0",
+    "pulumi-cloudflare>=6.11.0",
 ]
 
 [project.scripts]
