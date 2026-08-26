@@ -11,11 +11,12 @@ App records are not here. The ones that have not yet moved to a component
 live in `legacy.py` and leave one at a time; the ones that have moved live
 beside their app in the `apps` stack (dns.md §1).
 
-The anchors are not here either: `kluster.hosts` and `vip1.hosts` carry
-addresses the `physical` stack hands out, so they are built from that
-stack's outputs in `stacks/dns.py`. `archvps.hosts` is a literal precisely
-because it is the one anchor Pulumi does not create -- it names the legacy
-VPS, and it retires with it (migration.md Wave F).
+The cluster anchors are not here either: `kluster.hosts` and `vip1.hosts`
+carry addresses the `physical` stack hands out, so they are built from that
+stack's outputs in `stacks/dns.py`, and only in the primary zone.
+`archvps.hosts` is a literal precisely because it is the one anchor no stack
+output backs -- it names the legacy VPS, and it retires with it
+(migration.md Wave F).
 """
 
 from __future__ import annotations
@@ -157,7 +158,11 @@ CLUSTER_ISSUERS: tuple[str, ...] = ('letsencrypt.org',)
 #: The public zones whose estate is the mirrored block and nothing else. The
 #: other two members of `conventions.PUBLIC_ALL` -- the primary and
 #: unlimitedcodeworks.xyz -- carry the same block plus mail and their own site
-#: verifications, which is the only way any full mirror differs from another.
+#: verifications, which is the only way one full mirror's *estate* differs
+#: from another. The app half is still transitional: `legacy.py` gives
+#: unlimitedcodeworks.xyz none of the names the other mirrors carry and three
+#: of its own, and the zone becomes a mirror in app names too only as apps
+#: move into `apps` and take the default zone set (dns.md §2).
 ALIAS_ZONES: tuple[str, ...] = ('peifeng.phd', 'ucw.phd')
 
 #: Zone → the CA set its CAA names, keyed by who actually issues for names in
@@ -199,15 +204,21 @@ def _web_origin() -> tuple[Record, ...]:
     )
 
 
-#: What every full-mirror public zone carries identically -- the anchor
-#: namespace, the ZeroTier host block, and the web origin.
+#: What every full-mirror public zone carries identically -- the legacy VPS
+#: anchor, the ZeroTier host block, and the web origin.
 #:
 #: This block, not a zone-against-zone comparison, is the definition of the
 #: mirror: `conventions.PUBLIC_ALL` is exactly the set of zones that carry it,
 #: so a name added here reaches all of them and a name added to one zone's own
-#: function reaches only that zone. An app fanning a route across `PUBLIC_ALL`
-#: CNAMEs to an anchor in each zone it publishes in, which is why a member of
-#: the set missing this block would publish names that do not resolve.
+#: function reaches only that zone.
+#:
+#: The cluster anchors are deliberately not in it. An app fanning a route
+#: across `PUBLIC_ALL` publishes a CNAME in each zone, but every one of them
+#: targets the anchor's name in the *primary* zone, so a node rebuild moves
+#: one record instead of one per zone. The `archvps.hosts` copies here are
+#: not an exception to that rule but estate data: nothing CNAMEs to a
+#: mirror's copy -- the legacy rows target the primary's too -- they are the
+#: live records ported verbatim, and they retire with the VPS in Wave F.
 MIRRORED_ESTATE: tuple[Record, ...] = (
     a(
         f'archvps.{conventions.ANCHOR_LABEL}',
@@ -233,8 +244,9 @@ def _primary() -> tuple[Record, ...]:
 
 def _unlimitedcodeworks_xyz() -> tuple[Record, ...]:
     # A full mirror with mail of its own, the same shape as the primary: it is
-    # in `conventions.PUBLIC_ALL`, so every app fan-out lands a name in it and
-    # the anchors those names point at have to be here.
+    # in `conventions.PUBLIC_ALL`, so every app fan-out lands a name in it --
+    # a CNAME to the primary's anchor, like the fan-out lands in every other
+    # mirror.
     return (
         *MIRRORED_ESTATE,
         *_mail_records(dkim_google=DKIM_GOOGLE_XYZ),
