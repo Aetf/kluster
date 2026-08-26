@@ -120,6 +120,7 @@ def bootstrap(kit: KdbxStore, *, prompt: Prompt, only: str | None = None) -> lis
         if kit.has(seed.entry):
             log.info('%s: already in the kit', seed.title)
             continue
+        log.info('%s: creating', seed.title)
         create_seed(seed, kit=kit, prompt=prompt)
         created.append(member)
     if only is not None and only not in entries.SEEDS:

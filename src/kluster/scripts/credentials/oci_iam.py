@@ -37,6 +37,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import time
+
 import oci
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -52,6 +54,16 @@ log = logging.getLogger(__name__)
 #: all three: they exist only for each other, and a console reading them
 #: sideways should not have to work out which is which.
 SEED_NAME = 'kluster-seed'
+
+#: A freshly uploaded key reaches the identity servers eventually, not
+#: immediately: used right away it fails with 401 NotAuthenticated (the
+#: Terraform provider has the same defect, oracle/terraform-provider-oci#2383,
+#: papered over there with a sleep). The verification below is therefore also
+#: the wait -- it polls the one condition that matters, "the key
+#: authenticates", rather than guessing a delay -- and this is how long it is
+#: allowed to keep not happening before the 401 is treated as real.
+PROPAGATION_DEADLINE = 180.0
+PROPAGATION_INTERVAL = 5.0
 
 #: What the seed may do, and the whole of it. Managing users covers their API
 #: keys, which is what makes the seed self-reproducing; managing groups and
@@ -289,11 +301,23 @@ def _mint_verified(iam: Iam, user_id: str) -> str:
     Returns the private key PEM; the fingerprint is a function of it.
     """
     private_pem, public_pem = generate_key()
+    log.info('uploading a new API key for %s', SEED_NAME)
     assigned = iam.upload_key(user_id, public_pem)
     if assigned != fingerprint(private_pem):
         raise CredentialRejected(f'OCI registered fingerprint {assigned}, which is not the one this key computes to')
     minted = Iam.authorize(iam.tenancy, user_id, private_pem, connect=iam.connect)
-    _ = minted.api_keys(user_id)
+    log.info(
+        'waiting for %s to authenticate (propagation is eventually consistent, usually well under a minute)', assigned
+    )
+    deadline = time.monotonic() + PROPAGATION_DEADLINE
+    while True:
+        try:
+            _ = minted.api_keys(user_id)
+            break
+        except oci.exceptions.ServiceError as exc:
+            if exc.status != 401 or time.monotonic() >= deadline:
+                raise
+            time.sleep(PROPAGATION_INTERVAL)
     log.info('minted an API key for %s (%s), verified against the API', SEED_NAME, assigned)
     return private_pem
 
@@ -334,6 +358,15 @@ def create_seed(
 
     private_pem = _mint_verified(iam, str(user.id))
     _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=str(user.id), private_pem=private_pem)
+
+    # A run that died between upload and store left a key whose private half
+    # no longer exists anywhere; a user holds at most three keys, so orphans
+    # eventually block minting. Only the stored key survives -- the same sweep
+    # `rotate_seed` runs.
+    current = fingerprint(private_pem)
+    for existing in iam.api_keys(str(user.id)):
+        if existing != current:
+            iam.delete_api_key(str(user.id), existing)
     return str(user.id)
 
 
