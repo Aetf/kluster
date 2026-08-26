@@ -24,8 +24,10 @@ What §3's tokens carry is stated by the stack that consumes them.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -36,12 +38,28 @@ log = logging.getLogger(__name__)
 
 API = 'https://api.cloudflare.com/client/v4'
 
+#: How many zones one listing page carries. The estate is far below it, so the
+#: pagination below exists for correctness rather than for the estate's size.
+PAGE_SIZE = 50
+
 #: The permission the seed must carry for any of this to work. Checked by name
 #: when the seed is pasted in, because a token that merely reads is refused by
 #: the create call with a message that does not say which permission is
 #: missing -- and a console credential is exactly where the wrong template
 #: gets picked.
 MINTING_PERMISSION = 'API Tokens Write'
+
+#: What the zones token (§3) carries, by permission-group name. Editing records
+#: is the job; reading the zone is what the Cloudflare provider does before
+#: every change, and a token that cannot see its zone cannot manage records in
+#: it. Names rather than the well-known group ids, because the ids are account
+#: data to be looked up (`Session.permission_groups`) and a hard-coded one that
+#: the platform renumbered would mint a token with the wrong scope.
+ZONE_PERMISSIONS = ('DNS Write', 'Zone Read')
+
+#: The prefix under which a policy names a single zone. A resource map keyed by
+#: it grants on exactly the zones listed and on nothing else.
+ZONE_RESOURCE = 'com.cloudflare.api.account.zone'
 
 
 def _result(resp: requests.Response) -> Any:
@@ -136,6 +154,44 @@ class Session:
     def tokens(self) -> list[dict[str, Any]]:
         return list(self._call('GET', '/user/tokens'))
 
+    def zones(self, name: str | None = None) -> list[dict[str, Any]]:
+        """The zones this token may see, or the ones matching `name`.
+
+        Which zones come back is a property of the token, so this is both how
+        the seed resolves a zone name to the id a policy needs and how a minted
+        token proves what it was given: the same call, asked of two credentials.
+        """
+        found: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = {'per_page': str(PAGE_SIZE), 'page': str(page)} | ({'name': name} if name else {})
+            batch = list[dict[str, Any]](self._call('GET', f'/zones?{urlencode(query)}'))
+            found.extend(batch)
+            if len(batch) < PAGE_SIZE:
+                return found
+            page += 1
+
+    def permission_groups(self, names: Sequence[str]) -> list[dict[str, str]]:
+        """The ids of the named permission groups, as a policy's `permission_groups`.
+
+        A policy identifies a permission by id, and an id is account data: it is
+        read here rather than written down, so a token is minted with the scope
+        the name means rather than with whatever the id used to mean.
+        """
+        catalogue = list[dict[str, Any]](self._call('GET', '/user/tokens/permission_groups'))
+        by_name = {
+            str(group['name']): str(group['id'])
+            for group in catalogue
+            if ZONE_RESOURCE in [str(scope) for scope in list[Any](group.get('scopes') or [])]
+        }
+        missing = [name for name in names if name not in by_name]
+        if missing:
+            raise CredentialRejected(
+                f'Cloudflare lists no zone permission group named {", ".join(missing)} — '
+                "the names this repository asks for are no longer the platform's"
+            )
+        return [{'id': by_name[name]} for name in names]
+
     def create_token(self, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
         result = self._call('POST', '/user/tokens', {'name': name, 'policies': policies})
         return str(result['id']), str(result['value'])
@@ -188,6 +244,88 @@ def mint_token(session: Session, name: str, policies: list[dict[str, Any]]) -> t
     token_id, token, minted = _mint_verified(session, name, policies)
     _retire_superseded(minted, name, keep=token_id)
     return token_id, token
+
+
+@dataclass(frozen=True)
+class ZoneToken:
+    """A minted zones token and the two facts its consumer needs beside it.
+
+    The account id travels with the token because it is discovered on the way:
+    a stack that manages records in these zones is configured with the account
+    that owns them, and asking Cloudflare a second time could only produce a
+    second answer.
+    """
+
+    token_id: str
+    value: str
+    account_id: str
+    zone_ids: dict[str, str]
+
+
+def _resolve_zones(session: Session, names: Sequence[str]) -> tuple[str, dict[str, str]]:
+    """Zone names to ids, plus the account that owns them all.
+
+    Resolved through the minting session because a policy names zones by id.
+    A name the session cannot see is refused here rather than turned into a
+    token with a hole in its scope.
+    """
+    ids: dict[str, str] = {}
+    accounts: set[str] = set()
+    for name in names:
+        matches = [zone for zone in session.zones(name=name) if str(zone.get('name')) == name]
+        if not matches:
+            raise CredentialRejected(
+                f'the Cloudflare seed cannot see the zone {name!r}: it is not in this account, '
+                'or the seed token carries no zone read permission'
+            )
+        ids[name] = str(matches[0]['id'])
+        accounts.add(str(dict[str, Any](matches[0].get('account') or {}).get('id', '')))
+    if len(accounts) != 1:
+        raise CredentialRejected(
+            f'the zones are spread over {len(accounts)} Cloudflare accounts; one token cannot be scoped to them'
+        )
+    return accounts.pop(), ids
+
+
+def _confirm_scope(value: str, expected: Sequence[str]) -> None:
+    """Prove the minted token sees the zones it was minted for, as itself.
+
+    The mint call reports what it created; this reports what the credential can
+    do, which is the thing the consumer depends on. Extra zones are a warning
+    rather than a refusal — a token wider than intended still works, and the
+    place to narrow it is the policy above, not a failed run that leaves the
+    stack with no credential at all.
+    """
+    log.info('checking the minted token against the %d estate zones', len(expected))
+    visible = {str(zone.get('name')) for zone in Session.authorize(value).zones()}
+    missing = [name for name in expected if name not in visible]
+    if missing:
+        raise CredentialRejected(f'the minted token cannot see {", ".join(missing)}; it was not scoped as asked')
+    extra = sorted(visible - set(expected))
+    if extra:
+        log.warning('the minted token also sees %s, which nothing here asked for', ', '.join(extra))
+
+
+def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> ZoneToken:
+    """The §3 zones token: record edit on exactly `zones`, and nothing else.
+
+    One policy with one resource per zone, carrying `ZONE_PERMISSIONS` and no
+    token permission — the class the platform allows a sub-token to have. The
+    result is proven against the API as the minted token before it is handed
+    back, so a credential that cannot do the job never reaches a slot.
+    """
+    log.info('resolving %d estate zones through the Cloudflare seed', len(zones))
+    account_id, zone_ids = _resolve_zones(session, zones)
+    policies = [
+        {
+            'effect': 'allow',
+            'resources': {f'{ZONE_RESOURCE}.{zone_id}': '*' for zone_id in zone_ids.values()},
+            'permission_groups': session.permission_groups(ZONE_PERMISSIONS),
+        }
+    ]
+    token_id, value = mint_token(session, name, policies)
+    _confirm_scope(value, zones)
+    return ZoneToken(token_id=token_id, value=value, account_id=account_id, zone_ids=zone_ids)
 
 
 def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:

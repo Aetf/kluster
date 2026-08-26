@@ -12,17 +12,17 @@ no credential can mint the seed and the seed cannot mint its successor.
 
 from __future__ import annotations
 
-import itertools
-import json as jsonlib
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
+from cloudflare_api import ACCOUNT_ID, MINTING_POLICY, ZONE_POLICY, FakeApi, console_seed
 from memory_kit import MemoryKit
 
+from kluster import conventions
 from kluster.scripts.credentials import cloudflare, entries, lifecycle
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
@@ -30,120 +30,8 @@ from kluster.scripts.credentials.masters import CredentialRejected
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 
-#: What the seed carries, and the only template that can mint anything.
-MINTING_POLICY: dict[str, Any] = {
-    'id': 'policy-1',
-    'effect': 'allow',
-    'resources': {'com.cloudflare.api.user.deadbeef': '*'},
-    'permission_groups': [{'id': 'group-1', 'name': cloudflare.MINTING_PERMISSION}],
-}
-
-#: What a §3 token carries: zone work and no token permissions, which is the
-#: only class the platform will mint.
-ZONE_POLICY: dict[str, Any] = {
-    'id': 'policy-2',
-    'effect': 'allow',
-    'resources': {'com.cloudflare.api.account.zone.abc': '*'},
-    'permission_groups': [{'id': 'g'}],
-}
-
 #: The name a per-stack token is minted under, in these tests.
 STACK_TOKEN = 'kluster-dns'
-
-
-@dataclass
-class FakeApi:
-    """One account's tokens, answering the four calls the minter makes."""
-
-    tokens: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
-    #: token value -> token id, since a value is what a caller authorizes with.
-    values: dict[str, str] = field(default_factory=dict[str, str])
-    counter: itertools.count[int] = field(default_factory=lambda: itertools.count(2))
-    calls: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
-    #: The bodies of every create call, so a test can check what was asked
-    #: for and not only what came back.
-    posted: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
-    #: The API names a permission group in every response it returns, even
-    #: though a request may identify it by id alone.
-    group_names: dict[str, str] = field(
-        default_factory=lambda: {'group-1': cloudflare.MINTING_PERMISSION, 'g': 'Zone Read'}
-    )
-
-    def add(self, name: str, policies: list[dict[str, Any]]) -> str:
-        token_id = f'token-{next(self.counter)}'
-        value = f'value-of-{token_id}'
-        named = [
-            {
-                **policy,
-                'permission_groups': [
-                    {'id': group['id'], 'name': self.group_names[str(group['id'])]}
-                    for group in policy['permission_groups']
-                ],
-            }
-            for policy in policies
-        ]
-        self.tokens[token_id] = {'id': token_id, 'name': name, 'status': 'active', 'policies': named}
-        self.values[value] = token_id
-        return value
-
-    def _bearer(self, headers: dict[str, str]) -> dict[str, Any]:
-        value = headers['Authorization'].removeprefix('Bearer ')
-        token_id = self.values.get(value)
-        if token_id is None:
-            raise AssertionError(f'the fake was called with an unknown token {value!r}')
-        return self.tokens[token_id]
-
-    def _envelope(self, result: Any) -> requests.Response:
-        response = requests.Response()
-        response.status_code = 200
-        response._content = jsonlib.dumps({'success': True, 'errors': [], 'result': result}).encode()  # pyright: ignore[reportPrivateUsage]
-        return response
-
-    def _refusal(self, message: str) -> requests.Response:
-        """A refused call: 400 with a populated `errors`, not an exception."""
-        response = requests.Response()
-        response.status_code = 400
-        response._content = jsonlib.dumps(  # pyright: ignore[reportPrivateUsage]
-            {'success': False, 'errors': [{'code': 1000, 'message': message}], 'result': None}
-        ).encode()
-        return response
-
-    def get(self, url: str, headers: dict[str, str], timeout: int) -> requests.Response:
-        return self.request('GET', url, headers=headers, timeout=timeout, json=None)
-
-    def request(
-        self, method: str, url: str, *, headers: dict[str, str], timeout: int, json: dict[str, Any] | None
-    ) -> requests.Response:
-        path = url.removeprefix(cloudflare.API)
-        token = self._bearer(headers)
-        self.calls.append((method, path))
-        match (method, path):
-            case ('GET', '/user/tokens/verify'):
-                return self._envelope({'id': token['id'], 'status': token['status']})
-            case ('GET', '/user/tokens'):
-                return self._envelope(list(self.tokens.values()))
-            case ('POST', '/user/tokens'):
-                assert json is not None
-                self.posted.append(json)
-                policies = list[dict[str, Any]](json['policies'])
-                # The platform's own rule: "sub-token is not allowed to have
-                # permissions to manage other tokens". It is why there is no
-                # account root and no self-reproducing seed.
-                if any(
-                    self.group_names[str(group['id'])] == cloudflare.MINTING_PERMISSION
-                    for policy in policies
-                    for group in list[dict[str, Any]](policy['permission_groups'])
-                ):
-                    return self._refusal('sub-token is not allowed to have permissions to manage other tokens')
-                value = self.add(str(json['name']), policies)
-                return self._envelope({'id': self.values[value], 'value': value})
-            case ('DELETE', token_path) if token_path.startswith('/user/tokens/'):
-                del self.tokens[token_path.removeprefix('/user/tokens/')]
-                return self._envelope(None)
-            case ('GET', token_path) if token_path.startswith('/user/tokens/'):
-                return self._envelope(self.tokens[token_path.removeprefix('/user/tokens/')])
-            case _:  # pragma: no cover - a call the minter is not meant to make
-                raise AssertionError(f'unexpected call {method} {path}')
 
 
 @pytest.fixture
@@ -160,8 +48,7 @@ def kit(tmp_path: Path) -> KdbxStore:
 
 
 def _seed(api: FakeApi) -> str:
-    """A console-made seed token, as the dashboard hands one over."""
-    return api.add('kluster-seed', [MINTING_POLICY])
+    return console_seed(api)
 
 
 def test_the_row_holds_the_token_id_and_the_token(api: FakeApi, kit: KdbxStore) -> None:
@@ -286,6 +173,83 @@ def test_minting_retires_the_predecessor_as_the_new_token(api: FakeApi) -> None:
     assert _named(api, STACK_TOKEN) == [current]
     assert previous not in api.tokens
     assert orphan not in api.tokens
+
+
+def _estate(api: FakeApi) -> dict[str, str]:
+    """The zones the register scopes the provider token to, in the fake account."""
+    return {name: api.add_zone(name) for name in conventions.ALL_ZONES}
+
+
+def test_the_zones_token_is_scoped_to_exactly_the_estate_zones(api: FakeApi) -> None:
+    zone_ids = _estate(api)
+    api.add_zone('someone-elses.example')
+    session = cloudflare.Session.authorize(_seed(api))
+
+    minted = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+    # One policy: record edit on the estate's zones by id, the read the
+    # provider needs beside it, and no token permission — the only class the
+    # platform mints. A zone that is not the estate's is not in it.
+    (policy,) = list[dict[str, Any]](api.posted[-1]['policies'])
+    assert set(policy['resources']) == {f'{cloudflare.ZONE_RESOURCE}.{zone_id}' for zone_id in zone_ids.values()}
+    assert policy['permission_groups'] == [{'id': 'dns-write'}, {'id': 'zone-read'}]
+    assert minted.account_id == ACCOUNT_ID
+    assert minted.zone_ids == zone_ids
+
+
+def test_a_zone_the_seed_cannot_see_is_refused_before_anything_is_minted(api: FakeApi) -> None:
+    zones = _estate(api)
+    del api.zones[conventions.ZONE_FAMILY[0]]
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # A token scoped to five of six zones would manage records everywhere but
+    # one and say nothing about it, so resolution is where the run stops.
+    with pytest.raises(CredentialRejected, match=conventions.ZONE_FAMILY[0]):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
+    assert not _named(api, STACK_TOKEN)
+
+
+def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api: FakeApi) -> None:
+    _ = _estate(api)
+    api.seed_sees_zones = False
+    session = cloudflare.Session.authorize(_seed(api))
+
+    with pytest.raises(CredentialRejected, match='no zone read permission'):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+
+def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeApi) -> None:
+    zone_ids = _estate(api)
+    api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # The mint call reports what it created; the check asks the credential
+    # itself what it can reach, which is the thing the consumer depends on.
+    with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+
+def test_a_renamed_permission_group_is_named_rather_than_guessed(api: FakeApi) -> None:
+    _ = _estate(api)
+    api.groups['dns-write'] = {**api.groups['dns-write'], 'name': 'DNS Edit'}
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # The ids are account data and the names are the register's, so a rename
+    # on the platform's side has to surface as a refusal rather than as a
+    # policy missing a permission.
+    with pytest.raises(CredentialRejected, match='DNS Write'):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+
+def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi) -> None:
+    expected = {f'filler-{index}.example' for index in range(cloudflare.PAGE_SIZE + 3)}
+    for name in expected:
+        _ = api.add_zone(name)
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # A listing that stopped at the first page would report a token as unable
+    # to see zones it can see, and the scope check is built on this call.
+    assert {str(zone['name']) for zone in session.zones()} == expected
 
 
 class Interrupted(RuntimeError):
