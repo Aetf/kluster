@@ -21,6 +21,9 @@ currently stops partway — deliberately, and at a named place.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import cast
+
 import pulumi
 import pulumi_oci as oci
 
@@ -28,14 +31,27 @@ from kluster import conventions, gateway
 from kluster.gateway import estate as gw_estate
 from kluster.gateway import zerotier as gw_zerotier
 from kluster.physical import homelab
+from kluster.physical.backup import BackupBucket
 from kluster.physical.cloud import CloudNetwork
+from kluster.physical.guardrails import Guardrails
 from kluster.physical.image import TalosImage
 from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
+from kluster.physical.storage import CHUNK_IDENTITY, CacheVolume, ChunkStore
 from kluster.physical.talos import TalosCluster, TalosDay1
 from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
 KUBE_API_PORT = 6443
+
+#: The tenancy the OCI credential signs for, read out of the provider's own
+#: configuration rather than restated as a key of this program's. It is not a
+#: decision this program makes — it is the account the key belongs to, written
+#: beside the key by the mint that issued it (credentials.md §3) — and three
+#: resources below need it, because all three are tenancy-level objects that
+#: *name* a compartment rather than living in one: the quota policy, the
+#: budget, and the IAM policy confining the chunk credential.
+OCI_NAMESPACE = 'oci'
+OCI_TENANCY_KEY = 'tenancyOcid'
 
 
 async def main() -> None:
@@ -45,6 +61,7 @@ async def main() -> None:
     # the mint that issues that credential (credentials.md §3). A stack whose
     # compartment does not exist yet refuses by naming that command.
     compartment_id = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL].require()
+    tenancy_id = pulumi.Config(OCI_NAMESPACE).require_secret(OCI_TENANCY_KEY)
     talos_version = config.require('talosVersion')
 
     network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id)
@@ -105,13 +122,13 @@ async def main() -> None:
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
     _declare_talos_day1(cluster=cluster, nodes=nodes)
+    _declare_storage(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, nodes=nodes)
+    _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
 
     # The rest of the design, written or not. A domain with no implementation
     # is still called and refuses by name; the first one reached ends the run,
     # which is why the domains below it are unreachable today rather than
     # absent.
-    _declare_storage(compartment_id=compartment_id, nodes=nodes)
-    _declare_guardrails(compartment_id=compartment_id)
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,
@@ -170,7 +187,27 @@ def declare_gateway(config: pulumi.Config) -> None:
     )
 
 
-def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> None:
+@dataclass(frozen=True)
+class Storage:
+    """The three resources §1 and §5 declare, returned as one handle.
+
+    They belong together because the rule that separates them is the point:
+    two live on the cloud provider beside the nodes, and the third is
+    somewhere else on purpose.
+    """
+
+    cache: CacheVolume
+    chunks: ChunkStore
+    backup: BackupBucket
+
+
+def _declare_storage(
+    *,
+    config: pulumi.Config,
+    compartment_id: str,
+    tenancy_id: pulumi.Input[str],
+    nodes: CloudNodes,
+) -> Storage:
     """§1 and §5: the block volume and both object buckets.
 
     The augmented node's block volume, the chunk bucket that sits in-region
@@ -178,26 +215,105 @@ def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> None:
     a backup kept at the provider whose loss it insures is not a backup —
     together with their scoped keys and the version-retention rule that makes
     a deletion by automation recoverable.
+
+    Three site facts arrive as configuration because nothing here can derive
+    them: the identity domain's endpoint and name, which are properties of the
+    tenancy rather than of the region (`ociIdentityDomainUrl`,
+    `ociIdentityDomainName`), and the backup account's region, which no B2 API
+    returns in the form its S3 endpoint is spelled with (`b2Region`).
     """
-    raise NotImplementedError(
-        'physical §1/§5 storage: the block volume, the chunk bucket, the backup bucket and '
-        'their keys are not declared yet — kluster-ops#27, docs/declarative/physical.md §1 '
-        'and §5, docs/cluster/storage.md §4'
+    cache = CacheVolume(
+        conventions.CLUSTER_NAME,
+        compartment_id=compartment_id,
+        # Both read off the instance rather than restated: a volume attaches
+        # only within its own availability domain, and the node's domain is
+        # itself a regional fact chosen at apply time (`_placements`).
+        availability_domain=nodes.augmented.availability_domain,
+        instance_id=nodes.augmented.id,
     )
 
+    chunks = ChunkStore(
+        conventions.CLUSTER_NAME,
+        compartment_id=compartment_id,
+        tenancy_id=tenancy_id,
+        # The region the nodes are in, because that is what makes this bucket
+        # worth having here: node ↔ Object Storage traffic in-region is $0 and
+        # rides the service gateway (storage.md §4).
+        region=conventions.OCI_REGION,
+        idcs_endpoint=config.require('ociIdentityDomainUrl'),
+        domain_name=config.require('ociIdentityDomainName'),
+        # The domain refuses a user without a unique primary address, so each
+        # user this program creates is addressed after itself (`conventions`).
+        user_email=f'{CHUNK_IDENTITY}@{conventions.OCI_USER_EMAIL_DOMAIN}',
+        bucket_name=conventions.BUCKET_CHUNKS,
+    )
 
-def _declare_guardrails(*, compartment_id: str) -> None:
+    backup = BackupBucket(
+        conventions.CLUSTER_NAME,
+        region=config.require('b2Region'),
+        bucket_name=conventions.BUCKET_BACKUP,
+    )
+
+    # Names, endpoints and credentials, because that is what a consumer of a
+    # bucket is configured with (physical.md §0). The per-namespace VolSync and
+    # barman keys are not here: the census of namespaces belongs to the stack
+    # that declares them, and each arrives as a scope on this bucket when it
+    # does. What exists without any application is the etcd snapshot key.
+    pulumi.export('chunk_bucket', chunks.bucket_name)
+    pulumi.export('chunk_endpoint', chunks.endpoint)
+    pulumi.export('chunk_access_key_id', chunks.access_key_id)
+    pulumi.export('chunk_secret_key', chunks.secret_access_key)
+    pulumi.export('backup_bucket', backup.bucket_name)
+    pulumi.export('backup_endpoint', backup.endpoint)
+    pulumi.export(
+        'backup_keys',
+        {scope: {'id': backup.key_id(scope), 'secret': backup.key_secret(scope)} for scope in backup.keys},
+    )
+
+    return Storage(cache=cache, chunks=chunks, backup=backup)
+
+
+def _declare_guardrails(*, config: pulumi.Config, compartment_id: str, tenancy_id: pulumi.Input[str]) -> Guardrails:
     """§1: the spend limits.
 
     Compartment quotas that refuse to create anything outside the free
     envelope, and a budget whose alerts arrive before a bill does. The quota
     is the load-bearing half: an alert tells you afterwards.
+
+    The compartment is passed twice on purpose. A budget targets it by OCID,
+    while quota statements have no OCID form at all and name it by name —
+    which is why the name is a convention this program decides rather than
+    something read back from the tenancy.
     """
-    raise NotImplementedError(
-        'physical §1 guardrails: compartment quotas and the budget alert rules are not '
-        'declared yet — kluster-ops#27, docs/declarative/physical.md §1, '
-        'docs/cluster/nodes.md §3.2'
+    compartment = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    return Guardrails(
+        conventions.CLUSTER_NAME,
+        tenancy_id=tenancy_id,
+        compartment_id=compartment_id,
+        compartment_name=compartment.name,
+        recipients=_budget_recipients(config),
     )
+
+
+def _budget_recipients(config: pulumi.Config) -> tuple[str, ...]:
+    """Who the budget alerts go to, as `budgetAlertRecipients`.
+
+    A list rather than one address: a budget alert is the only signal this
+    stack emits that does not go through the cluster, so it has to survive the
+    cluster being the thing that is broken, and a second address is the
+    cheapest form of that. An empty list is refused by the component — an
+    alert with no audience is a rule that runs and tells nobody.
+
+    Addresses are ordinary configuration and may be set with `--secret`; a
+    secret value reads back through this call unchanged.
+    """
+    recipients = cast('object', config.require_object('budgetAlertRecipients'))
+    if not isinstance(recipients, list):
+        raise TypeError(f'budgetAlertRecipients must be a list of email addresses, not {recipients!r}')
+    entries = cast('list[object]', recipients)
+    if not all(isinstance(entry, str) for entry in entries):
+        raise TypeError(f'budgetAlertRecipients must be a list of email addresses, not {recipients!r}')
+    return tuple(cast('list[str]', entries))
 
 
 def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> TalosDay1:
