@@ -13,7 +13,10 @@ secret and the `kluster` repository secret are all a `Slot` in
 `github_secrets.py`, differing in which repository they sit in and whether they
 name an Environment.
 
-**Every value comes from one of four places**, which is the row's source class:
+**Every value comes from one of four places**, which is the row's source class.
+Three of them hold a value that can be obtained again, and `derived sync` copies
+those into their GitHub slots; the fourth is born into its slot and is no
+business of that command:
 
 -   **derived** -- obtainable again from the kit alone, with no provider
     involved. Today every such row is an escrow label (§2.2): the value is
@@ -707,12 +710,29 @@ def _verify(forge: Forge, slot: Slot, before: str | None) -> None:
 
 
 def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str | None = None) -> list[str]:
-    """Fill every GitHub secret in the map that can be filled. Returns what was pushed.
+    """Copy into their GitHub slots the rows whose value lives elsewhere. Returns what was pushed.
 
     Resolve, push, verify -- per row, every run -- so a first fill and a refill
-    are the same command. A row with no GitHub slot is skipped with its reason;
-    asking for one by name is an error instead, because a request for a specific
-    row that quietly does nothing is worse than a refusal.
+    after a channel is lost are the same command. A row with no GitHub slot is
+    skipped with its reason; asking for one by name is an error instead, because
+    a request for a specific row that quietly does nothing is worse than a
+    refusal.
+
+    **What this is for is a copy, not a delivery.** Two of the map's source
+    classes hold a value whose truth lives somewhere else: a *state-read* row is
+    generated inside a Pulumi program and read back out of the stack it belongs
+    to, and a *manual* row is typed in because its slot is the only place it is
+    stored. A *derived* row is a third: the plaintext is in the escrow, and this
+    copies the generation the registry currently holds. All three can be
+    obtained again, so all three can be re-filled here.
+
+    **A minted row is born into its slot and is out of scope.** Such a
+    credential is disclosed once, to the call that creates it, so its own
+    `credentials derived <row> mint` fills every slot it has in the same run --
+    and obtaining it again means minting again, which is a rotation of a live
+    credential rather than a synchronization. The walk passes over those rows;
+    naming one is refused, so the operator hears which command owns it instead
+    of watching a run do nothing.
 
     **A row that cannot produce its value does not stop the walk.** Most of the
     map is waiting on something -- a stack that has not run, a value nobody has
@@ -731,6 +751,13 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     refused: list[str] = []
     for name, row in table.items():
         if only is not None and name != only:
+            continue
+        if isinstance(row.source, Minted):
+            if only is not None:
+                raise SlotRefused(
+                    f'{name}: born into its slot, {row.source.describe()} -- there is nothing here to copy, '
+                    'and obtaining the value again would mint a different credential'
+                )
             continue
         if not row.sinks:
             reason = row.pending or 'the register names no GitHub secret for it'
