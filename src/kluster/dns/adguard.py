@@ -69,8 +69,11 @@ class AdGuardRewriteProvider(dynamic.ResourceProvider):
         base, session = _session(props)
         if _entry(props) not in self._list(base, session):
             # An absent entry is a deleted resource, which is how a rewrite
-            # someone removed in the UI comes back on the next up.
-            return dynamic.ReadResult(id_=None, outs=None)
+            # someone removed in the UI comes back on the next up. The outs
+            # must be an empty dict, not None: the provider host writes its
+            # own key into whatever this returns, and it mutates the dict,
+            # so a shared constant would not do either.
+            return dynamic.ReadResult(id_=None, outs={})
         return dynamic.ReadResult(id_=id_, outs=props)
 
     def diff(self, _id: str, _olds: dict[str, Any], _news: dict[str, Any]) -> dynamic.DiffResult:

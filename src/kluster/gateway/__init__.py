@@ -26,11 +26,12 @@ through three different doors and each needs its own credential:
 
 The SSH session crosses ZeroTier, so the device's **host key is pinned**: a
 first contact that accepts whatever answers would hand an interposer root on
-the router. The transport is `asyncssh` rather than a subprocess: a dynamic
-provider's `diff`, `create` and `update` are already coroutines, so an
-asyncio-native client needs no thread to bridge; it ships its own type
-information, which a shelled-out `ssh` cannot; and pinning a host key is a
-parameter to it rather than a `known_hosts` file assembled on the runner.
+the router. The transport is `asyncssh` rather than a subprocess: each provider
+operation runs on a gRPC worker thread and brings up its own event loop
+(`asyncio.run`), and inside that loop an asyncio-native client needs no
+further bridging; it ships its own type information, which a shelled-out
+`ssh` cannot; and pinning a host key is a parameter to it rather than a
+`known_hosts` file assembled on the runner.
 
 Not implemented: each `declare_*` raises, naming what is missing.
 """
