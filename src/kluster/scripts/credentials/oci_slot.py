@@ -1,4 +1,4 @@
-"""The OCI key a workstation-only consumer signs with (docs/credentials.md §3).
+"""The OCI key the state-backend appliance signs with (docs/credentials.md §3).
 
 A per-stack OCI key normally reaches its consumer as a Pulumi config secret,
 because its consumer is a stack. `state-backend provision` is not a stack: it
@@ -20,27 +20,27 @@ provisioning run has to be given.
 The key file is named by absolute path, as the client bundle's certificates
 are: the SDK expands nothing, so a checkout copied to another path re-runs the
 mint rather than editing the file (§4.4).
+
+There is one such slot, and it is written here and read in
+`state_backend.provision` — including the fallback to the path this one
+superseded, which lives with that reader so the two die together. A second
+workstation-only consumer would earn a parameter back; inventing one now would
+only be a shape nothing has to satisfy.
 """
 
 from __future__ import annotations
 
 import configparser
 import io
-import logging
 from pathlib import Path
 
+from ... import conventions
 from . import workstation
+from .oci_iam import ApiKey
 
-log = logging.getLogger(__name__)
-
-#: The directory under `.credentials/` that holds them, one subdirectory per
-#: consumer.
+#: `.credentials/oci/<appliance>/`, one level deeper than it has to be so a
+#: second consumer's slot would land beside this one rather than move it.
 DIRECTORY = 'oci'
-
-#: The one consumer with such a slot. Named here rather than imported from
-#: `state_backend.settings`: that package depends on this one, and one string
-#: is a cheaper price than the cycle (`lifecycle.URL_FILE` is the same trade).
-STATE_BACKEND = 'state-backend'
 
 #: The profile `oci.config.from_file` reads when none is named. A slot holding
 #: one credential has no use for a second.
@@ -49,80 +49,44 @@ PROFILE = 'DEFAULT'
 CONFIG = 'config'
 KEY = 'key.pem'
 
-#: Where the appliance's key lived before it became a workstation slot: the
-#: XDG path the containerized `oci` CLI reads too. Still read, once and
-#: loudly, so a workstation that predates the mint keeps provisioning.
-#: TODO(kluster-ops#41): delete this and its reader once every workstation has
-#: run `credentials derived oci state-backend`.
-LEGACY_CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
+
+def directory() -> Path:
+    return workstation.directory() / DIRECTORY / conventions.STATE_BACKEND
 
 
-def directory(consumer: str) -> Path:
-    return workstation.directory() / DIRECTORY / consumer
+def config_path() -> Path:
+    return directory() / CONFIG
 
 
-def config_path(consumer: str) -> Path:
-    return directory(consumer) / CONFIG
+def key_path() -> Path:
+    return directory() / KEY
 
 
-def key_path(consumer: str) -> Path:
-    return directory(consumer) / KEY
+def write(key: ApiKey, *, compartment_id: str) -> Path:
+    """Fill the slot with a minted key, and return the configuration file's path.
 
+    The key arrives whole rather than as five scalars, which is what `ApiKey`
+    is for: the fingerprint is a function of the PEM, and a caller free to
+    pass them separately is a caller free to make them disagree.
 
-def write(
-    consumer: str,
-    *,
-    tenancy: str,
-    user: str,
-    fingerprint: str,
-    private_key: str,
-    region: str,
-    compartment_id: str,
-) -> Path:
-    """Fill the slot, and return the configuration file's path.
-
-    The key is written before the configuration that names it, so a run
+    The PEM is written before the configuration that names it, so a run
     interrupted between the two leaves a configuration file that is either
     absent or complete rather than one pointing at a key that is not there.
     """
-    key = workstation.write(key_path(consumer), private_key)
+    written = workstation.write(key_path(), key.private_key)
     # No interpolation, which is what the SDK's own reader does: the values
     # here are paths and OCIDs rather than a template, and the default
     # `BasicInterpolation` would refuse a checkout path containing a `%` --
     # after the key it describes is already live in the tenancy.
     profile = configparser.ConfigParser(interpolation=None)
     profile[PROFILE] = {
-        'user': user,
-        'fingerprint': fingerprint,
-        'tenancy': tenancy,
-        'region': region,
-        'key_file': str(key),
+        'user': key.user,
+        'fingerprint': key.fingerprint,
+        'tenancy': key.tenancy,
+        'region': key.region,
+        'key_file': str(written),
         'compartment-id': compartment_id,
     }
     rendered = io.StringIO()
     profile.write(rendered)
-    return workstation.write(config_path(consumer), rendered.getvalue())
-
-
-def config_file(consumer: str) -> Path | None:
-    """The slot's configuration file, the path it superseded, or None for neither.
-
-    A machine that still has a hand-written configuration where this one used
-    to live keeps working, once and loudly: what is there is a complete answer,
-    and the warning names the command that replaces it.
-
-    TODO(kluster-ops#41): delete the fallback once every workstation has run
-    `credentials derived oci state-backend`.
-    """
-    current = config_path(consumer)
-    if current.is_file():
-        return current
-    if consumer == STATE_BACKEND and LEGACY_CONFIG_FILE.is_file():
-        log.warning(
-            'using the OCI configuration in %s: the appliance has a minted key of its own now, '
-            'which `credentials derived oci state-backend` writes to %s',
-            LEGACY_CONFIG_FILE,
-            current,
-        )
-        return LEGACY_CONFIG_FILE
-    return None
+    return workstation.write(config_path(), rendered.getvalue())

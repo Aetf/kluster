@@ -359,10 +359,10 @@ def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
 
     # The slot is an SDK configuration file because the SDK is the whole of the
     # reader: what proves the push is that `from_file` accepts what it wrote.
-    assert written == slots / oci_slot.DIRECTORY / oci_slot.STATE_BACKEND / oci_slot.CONFIG
+    assert written == slots / oci_slot.DIRECTORY / conventions.STATE_BACKEND / oci_slot.CONFIG
     config = oci.config.from_file(str(written))
     oci.config.validate_config(config)  # pyright: ignore[reportUnknownMemberType]
-    user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{oci_slot.STATE_BACKEND}')
+    user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
     assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_REGION)
     assert config['compartment-id'] == COMPARTMENT
 
@@ -402,7 +402,7 @@ def test_the_appliance_row_is_its_own_principal(oci_kit: KdbxStore, tenancy: Ten
     # Two §3 OCI rows, two principals: the appliance provisioner and the
     # physical stack are separate consumers, so a compromise of either is
     # confined to its own compartment.
-    name = f'{conventions.CLUSTER_NAME}-{oci_slot.STATE_BACKEND}'
+    name = f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}'
     assert sorted(user.name for user in tenancy.identity.users.values()) == [oci_iam.SEED_NAME, name]
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {COMPARTMENT}']
