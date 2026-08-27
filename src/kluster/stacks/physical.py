@@ -25,6 +25,8 @@ import pulumi
 import pulumi_oci as oci
 
 from kluster import conventions, gateway
+from kluster.gateway import estate as gw_estate
+from kluster.gateway import zerotier as gw_zerotier
 from kluster.physical import homelab
 from kluster.physical.cloud import CloudNetwork
 from kluster.physical.image import TalosImage
@@ -103,12 +105,35 @@ async def main() -> None:
         disk_gb=conventions.HOMELAB_DISK_GB,
         haos_domain_uuid=config.require('haosDomainUuid'),
     )
+    declare_gateway(config)
+
+
+def declare_gateway(config: pulumi.Config) -> None:
+    """§4: the gateway, through the three doors it is configured by.
+
+    The device's own desired state over SSH, the controller's firewall over its
+    API, and the overlay's configuration over ZeroTier Central's — three
+    credentials, because they authorize three different things and no one of
+    them should imply the others.
+
+    Everything read here is a site fact: what the images were built as, where
+    the resolvers sit, which nodes are on the overlay. The decisions — the
+    estate's shape, the firewall census, the roster's roles and the rules that
+    confine a run — are code, and the configuration is checked against them.
+    """
+    addresses = gw_estate.parse_addresses(config.require_object('gatewayAddresses'))
+    resolvers = [addresses[instance] for instance in sorted(gw_estate.VHOST_ADGUARD)]
+
     gateway.declare_estate(
         conventions.CLUSTER_NAME,
         host=str(conventions.ZT_UDM),
         host_key=config.require_secret('gatewayHostKey'),
         private_key=config.require_secret('gatewayPrivateKey'),
         bgp_neighbour=conventions.HOMELAB_NODE_IPV4,
+        bgp_password=config.require_secret('gatewayBgpPassword'),
+        acme_token=config.require_secret('gatewayAcmeToken'),
+        rootfs=gw_estate.parse_rootfs(config.require_object('gatewayRootfs')),
+        addresses=addresses,
     )
     gateway.declare_firewall(
         conventions.CLUSTER_NAME,
@@ -122,6 +147,8 @@ async def main() -> None:
         conventions.CLUSTER_NAME,
         api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
+        members=gw_zerotier.parse_members(config.require_object('zerotierMembers')),
+        adguard=resolvers,
     )
 
 
