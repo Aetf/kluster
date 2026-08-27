@@ -42,8 +42,5 @@ them earlier would be deciding them on no evidence:
     over after the first pin. Known floors: **Cilium ≥1.20** for the
     ExternalAuth route filter, ≥1.16 for tunnel-mode Egress Gateway,
     Longhorn ≥1.12 if it is ever adopted.
--   **The AdGuard static-config templating shape** inside the gw-config
-    estate (dns.md §3 fixes what the rewrites are, not how the static
-    halves are rendered).
 -   **Alertmanager routing details** beyond "ported from legacy"
     (operations.md §4 fixes the alert contract, not the routing tree).
