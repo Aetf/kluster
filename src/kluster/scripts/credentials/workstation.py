@@ -44,8 +44,8 @@ DIRECTORY = '.credentials'
 #: is how a kit kept on removable media or shared between checkouts is used.
 KIT = 'kit.kdbx'
 
-#: The Pulumi state passphrase, derived from the derivation seed (§2.2) and
-#: cached here so a local `pulumi preview` needs neither the kit nor an eval.
+#: The Pulumi state passphrase, recovered from the escrow (§2.2) and cached
+#: here so a local `pulumi preview` needs neither the kit nor an eval.
 PASSPHRASE = 'pulumi.passphrase'
 
 #: The account roots' file layer (`masters.py`), one file per field.

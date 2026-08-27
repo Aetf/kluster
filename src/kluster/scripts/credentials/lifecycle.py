@@ -1,7 +1,7 @@
 """The three things done to a seed kit: build one, replace one, spend one.
 
 `docs/credentials.md` §4 describes them as `bootstrap`, `rotate` and the
-derivations `bringup` pushes. They are one module because they share a shape:
+credentials `bringup` pushes. They are one module because they share a shape:
 walk §2's table in order, and for each row either call the platform that can
 mint it or stop and print what a human must do in a console.
 
@@ -24,7 +24,7 @@ import getpass
 import logging
 from pathlib import Path
 
-from . import b2, cloudflare, entries, masters, oci_iam, seeds, workstation
+from . import b2, cloudflare, entries, escrow, masters, oci_iam, workstation
 from .kdbx import KdbxError, KdbxStore
 from .masters import Prompt
 
@@ -88,7 +88,14 @@ def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, by
     return identifier, secret, payload
 
 
-def create_seed(seed: entries.Seed, *, kit: KdbxStore, prompt: Prompt, entry: str | None = None) -> None:
+def create_seed(
+    seed: entries.Seed,
+    *,
+    kit: KdbxStore,
+    prompt: Prompt,
+    entry: str | None = None,
+    registry: escrow.Registry | None = None,
+) -> None:
     """Create one §2 row in the kit. Assumes it is not there yet.
 
     `entry` overrides where the row is written, which is what `seed <member>
@@ -96,8 +103,11 @@ def create_seed(seed: entries.Seed, *, kit: KdbxStore, prompt: Prompt, entry: st
     """
     where = entry or seed.entry
     match seed.member:
-        case 'derivation':
-            seeds.init_seed(kit, where)
+        case 'recovery':
+            # The one row with a half that leaves the kit: the recipient is
+            # committed, so creating the key and writing `escrow/RECIPIENTS`
+            # is a single act rather than a step someone can forget.
+            _ = escrow.init(kit, registry or escrow.Registry.open(), entry=where)
         case 'oci':
             _ = oci_iam.create_seed(root=root('oci', prompt), seeds=kit, seed_entry=where)
         case 'cloudflare':
@@ -140,17 +150,17 @@ def backend_url_file(bundle_dir: Path) -> Path | None:
     return None
 
 
-def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
-    """The variables a Pulumi run needs, derived and read rather than stored.
+def environment(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None) -> dict[str, str]:
+    """The variables a Pulumi run needs, recovered and read rather than stored.
 
-    `PULUMI_CONFIG_PASSPHRASE` is a derivation of the seed (§2.2) and lives in
-    no slot an operator can read, so before this there was no way to obtain it
-    -- the state-backend README told the reader to export it without saying
-    where from. `PULUMI_BACKEND_URL` is read from the bundle the appliance's
-    provisioner writes, so the two halves of "log in to the backend" come from
-    one command.
+    `PULUMI_CONFIG_PASSPHRASE` is recovered from the escrow with the kit's
+    recovery key (§2.2), so the one place it exists outside its consumers is a
+    committed ciphertext nobody can open without the kit.
+    `PULUMI_BACKEND_URL` is read from the bundle the appliance's provisioner
+    writes, so the two halves of "log in to the backend" come from one command.
     """
-    values = {'PULUMI_CONFIG_PASSPHRASE': seeds.pulumi_passphrase(seeds.load_seed(kit))}
+    vault = escrow.Vault.open(kit, registry)
+    values = {'PULUMI_CONFIG_PASSPHRASE': vault.recover(escrow.PASSPHRASE)}
     url = backend_url_file(bundle_dir)
     if url is not None:
         values['PULUMI_BACKEND_URL'] = url.read_text().strip()
@@ -162,12 +172,19 @@ def environment(kit: KdbxStore, bundle_dir: Path) -> dict[str, str]:
     return values
 
 
-def bootstrap(kit: KdbxStore, *, prompt: Prompt, only: str | None = None) -> list[str]:
+def bootstrap(
+    kit: KdbxStore, *, prompt: Prompt, only: str | None = None, registry: escrow.Registry | None = None
+) -> list[str]:
     """Fill the kit with every §2 row. Returns the members it created.
 
     Idempotent by probing: a row already in the kit is left alone, so an
     interrupted bootstrap is resumed by re-running it. That also makes this
     the repair path when one seed is lost -- `--only <member>`.
+
+    It fills the kit and stops there. The escrow's own labels are minted one
+    command at a time (`credentials escrow generate <label>`), because
+    generating the state passphrase is a decision with consequences for every
+    stack, not a step a fill-everything command should take on its own.
     """
     created: list[str] = []
     for member, seed in entries.SEEDS.items():
@@ -177,19 +194,28 @@ def bootstrap(kit: KdbxStore, *, prompt: Prompt, only: str | None = None) -> lis
             log.info('%s: already in the kit', seed.title)
             continue
         log.info('%s: creating', seed.title)
-        create_seed(seed, kit=kit, prompt=prompt)
+        create_seed(seed, kit=kit, prompt=prompt, registry=registry)
         created.append(member)
     if only is not None and only not in entries.SEEDS:
         raise KdbxError(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}')
     return created
 
 
-def rotate(kit: KdbxStore, successor: KdbxStore, *, prompt: Prompt, only: str | None = None) -> list[str]:
+def rotate(
+    kit: KdbxStore,
+    successor: KdbxStore,
+    *,
+    prompt: Prompt,
+    only: str | None = None,
+    registry: escrow.Registry | None = None,
+) -> list[str]:
     """Write a new kit in which every seed has been replaced.
 
-    A *new* database file, per §4.2: the retired one stays until the last
-    secret derived from it has expired, which for a backup key means until
-    the last dump under it is out of retention (§2.2).
+    A *new* database file, per §4.2. The recovery key is the row that makes
+    the retired file destroyable: rotating it re-wraps the escrow, so once the
+    run is done the old kit opens nothing. Provider seeds behave as they
+    always did -- the minted credentials keep working, and each is replaced by
+    re-running its own command.
 
     A seed whose platform can mint its successor does so; the rest stop and
     print their console steps, exactly as at bootstrap.
@@ -198,9 +224,11 @@ def rotate(kit: KdbxStore, successor: KdbxStore, *, prompt: Prompt, only: str | 
     for member, seed in entries.SEEDS.items():
         if only is not None and member != only:
             continue
-        if member == 'derivation':
-            # Generated, not minted: the successor is fresh random bytes.
-            seeds.store_seed(successor, seeds.generate_seed(), seed.entry)
+        if member == 'recovery':
+            # Pure re-encryption: a successor key, and every ciphertext in the
+            # registry re-wrapped to it. No production secret changes value,
+            # which is the whole reason the two rotations are separable.
+            escrow.rotate_recovery(kit, successor, registry or escrow.Registry.open(), entry=seed.entry)
         elif member == 'oci':
             # Reads the predecessor from the retired kit, writes the successor
             # into the new one, and leaves the retired file untouched.

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import cloudflare, entries, masters, seeds
+from kluster.scripts.credentials import cloudflare, entries, escrow, masters
 from kluster.scripts.credentials.cli import main
 from kluster.scripts.credentials.kdbx import KdbxStore
 
@@ -28,16 +28,16 @@ def test_no_seed_leaves_its_identifier_empty() -> None:
         assert seed.identifier
 
 
-def test_the_derivation_seed_entry_has_one_definition() -> None:
-    assert seeds.SEED_ENTRY == entries.SEEDS['derivation'].entry
+def test_the_recovery_key_entry_has_one_definition() -> None:
+    assert escrow.RECOVERY_ENTRY == entries.SEEDS['recovery'].entry
 
 
 def test_console_only_seeds_are_the_manual_surface() -> None:
     # Everything a rotation must stop for: the two Apps, whose key generation
     # is console-only; ZeroTier, which has no token API; and Cloudflare, which
     # forbids a minted token from carrying token permissions and so has no
-    # credential able to mint the seed. The derivation seed is generated
-    # rather than minted, so it is not one of them.
+    # credential able to mint the seed. The recovery key is generated rather
+    # than minted, so it is not one of them.
     assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger', 'zerotier'}
 
 
@@ -116,5 +116,5 @@ def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> N
     for landmark in ('bring-up, from nothing', 'when one seed is lost', 'rotation', 'day to day'):
         assert landmark in printed
     # Each lifecycle verb appears in the ordering, not only in the tree.
-    for verb in ('bootstrap', 'rotate', 'derive env'):
+    for verb in ('bootstrap', 'rotate', 'escrow env', 'escrow check'):
         assert verb in printed

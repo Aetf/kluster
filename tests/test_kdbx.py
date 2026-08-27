@@ -67,12 +67,12 @@ def test_create_refuses_an_existing_file(tmp_path: Path) -> None:
 
 def test_writes_survive_a_reopen(tmp_path: Path) -> None:
     path = tmp_path / 'kit.kdbx'
-    KdbxStore.create(path, PASSWORD).put('seeds/Derivation seed', 'derivation-seed', 'AAAA')
+    KdbxStore.create(path, PASSWORD).put('seeds/Recovery key', 'age1identifier', 'AAAA')
 
     # Every put saves, so an interrupted bring-up keeps what it already wrote.
     reopened = KdbxStore(path=path)
     reopened.unlock_with(PASSWORD)
-    assert reopened.get('seeds/Derivation seed') == 'AAAA'
+    assert reopened.get('seeds/Recovery key') == 'AAAA'
 
 
 def test_nested_groups_are_created_on_demand(store: KdbxStore) -> None:

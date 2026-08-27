@@ -108,10 +108,16 @@ def expected(path: list[str]) -> str | None:
             return f'store.{action}'
         case ['derived', row, token]:
             return f'derived.{row}_{token}'
-        case ['derive', 'env']:
+        case ['escrow', 'env']:
             return 'lifecycle.environment'
-        case ['derive', 'passphrase']:
-            return 'seeds.pulumi_passphrase'
+        case ['escrow', 'recover']:
+            return 'escrow.Vault.open'
+        case ['escrow', 'import']:
+            # `import` is a keyword, so the register's verb and the function
+            # that implements it cannot share a name.
+            return 'escrow.adopt'
+        case ['escrow', action]:
+            return f'escrow.{action}'
         case ['bootstrap']:
             return 'lifecycle.bootstrap'
         case ['rotate']:
@@ -131,6 +137,13 @@ def expected(path: list[str]) -> str | None:
 def kit(tmp_path_factory: pytest.TempPathFactory) -> KdbxStore:
     """One real database for the whole module: creating one is the slow part."""
     return KdbxStore.create(tmp_path_factory.mktemp('cli') / 'kit.kdbx', PASSWORD)
+
+
+class _Vault:
+    """Stands in for an opened escrow; every leaf that reaches one is a dispatch."""
+
+    def recover(self, _label: str, _generation: int | None = None) -> str:
+        return 'a-secret'
 
 
 class Dispatch:
@@ -159,8 +172,12 @@ class Dispatch:
             (cli.lifecycle, 'rotate', []),
             (cli.lifecycle, 'create_seed', None),
             (cli.lifecycle, 'environment', {}),
-            (cli.seeds, 'pulumi_passphrase', 'passphrase'),
-            (cli.seeds, 'load_seed', b''),
+            (cli.escrow, 'init', cli.escrow.age.Identity(secret='a-secret', public='age1stub')),
+            (cli.escrow, 'generate', 'a-secret'),
+            (cli.escrow, 'adopt', Path('placeholder')),
+            (cli.escrow, 'rewrap', []),
+            (cli.escrow, 'check', []),
+            (cli.escrow, 'missing', []),
             (cli.masters, 'stored', {}),
             (cli.masters, 'remember', []),
             (cli.masters, 'forget', None),
@@ -177,6 +194,10 @@ class Dispatch:
         for module, attribute, result in handlers:
             name = f'{module.__name__.rsplit(".", 1)[-1]}.{attribute}'
             monkeypatch.setattr(module, attribute, self.stub(name, result))
+        # A vault that opens nothing: what is under test is the dispatch, and
+        # a real one would want a real recovery key.
+        monkeypatch.setattr(KdbxStore, 'get', self.stub('store.get', 'a-secret'))
+        monkeypatch.setattr(cli.escrow.Vault, 'open', classmethod(self.stub('escrow.Vault.open', _Vault())))
         methods: tuple[tuple[str, Any], ...] = (
             ('entries', []),
             ('describe', {}),
@@ -190,9 +211,11 @@ class Dispatch:
         # kit when there is none; neither should write a file here.
         monkeypatch.setattr(KdbxStore, 'create', self.stub('store.create', kit))
         monkeypatch.setattr('getpass.getpass', lambda _prompt='': PASSWORD)
-        # `derive` refuses to print a passphrase to a terminal, and whether
-        # the test runner has one is not this test's business.
+        # `escrow env` and `escrow recover` refuse to print a secret to a
+        # terminal, and whether the test runner has one is not this test's
+        # business; `escrow import` reads its value from standard input.
         monkeypatch.setattr('sys.stdout', io.StringIO())
+        monkeypatch.setattr('sys.stdin', io.StringIO('a-value'))
 
 
 @pytest.fixture
@@ -236,12 +259,12 @@ def test_every_leaf_dispatches(argv: list[str], dispatch: Dispatch, caplog: pyte
 
 
 def test_bootstrap_carries_its_only_through(dispatch: Dispatch) -> None:
-    assert cli.main(['bootstrap', '--only', 'derivation']) == 0
+    assert cli.main(['bootstrap', '--only', 'recovery']) == 0
 
     # `bootstrap` and `rotate` have no <action> level, so their namespaces
     # lack the attribute the dispatch matches on; the arguments they do carry
     # have to survive that.
-    assert [kwargs['only'] for name, _, kwargs in dispatch.calls if name == 'lifecycle.bootstrap'] == ['derivation']
+    assert [kwargs['only'] for name, _, kwargs in dispatch.calls if name == 'lifecycle.bootstrap'] == ['recovery']
 
 
 def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch, tmp_path: Path) -> None:
@@ -265,23 +288,46 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
 
 
 def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:
-    assert cli.main(['derive', 'passphrase']) == 0
+    assert cli.main(['escrow', 'recover', 'pulumi/passphrase']) == 0
 
     # The command owns the file, so it is 0600 from the moment it exists
     # instead of whatever the shell's umask happened to be.
     (_, args, _), *rest = [call for call in dispatch.calls if call[0] == 'workstation.write']
     assert not rest
     assert args[0] == cli.workstation.passphrase_path()
-    assert args[1] == 'passphrase'
+    assert args[1] == 'a-secret'
 
 
-def test_the_passphrase_can_still_be_piped_to_another_machine(
-    dispatch: Dispatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert cli.main(['derive', 'passphrase', '--stdout']) == 0
+def test_generating_the_passphrase_also_fills_its_slot(dispatch: Dispatch) -> None:
+    # generate -> escrow -> push: the value reaches the slot mise.toml reads
+    # in the same run, so a rotation is one command rather than two.
+    assert cli.main(['escrow', 'generate', 'pulumi/passphrase']) == 0
+
+    (_, args, _), *rest = [call for call in dispatch.calls if call[0] == 'workstation.write']
+    assert not rest
+    assert args[0] == cli.workstation.passphrase_path()
+    assert args[1] == 'a-secret'
+
+
+def test_generating_a_label_with_no_slot_writes_no_file(dispatch: Dispatch) -> None:
+    assert cli.main(['escrow', 'generate', 'state-backend/ca']) == 0
 
     assert 'workstation.write' not in dispatch.reached
-    assert capsys.readouterr().out.strip() == 'passphrase'
+
+
+def test_the_passphrase_can_still_be_piped_to_another_machine(dispatch: Dispatch) -> None:
+    assert cli.main(['escrow', 'recover', 'pulumi/passphrase', '--stdout']) == 0
+
+    assert 'workstation.write' not in dispatch.reached
+
+
+def test_check_runs_without_opening_a_kit(dispatch: Dispatch) -> None:
+    # The one command a stranger with a clone can run. Opening the kit here
+    # would make a check into a ceremony.
+    assert cli.main(['escrow', 'check']) == 0
+
+    assert 'escrow.check' in dispatch.reached
+    assert not [name for name in dispatch.reached if name.startswith('store.')]
 
 
 def test_seed_create_dispatches_the_row_the_member_names(dispatch: Dispatch) -> None:

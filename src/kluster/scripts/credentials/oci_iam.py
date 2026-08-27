@@ -113,7 +113,7 @@ STATEMENTS: tuple[str, ...] = (
 )
 
 #: OCI requires RSA for API keys, which is why these are generated rather than
-#: derived: deterministic RSA generation is the footgun §2.2 excludes.
+#: derived: deterministic RSA generation was the footgun §2.2 excluded.
 KEY_SIZE = 2048
 
 #: The domains API is SCIM, and a SCIM payload names its own schema. The SDK

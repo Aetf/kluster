@@ -152,8 +152,8 @@ class KdbxStore:
         """A new, empty database — the output of `bootstrap` and of `rotate`.
 
         Refuses an existing file: rotation writes a *new* database and the old
-        one stays until its last derived secret has expired (§2.2), so
-        overwriting is never the intent.
+        one stays until the rotation that wrote the successor has been
+        verified (§4.2), so overwriting is never the intent.
         """
         from . import workstation
 
