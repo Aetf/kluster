@@ -536,11 +536,20 @@ that puts a value there.
     server certificate issued under that CA and the age identity's public
     half — plus a B2 dump key minted from the B2 seed. The run ends by
     writing the `operator` client bundle into its workstation slot (§4.4).
-4.  `eval "$(credentials escrow env)"` — the two variables a `pulumi`
+4.  `credentials escrow generate pulumi/passphrase` — the one escrowed
+    label no stage above mints, because it has no single installer: the
+    state backend owns the CA and the backup identities and generates
+    them in the run that installs them, while the state passphrase
+    belongs to every stack and to none of them. The command writes the
+    workstation slot (§4.4) as well as the ciphertext, so `mise.toml`
+    finds the passphrase on every later run. A kit that predates escrow
+    carries a live passphrase already and uses `import` here instead
+    (§4.2), which escrows that value rather than replacing it.
+5.  `eval "$(credentials escrow env)"` — the two variables a `pulumi`
     run needs: `PULUMI_CONFIG_PASSPHRASE`, recovered from escrow and
     stored in no slot, and `PULUMI_BACKEND_URL`, read from the bundle the
     previous stage wrote.
-5.  `credentials derived cloudflare zones` — mints the zone-scoped
+6.  `credentials derived cloudflare zones` — mints the zone-scoped
     Cloudflare token from the seed into the `dns` stack's config, which
     is then committed. One §3 row per command, and re-running one rotates
     that row.
