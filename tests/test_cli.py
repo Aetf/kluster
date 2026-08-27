@@ -28,7 +28,7 @@ from typing import Any, cast
 
 import pytest
 
-from kluster.scripts.credentials import cli, entries, masters
+from kluster.scripts.credentials import cli, devices, entries, masters
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
 
 PASSWORD = 'kit-password'
@@ -110,6 +110,10 @@ def expected(path: list[str]) -> str | None:
             # `state-backend` is a row name and not an identifier, which is the
             # one place the two spellings differ.
             return f'derived.{row}_{credential}'.replace('-', '_')
+        case ['device', _]:
+            # One handler for every device row: what differs between them is
+            # the table in `devices.py`, not the code that reads it.
+            return 'devices.deliver'
         case ['slots', action]:
             # `ls` prints the map and `push` fills it; both are the slot map's
             # own module, which is where the register's machine-readable half
@@ -201,6 +205,7 @@ class Dispatch:
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', Path('placeholder')),
             (cli.derived, 'b2_management', 'key-id'),
+            (cli.devices, 'deliver', ()),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
             # placeholder passphrase where mise would then read it.
@@ -254,6 +259,8 @@ def test_the_walk_finds_every_register_row() -> None:
             assert ['seed', member, seed.repair[0]] in found
     for member in masters.ROOTS:
         assert ['master', member, 'remember'] in found
+    for member in devices.DEVICES:
+        assert ['device', member] in found
     assert ['bootstrap'] in found
 
 
@@ -344,6 +351,38 @@ def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch:
     (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'derived.oci_physical']
     assert not rest
     assert kwargs['compartment_id'] == 'ocid1.compartment.test'
+
+
+def test_a_device_row_is_pushed_into_the_stack_its_table_names(dispatch: Dispatch) -> None:
+    assert cli.main(['device', 'adguard']) == 0
+
+    # The row decides the stack, and the push still needs the state backend
+    # open: a device credential is a config secret like any other.
+    (_, args, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'devices.deliver']
+    assert not rest
+    assert args[0] is devices.DEVICES['adguard']
+    assert kwargs['stack'].name == devices.DEVICES['adguard'].stack
+    assert 'lifecycle.environment' in dispatch.reached
+
+
+def test_a_device_row_takes_no_stack_of_its_own() -> None:
+    # The credential authenticates against one device, and one stack talks to
+    # that device; a `--stack` would deliver it where nothing checks it.
+    with pytest.raises(SystemExit):
+        _ = cli.build_parser().parse_args(['device', 'unifi', '--stack', 'elsewhere'])
+
+
+def test_what_a_device_run_is_handed_reaches_the_delivery(dispatch: Dispatch, tmp_path: Path) -> None:
+    key = tmp_path / 'api-key'
+    _ = key.write_text('an-api-key\n')
+
+    assert cli.main(['device', 'unifi', '--api-key-file', str(key), '--api-url', 'https://198.51.100.1']) == 0
+
+    # A secret is named as a file and a plain field as its value, and both
+    # arrive addressed by the field name the table gives them.
+    (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'devices.deliver']
+    assert not rest
+    assert kwargs['given'] == {'api-key': str(key), 'api-url': 'https://198.51.100.1'}
 
 
 def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:

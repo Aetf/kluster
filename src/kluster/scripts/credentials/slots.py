@@ -34,8 +34,10 @@ name an Environment.
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
     from a kit row the platform publishes no API for (the ZeroTier Central
-    token), and some are installed by another tracker's automation entirely
-    (the UDM and libvirt SSH identities, §3).
+    token), some are made on a device of the estate and delivered by a command
+    of their own (the UniFi key and the AdGuard login, `devices.py`), and some
+    are installed by another tracker's automation entirely (the UDM and libvirt
+    SSH identities, §3).
 
 **A target has to be an address, not an intention.** Where §3 names a channel
 that nothing has given a name yet -- an Environment secret no workflow reads, a
@@ -63,7 +65,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 
 from ... import conventions
-from . import derived, escrow, pulumi_config
+from . import derived, devices, escrow, pulumi_config
 from .github_secrets import Forge, Slot
 from .pulumi_config import SlotRefused
 
@@ -363,9 +365,13 @@ class Manual:
     describes: str
     #: Where the operator gets it, printed at the moment they are asked.
     console: str
+    #: What takes it from them and delivers it, where anything does. Empty for
+    #: a row whose only delivery is this map's own sink.
+    command: str = ''
 
     def describe(self) -> str:
-        return f'typed in: {self.describes}'
+        by = f', delivered by `{self.command}`' if self.command else ''
+        return f'typed in: {self.describes}{by}'
 
     def value(self, context: Context) -> str:
         log.warning('%s is neither minted nor derived; it comes from here:', self.describes)
@@ -409,6 +415,22 @@ class Row:
 
 def _github(name: str, environments: tuple[str, ...], repository: str = REPOSITORY) -> tuple[Slot, ...]:
     return tuple(Slot(repository=repository, name=name, environment=environment) for environment in environments)
+
+
+def _device(member: str) -> Row:
+    """A §3 row whose credential is made on a device and typed in (`devices.py`).
+
+    Built from that module's table rather than restated here, so the keys this
+    map advertises are the keys the command writes -- the same rule the minted
+    rows follow by importing their key names.
+    """
+    device = devices.DEVICES[member]
+    return Row(
+        register=device.register,
+        source=Manual(device.title, device.console, command=f'credentials device {device.member}'),
+        targets=tuple(PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields),
+        pending=_IN_STACK_CONFIG,
+    )
 
 
 #: Why a provider credential CI *uses* is nonetheless not a CI secret today: it
@@ -610,28 +632,8 @@ ROWS: dict[str, Row] = {
         ),
         pending=_IN_STACK_CONFIG,
     ),
-    'unifi': Row(
-        register='UniFi API key',
-        source=Manual(
-            'the UniFi API key',
-            'The controller mints it for a dedicated local admin: UniFi → Settings →\n'
-            '  Admins → that account → Create API key. It is shown once.',
-        ),
-        targets=(
-            PulumiConfig(PHYSICAL_STACK, 'unifiApiKey'),
-            PulumiConfig(PHYSICAL_STACK, 'unifiApiUrl', secret=False),
-        ),
-        pending=_IN_STACK_CONFIG,
-    ),
-    'adguard': Row(
-        register='AdGuard API credentials',
-        source=Manual(
-            'the AdGuard admin credentials',
-            'AdGuard Home has no scoped API (audit L11), so these are the admin\n'
-            '  account of each instance, set where that instance is configured.',
-        ),
-        pending='the `apps` stack that would hold them declares no AdGuard rewrites yet',
-    ),
+    'unifi': _device('unifi'),
+    'adguard': _device('adguard'),
     'alertmanager-read': Row(
         register='Alertmanager read token',
         source=Derived(escrow.ALERTMANAGER),

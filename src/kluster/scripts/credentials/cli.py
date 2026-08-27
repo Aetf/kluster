@@ -24,6 +24,7 @@ from ... import conventions
 from . import (
     b2,
     derived,
+    devices,
     entries,
     escrow,
     github_secrets,
@@ -80,7 +81,14 @@ _ORDER = """when to run what (docs/credentials.md §4):
        credentials derived b2 management
          The two provider credentials the physical stack runs on, into its
          config, which is then committed like the one above.
-    8. credentials slots push
+    8. credentials device unifi
+       credentials device adguard
+         The two §3 credentials no API here mints: each is made on the
+         device that checks it, so the command prints the steps that
+         create it, takes the value without echoing it, and writes it
+         into the stack config that reads it -- physical for the UniFi
+         key, dns for the AdGuard login. Both files are then committed.
+    9. credentials slots push
          The GitHub secrets CI reads, from the slot map (§4). Run it again
          whenever a value behind one of them moves; a row it cannot fill
          yet says which slot is waiting on what.
@@ -323,6 +331,28 @@ def build_parser() -> argparse.ArgumentParser:
         '--entry', default=derived.B2_SEED_ENTRY, help=f'the seed row (default: {derived.B2_SEED_ENTRY})'
     )
     _slot_source(management)
+
+    # §3's rows whose credential is made on a device of the estate rather than
+    # minted from a seed: the command prints the console steps that create it,
+    # takes the value without echoing it and pushes it into the stack that
+    # reads it (`devices.py`). A separate family from `derived` because nothing
+    # here mints anything -- the delivery is the whole of the act.
+    device_cmd = families.add_parser('device', help='the credentials a device of the estate holds (§3)')
+    device_rows = device_cmd.add_subparsers(dest='member', required=True, metavar='<device>')
+    for device in devices.DEVICES.values():
+        row = device_rows.add_parser(device.member, help=f"{device.title}, into the {device.stack} stack's config")
+        for field in device.fields:
+            _ = row.add_argument(
+                field.flag,
+                default=None,
+                metavar='<path>' if field.secret else '<value>',
+                help=(
+                    f'read {field.describes} from a file rather than a prompt (`{devices.STDIN}` reads stdin)'
+                    if field.secret
+                    else f'{field.describes}, rather than a prompt'
+                ),
+            )
+        _slot_source(row)
 
     # The slot map (§4): the machine-readable half of §3, and the one sink that
     # fills a slot kind no `derived` row can reach — a GitHub secret, which is
@@ -632,6 +662,17 @@ def main(argv: list[str] | None = None) -> int:
             case ('derived', 'b2', 'management'):
                 _ = derived.b2_management(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry
+                )
+            # §3's device rows: no mint, so the command is the console steps
+            # plus the push. Which stack takes it comes from the row rather
+            # than from an argument -- the credential authenticates against
+            # one device, and one stack talks to that device.
+            case ('device', member, _) if member in devices.DEVICES:
+                device = devices.DEVICES[member]
+                _ = devices.deliver(
+                    device,
+                    stack=_stack(args, store, device.stack),
+                    given={field.name: getattr(args, field.dest) for field in device.fields},
                 )
             # The slot map's sink: one row at a time or the whole map, each
             # resolved, pushed and verified in the same run.

@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from fake_gh import RecordedGh
 
-from kluster.scripts.credentials import escrow, pulumi_config, slots
+from kluster.scripts.credentials import devices, escrow, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
@@ -93,6 +93,20 @@ def test_the_passphrase_reaches_every_environment() -> None:
 
     assert {slot.environment for slot in passphrase.sinks} == set(slots.ENVIRONMENTS)
     assert {slot.name for slot in passphrase.sinks} == {'PULUMI_CONFIG_PASSPHRASE'}
+
+
+def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
+    for member, device in devices.DEVICES.items():
+        row = slots.ROWS[member]
+
+        # The map is built from the device table rather than restating it, for
+        # the reason the minted rows import their key names: two descriptions
+        # of one delivery are two things to keep in step.
+        assert row.register == device.register
+        assert row.targets == tuple(
+            slots.PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields
+        )
+        assert f'credentials device {member}' in row.source.describe()
 
 
 def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None:
