@@ -37,6 +37,12 @@ from putils import Component, async_output, resolve
 #: on the nodes themselves, and neither belongs to a workload.
 MANAGEMENT_PORTS: tuple[int, ...] = (6443, 50000)
 
+#: How the two families are told apart in the balancer's address list. The
+#: separator decides it for every literal OCI hands back — an IPv4 literal
+#: carries no colon and an IPv6 literal no dot — and it keeps deciding it if a
+#: read leaves the address record's own `ip_version` field unset.
+FAMILY_SEPARATOR: Mapping[str, str] = {'IPv4': '.', 'IPv6': ':'}
+
 
 class NodeLoadBalancer(Component):
     """The NLB and its management backend sets — the cluster's endpoint."""
@@ -96,15 +102,37 @@ class NodeLoadBalancer(Component):
     @property
     def address(self) -> pulumi.Output[str]:
         """The public IPv4 the cluster endpoint and certificate SANs name."""
+        return self._public_address('IPv4')
 
-        def public_v4(addresses: Sequence[Any]) -> str:
+    @property
+    def address_v6(self) -> pulumi.Output[str]:
+        """The public IPv6, which only the `dns` stack's cluster anchor names.
+
+        The balancer is dual-stack, so it holds one public address of each
+        family and the anchor's AAAA is as much a machine fact as its A
+        (docs/declarative/dns.md §2). The endpoint and the certificate SANs
+        stay on the IPv4 alone: they are what a node's machine configuration
+        is written with, and a Talos node reaches its own cluster over the
+        address family the fleet is uniformly reachable on.
+        """
+        return self._public_address('IPv6')
+
+    def _public_address(self, family: str) -> pulumi.Output[str]:
+        """The balancer's one public address of `family`.
+
+        Public only: the list also carries the private address the balancer
+        holds in its own subnet, which no caller of this ever wants.
+        """
+        separator = FAMILY_SEPARATOR[family]
+
+        def public(addresses: Sequence[Any]) -> str:
             for address in addresses:
                 text = str(address.ip_address or '')
-                if address.is_public and '.' in text:
+                if address.is_public and separator in text:
                     return text
-            raise ValueError('the load balancer has no public IPv4 address')
+            raise ValueError(f'the load balancer has no public {family} address')
 
-        return self.load_balancer.ip_addresses.apply(public_v4)
+        return self.load_balancer.ip_addresses.apply(public)
 
 
 class CloudNodes(Component):

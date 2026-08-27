@@ -32,8 +32,9 @@ API (that's `k8s-base`/`apps`).
 
 Stack outputs (the machine facts other stacks may reference,
 pulumi.md §3.1): `kubeconfig`, `talosconfig`, per-node public/private
-IPs, the NLB IP, the dedicated-VIP addresses (reserved public +
-secondary private), and bucket names/endpoints.
+IPs, both of the NLB's public addresses (IPv4 and IPv6 — the cluster
+anchor in `dns` carries an A and an AAAA), the dedicated-VIP addresses
+(reserved public + secondary private), and bucket names/endpoints.
 
 ## 1. OCI (pulumi-oci)
 
