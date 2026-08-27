@@ -12,10 +12,10 @@ without asking anybody for anything.
 The slot is an **OCI SDK configuration file plus the key it names**, rather
 than a shape of this repository's own, because the SDK is the whole of the
 reader: `oci.config.from_file` needs no adapter, and a containerized `oci` CLI
-pointed at the same file behaves identically. The compartment travels in the
-same file under `compartment-id`, which is not an SDK field — the SDK hands
-back every key in the profile — so one path is the whole of what a
-provisioning run has to be given.
+pointed at the same file behaves identically. It holds the credential and
+nothing else: the compartment the appliance acts in is a boundary this program
+decides rather than a property of the key, so it lives in `conventions` and
+the provisioner reads it there — a copy here could only go stale against it.
 
 The key file is named by absolute path, as the client bundle's certificates
 are: the SDK expands nothing, so a checkout copied to another path re-runs the
@@ -62,7 +62,7 @@ def key_path() -> Path:
     return directory() / KEY
 
 
-def write(key: ApiKey, *, compartment_id: str) -> Path:
+def write(key: ApiKey) -> Path:
     """Fill the slot with a minted key, and return the configuration file's path.
 
     The key arrives whole rather than as five scalars, which is what `ApiKey`
@@ -85,7 +85,6 @@ def write(key: ApiKey, *, compartment_id: str) -> Path:
         'tenancy': key.tenancy,
         'region': key.region,
         'key_file': str(written),
-        'compartment-id': compartment_id,
     }
     rendered = io.StringIO()
     profile.write(rendered)

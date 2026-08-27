@@ -356,6 +356,17 @@ def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch:
     assert kwargs['compartment_id'] == 'ocid1.compartment.test'
 
 
+def test_a_mint_with_no_compartment_leaves_the_choice_to_conventions(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'oci-physical', 'mint']) == 0
+    assert cli.main(['derived', 'oci-state-backend', 'mint']) == 0
+
+    # The ordinary bring-up names no compartment at all: the mapping does, and
+    # the row's own function creates what is not there. `None` is how the
+    # command says "the convention", rather than a second copy of it here.
+    passed = [kwargs['compartment_id'] for name, _, kwargs in dispatch.calls if name.startswith('derived.oci')]
+    assert passed == [None, None]
+
+
 def test_a_device_row_is_pushed_into_the_stack_its_table_names(dispatch: Dispatch) -> None:
     assert cli.main(['derived', 'adguard', 'record']) == 0
 

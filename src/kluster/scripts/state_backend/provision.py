@@ -39,6 +39,7 @@ from typing import Any
 
 import oci
 
+from ... import conventions
 from ..credentials import oci_slot
 from . import settings
 
@@ -88,6 +89,14 @@ class Oci:
         A machine that still has a hand-written configuration where the slot
         used to be keeps provisioning, once and loudly: what is there is a
         complete answer, and the warning names the command that replaces it.
+
+        The compartment is not part of that answer. It is a boundary this
+        program decides (`conventions.OCI_COMPARTMENTS`), so the minted slot
+        carries the credential alone and the mapping says where it acts;
+        `--compartment` overrides both, and a configuration file that names a
+        `compartment-id` of its own — the hand-written one above, or one an
+        operator points this run at — is honoured ahead of the mapping,
+        because a file naming another tenancy's compartment means it.
         """
         location = os.environ.get('OCI_CLI_CONFIG_FILE')
         if not location:
@@ -105,12 +114,19 @@ class Oci:
             else:
                 raise ValueError(
                     'the appliance has no OCI credential on this machine: run `credentials derived '
-                    f'oci-state-backend mint --compartment <ocid>`, which mints one into {slot}'
+                    f'oci-state-backend mint`, which mints one into {slot}'
                 )
         config = oci.config.from_file(location)
-        compartment = compartment_id or config.get('compartment-id')
+        compartment = (
+            compartment_id
+            or config.get('compartment-id')
+            or conventions.OCI_COMPARTMENTS[conventions.STATE_BACKEND].ocid
+        )
         if not compartment:
-            raise ValueError(f'no compartment: pass --compartment or set compartment-id in {location}')
+            raise ValueError(
+                f'no compartment: pass --compartment, set compartment-id in {location}, or record the '
+                "appliance's compartment in `conventions.OCI_COMPARTMENTS`"
+            )
         return cls(compartment_id=str(compartment), config=config)
 
     @property

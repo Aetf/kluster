@@ -59,21 +59,17 @@ ACCOUNT_KEY = 'cloudflareAccountId'
 #: the mint retires every other credential of that name, so a delivery aimed
 #: somewhere else would revoke this stack's live credential on its way to
 #: filling another stack's slot. Identity is fixed, so delivery is too.
-PHYSICAL_STACK = 'physical'
+PHYSICAL_STACK = conventions.PHYSICAL
 
 #: Where the OCI provider reads its credential, namespaced to the provider as
-#: the provider requires. The compartment is this project's own key rather
-#: than the provider's, so it carries no namespace at all, for the reason
-#: `cloudflareAccountId` carries none: `pulumi config set` and
-#: `pulumi.Config()` resolve an unqualified key against the same project name,
-#: which then lives in `Pulumi.yaml` alone. It is also the one key here whose
-#: name a stack program already spells (`stacks/physical.py`).
+#: the provider requires. The compartment is not among them: it is a boundary
+#: this program decides rather than a part of the signing configuration, so it
+#: lives in `conventions` and the stack reads it there.
 OCI_TENANCY_KEY = 'oci:tenancyOcid'
 OCI_USER_KEY = 'oci:userOcid'
 OCI_FINGERPRINT_KEY = 'oci:fingerprint'
 OCI_PRIVATE_KEY_KEY = 'oci:privateKey'
 OCI_REGION_KEY = 'oci:region'
-COMPARTMENT_KEY = 'compartmentId'
 
 #: Where the B2 provider reads its credential.
 B2_KEY_ID_KEY = 'b2:applicationKeyId'
@@ -115,7 +111,7 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     return minted.account_id
 
 
-def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartment_id: str, holds: str) -> None:
+def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:
     """Write one OCI signing configuration into a stack's committed config.
 
     The four keys the provider signs with are secrets. The key obviously is;
@@ -126,19 +122,10 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartmen
     it — and it is computed from the key at push time, so the two cannot
     disagree.
 
-    The other two are plain, and each for its own reason. The region is a
-    constant of this estate (`conventions`).
-
-    The compartment is plain because the program reads it plain:
-    `stacks/physical.py` takes it with `require`, and a value pushed as a
-    secret and read that way agrees only by way of an upstream defect
-    (pulumi/pulumi#7127) — the two sides have to say the same thing. Reading
-    it with `require_secret` instead would type-check, every component here
-    taking an `Input[str]`, but secretness propagates: the compartment field
-    of every resource in the stack would become encrypted state and every
-    preview line naming one would read `[secret]`. That is a poor trade for an
-    identifier that names a container inside the tenancy rather than the
-    account that owns it.
+    The fifth is plain: the region is a constant of this estate
+    (`conventions`), which is also where the compartment the key may act in
+    lives — a boundary this program decides is not something a credential
+    delivery gets to restate.
     """
     stack.fill(
         secret={
@@ -152,7 +139,7 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartmen
             # PEM to every reader of one, this provider included.
             OCI_PRIVATE_KEY_KEY: key.private_key.strip(),
         },
-        plain={COMPARTMENT_KEY: compartment_id, OCI_REGION_KEY: key.region},
+        plain={OCI_REGION_KEY: key.region},
         holds=holds,
     )
 
@@ -161,29 +148,29 @@ def oci_physical(
     kit: KdbxStore,
     *,
     stack: pulumi_config.Stack,
-    compartment_id: str,
+    compartment_id: str | None = None,
     seed_entry: str = OCI_SEED_ENTRY,
     connect: oci_iam.Connect = oci_iam.identity_client,
 ) -> str:
     """Mint the `physical` stack's OCI user and key into its config. Returns the user OCID.
 
-    The compartment is pushed beside the credential because a signing
-    configuration does not say where the stack may act, and the two are one
-    decision: the user is an administrator of that compartment and a stranger
-    outside it, so a key delivered without it would be a credential the stack
-    cannot aim.
+    The compartment is not delivered with the credential: it is the boundary
+    `conventions` gives this consumer, created here if it does not exist yet,
+    and the stack reads it from the same place. `compartment_id` overrides that
+    for a drill tenancy, where none of those names mean anything.
     """
-    identity = oci_iam.Identity.for_consumer(PHYSICAL_STACK, compartment_id=compartment_id)
-    minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
+    minted = oci_iam.mint_api_key(
+        kit, consumer=PHYSICAL_STACK, compartment_id=compartment_id, seed_entry=seed_entry, connect=connect
+    )
 
-    _push_api_key(stack, minted, compartment_id=compartment_id, holds=f'a key for {identity.name}')
+    _push_api_key(stack, minted, holds=f'a key for {oci_iam.Identity.name_for(PHYSICAL_STACK)}')
     return minted.user
 
 
 def oci_state_backend(
     kit: KdbxStore,
     *,
-    compartment_id: str,
+    compartment_id: str | None = None,
     seed_entry: str = OCI_SEED_ENTRY,
     connect: oci_iam.Connect = oci_iam.identity_client,
 ) -> Path:
@@ -194,11 +181,20 @@ def oci_state_backend(
     runs before there is a Pulumi backend to hold a secret at all, so the slot
     is what a non-interactive reader can be pointed at (`oci_slot.py`).
     """
-    identity = oci_iam.Identity.for_consumer(conventions.STATE_BACKEND, compartment_id=compartment_id)
-    minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
+    minted = oci_iam.mint_api_key(
+        kit,
+        consumer=conventions.STATE_BACKEND,
+        compartment_id=compartment_id,
+        seed_entry=seed_entry,
+        connect=connect,
+    )
 
-    written = oci_slot.write(minted, compartment_id=compartment_id)
-    log.info('`state-backend provision` signs as %s from now on, reading %s', identity.name, written)
+    written = oci_slot.write(minted)
+    log.info(
+        '`state-backend provision` signs as %s from now on, reading %s',
+        oci_iam.Identity.name_for(conventions.STATE_BACKEND),
+        written,
+    )
     return written
 
 
