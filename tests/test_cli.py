@@ -106,8 +106,10 @@ def expected(path: list[str]) -> str | None:
             return 'store.describe'
         case ['kdbx', action]:
             return f'store.{action}'
-        case ['derived', row, token]:
-            return f'derived.{row}_{token}'
+        case ['derived', row, credential]:
+            # `state-backend` is a row name and not an identifier, which is the
+            # one place the two spellings differ.
+            return f'derived.{row}_{credential}'.replace('-', '_')
         case ['escrow', 'env']:
             return 'lifecycle.environment'
         case ['escrow', 'recover']:
@@ -186,6 +188,9 @@ class Dispatch:
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
             (cli.derived, 'cloudflare_zones', 'account-id'),
+            (cli.derived, 'oci_physical', 'ocid1.user.test'),
+            (cli.derived, 'oci_state_backend', Path('placeholder')),
+            (cli.derived, 'b2_management', 'key-id'),
             # Slots are files in the checkout this test is running from, so
             # the writer is stubbed: a dispatch test must not leave a
             # placeholder passphrase where mise would then read it.
