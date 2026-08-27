@@ -17,9 +17,11 @@ exposed as the `state-backend` console script.
 
 ## Provisioning
 
-Runs on the workstation holding the offline database — the PKI and the
-encryption identities are derived from the derivation seed, and the B2
-credentials are minted from the seed key:
+Runs on the workstation holding the offline kit. The CA and the backup
+encryption identities come out of the escrow registry — the first run generates
+them and commits their ciphertexts, every run after opens the same ones with
+the kit's recovery key (docs/credentials.md §2.2) — and the B2 credentials are
+minted from the seed key:
 
 ```sh
 mise x uv -- uv run state-backend provision
@@ -59,11 +61,11 @@ the server by literal IP (`sslmode=verify-full`) so the hot path never depends
 on DNS — which is itself something this backend deploys.
 
 ```sh
-eval "$(mise x uv -- uv run credentials derive env)"
+eval "$(mise x uv -- uv run credentials escrow env)"
 ```
 
-That derives `PULUMI_CONFIG_PASSPHRASE` from the derivation seed — it is
-stored nowhere, so there is nothing to look up — and reads
+That recovers `PULUMI_CONFIG_PASSPHRASE` from its escrow ciphertext, using the
+recovery key in the kit, and exports it without writing it anywhere; it reads
 `PULUMI_BACKEND_URL` out of the client bundle written above. The URL names the
 bundle's files by absolute path, because nothing on the path expands a
 variable inside a connection string:
@@ -93,8 +95,9 @@ to enforce it.
 
 ## Losing it
 
-The daily dump is age-encrypted to identities derived from the derivation
-seed and lands in B2 under a prefix whose lifecycle rule enforces retention.
-Recovery is
+The daily dump is age-encrypted to the `backup/age/<generation>` identities —
+random at creation, their only stored copies the ciphertexts under `escrow/`,
+which the kit's recovery key opens — and lands in B2 under a prefix whose
+lifecycle rule enforces retention. Recovery is
 a re-provision followed by `pg_restore` of the newest object — the same path
 the quarterly drill exercises, which is why nothing about it is improvised.

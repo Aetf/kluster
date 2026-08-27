@@ -29,6 +29,7 @@ Managed with [uv](https://github.com/astral-sh/uv) and
 | `deploy/` | Deployment material that is not library code — the state-backend appliance's Butane file, its dump script, its operator keys. |
 | `docker/` | The self-built container images: per image, a build file plus a `.conf` holding its build args and tag. Published by the `images` workflow. |
 | `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (still the legacy cluster's chart set). |
+| `escrow/` | Age ciphertexts of the secrets no provider mints, one file per generation. Committed on purpose: what protects them is the recovery key, which is in the offline kit and nowhere else (docs/credentials.md §2.2). |
 | `docs/` | Design docs. |
 | `tests/` | Unit tests: the framework layer against Pulumi mocks, the scripts against real files. No cloud access. |
 
@@ -45,12 +46,14 @@ mise x -- pulumi preview --stack <layer>
 
 A `pulumi` run needs two things that cannot be looked up: `PULUMI_BACKEND_URL`,
 written by `state-backend provision` beside the client certificate it names,
-and `PULUMI_CONFIG_PASSPHRASE`, derived from the offline derivation seed and
-stored in no slot at all. Both live in `.credentials/`, a git-ignored directory
-in the checkout holding everything local this repository needs — the seed kit,
-the cached passphrase, the state backend's client bundle, the account roots'
-token files (docs/credentials.md §4.4). `mise.toml` reads them from there, so a
-workstation is set up by copying that directory from one that already has it:
+and `PULUMI_CONFIG_PASSPHRASE`, a random secret whose only recoverable copy is
+the ciphertext committed under `escrow/`, which the offline kit's recovery key
+alone opens (docs/credentials.md §2.2). Both are read from `.credentials/`, a
+git-ignored directory in the checkout holding everything local this repository
+needs — the seed kit, the cached passphrase, the state backend's client bundle,
+the account roots' token files (docs/credentials.md §4.4). `mise.toml` reads
+them from there, so a workstation is set up by copying that directory from one
+that already has it:
 
 ```sh
 # on the workstation that holds the kit; leave kit.kdbx behind unless the
@@ -63,15 +66,16 @@ connection string names the bundle's certificate files absolutely, because
 nothing on the path expands a variable inside one. A checkout elsewhere needs
 those three paths corrected in `.credentials/state-backend/backend-url`.
 
-On a machine that holds the kit, `credentials derive passphrase` writes the
-passphrase slot itself, and `state-backend bundle operator --address <ip>`
-writes the bundle.
+On a machine that holds the kit, `credentials escrow recover pulumi/passphrase`
+writes the passphrase slot itself, and `state-backend bundle operator --address
+<ip>` writes the bundle.
 
 The `github` stack additionally needs `GITHUB_TOKEN`, which `mise.toml` reads
 from `.credentials/roots/github.token`. That one is an account root rather than
-a derived secret: nothing here can recreate it, which is deliberate -- that
-stack is applied by hand and never by CI. `credentials master github remember`
-is how the value from the personal estate gets into the slot.
+a credential this repository mints: nothing here can recreate it, which is
+deliberate -- that stack is applied by hand and never by CI. `credentials
+master github remember` is how the value from the personal estate gets into
+the slot.
 
 The console scripts — `credentials`, `state-backend`, `update_crds` — are the
 operator-side half of the estate; each one's `--help` is written to say when it
