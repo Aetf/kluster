@@ -442,6 +442,10 @@ def main(argv: list[str] | None = None) -> int:
                 created = lifecycle.bootstrap(store, prompt=input, only=args.only, registry=registry)
                 log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
             case ('rotate', _, _):
+                # Before the successor exists, not once `rotate` reaches its
+                # walk: a `--only` that names no row would otherwise leave a
+                # new database file behind with nothing rotated into it.
+                lifecycle.require_member(args.only)
                 successor = KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: '))
                 rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only, registry=registry)
                 log.info('rotated %s into %s', ', '.join(rotated), args.into)

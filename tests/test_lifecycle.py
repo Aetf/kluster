@@ -131,6 +131,17 @@ def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
         _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
 
 
+def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxStore, tmp_path: Path) -> None:
+    # A rotation that matches no row would otherwise report an empty list as a
+    # finished run, leaving a successor kit with nothing in it.
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+
+    with pytest.raises(KdbxError, match='no seed named'):
+        _ = lifecycle.rotate(kit, successor, prompt=_refuse, only='nonesuch')
+
+    assert successor.entries() == []
+
+
 @needs_age
 def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path

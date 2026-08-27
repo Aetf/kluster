@@ -172,6 +172,17 @@ def environment(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | No
     return values
 
 
+def require_member(only: str | None) -> None:
+    """Refuse an `--only` that names no §2 row.
+
+    Checked before either walk starts, and before `rotate` opens its
+    successor: a member that matches nothing otherwise walks past every row,
+    touches none of them, and reports the empty result as a finished run.
+    """
+    if only is not None and only not in entries.SEEDS:
+        raise KdbxError(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}')
+
+
 def bootstrap(
     kit: KdbxStore, *, prompt: Prompt, only: str | None = None, registry: escrow.Registry | None = None
 ) -> list[str]:
@@ -186,6 +197,7 @@ def bootstrap(
     generating the state passphrase is a decision with consequences for every
     stack, not a step a fill-everything command should take on its own.
     """
+    require_member(only)
     created: list[str] = []
     for member, seed in entries.SEEDS.items():
         if only is not None and member != only:
@@ -196,8 +208,6 @@ def bootstrap(
         log.info('%s: creating', seed.title)
         create_seed(seed, kit=kit, prompt=prompt, registry=registry)
         created.append(member)
-    if only is not None and only not in entries.SEEDS:
-        raise KdbxError(f'no seed named {only!r}; expected one of {", ".join(entries.SEEDS)}')
     return created
 
 
@@ -220,6 +230,7 @@ def rotate(
     A seed whose platform can mint its successor does so; the rest stop and
     print their console steps, exactly as at bootstrap.
     """
+    require_member(only)
     rotated: list[str] = []
     for member, seed in entries.SEEDS.items():
         if only is not None and member != only:
