@@ -80,28 +80,21 @@ APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..estate'
 def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """`.credentials/` outside this checkout, with no ambient override in force."""
     monkeypatch.delenv('OCI_CLI_CONFIG_FILE', raising=False)
-    monkeypatch.setattr(oci_slot, 'LEGACY_CONFIG_FILE', tmp_path / 'legacy' / 'config')
+    monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', tmp_path / 'legacy' / 'config')
     directory = tmp_path / '.credentials'
     monkeypatch.setattr(workstation, 'directory', lambda: directory)
     return directory
 
 
-def _mint_into(where: str) -> Path:
+def _mint() -> Path:
     """A slot filled the way `credentials derived oci state-backend` fills it."""
     private_pem, _ = oci_iam.generate_key()
-    return oci_slot.write(
-        where,
-        tenancy=APPLIANCE_TENANCY,
-        user=APPLIANCE_USER,
-        fingerprint=oci_iam.fingerprint(private_pem),
-        private_key=private_pem,
-        region='us-phoenix-1',
-        compartment_id=COMPARTMENT,
-    )
+    key = oci_iam.ApiKey(tenancy=APPLIANCE_TENANCY, user=APPLIANCE_USER, private_key=private_pem)
+    return oci_slot.write(key, compartment_id=COMPARTMENT)
 
 
 def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
-    _ = _mint_into(oci_slot.STATE_BACKEND)
+    _ = _mint()
 
     client = provision.Oci.load()
 
@@ -112,7 +105,7 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
 
 
 def test_an_explicit_compartment_wins_over_the_recorded_one(slots: Path) -> None:
-    _ = _mint_into(oci_slot.STATE_BACKEND)
+    _ = _mint()
 
     client = provision.Oci.load('ocid1.compartment.oc1..elsewhere')
 
@@ -120,12 +113,16 @@ def test_an_explicit_compartment_wins_over_the_recorded_one(slots: Path) -> None
 
 
 def test_the_superseded_configuration_is_read_once_and_loudly(
-    slots: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    slots: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     # A workstation that predates the mint keeps provisioning: what is at the
     # old path is a complete answer, and the warning names its replacement.
-    superseded = _mint_into('superseded')
-    monkeypatch.setattr(oci_slot, 'LEGACY_CONFIG_FILE', superseded)
+    # Moving the file out of the slot is what makes it the old one -- it names
+    # its key absolutely, so it goes on working from anywhere.
+    superseded = tmp_path / 'legacy' / 'config'
+    superseded.parent.mkdir()
+    _mint().rename(superseded)
+    monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', superseded)
 
     with caplog.at_level(logging.WARNING):
         client = provision.Oci.load()

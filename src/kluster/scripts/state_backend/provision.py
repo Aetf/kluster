@@ -46,6 +46,15 @@ log = logging.getLogger(__name__)
 
 IMAGE_BUCKET = f'{settings.NAME}-images'
 
+#: Where the appliance's key lived before it became a workstation slot: the
+#: XDG path the containerized `oci` CLI reads too. Still read, once and
+#: loudly, so a workstation that predates the mint keeps provisioning. It
+#: lives here rather than beside the writer because this is the only thing
+#: that reads it, and the two have to be deleted together.
+#: TODO(kluster-ops#41): delete this and its probe below once every
+#: workstation has run `credentials derived oci state-backend`.
+LEGACY_CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
+
 
 def _name(suffix: str) -> str:
     return f'{settings.NAME}-{suffix}'
@@ -75,17 +84,29 @@ class Oci:
         `OCI_CLI_CONFIG_FILE` still wins, because pointing one run at another
         tenancy is a thing an operator does and a slot is not where that
         belongs.
+
+        A machine that still has a hand-written configuration where the slot
+        used to be keeps provisioning, once and loudly: what is there is a
+        complete answer, and the warning names the command that replaces it.
         """
         location = os.environ.get('OCI_CLI_CONFIG_FILE')
         if not location:
-            found = oci_slot.config_file(oci_slot.STATE_BACKEND)
-            if found is None:
-                slot = oci_slot.config_path(oci_slot.STATE_BACKEND)
+            slot = oci_slot.config_path()
+            if slot.is_file():
+                location = str(slot)
+            elif LEGACY_CONFIG_FILE.is_file():
+                log.warning(
+                    'using the OCI configuration in %s: the appliance has a minted key of its own now, '
+                    'which `credentials derived oci state-backend` writes to %s',
+                    LEGACY_CONFIG_FILE,
+                    slot,
+                )
+                location = str(LEGACY_CONFIG_FILE)
+            else:
                 raise ValueError(
                     'the appliance has no OCI credential on this machine: run `credentials derived oci '
                     f'state-backend --compartment <ocid>`, which mints one into {slot}'
                 )
-            location = str(found)
         config = oci.config.from_file(location)
         compartment = compartment_id or config.get('compartment-id')
         if not compartment:

@@ -190,18 +190,10 @@ def oci_state_backend(
     runs before there is a Pulumi backend to hold a secret at all, so the slot
     is what a non-interactive reader can be pointed at (`oci_slot.py`).
     """
-    identity = oci_iam.Identity.for_consumer(oci_slot.STATE_BACKEND, compartment_id=compartment_id)
+    identity = oci_iam.Identity.for_consumer(conventions.STATE_BACKEND, compartment_id=compartment_id)
     minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
 
-    written = oci_slot.write(
-        oci_slot.STATE_BACKEND,
-        tenancy=minted.tenancy,
-        user=minted.user,
-        fingerprint=minted.fingerprint,
-        private_key=minted.private_key,
-        region=minted.region,
-        compartment_id=compartment_id,
-    )
+    written = oci_slot.write(minted, compartment_id=compartment_id)
     log.info('`state-backend provision` signs as %s from now on, reading %s', identity.name, written)
     return written
 
