@@ -132,9 +132,24 @@ machine_secrets
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
     path under it is machine config).
+-   **Two renderings, one configuration.** What a machine boots with is
+    delivered before that machine exists (`user_data`, seed image), so
+    it cannot name anything the cloud assigns to the finished instance:
+    a configuration naming the augmented node's secondary private IP
+    would wait on the instance that waits on it. That address arrives on
+    day 1 instead — the configuration applied over apid is the booted
+    one plus the address — and every other node is applied the very
+    configuration it booted. This is also why the chain is two
+    components: day 0 is knowable up front, day 1 needs the address each
+    machine's apid listens on.
 -   **Reboot-requiring config changes**: `apply_mode:
     staged_if_needing_reboot`, and CI applies node-serially, so the
     quorum never reboots together.
+-   **Where a machine is reached**: each node is administered at its own
+    address rather than through the NLB — an apply names one node and a
+    balancer would pick whichever backend it liked. On the cloud nodes
+    that address is the public one; the worker is reached on its LAN
+    address, over the overlay (physical/gateway.md §2).
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying
     data; node replacement is explicit (drain, etcd leave, destroy,

@@ -6,6 +6,19 @@ carries later changes over apid, the one-time bootstrap of the first control
 plane, the kubeconfig and client configuration, and the health check that
 gates everything downstream.
 
+The chain is two components because the day it describes is two days.
+`TalosCluster` is day 0: the PKI and the configuration each machine boots
+with, delivered out of band as instance metadata or a seed image, and
+therefore knowable before any machine exists. `TalosDay1` is what happens
+once they do: it needs the address each machine answers apid on, which is a
+fact about a running machine rather than a decision this program makes.
+
+Splitting them is not an aesthetic choice. An OCI instance's `user_data` *is*
+its machine configuration, so a configuration naming something the cloud only
+assigns to the finished instance — the augmented node's secondary private IP —
+would wait on the instance that is waiting on it. Day 1 carries those
+addresses instead, over apid, on top of the configuration the machine booted.
+
 Day-2 is deliberately `talosctl` — upgrades, `upgrade-k8s` and etcd snapshots
 are imperative operations, and wrapping them in fake-declarative command
 resources would buy drift detection that isn't real.
@@ -25,7 +38,8 @@ from functools import partial
 from typing import Any, Literal, cast
 
 import pulumi
-from pulumiverse_talos import client, cluster, machine
+from pulumiverse_talos import client, machine
+from pulumiverse_talos.cluster import Kubeconfig, get_health_output
 
 from kluster import conventions
 from putils import Component, async_output, resolve
@@ -226,27 +240,24 @@ def patches(
 
 
 class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
-    """Cluster PKI, per-node machine configuration, and the day-1 chain.
+    """The cluster PKI and the configuration each machine boots with.
 
     The secrets land in Pulumi state — the provider's ephemeral resources do
     not bridge — which is why the state backend is passphrase-encrypted behind
     client-certificate TLS.
 
-    Day-0 delivers each machine its configuration out of band: `user_data` in
+    Day 0 delivers each machine its configuration out of band: `user_data` in
     OCI instance metadata for the cloud nodes, a cloud-init seed for the
-    homelab VM. `addresses` is what turns on day-1 on top of that — the
-    address each machine answers apid on, which exists only once the machine
-    does. Without it the component stops at the configurations, and
-    `kubeconfig`/`talosconfig` have nothing to return.
+    homelab VM. Everything that needs a machine to answer — applying later
+    changes, bootstrapping etcd, the health gate, the two credentials the
+    later stacks are built on — is `TalosDay1`.
 
     :param control_plane_nodes: node names, in the order they take the
         cluster; the first one is the node that bootstraps etcd.
     :param worker_nodes: node names that get a worker configuration.
-    :param addresses: node name to the address talosctl reaches it at.
-    :param secondary_addresses: node name to an extra address to configure on
-        its interface (the augmented node's dedicated VIP).
     :param bgp_peers: node name to the subnet allowed to open a BGP session
-        with it (the homelab worker's gateway).
+        with it (the homelab worker's gateway). This is a site fact rather
+        than a machine one, so it is part of what the machine boots with.
     """
 
     def __init__(
@@ -259,8 +270,6 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         control_plane_nodes: Sequence[str],
         talos_version: str,
         worker_nodes: Sequence[str] = (),
-        addresses: Mapping[str, pulumi.Input[str]] | None = None,
-        secondary_addresses: Mapping[str, pulumi.Input[str]] | None = None,
         bgp_peers: Mapping[str, pulumi.Input[str]] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -276,20 +285,14 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         if len(self.roles) != len(self.control_plane_nodes) + len(self.worker_nodes):
             raise ValueError('a node is both a control plane and a worker')
 
+        self.cluster_name = cluster_name
+        self._endpoint = endpoint
+        self._talos_version = talos_version
         self._cert_sans = tuple(cert_sans)
-        self._addresses = dict(addresses or {})
-        self._secondary_addresses = dict(secondary_addresses or {})
         self._bgp_peers = dict(bgp_peers or {})
-        for label, keyed in (
-            ('addresses', self._addresses),
-            ('secondary addresses', self._secondary_addresses),
-            ('BGP peers', self._bgp_peers),
-        ):
-            unknown = sorted(set(keyed) - set(self.roles))
-            if unknown:
-                raise ValueError(f'{label} name nodes that are not in the cluster: {unknown}')
-        if self._addresses and set(self._addresses) != set(self.roles):
-            raise ValueError('day-1 needs an address for every node, or for none of them')
+        unknown = sorted(set(self._bgp_peers) - set(self.roles))
+        if unknown:
+            raise ValueError(f'BGP peers name nodes that are not in the cluster: {unknown}')
 
         self.secrets = machine.Secrets(
             f'{name}-secrets',
@@ -298,118 +301,59 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
             opts=self.child_opts(protect=True),
         )
 
-        self.configurations = {
-            node: machine.get_configuration_output(
-                cluster_name=cluster_name,
-                cluster_endpoint=endpoint,
-                machine_type=role,
-                # The provider's input and output types describe the same
-                # structure under different names.
-                machine_secrets=cast('Any', self.secrets.machine_secrets),
-                talos_version=talos_version,
-                # The endpoint is the load balancer's address, which exists
-                # only once that resource does — so the patches are computed
-                # inside an async_output rather than at declaration time.
-                config_patches=async_output(partial(self._patches, node, role)),
-            )
-            for node, role in self.roles.items()
-        }
-
-        self.applies: dict[str, machine.ConfigurationApply] = {}
-        self.bootstrap: machine.Bootstrap | None = None
-        self.kubeconfig_source: cluster.Kubeconfig | None = None
-        self.health: pulumi.Output[cluster.GetHealthResult] | None = None
-        self._client_configuration: pulumi.Output[client.GetConfigurationResult] | None = None
-        self._kubeconfig: pulumi.Output[str] | None = None
-        if self._addresses:
-            self._declare_day1(name, cluster_name)
+        self.configurations = {node: self._render(node) for node in self.roles}
 
         self.register_outputs({})
 
-    # -- day 1 --------------------------------------------------------------
+    # -- configuration ------------------------------------------------------
 
-    def _declare_day1(self, name: str, cluster_name: str) -> None:
-        """Apply, bootstrap, and the credentials the rest of the world reads."""
-        client_configuration = cast('Any', self.secrets.client_configuration)
+    def configuration(
+        self,
+        node: str,
+        *,
+        secondary_address: pulumi.Input[str] | None = None,
+    ) -> pulumi.Output[machine.GetConfigurationResult]:
+        """One node's machine configuration, optionally with an extra address.
 
-        # Node-serial by construction: each apply waits for the one before it,
-        # so a change that reboots the machine never takes the quorum with it.
-        previous: list[pulumi.Resource] = []
-        for node in self.roles:
-            applied = machine.ConfigurationApply(
-                f'{name}-{node}-config',
-                node=self._addresses[node],
-                endpoint=self._addresses[node],
-                client_configuration=client_configuration,
-                machine_configuration_input=self.configurations[node].machine_configuration,
-                # A change needing a reboot is staged rather than applied, so
-                # the reboot is an operator's decision and not a side effect.
-                apply_mode='staged_if_needing_reboot',
-                # `reset` wipes STATE and EPHEMERAL — every partition the node
-                # has (provider issue #205). It stays off on every node,
-                # whatever it carries: replacing a node is an explicit
-                # procedure (drain, etcd leave, destroy, recreate), never
-                # something a destroy of this resource does on its own.
-                on_destroy=machine.ConfigurationApplyOnDestroyArgs(reset=False, graceful=True, reboot=False),
-                opts=self.child_opts(depends_on=previous),
-            )
-            self.applies[node] = applied
-            previous = [applied]
+        Without `secondary_address` this is what the machine boots with,
+        rendered once. With one it is a second rendering of the same
+        configuration that additionally puts that address on the node's
+        interface — a configuration that only exists to be applied over apid,
+        because the address it names is assigned to an instance that the first
+        rendering is an input to.
+        """
+        if secondary_address is None:
+            return self.configurations[node]
+        return self._render(node, secondary_address=secondary_address)
 
-        first = self.control_plane_nodes[0]
-        # Bootstrap is a once-per-cluster operation on one node: running it on
-        # a second control plane would try to start a second etcd cluster.
-        self.bootstrap = machine.Bootstrap(
-            f'{name}-bootstrap',
-            node=self._addresses[first],
-            endpoint=self._addresses[first],
-            client_configuration=client_configuration,
-            opts=self.child_opts(depends_on=[self.applies[first]]),
+    def _render(
+        self,
+        node: str,
+        *,
+        secondary_address: pulumi.Input[str] | None = None,
+    ) -> pulumi.Output[machine.GetConfigurationResult]:
+        role = self.roles[node]
+        return machine.get_configuration_output(
+            cluster_name=self.cluster_name,
+            cluster_endpoint=self._endpoint,
+            machine_type=role,
+            # The provider's input and output types describe the same
+            # structure under different names.
+            machine_secrets=cast('Any', self.secrets.machine_secrets),
+            talos_version=self._talos_version,
+            # The endpoint is the load balancer's address, which exists only
+            # once that resource does — so the patches are computed inside an
+            # async_output rather than at declaration time.
+            config_patches=async_output(partial(self._patches, node, role, secondary_address)),
         )
 
-        self.kubeconfig_source = cluster.Kubeconfig(
-            f'{name}-kubeconfig',
-            node=self._addresses[first],
-            endpoint=self._addresses[first],
-            client_configuration=client_configuration,
-            opts=self.child_opts(depends_on=[self.bootstrap]),
-        )
-
-        self._client_configuration = client.get_configuration_output(
-            cluster_name=cluster_name,
-            client_configuration=client_configuration,
-            endpoints=async_output(partial(self._addresses_of, self.control_plane_nodes)),
-            nodes=async_output(partial(self._addresses_of, tuple(self.roles))),
-            opts=pulumi.InvokeOutputOptions(parent=self),
-        )
-
-        # The gate. This data source does not return until the cluster reports
-        # healthy, so anything that resolves it is ordered behind a working
-        # cluster rather than behind a resource that merely finished.
-        self.health = cluster.get_health_output(
-            client_configuration=client_configuration,
-            control_plane_nodes=async_output(partial(self._addresses_of, self.control_plane_nodes)),
-            worker_nodes=async_output(partial(self._addresses_of, self.worker_nodes)),
-            endpoints=async_output(partial(self._addresses_of, self.control_plane_nodes)),
-            opts=pulumi.InvokeOutputOptions(parent=self, depends_on=[self.bootstrap, *self.applies.values()]),
-        )
-        self._kubeconfig = pulumi.Output.secret(async_output(self._healthy_kubeconfig))
-
-    # -- inputs prepared asynchronously -------------------------------------
-
-    async def _healthy_kubeconfig(self) -> str:
-        """The kubeconfig, resolved behind the health check rather than beside it."""
-        assert self.health is not None and self.kubeconfig_source is not None
-        _, raw = await resolve(self.health, self.kubeconfig_source.kubeconfig_raw)
-        return str(raw)
-
-    async def _patches(self, node: str, role: Role) -> list[str]:
+    async def _patches(self, node: str, role: Role, secondary_address: pulumi.Input[str] | None) -> list[str]:
         return patches(
             role=role,
-            cert_sans=await self._resolved(self._cert_sans),
+            cert_sans=await _resolved(self._cert_sans),
             secretbox_secret=await self._secretbox_secret() if role == 'controlplane' else None,
-            secondary_address=await self._resolved_one(self._secondary_addresses.get(node)),
-            bgp_peer=await self._resolved_one(self._bgp_peers.get(node)),
+            secondary_address=await _resolved_one(secondary_address),
+            bgp_peer=await _resolved_one(self._bgp_peers.get(node)),
         )
 
     async def _secretbox_secret(self) -> str | None:
@@ -434,18 +378,6 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
             return None
         return str(secret)
 
-    async def _addresses_of(self, nodes: Sequence[str]) -> list[str]:
-        return await self._resolved([self._addresses[node] for node in nodes])
-
-    async def _resolved(self, inputs: Sequence[pulumi.Input[str]]) -> list[str]:
-        if not inputs:
-            return []
-        values = await resolve(*inputs)
-        return [str(value) for value in (values if len(inputs) > 1 else (values,))]
-
-    async def _resolved_one(self, value: pulumi.Input[str] | None) -> str | None:
-        return None if value is None else str(await resolve(value))
-
     # -- outputs ------------------------------------------------------------
 
     @property
@@ -453,16 +385,151 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         """Per-node configuration, ready to become `user_data` or a seed ISO."""
         return {node: configuration.machine_configuration for node, configuration in self.configurations.items()}
 
+
+class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
+    """Apply, bootstrap, health, and the credentials the rest of the world reads.
+
+    Everything here talks to machines that already run, over apid on port
+    50000, which is why it is a component of its own: it is declared with the
+    addresses those machines answer on, and those exist only once the
+    instances and the worker VM do.
+
+    :param cluster: the PKI and the day-0 configuration these machines booted.
+    :param addresses: node name to the address talosctl reaches it at. Every
+        node of the cluster needs one — a cluster is not healthy because the
+        nodes somebody listed are.
+    :param secondary_addresses: node name to an extra address to put on its
+        interface (the augmented node's dedicated VIP).
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        cluster: TalosCluster,
+        addresses: Mapping[str, pulumi.Input[str]],
+        secondary_addresses: Mapping[str, pulumi.Input[str]] | None = None,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        super().__init__(name, opts=opts)
+        self.cluster = cluster
+        self._addresses = dict(addresses)
+        self._secondary_addresses = dict(secondary_addresses or {})
+        for label, keyed in (
+            ('addresses', self._addresses),
+            ('secondary addresses', self._secondary_addresses),
+        ):
+            unknown = sorted(set(keyed) - set(cluster.roles))
+            if unknown:
+                raise ValueError(f'{label} name nodes that are not in the cluster: {unknown}')
+        missing = sorted(set(cluster.roles) - set(self._addresses))
+        if missing:
+            raise ValueError(f'day 1 needs an address for every node, and {missing} have none')
+
+        # What is applied is the booted configuration plus whatever only exists
+        # now: the augmented node's secondary private IP.
+        self.configurations = {
+            node: cluster.configuration(node, secondary_address=self._secondary_addresses.get(node))
+            for node in cluster.roles
+        }
+
+        client_configuration = cast('Any', cluster.secrets.client_configuration)
+
+        # Node-serial by construction: each apply waits for the one before it,
+        # so a change that reboots the machine never takes the quorum with it.
+        self.applies: dict[str, machine.ConfigurationApply] = {}
+        previous: list[pulumi.Resource] = []
+        for node in cluster.roles:
+            applied = machine.ConfigurationApply(
+                f'{name}-{node}-config',
+                node=self._addresses[node],
+                endpoint=self._addresses[node],
+                client_configuration=client_configuration,
+                machine_configuration_input=self.configurations[node].machine_configuration,
+                # A change needing a reboot is staged rather than applied, so
+                # the reboot is an operator's decision and not a side effect.
+                apply_mode='staged_if_needing_reboot',
+                # `reset` wipes STATE and EPHEMERAL — every partition the node
+                # has (provider issue #205). It stays off on every node,
+                # whatever it carries: replacing a node is an explicit
+                # procedure (drain, etcd leave, destroy, recreate), never
+                # something a destroy of this resource does on its own.
+                on_destroy=machine.ConfigurationApplyOnDestroyArgs(reset=False, graceful=True, reboot=False),
+                opts=self.child_opts(depends_on=previous),
+            )
+            self.applies[node] = applied
+            previous = [applied]
+
+        first = cluster.control_plane_nodes[0]
+        # Bootstrap is a once-per-cluster operation on one node: running it on
+        # a second control plane would try to start a second etcd cluster.
+        self.bootstrap = machine.Bootstrap(
+            f'{name}-bootstrap',
+            node=self._addresses[first],
+            endpoint=self._addresses[first],
+            client_configuration=client_configuration,
+            opts=self.child_opts(depends_on=[self.applies[first]]),
+        )
+
+        self.kubeconfig_source = Kubeconfig(
+            f'{name}-kubeconfig',
+            node=self._addresses[first],
+            endpoint=self._addresses[first],
+            client_configuration=client_configuration,
+            opts=self.child_opts(depends_on=[self.bootstrap]),
+        )
+
+        self._client_configuration = client.get_configuration_output(
+            cluster_name=cluster.cluster_name,
+            client_configuration=client_configuration,
+            endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
+            nodes=async_output(partial(self._addresses_of, tuple(cluster.roles))),
+            opts=pulumi.InvokeOutputOptions(parent=self),
+        )
+
+        # The gate. This data source does not return until the cluster reports
+        # healthy, so anything that resolves it is ordered behind a working
+        # cluster rather than behind a resource that merely finished.
+        self.health = get_health_output(
+            client_configuration=client_configuration,
+            control_plane_nodes=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
+            worker_nodes=async_output(partial(self._addresses_of, cluster.worker_nodes)),
+            endpoints=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
+            opts=pulumi.InvokeOutputOptions(parent=self, depends_on=[self.bootstrap, *self.applies.values()]),
+        )
+        self._kubeconfig = pulumi.Output.secret(async_output(self._healthy_kubeconfig))
+
+        self.register_outputs({})
+
+    # -- inputs prepared asynchronously -------------------------------------
+
+    async def _healthy_kubeconfig(self) -> str:
+        """The kubeconfig, resolved behind the health check rather than beside it."""
+        _, raw = await resolve(self.health, self.kubeconfig_source.kubeconfig_raw)
+        return str(raw)
+
+    async def _addresses_of(self, nodes: Sequence[str]) -> list[str]:
+        return await _resolved([self._addresses[node] for node in nodes])
+
+    # -- outputs ------------------------------------------------------------
+
     @property
     def kubeconfig(self) -> pulumi.Output[str]:
         """Cluster-admin credentials, released only once the cluster is healthy."""
-        if self._kubeconfig is None:
-            raise ValueError('the day-1 chain was not declared: no node addresses were given')
         return self._kubeconfig
 
     @property
     def talosconfig(self) -> pulumi.Output[str]:
         """The talosctl client configuration: the same PKI, for the machine API."""
-        if self._client_configuration is None:
-            raise ValueError('the day-1 chain was not declared: no node addresses were given')
         return pulumi.Output.secret(self._client_configuration.apply(lambda config: config.talos_config))
+
+
+async def _resolved(inputs: Sequence[pulumi.Input[str]]) -> list[str]:
+    if not inputs:
+        return []
+    values = await resolve(*inputs)
+    return [str(value) for value in (values if len(inputs) > 1 else (values,))]
+
+
+async def _resolved_one(value: pulumi.Input[str] | None) -> str | None:
+    return None if value is None else str(await resolve(value))

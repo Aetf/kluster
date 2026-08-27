@@ -31,7 +31,7 @@ from kluster.physical import homelab
 from kluster.physical.cloud import CloudNetwork
 from kluster.physical.image import TalosImage
 from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
-from kluster.physical.talos import TalosCluster
+from kluster.physical.talos import TalosCluster, TalosDay1
 from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
@@ -58,7 +58,13 @@ async def main() -> None:
         endpoint=load_balancer.address.apply(lambda address: f'https://{address}:{KUBE_API_PORT}'),
         cert_sans=[load_balancer.address],
         control_plane_nodes=conventions.CLOUD_NODES,
+        worker_nodes=(conventions.HOMELAB_NODE,),
         talos_version=talos_version,
+        # Who may open a BGP session with the worker. The gateway's own address
+        # on the server LAN is a site fact — the router held it long before this
+        # program — and scoping the opening to it rather than to the LAN is what
+        # keeps every other host on that LAN out of the routing table.
+        bgp_peers={conventions.HOMELAB_NODE: config.require('gatewayBgpPeer')},
     )
 
     placements = async_output(lambda: _placements(compartment_id))
@@ -68,7 +74,9 @@ async def main() -> None:
         compartment_id=compartment_id,
         subnet_id=network.subnet.id,
         image_id=image.image.id,
-        machine_configs=cluster.machine_configs,
+        # The cloud half of the fleet only: the worker's configuration reaches
+        # it on a seed image under libvirt, not as instance metadata.
+        machine_configs={node: cluster.machine_configs[node] for node in conventions.CLOUD_NODES},
         ocpus=conventions.NODE_OCPUS,
         memory_gb=conventions.NODE_MEMORY_GB,
         boot_volume_gb=conventions.NODE_BOOT_VOLUME_GB,
@@ -92,13 +100,14 @@ async def main() -> None:
     pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
+    _declare_talos_day1(cluster=cluster, nodes=nodes)
+
     # The rest of the design, written or not. A domain with no implementation
     # is still called and refuses by name; the first one reached ends the run,
     # which is why the domains below it are unreachable today rather than
     # absent.
     _declare_storage(compartment_id=compartment_id, nodes=nodes)
     _declare_guardrails(compartment_id=compartment_id)
-    _declare_talos_day1(cluster=cluster, nodes=nodes)
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,
@@ -187,20 +196,38 @@ def _declare_guardrails(*, compartment_id: str) -> None:
     )
 
 
-def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> None:
-    """§2: the tail of the Talos chain.
+def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> TalosDay1:
+    """§2: the tail of the Talos chain, and the two credentials it produces.
 
-    Secrets and per-node configuration already stand, and the cloud nodes read
-    that configuration from instance metadata at first boot. What is missing
-    is everything after first boot: applying subsequent configuration changes
-    over the machine API, bootstrapping etcd on one node, gating on cluster
-    health, and surfacing the two credentials the later stacks are built on.
+    The cloud nodes read their configuration from instance metadata at first
+    boot and the worker reads it from a seed image; this is everything after
+    that. Subsequent configuration changes go over the machine API one node at
+    a time, the first control plane bootstraps etcd, and the kubeconfig is
+    released only once the cluster reports healthy.
+
+    Each machine is reached at the address it is administered on rather than
+    through the balancer: an apply names one node, and a balancer would pick
+    whichever backend it liked. The cloud nodes answer apid on their public
+    addresses; the worker answers on its LAN address, which a run reaches over
+    the overlay (physical/gateway.md §2).
     """
-    raise NotImplementedError(
-        'physical §2 Talos day-1: configuration apply, bootstrap, the health gate and the '
-        'kubeconfig/talosconfig outputs are not declared yet — kluster-ops#26, '
-        'docs/declarative/physical.md §2'
+    day1 = TalosDay1(
+        conventions.CLUSTER_NAME,
+        cluster=cluster,
+        addresses={
+            **{node: instance.public_ip for node, instance in nodes.instances.items()},
+            conventions.HOMELAB_NODE: str(conventions.HOMELAB_NODE_IPV4),
+        },
+        # The dedicated VIP, which the augmented node does not otherwise answer
+        # for: OCI assigns the address to the VNIC and leaves the guest alone.
+        secondary_addresses={conventions.AUGMENTED_NODE: nodes.secondary_ip.ip_address},
     )
+    # Both are cluster-admin credentials, and both are marked secret at the
+    # source; `k8s-base` and `apps` read them from here rather than from a file
+    # anybody has to hold.
+    pulumi.export('kubeconfig', day1.kubeconfig)
+    pulumi.export('talosconfig', day1.talosconfig)
+    return day1
 
 
 async def _placements(compartment_id: str) -> list[tuple[str, str]]:
