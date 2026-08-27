@@ -134,10 +134,8 @@ What that buys, and what it costs:
     close a rare and self-healing hole.
 
 Rejected alternatives and the join-latency expectation:
-physical/gateway.md §2.6. Its §2.1 roster still describes the CI
-members in terms of an `apps` preview and a `zt-preview` group, which
-predates the LAN work moving into `dns`; the roster is that document's
-to correct.
+physical/gateway.md §2.6. The member roster the two identities sit in,
+with their addressing and role tag: its §2.1.
 
 ## 3. Pipeline shape
 
