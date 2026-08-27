@@ -64,7 +64,7 @@ PULUMI_BACKEND_URL = """
 {%- endif -%}
 """
 # The token file is one layer of the account-root chain (credentials.md §2):
-# `credentials master github remember` writes it, and this materializes it for
+# `credentials root github remember` writes it, and this materializes it for
 # apply time because a provider reads a variable and not a keyring. Note that
 # `gh` reads this variable too: inside this directory it will act as the admin
 # token.

@@ -65,7 +65,7 @@ def test_every_account_root_is_reachable_as_a_subcommand(capsys: pytest.CaptureF
     # The roots are a register too (§2): one `master <root>` command each, so
     # a root the scripts borrow has a place to be put and to be listed.
     with pytest.raises(SystemExit):
-        _ = main(['master', '--help'])
+        _ = main(['root', '--help'])
 
     printed = capsys.readouterr().out
     for member in masters.ROOTS:
@@ -82,7 +82,7 @@ def test_listing_the_roots_needs_no_kit_and_prints_no_value(
 
     monkeypatch.setattr('kluster.scripts.credentials.kdbx.remembered', held)
 
-    assert main(['master', 'ls']) == 0
+    assert main(['root', 'ls']) == 0
 
     printed = capsys.readouterr().out
     assert 'a-secret' not in printed

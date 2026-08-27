@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 _ORDER = """when to run what (docs/credentials.md §4):
 
   bring-up, from nothing
-    0. credentials master <root> remember
+    0. credentials root <root> remember
          Keeps an account root (§2) on this machine, once, so the mints
          below ask for nothing. Every root is looked up the same way:
          desktop secret store, then its token file, then its environment
@@ -134,7 +134,7 @@ _ORDER = """when to run what (docs/credentials.md §4):
     credentials kdbx ls | show <entry>
     credentials slots ls          every §3 credential, where its value comes
                                   from, and every slot it lands in
-    credentials master ls         which account roots this machine holds, and
+    credentials root ls           which account roots this machine holds, and
                                   which layer of the chain each comes from
     credentials kdbx remember     stores the kit's master password in the
                                   desktop secret store, so a long run is not
@@ -201,19 +201,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f'the escrow registry (default: the {escrow.DIRECTORY}/ directory of this checkout)',
     )
-    families = parser.add_subparsers(dest='family', required=True, metavar='<family>')
+    subjects = parser.add_subparsers(dest='subject', required=True, metavar='<subject>')
 
     # The three things done to a kit (§4). Each walks §2's table in order and
     # skips what is already there, so an interrupted run is resumed by
     # re-running it rather than by remembering where it stopped.
-    boot = families.add_parser('bootstrap', help='fill a kit with every seed (§4.1); creates the kit if absent')
+    boot = subjects.add_parser('bootstrap', help='fill a kit with every seed (§4.1); creates the kit if absent')
     _ = boot.add_argument('--only', default=None, metavar='<member>', help='create just this seed (repair, seed loss)')
 
     # The escrow (§2.2): random secrets whose ciphertexts are committed, and
     # the one recovery key that opens them. `generate` and the ciphertext are
     # a single act, so no command here hands out a secret the registry does
     # not carry.
-    esc = families.add_parser('escrow', help='the generated secrets and their committed ciphertexts (§2.2)')
+    esc = subjects.add_parser('escrow', help='the generated secrets and their committed ciphertexts (§2.2)')
     esc_actions = esc.add_subparsers(dest='action', required=True, metavar='<action>')
     _ = esc_actions.add_parser('init', help='create the recovery key: kit row plus escrow/RECIPIENTS')
     generate = esc_actions.add_parser('generate', help="mint a label's next generation and escrow it")
@@ -239,11 +239,11 @@ def build_parser() -> argparse.ArgumentParser:
         help='where `state-backend` wrote the client bundle',
     )
 
-    rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
+    rot = subjects.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
     _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
     _ = rot.add_argument('--only', default=None, metavar='<member>', help='rotate just this seed')
 
-    kdbx_cmd = families.add_parser('kdbx', help='the offline store itself (§2.1)')
+    kdbx_cmd = subjects.add_parser('kdbx', help='the offline store itself (§2.1)')
     kdbx_actions = kdbx_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
     ls = kdbx_actions.add_parser('ls', help='list entry paths')
     _ = ls.add_argument('group', nargs='?', default='/')
@@ -258,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     # The tree is generated from §2's table rather than written out, so a
     # seed that exists in the register and nowhere in the code shows up as a
     # subcommand that refuses to run -- not as a subcommand that is missing.
-    seed_cmd = families.add_parser('seed', help='the seed layer (§2), one member per row')
+    seed_cmd = subjects.add_parser('seed', help='the seed layer (§2), one member per row')
     members = seed_cmd.add_subparsers(dest='member', required=True, metavar='<member>')
     for seed in entries.SEEDS.values():
         member = members.add_parser(seed.member, help=f'mints {seed.mints}')
@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     # pushed into the slot its consumer reads. A row joins this family when
     # that consumer exists -- a mint with nowhere to deliver would park a
     # secret, which is the one thing the register forbids outright.
-    derived_cmd = families.add_parser('derived', help='the credentials minted from a seed into a slot (§3)')
+    derived_cmd = subjects.add_parser('derived', help='the credentials minted from a seed into a slot (§3)')
     rows = derived_cmd.add_subparsers(dest='member', required=True, metavar='<row>')
     cloudflare_row = rows.add_parser('cloudflare', help='the tokens the Cloudflare seed mints (§3)')
     cloudflare_actions = cloudflare_row.add_subparsers(dest='action', required=True, metavar='<token>')
@@ -337,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     # takes the value without echoing it and pushes it into the stack that
     # reads it (`devices.py`). A separate family from `derived` because nothing
     # here mints anything -- the delivery is the whole of the act.
-    device_cmd = families.add_parser('device', help='the credentials a device of the estate holds (§3)')
+    device_cmd = subjects.add_parser('device', help='the credentials a device of the estate holds (§3)')
     device_rows = device_cmd.add_subparsers(dest='member', required=True, metavar='<device>')
     for device in devices.DEVICES.values():
         row = device_rows.add_parser(device.member, help=f"{device.title}, into the {device.stack} stack's config")
@@ -358,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
     # fills a slot kind no `derived` row can reach — a GitHub secret, which is
     # written from here rather than by the `github` stack or by CI
     # (`github_secrets.py`).
-    slots_cmd = families.add_parser('slots', help='where every §3 credential is delivered, and the GitHub sink (§4)')
+    slots_cmd = subjects.add_parser('slots', help='where every §3 credential is delivered, and the GitHub sink (§4)')
     slot_actions = slots_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
     _ = slot_actions.add_parser('ls', help='the whole map; needs no kit, no token and no network')
     fill = slot_actions.add_parser('push', help='fill every GitHub secret in the map that can be filled')
@@ -370,8 +370,8 @@ def build_parser() -> argparse.ArgumentParser:
     # store, token file, environment variable, prompt (`masters.py`). This
     # family is how they get onto a machine, and the only thing that writes
     # them.
-    master_cmd = families.add_parser('master', help='the account roots the workstation borrows (§2)')
-    roots = master_cmd.add_subparsers(dest='member', required=True, metavar='<root>')
+    root_family = subjects.add_parser('root', help='the account roots the workstation borrows (§2)')
+    roots = root_family.add_subparsers(dest='member', required=True, metavar='<root>')
     listing = roots.add_parser('ls', help='which roots this machine holds, and where; prints no values')
     listing.set_defaults(action='ls')
     for account in masters.ROOTS.values():
@@ -384,7 +384,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _layers(held: dict[str, str | None]) -> str:
-    """One root's line in `master ls`: where its fields are, never what they are.
+    """One root's line in `root ls`: where its fields are, never what they are.
 
     A root whose fields all come from the same layer is one phrase, because
     that is the ordinary case and a field-by-field listing would bury it. The
@@ -423,7 +423,7 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     missing one.
     """
     path = args.kdbx or default_path()
-    if args.family == 'bootstrap' and not path.exists():
+    if args.subject == 'bootstrap' and not path.exists():
         log.info('no kit at %s; creating it', path)
         return KdbxStore.create(path, getpass.getpass(f'new master password for {path.name}: '))
     return KdbxStore.from_env(args.kdbx)
@@ -552,12 +552,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
-        if args.family == 'master':
+        if args.subject == 'root':
             return _master(args)
         # Ordered before the registry and the kit, like `escrow check` below:
         # the map is a checked-in file, so reading it is something a clone can
         # do with no credential of any kind on the machine.
-        if (args.family, getattr(args, 'action', None)) == ('slots', 'ls'):
+        if (args.subject, getattr(args, 'action', None)) == ('slots', 'ls'):
             for line in slots.describe():
                 print(line)
             return 0
@@ -565,13 +565,13 @@ def main(argv: list[str] | None = None) -> int:
         # Ordered before the kit deliberately: the point of `check` is that a
         # clone with no offline database can still say whether the registry is
         # whole.
-        if (args.family, getattr(args, 'action', None)) == ('escrow', 'check'):
+        if (args.subject, getattr(args, 'action', None)) == ('escrow', 'check'):
             return _check(registry)
         store = _kit(args)
 
         # `bootstrap` and `rotate` have no <action> level, so the attribute
         # does not exist on their namespaces; the guard mirrors `member`'s.
-        match (args.family, getattr(args, 'member', None), getattr(args, 'action', None)):
+        match (args.subject, getattr(args, 'member', None), getattr(args, 'action', None)):
             case ('kdbx', _, 'ls'):
                 for entry in store.entries(args.group):
                     print(entry)
@@ -682,7 +682,7 @@ def main(argv: list[str] | None = None) -> int:
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
-                raise ValueError(f'unhandled command {args.family}')
+                raise ValueError(f'unhandled command {args.subject}')
     except (KdbxError, CredentialRejected, SlotRefused, EscrowError, AgeError) as exc:
         log.error('%s', exc)
         return 1

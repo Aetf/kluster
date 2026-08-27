@@ -14,7 +14,7 @@ made in the dashboard and there is nothing left for a root to do.
 Handing those over is what this module is. **One acquisition chain serves every
 root**, in this order, first hit wins:
 
-1.  the **desktop secret store**, where `credentials master <root> remember`
+1.  the **desktop secret store**, where `credentials root <root> remember`
     puts it;
 2.  the root's **token file**, a workstation slot (`workstation.py`) — the
     layer a non-interactive reader can use, which is how `mise.toml`
@@ -30,7 +30,7 @@ Three properties decide the shape:
     typing the master password of a database holding everything the operator
     owns so that `bootstrap` can read one row. Instead each root's fields live
     in the desktop secret store under their own keys, put there once by
-    `credentials master <member> remember`, and a run reads exactly the fields
+    `credentials root <member> remember`, and a run reads exactly the fields
     it needs.
 -   **A machine without a secret store still works.** Headless and CI runs
     fall through the file and the variable to a prompt, which names the
@@ -73,7 +73,7 @@ Prompt = Callable[[str], str]
 ACCOUNT_PREFIX = 'account-root'
 
 #: The chain's layers, as they are reported by `stored` and printed by
-#: `credentials master ls`. Names rather than an enum because their only job
+#: `credentials root ls`. Names rather than an enum because their only job
 #: is to be read by an operator.
 STORE = 'the secret store'
 FILE = 'a token file'
@@ -135,7 +135,7 @@ class Field:
 class Root:
     """One account root (credentials.md §2), and what it is made of."""
 
-    #: The `credentials master <member>` name; matches the seed it mints, so
+    #: The `credentials root <member>` name; matches the seed it mints, so
     #: `seed oci create` and `master oci remember` speak of the same account.
     member: str
     #: Human name, used in every prompt and log line.
@@ -319,7 +319,7 @@ def load(root: Root, prompt: Prompt) -> Credential:
             log.warning('%s is not on this machine; it is created like this:', root.title)
             for line in root.console.splitlines():
                 log.warning('  %s', line)
-            log.warning('`credentials master %s remember` keeps it, so this is asked once.', root.member)
+            log.warning('`credentials root %s remember` keeps it, so this is asked once.', root.member)
             announced = True
         values[field.name] = field.ask(prompt, root.title)
     return Credential(root=root, values=values)

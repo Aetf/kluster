@@ -96,9 +96,9 @@ def _module_for(member: str) -> types.ModuleType | None:
 def expected(path: list[str]) -> str | None:
     """Which stub this leaf must reach, or None if it must refuse by name."""
     match [part for part in path if not part.startswith('-') and not part.startswith('placeholder')]:
-        case ['master', 'ls']:
+        case ['root', 'ls']:
             return 'masters.stored'
-        case ['master', _, action]:
+        case ['root', _, action]:
             return f'masters.{action}'
         case ['kdbx', 'ls']:
             return 'store.entries'
@@ -258,7 +258,7 @@ def test_the_walk_finds_every_register_row() -> None:
         if seed.repair is not None:
             assert ['seed', member, seed.repair[0]] in found
     for member in masters.ROOTS:
-        assert ['master', member, 'remember'] in found
+        assert ['root', member, 'remember'] in found
     for member in devices.DEVICES:
         assert ['device', member] in found
     assert ['bootstrap'] in found
