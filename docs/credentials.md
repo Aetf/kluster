@@ -452,12 +452,12 @@ credential family plus the lifecycle commands below.
 | `credentials escrow recover <label> [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. |
 | `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
 | `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, writes it to the slot §3 names and commits its ciphertext as the label's next generation — one act, no other label touched. |
-| `credentials escrow import <label>` | Escrows a value that already exists as the label's next generation, changing nothing a consumer holds (§4.2). |
+| `credentials escrow import <label>` | Escrows a value that already exists as the label's next generation, changing nothing a consumer holds (§4.2). Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
 | `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
 | `credentials escrow rewrap` | After a `rotate` wrote a new recovery key. Re-encrypts every generation in the registry to it and updates `escrow/RECIPIENTS`; no plaintext changes. |
 | `credentials escrow check` | Any time, kit or no kit: every label the register names is present, every ciphertext parses, generations are monotonic. It opens nothing, which is what lets CI run it. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
-| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored; `forget` removes it again. |
+| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run; `forget` removes it again. |
 
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
