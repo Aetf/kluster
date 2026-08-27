@@ -316,6 +316,29 @@ def test_a_minted_row_refuses_by_naming_the_command_that_delivers_it() -> None:
         _ = row.source.value(context(RecordedGh()))
 
 
+def test_a_minted_row_is_not_this_command_s_business(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    gh = RecordedGh()
+    minted = {'oci-physical': slots.ROWS['oci-physical']}
+
+    pushed = slots.sync(context(gh), rows=minted)
+
+    # A minted credential is born into its slot, so a walk that reported it as
+    # something still to do would be reporting on a row that is already
+    # delivered. It is passed over without a word, and nothing is read.
+    assert pushed == []
+    assert gh.invocations == []
+    assert 'oci-physical' not in caplog.text
+
+
+def test_naming_a_minted_row_is_refused_by_pointing_at_the_command_that_mints_it() -> None:
+    # Obtaining the value again means minting again, which rotates a live
+    # credential; the operator asking for a copy has to hear that rather than
+    # watch a run do nothing.
+    with pytest.raises(SlotRefused, match='born into its slot'):
+        _ = slots.sync(context(RecordedGh()), only='oci-physical')
+
+
 def test_a_row_with_no_github_slot_is_skipped_with_its_reason(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     gh = RecordedGh()
