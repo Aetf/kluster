@@ -212,6 +212,39 @@ criterion.
 
 **Lives in.** migration.md §0.5, §4 (Wave F).
 
+### M6 — AdGuard credential in the `dns` CI environment is LAN-wide DNS control
+
+**Attack.** AdGuard Home has no scoped API, so the credential the
+split-horizon rewrites are written with (dns.md §3; `adguardUsername` /
+`adguardPassword` on the `dns` stack) is the admin account of both
+instances. That pair is the home network's resolver, so holding it means
+forging any LAN name for every client on it — hosts with no relation to
+the cluster — retargeting the upstreams behind them, and reading the
+query log. The Environment's other stack credentials are the
+zone-scoped Cloudflare token and the `ci-dns` ZeroTier identity, neither
+of which writes anything on the home network: the AdGuard login is the
+deepest of the three rather than an addition to a stronger one, and it
+sits beside the token that edits the estate's public names, so one
+Environment holds both halves of the estate's naming. That Environment
+is also pull-request-reachable, unlike the main-only physical pair —
+`preview (dns)` and `prove (dns)` execute a same-repo branch's Python
+with it, and noop-automerge's path classifier routes a dependency bump
+into `prove`.
+
+**Fix.** None at the credential: an admin login is the whole of what the
+appliance offers, and the rewrites are what makes LAN clients resolve
+split-horizon apps to their `lan` VIPs at all. The containment is
+positional — ZT flow rules confine a `ci`-tagged member to the AdGuard
+APIs and three other targets (L5), so the login is usable only from a
+joined member, and previews run for same-repo branches only, never a
+fork's. Accepted residual, and its detection gap is part of what is
+accepted: a refresh reads back the rewrites the stack declares, so one
+added beside them is not something the weekly drift run compares.
+
+**Lives in.** ci.md §3 (which Environment holds it), §2 (the residual on
+record), declarative/dns.md §3 (the writer), credentials.md §3 (the
+register row).
+
 ---
 
 ## Low severity / best practice
@@ -318,18 +351,6 @@ ciphertext or salt markers, every other path keeps its exact blob hash,
 and the commit count is unchanged. Because the rewrite changed every
 commit id, a clone predating it is not fast-forwardable — re-clone
 rather than pull. *Lives in* ci.md §4.
-
-### L11 — AdGuard credential in the `apps` CI environment is LAN-DNS control
-
-The split-horizon rewrites make `apps` jobs carry the AdGuard admin
-credential (AdGuard has no scoped API), so the frictionless apps tier
-can rewrite any LAN name — LAN-wide DNS hijack from the lowest-tier
-credential set. Accepted residual: that environment already holds
-cluster-admin kubeconfig (H3's accepted core), so this adds breadth,
-not depth, and the ZT flow rules still confine where the credential is
-usable from. Stated so the apps tier is never mistaken for harmless.
-*Lives in* ci.md §3 (which Environment holds it), §2 (the residual on
-record).
 
 ---
 
