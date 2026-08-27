@@ -59,8 +59,8 @@ in the desired state (relevant because the tag default is permissive,
 | UDM | `infra` | Static managed IP (`conventions.py`); nexthop of every managed route. |
 | Homelab host | `infra` | Today's only home member — a plain member, never a router (ZT carries no home-LAN routes today); kept as the recovery side-door (§3). |
 | Legacy VPS | `infra` | Retires in Wave F together with its `10.42.0.0/24` route. |
-| CI member `ci-deploy` | `ci` | Merge-chain jobs (plan/up-physical, up-apps). Identity generated in-state (`zerotier_identity`), private key in CI environment secrets; never self-collides — the deploy workflow's `concurrency` group serializes chains (§2.6). IPv4-only (§2.3). |
-| CI member `ci-preview` | `ci` | PR `preview-apps` (AdGuard-rewrite diffs). Same generation and confinement; serialized by a `zt-preview` job concurrency group (§2.6). IPv4-only (§2.3). |
+| CI member `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in-state (`zerotier_identity`), private key in the CI Environments' secrets; the `zt-physical` job concurrency group keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
+| CI member `ci-dns` | `ci` | The `dns` identity domain: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
 
 Import census (2026-08-24, against ZT Central): 11 members live. Three
 `*.zt` records name members that no longer exist (Abacus, Aetf-Arch-Mac,
@@ -249,17 +249,19 @@ Facts that shape it (decided 2026-08-24):
     latency of each join (below).
 -   **One identity live in two places flaps** (ZT maps a node ID to
     one endpoint at a time), so concurrent jobs must never share an
-    identity. Hence, one identity per concurrency domain, each domain
-    serialized: the merge chain by its workflow `concurrency` group
-    (queued — which Pulumi state-lock sanity wants anyway; collapsing
-    pending runs is safe because deploys are cumulative, the newest
-    applies everything), and `preview-apps` by a `zt-preview` job
-    group (a cancelled pending preview is a re-run button — PRs are
-    not cumulative, accepted as rarity).
+    identity. Hence, one identity per domain — `physical` and `dns`,
+    the two stacks whose jobs join — and each domain serialized by a
+    **job-level `concurrency` group named after it**, `zt-physical` or
+    `zt-dns`. The group has to name the identity rather than the
+    workflow because previews, proofs, drift and the merge chain are
+    different workflows joining with the same two identities, and a
+    concurrency group is repository-wide. Mechanics and the accepted
+    residual (a pending joining job can be superseded by a newer one):
+    ci.md §2.
 -   **Rejected: per-run generated identities** self-authorizing via
-    the Central API — that puts the network-admin Central token in
-    the apps environment, dissolving the confinement the flow rules
-    exist to provide.
+    the Central API — that puts the network-admin Central token into
+    every environment that joins, dissolving the confinement the flow
+    rules exist to provide.
 -   **Join latency expectation**: kluster-code's measured 1–2 min
     wait-for-peer is dominated by NAT traversal toward a NATed host
     member (relay first, then a hole-punched direct path). Here the
