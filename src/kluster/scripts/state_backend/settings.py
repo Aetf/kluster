@@ -13,8 +13,11 @@ from kluster import conventions
 # --- OCI ------------------------------------------------------------------
 
 #: Every resource this script creates carries the same prefix, so the
-#: appliance's footprint is greppable in a console and safe to clean up.
-NAME = 'state-backend'
+#: appliance's footprint is greppable in a console and safe to clean up. The
+#: string itself is a convention rather than a setting: the credentials
+#: package names the same appliance, and one of the two would eventually be
+#: edited alone.
+NAME = conventions.STATE_BACKEND
 
 SHAPE = 'VM.Standard.E2.1.Micro'
 BOOT_VOLUME_GB = 50

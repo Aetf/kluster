@@ -22,6 +22,13 @@ from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 
 CLUSTER_NAME = 'kluster'
 
+#: The state-backend appliance (physical/state-backend.md), which is one name
+#: in four places: the prefix on every cloud resource the box owns, the IAM
+#: principal its provisioner signs as, the workstation slot that key lands in,
+#: and the `credentials derived oci` subcommand that mints it. A name three
+#: packages have to agree on is a convention, not a setting of any one of them.
+STATE_BACKEND = 'state-backend'
+
 #: Prefix for every label/annotation key this program owns. A k8s label key
 #: prefix must be a DNS subdomain; this one is a zone we control, so the keys
 #: can never collide with an upstream chart's.
