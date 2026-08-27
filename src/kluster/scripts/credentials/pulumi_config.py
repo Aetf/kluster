@@ -112,6 +112,18 @@ class Stack:
     def get(self, key: str) -> str:
         return self._pulumi('config', 'get', key, '--stack', self.name).strip()
 
+    def outputs(self) -> dict[str, Any]:
+        """Every output of the stack's current state, secrets included.
+
+        The other direction of this module: what a *program* generated, rather
+        than what one needs to start. The register's state-read rows are read
+        through here, and `--show-secrets` is what makes that possible at all —
+        a ZeroTier identity is a secret output, and without it the value comes
+        back as the string `[secret]`, which would be pushed as if it were one.
+        """
+        raw = self._pulumi('stack', 'output', '--json', '--show-secrets', '--stack', self.name).strip()
+        return dict[str, Any](json.loads(raw or '{}'))
+
     def set(self, key: str, value: str) -> None:
         """Write a non-secret key, in plain text in the committed file."""
         log.info('setting %s on the %s stack', key, self.name)

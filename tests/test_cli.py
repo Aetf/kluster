@@ -110,6 +110,11 @@ def expected(path: list[str]) -> str | None:
             # `state-backend` is a row name and not an identifier, which is the
             # one place the two spellings differ.
             return f'derived.{row}_{credential}'.replace('-', '_')
+        case ['slots', action]:
+            # `ls` prints the map and `push` fills it; both are the slot map's
+            # own module, which is where the register's machine-readable half
+            # lives.
+            return f'slots.{"describe" if action == "ls" else action}'
         case ['escrow', 'env']:
             return 'lifecycle.environment'
         case ['escrow', 'recover']:
@@ -183,7 +188,12 @@ class Dispatch:
             (cli.masters, 'stored', {}),
             (cli.masters, 'remember', []),
             (cli.masters, 'forget', None),
-            (cli.lifecycle, 'root', None),
+            # The account root a push authenticates as. A value rather than
+            # `None`, because the GitHub sink reads one field out of it before
+            # it can build the forge it pushes through.
+            (cli.lifecycle, 'root', masters.Credential(root=masters.ROOTS['github'], values={'token': 'a-token'})),
+            (cli.slots, 'describe', iter(())),
+            (cli.slots, 'push', []),
             (cli.oci_iam, 'rotate_seed', 'fingerprint'),
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),

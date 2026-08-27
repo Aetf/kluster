@@ -21,7 +21,19 @@ import sys
 from pathlib import Path
 
 from ... import conventions
-from . import b2, derived, entries, escrow, lifecycle, masters, oci_iam, pulumi_config, workstation
+from . import (
+    b2,
+    derived,
+    entries,
+    escrow,
+    github_secrets,
+    lifecycle,
+    masters,
+    oci_iam,
+    pulumi_config,
+    slots,
+    workstation,
+)
 from .age import AgeError
 from .escrow import EscrowError
 from .kdbx import PATH_ENV, KdbxError, KdbxStore, default_path
@@ -68,6 +80,10 @@ _ORDER = """when to run what (docs/credentials.md §4):
        credentials derived b2 management
          The two provider credentials the physical stack runs on, into its
          config, which is then committed like the one above.
+    8. credentials slots push
+         The GitHub secrets CI reads, from the slot map (§4). Run it again
+         whenever a value behind one of them moves; a row it cannot fill
+         yet says which slot is waiting on what.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -108,6 +124,8 @@ _ORDER = """when to run what (docs/credentials.md §4):
     credentials escrow check      every expected label present, every
                                   ciphertext an age file, generations dense
     credentials kdbx ls | show <entry>
+    credentials slots ls          every §3 credential, where its value comes
+                                  from, and every slot it lands in
     credentials master ls         which account roots this machine holds, and
                                   which layer of the chain each comes from
     credentials kdbx remember     stores the kit's master password in the
@@ -306,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _slot_source(management)
 
+    # The slot map (§4): the machine-readable half of §3, and the one sink that
+    # fills a slot kind no `derived` row can reach — a GitHub secret, which is
+    # written from here rather than by the `github` stack or by CI
+    # (`github_secrets.py`).
+    slots_cmd = families.add_parser('slots', help='where every §3 credential is delivered, and the GitHub sink (§4)')
+    slot_actions = slots_cmd.add_subparsers(dest='action', required=True, metavar='<action>')
+    _ = slot_actions.add_parser('ls', help='the whole map; needs no kit, no token and no network')
+    fill = slot_actions.add_parser('push', help='fill every GitHub secret in the map that can be filled')
+    _ = fill.add_argument('--only', default=None, metavar='<row>', help='one row of the map; `ls` names them')
+    _slot_source(fill)
+
     # The account roots (§2) are not in the kit and not in any database this
     # repository opens: each is looked up through one chain -- desktop secret
     # store, token file, environment variable, prompt (`masters.py`). This
@@ -387,6 +416,21 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str) -> pulumi_conf
         name=name,
         directory=pulumi_config.project_dir(),
         env=lifecycle.environment(store, args.bundle_dir),
+    )
+
+
+def _slots(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
+    """What `slots push` may reach for, with everything slow left unopened.
+
+    The token is fetched up front because every push needs it and the chain
+    that finds it may have to ask (`masters.py`); the kit's escrow and the state
+    backend are passed as openers, so pushing the one typed-in row asks for
+    neither and a row recovered from escrow never reaches for a backend.
+    """
+    return slots.Context(
+        forge=github_secrets.Forge(token=lifecycle.root('github', input)['token']),
+        open_vault=lambda: escrow.Vault.open(store, registry),
+        open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )
 
 
@@ -480,6 +524,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.family == 'master':
             return _master(args)
+        # Ordered before the registry and the kit, like `escrow check` below:
+        # the map is a checked-in file, so reading it is something a clone can
+        # do with no credential of any kind on the machine.
+        if (args.family, getattr(args, 'action', None)) == ('slots', 'ls'):
+            for line in slots.describe():
+                print(line)
+            return 0
         registry = escrow.Registry.open(args.escrow)
         # Ordered before the kit deliberately: the point of `check` is that a
         # clone with no offline database can still say whether the registry is
@@ -582,6 +633,11 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.b2_management(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry
                 )
+            # The slot map's sink: one row at a time or the whole map, each
+            # resolved, pushed and verified in the same run.
+            case ('slots', _, 'push'):
+                filled = slots.push(_slots(args, store, registry), only=args.only)
+                log.info('pushed %s', ', '.join(filled) if filled else 'nothing')
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
