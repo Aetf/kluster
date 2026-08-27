@@ -24,9 +24,11 @@ shape nor the domain, which reads like a permissions problem.
 > `deploy/state-backend/` holds the Butane file, the operator keys and
 > the dump script, and the `state-backend` console script renders,
 > provisions and converges the box, checks its pins, writes the client
-> bundle into its workstation slot (§3), and logs in for diagnosis.
-> Still design-only: the restore
-> and key-rotation scripts of §1, and the playbooks and drills of §7.
+> bundle into its workstation slot (§3), logs in for diagnosis, and
+> takes and restores dumps (§7). Still design-only: the key-rotation
+> script of §1; the **drill key** of §5, so today every dump opens with
+> an escrowed generation and nothing else; and the scheduled drills of
+> §7.3.
 
 ## 1. OS & configuration management
 
@@ -52,7 +54,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     finding an IP. Note the key set is
     `deploy/state-backend/operator-keys.txt`: a workstation whose key
     is not in it cannot reach the box at all, which is a re-provision
-    to fix, not an `ssh-copy-id`. The address is reserved and the box
+    to fix, not an `ssh-copy-id`. The address is reserved, and the box
     is cattle, so each replace gives the same address a new host key
     and ssh reports a possible man-in-the-middle; the replace path
     therefore drops the destroyed box's key from `known_hosts` itself.
@@ -98,9 +100,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     clients retry.
 -   **Every hand operation is a script.** The box is outside Pulumi,
     but not outside version control: `deploy/state-backend/` carries
-    the executable form of every operation this document names —
-    provision/re-provision, restore, key rotation. The
-    playbooks (§7) *invoke* these scripts; a procedure that exists
+    the machine's definition, and the `state-backend` console script
+    carries the executable form of every operation this document names
+    — provision/re-provision, dump, restore, key rotation. The
+    playbooks (§7) *invoke* these; a procedure that exists
     only as prose in a playbook is a bug.
 -   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
     the B2 upload credential (§5) are in `user_data`. On this box
@@ -212,6 +215,14 @@ there is nothing for it to edit.)
     no index to read (storage.md §4). Pruning is not the box's job:
     RPO ≤ 24 h is fine — state is re-derivable from reality
     (`pulumi refresh`/import) at worst.
+-   **The same dump on demand: `state-backend dump`.** It differs from
+    the timer's in its channel and its destination and in nothing else
+    — the operator's client certificate rather than the box's local
+    socket, a named local file rather than a B2 object, the same
+    `pg_dump -Fc` under the same age recipients. That is what makes it
+    the first step of every playbook below: a dump taken by hand before
+    a destructive move is as recoverable as a nightly one, and a
+    restore cannot tell which of the two produced its input.
 -   **Retention, explicit: STANDARD class — daily, kept 30 days —
     enforced by a B2 lifecycle rule on the prefix** (Pulumi-managed
     with the bucket, storage.md §4), not by the uploader. That keeps
@@ -321,6 +332,39 @@ trigger, and outline only, enough to show what must exist; the
 executable playbooks (the §1 scripts plus their runbooks in
 `deploy/state-backend/`) are written with the implementation.
 
+**The two moves the playbooks below are built from are commands, not
+prose.** `state-backend dump` writes a `pg_dump -Fc` of the live state,
+age-encrypted to the recipients of §5, into a named local file;
+`state-backend restore <file>` feeds one back into a provisioned box.
+Either form of file is accepted — an encrypted dump or a bare archive
+— and the identity that opens an encrypted one comes from the escrow
+via the kit, or from `--identity-file` for a workflow that was handed a
+key and has no kit at all (§7.3). Both connect over the `operator`
+client bundle (§3), which is the same connection string `pulumi` uses.
+
+Each **verifies rather than reports**, because the moment either is run
+is the moment nobody can afford to find out later:
+
+-   A dump is listed with `pg_restore --list` before it is called one,
+    and a listing naming no table fails the run. A truncated archive
+    has a plausible size and a plausible name; what it does not have is
+    a readable table of contents. The plaintext exists in a temporary
+    directory for the two steps that read it and is never written
+    beside the encrypted file.
+-   A restore asks `pulumi stack ls` twice. Beforehand, so that a
+    backend already serving stacks is refused rather than overwritten
+    — `--force` is how a deliberate overwrite says so, and a box too
+    freshly provisioned to answer at all is read as empty rather than
+    as a reason to stop. Afterward as the verification proper: **a
+    restore is finished when Pulumi can log in to what came back and
+    list what it holds**, which is a stronger claim than "the rows
+    arrived". The load itself runs in a single transaction, so a
+    failure leaves a box to re-run against instead of a half-populated
+    backend that `pulumi` would read as authoritative.
+-   Ownership is preserved — no `--no-owner` — because the roles a
+    dump names are certificate subjects that exist on every box (§3),
+    and flattening them would hand CI's tables to the operator.
+
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: expiry alert
     (<30 days) or key compromise. Outline: re-provision, which
     re-issues the server certificate under the same CA. On compromise
@@ -328,13 +372,18 @@ executable playbooks (the §1 scripts plus their runbooks in
     for a new generation, re-provision against it, redistribute the
     `ci` and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
-    Outline: fresh dump → merge → re-provision (new major initdb's) →
-    restore → clean `pulumi preview`.
+    Outline: `state-backend dump` → merge → `state-backend provision`
+    (the new major initdb's a fresh data directory) → `state-backend
+    restore <the dump>` → clean `pulumi preview`. The dump comes first
+    because the re-provision destroys the box it came from, and it is
+    verified as it is taken rather than trusted for the minutes between
+    the two.
 -   **§7.3 Rebuild / DR drill (quarterly, automated in the ops repo).** §7.2
     minus the pin bump: provision a scratch micro from Butane,
-    restore the latest age-encrypted B2 object via the **drill key**,
-    verify, destroy — unattended, alert on failure (operations.md
-    §4). One pass exercises B2 download, decryption,
+    restore the latest age-encrypted B2 object via the **drill key**
+    (`state-backend restore <object> --identity-file <key>`, the form
+    that needs no kit), verify, destroy — unattended, alert on failure
+    (operations.md §4). One pass exercises B2 download, decryption,
     provision-from-Butane, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it.
