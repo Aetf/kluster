@@ -2,7 +2,7 @@
 
 Everything CI runs inside is configuration too, and until now it existed only
 as console state: two repositories (`kluster`, `kluster-ops`), the per-stack
-Environments that partition the credentials (ci.md §2), which of them a
+Environments that partition the credentials (ci.md §3), which of them a
 reviewer gates, the branch protection that makes the zero-diff proof
 load-bearing, and the two single-purpose GitHub Apps. None of it was written
 down, so none of it could drift-check, review, or be rebuilt.
@@ -11,7 +11,7 @@ down, so none of it could drift-check, review, or be rebuilt.
 stack needs can change branch protection and environment gates -- that is,
 it can switch off the things that guard `main`. Handing it to a workflow
 would mean anything that merges to `main` can also unguard `main`, which
-undoes the partition ci.md §2 exists to create. The trade is cheap: the
+undoes the partition ci.md §3 exists to create. The trade is cheap: the
 forge changes a few times a year, while the credential would sit in CI
 permanently. CI may still *preview* this stack to detect drift; it may not
 apply it.
@@ -45,7 +45,7 @@ OPS_REPO = 'kluster-ops'
 #: noop-automerge, which is where "the preview was empty" is decided.
 REQUIRED_CHECKS = ('checks', 'changes')
 
-#: One Environment per deployment layer (ci.md §2), so a job holds its layer's
+#: One Environment per deployment layer (ci.md §3), so a job holds its layer's
 #: credentials and no other. `physical` is split in two: the plan half is
 #: ungated because reading the diff *is* the approval moment, and the apply
 #: half is what a reviewer stands in front of.

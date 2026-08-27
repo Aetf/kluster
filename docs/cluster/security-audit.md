@@ -309,7 +309,9 @@ purpose — CI reads them, and the passphrase they are derived against is
 ciphertext opened by the offline kit (credentials.md §2.2), which no
 offline attack on a KDF salt reaches. What made the scrubbed
 blobs a finding was whose secrets they were: the legacy cluster's, under
-a passphrase that was not derived and is live until Wave F.
+a passphrase this register does not cover — no escrow label names it,
+so nothing in the model above protects or rotates it — and live until
+Wave F.
 
 Post-conditions, verified on the rewritten history: no blob matches the
 ciphertext or salt markers, every other path keeps its exact blob hash,
@@ -326,7 +328,8 @@ credential set. Accepted residual: that environment already holds
 cluster-admin kubeconfig (H3's accepted core), so this adds breadth,
 not depth, and the ZT flow rules still confine where the credential is
 usable from. Stated so the apps tier is never mistaken for harmless.
-*Lives in* ci.md §2.
+*Lives in* ci.md §3 (which Environment holds it), §2 (the residual on
+record).
 
 ---
 
