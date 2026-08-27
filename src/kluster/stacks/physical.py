@@ -12,11 +12,11 @@ declared before the configuration that names it and before the nodes that
 carry that configuration; the backends pointing back at those nodes come
 last.
 
-**Every domain of the design appears below, implemented or not.** A domain
-that has no implementation yet is still called, and says so by raising with
-its own name: the stack is the inventory, so what is missing is visible in
-the program rather than only in a tracker. This is why a run of the stack
-currently stops partway — deliberately, and at a named place.
+**Every domain of the design appears below, and every one of them is
+written.** The stack is the inventory: a domain with no implementation would
+still be called here and would refuse by naming itself, so what is missing is
+visible in the program rather than only in a tracker. Nothing is missing
+today, and a run therefore goes all the way through.
 """
 
 from __future__ import annotations
@@ -125,10 +125,8 @@ async def main() -> None:
     _declare_storage(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, nodes=nodes)
     _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
 
-    # The rest of the design, written or not. A domain with no implementation
-    # is still called and refuses by name; the first one reached ends the run,
-    # which is why the domains below it are unreachable today rather than
-    # absent.
+    # The two domains that are not the cloud: the host under libvirt, and the
+    # gateway through the three doors it is configured by.
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,

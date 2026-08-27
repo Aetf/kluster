@@ -4,14 +4,15 @@ A smoke test with teeth: it declares the entire stack against mocks, which is
 what catches wiring mistakes — a resource argument the provider would reject,
 or a dependency ordered so that the endpoint is needed before it exists.
 
-The stack is also an inventory. Domains the design calls for but nobody has
-written yet are still called, and refuse by name; the suite holds both halves
-of that — the declared graph really is declared, and the first gap really does
-say which domain it is.
+The stack is also an inventory, and as of the libvirt domain it is a complete
+one: every domain the design calls for is written, so `main` runs end to end
+here rather than stopping at a named gap. What replaces that gap as a test is
+the same worry stated positively — each provider of the design has to appear in
+what the run registered, because a domain that quietly declared nothing would
+leave a stack that comes up looking whole.
 """
 
 import json
-from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -23,7 +24,6 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 from kluster.gateway import zerotier
-from kluster.physical import homelab
 from kluster.physical.guardrails import Guardrails
 from kluster.stacks import physical
 
@@ -74,7 +74,13 @@ GATEWAY_CONFIG = {
 
 
 class Mocks(pulumi.runtime.Mocks):
+    def __init__(self) -> None:
+        #: Every resource type the run registered, so a test can ask which
+        #: providers the program actually reached.
+        self.registered: set[str] = set()
+
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+        self.registered.add(args.typ)
         outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
         if args.typ == 'oci:Core/vcn:Vcn':
             outputs['ipv6cidrBlocks'] = ['2603:c020:8000:1200::/56']
@@ -152,8 +158,8 @@ STACK_CONFIG = {
     'kluster:ociIdentityDomainName': IDENTITY_DOMAIN,
     'kluster:b2Region': B2_REGION,
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
-    # Read by the §3 domain, which announces itself as unwritten only after
-    # its arguments have been evaluated.
+    # The §3 domain: where the host is reached, where the worker's image and
+    # seed are written, and which domain is adopted rather than built.
     'kluster:libvirtUri': 'qemu+ssh://host.invalid/system',
     'kluster:libvirtStorageDir': '/var/lib/libvirt/kluster',
     'kluster:haosDomainUuid': '00000000-0000-0000-0000-000000000000',
@@ -162,23 +168,36 @@ STACK_CONFIG = {
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup(monkeypatch: pytest.MonkeyPatch) -> None:
+async def setup(monkeypatch: pytest.MonkeyPatch) -> Mocks:
     monkeypatch.setitem(conventions.OCI_COMPARTMENTS, conventions.PHYSICAL, COMPARTMENT)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
+    mocks = Mocks()
+    pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
     # A bridged SDK registers its own parameterized package before it may
     # register a resource, and it gates that on a feature flag read out of a
     # synchronous cache that only the async negotiation fills.
     _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
+    return mocks
+
+
+#: The provider of each domain the design has, by the prefix its type tokens
+#: carry: the cloud, the Talos chain, the homelab host, the backup account, the
+#: gateway's controller and the overlay.
+DOMAIN_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
 
 
 @pytest.mark.asyncio
-async def test_the_stack_declares_and_then_names_its_first_gap() -> None:
-    # Everything above the gap is declared for real against the mocks, which
-    # is where a wiring mistake would surface; the gap itself is the program
-    # refusing to pretend the rest of the design exists.
-    with pytest.raises(NotImplementedError, match=r'physical §3 homelab'):
-        await physical.main()
+async def test_the_stack_declares_every_domain_of_the_design(setup: Mocks) -> None:
+    # The whole program against the mocks, which is where a wiring mistake
+    # surfaces — an argument the provider would reject, or a dependency that
+    # needs the endpoint before it exists.
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    # And the inventory property: a domain that declared nothing at all would
+    # leave a stack that runs clean and comes up one provider short.
+    families = {typ.partition(':')[0] for typ in setup.registered}
+    assert set(DOMAIN_PROVIDERS) <= families
 
 
 @pytest.mark.asyncio
@@ -220,10 +239,7 @@ async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
 
     monkeypatch.setattr(physical.pulumi, 'export', record)
 
-    # The exports are declared above the stack's first unwritten domain, so
-    # the run that reaches them is the same run that stops there.
-    with pytest.raises(NotImplementedError):
-        await physical.main()
+    await physical.main()
 
     for output in (dns.OUTPUT_CLUSTER_V4, dns.OUTPUT_CLUSTER_V6, dns.OUTPUT_VIP1_V4):
         assert output in exported, output
@@ -253,8 +269,7 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
 
     monkeypatch.setattr(physical.pulumi, 'export', record)
 
-    with pytest.raises(NotImplementedError):
-        await physical.main()
+    await physical.main()
 
     kubeconfig = cast('pulumi.Output[str]', exported['kubeconfig'])
     talosconfig = cast('pulumi.Output[str]', exported['talosconfig'])
@@ -369,8 +384,7 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
     monkeypatch.setattr(physical.pulumi, 'export', record)
 
-    with pytest.raises(NotImplementedError):
-        await physical.main()
+    await physical.main()
 
     assert exported['chunk_bucket'] == conventions.BUCKET_CHUNKS
     assert exported['backup_bucket'] == conventions.BUCKET_BACKUP
@@ -453,6 +467,9 @@ SITE_FACTS = [
     'kluster:ociIdentityDomainName',
     'kluster:b2Region',
     'kluster:budgetAlertRecipients',
+    'kluster:libvirtUri',
+    'kluster:libvirtStorageDir',
+    'kluster:haosDomainUuid',
 ]
 
 
@@ -467,42 +484,15 @@ async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> 
 
 @pytest.mark.asyncio
 async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need() -> None:
-    """The one domain below the gap that is written, exercised on its own.
+    """The gateway's three channels, exercised without the rest of the stack.
 
-    A run stops at the first unwritten domain, so the gateway is unreachable
-    through `main` today; declaring it directly is what keeps its wiring —
-    every configuration key, and which of them is a secret — under test until
-    the domains above it are written.
+    `main` reaches it now, but a failure there names the whole program; this
+    isolates the arm whose wiring is entirely configuration — every key, and
+    which of them is a secret — so a missing one is reported against the
+    gateway rather than against a run of everything.
     """
     physical.declare_gateway(pulumi.Config())
     await wait_for_rpcs(await_all_outstanding_tasks=False)
-
-
-#: Every domain of the design that has no implementation, and the text its
-#: refusal must carry. A domain that quietly declared nothing would be far
-#: worse than one that stops the run: the stack would come up looking whole.
-SEAMS: list[tuple[str, Callable[[], object]]] = [
-    (
-        'physical §3 homelab',
-        lambda: homelab.declare(
-            'kluster',
-            cluster=cast('Any', None),
-            connection_uri='qemu+ssh://host/system',
-            storage_dir='/var/lib/libvirt/kluster',
-            bridge='kvmbr1',
-            vcpus=12,
-            memory_gib=10,
-            disk_gb=60,
-            haos_domain_uuid='00000000-0000-0000-0000-000000000000',
-        ),
-    ),
-]
-
-
-@pytest.mark.parametrize(('expected', 'seam'), SEAMS)
-def test_an_unwritten_domain_refuses_by_name(expected: str, seam: Callable[[], object]) -> None:
-    with pytest.raises(NotImplementedError, match=expected):
-        seam()
 
 
 def test_the_provider_sdks_import() -> None:
