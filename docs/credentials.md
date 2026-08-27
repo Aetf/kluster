@@ -434,7 +434,7 @@ by hand.
 | kubeconfig | `physical` output | cluster-admin | CI env | `k8s-base`, `apps` |
 | UDM SSH key, libvirt SSH identity | installed by the estate's other automation: gw-config puts the UDM key on the gateway, aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | gw-config push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret + CI env | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret + CI env | `physical` |
-| AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `apps` rewrites |
+| AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `dns` rewrites |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo `drill` Environment | Drill workflows |
@@ -480,6 +480,21 @@ key, aconfmgr provisions the host's service user — rather than by a
 into `physical`'s config. Rotating any of the three is that other
 procedure followed by that paste.
 
+**Two more are a device's own credential.** The UniFi API key and the
+AdGuard admin login are made on the appliances that check them: the
+controller mints a key for a dedicated local admin and shows it once,
+and AdGuard Home has no scoped API at all, so its admin account *is* the
+API credential — the residual the security audit records as L11. Both
+instances answer to the same login, because a rewrite is written to
+alice and bob directly rather than synchronized (declarative/dns.md §3),
+and that account is part of the static configuration the gw-config
+estate pushes. Neither is minted here, so `credentials device <name>`
+(§4) is the delivery alone: the console steps, the value, the stack
+config that reads it. The consumer decides which stack — `physical`
+drives the UDM's Network API, `dns` writes the AdGuard rewrites — and
+the address travels with the credential where the program needs one, as
+the plain `unifiApiUrl` beside the key.
+
 ## 4. The scripts
 
 The register's executable form: `credentials`, a console script in
@@ -504,6 +519,8 @@ credential family plus the lifecycle commands below.
 | `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
 | `credentials derived oci physical --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
 | `credentials derived b2 management` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
+| `credentials device unifi` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
+| `credentials device adguard` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials slots ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials slots push [--only <row>]` | Once during bring-up, and again whenever a value behind a GitHub secret moves. Fills every GitHub secret the map can fill — resolve, push, verify, per row — so a first fill and a refill are one command. A row whose value cannot be obtained from here names the command that owns it instead. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials escrow recover <label> [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
@@ -547,6 +564,18 @@ gateway's ACME token join them with cert-manager and the gateway. The
 GitHub-secret half of a row is delivered separately, by `credentials
 slots push` rather than by the row's own command, for the rows whose
 value can be obtained without minting one (below).
+
+§3's **device rows** are neither minted nor escrowed, so they are
+`credentials device <name>`, one per row: the command prints the console
+steps that create the credential, takes the value without echoing it,
+and pushes it into the config of the stack that reads it, proven by
+reading it back like every other config secret. A value may be handed in
+instead of typed, which is what makes a scripted run possible — a secret
+as a *path* and never as an argument, because an argument would put the
+credential in the process table of a shared machine, with `-` reading
+standard input. The console steps live beside the row (`devices.py`) for
+the reason §2's live beside theirs: a runbook would be a second place
+for them to be wrong.
 
 The zones token's scope is not a list in the script: it is the estate's
 zones as `conventions` names them, resolved to zone ids through the seed
@@ -693,7 +722,12 @@ that puts a value there.
     `credentials derived b2 management` — the §3 rows whose slot is a
     stack's committed configuration, which is then committed. One row per
     command, and re-running one rotates that row.
-8.  `credentials slots push` — the GitHub secrets CI reads, from the
+8.  `credentials device unifi` and `credentials device adguard` — the
+    two §3 rows whose credential is made on a device of the estate
+    rather than minted here. Each prints the steps that create it,
+    takes the value, and writes it into the config of the stack that
+    reads it, which is then committed like the rows above.
+9.  `credentials slots push` — the GitHub secrets CI reads, from the
     slot map (§4). Last, because a row read out of a stack needs that
     stack to have run; a row it cannot fill yet says which slot is
     waiting on what, and the same command run again fills it.
@@ -705,10 +739,13 @@ done, the kit goes back in its envelope.
 kinds have a sink — the Pulumi config secret, the workstation slot and the
 GitHub secret — and the rest have none.
 
--   The **device credentials** (UDM SSH key, libvirt identity, UniFi API
-    key, AdGuard credentials) and the **in-cluster secrets** (the DNS-01
-    token and the writer keys, sealable only once `k8s-base` has the
-    sealed-secrets controller up) have neither half.
+-   The **SSH identities** (the UDM key and the libvirt identity) have no
+    command on this side. Neither is created in a console, so there are
+    no steps to print: the estate's other automation installs them (§3),
+    and what is left here is a paste into `physical`'s configuration.
+    The **in-cluster secrets** (the DNS-01 token and the writer keys,
+    sealable only once `k8s-base` has the sealed-secrets controller up)
+    have neither half.
 -   Most of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what it can obtain from a workstation: the state passphrase,
     into every Environment, and the deploy-failure webhook, which is typed
@@ -734,7 +771,8 @@ Restic passwords will not join that list: they arrive with the
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
 above exist, a bring-up delivers the seed kit, the state backend, the
-provider credentials the `dns` and `physical` stacks run on, and the
+provider credentials the `dns` and `physical` stacks run on, the two
+device credentials those stacks authenticate to the estate with, and the
 GitHub secrets whose values a workstation can obtain; the rest of §3 is
 design rather than procedure.
 
