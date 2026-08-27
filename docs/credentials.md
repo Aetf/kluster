@@ -166,7 +166,7 @@ that rotation incomplete.
 
 | Kit row | What it mints | Self-reproducing |
 | --- | --- | --- |
-| OCI seed API key (its own user, group and policy: manage users, groups and policies in the tenancy) | The per-stack OCI users and their API keys | **Yes** — IAM creates users and keys, its own included |
+| OCI seed API key (its own user, group and policy: manage users, groups, policies and compartments in the tenancy) | The per-stack OCI users and their API keys, and the compartment each is confined to | **Yes** — IAM creates users and keys, its own included |
 | Cloudflare seed token (**API Tokens Write**, and **Zone Read** on all zones) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
@@ -468,6 +468,20 @@ stranger everywhere else, so what a consumer may do widens by declaring a
 resource in its own compartment rather than by editing a policy, and a
 compromise of either key is confined to a boundary the console shows.
 
+**The compartment is part of the mint, not a prerequisite of it.**
+`conventions.OCI_COMPARTMENTS` names one per consumer, and the mint creates
+the one the tenancy does not have yet — which is what the seed's `manage
+compartments` statement is for: a boundary the platform's API can make must
+not become a console errand (§1 rule 5). The mapping carries the name, which
+is a decision, and the `OCID`, which is the site fact that follows from
+creating it; a compartment created for the first time is announced as the
+line to record there and commit, because the consuming stack reads the `OCID`
+from that file and refuses by naming the mint until it is written. The
+appliance's compartment predates the model and carries the estate's own name
+rather than a per-consumer one, so the mint adopts it exactly as it adopts a
+user or a group that is already there. `--compartment` overrides the mapping
+for a drill tenancy, where none of those names mean anything.
+
 **Three rows are here for their delivery rather than their birth.** The
 ZeroTier row's value *is* the §2 seed: Central publishes no token API,
 so there is nothing smaller to mint and the seed itself is what
@@ -525,11 +539,11 @@ the row name.
 | `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
 | `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
-| `credentials derived oci-state-backend mint --compartment <ocid>` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4). Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
+| `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived cloudflare-zones mint` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
-| `credentials derived oci-physical mint --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
+| `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
@@ -603,28 +617,20 @@ both resolve against the project's own name — so the committed file reads
 An OCI key is pushed the same way and fills more keys, because an API key
 is five things (§2.1) and a provider recovers none of them: it reads
 `oci:tenancyOcid`, `oci:userOcid`, `oci:fingerprint`, `oci:privateKey` and
-`oci:region`. A sixth travels beside them, `compartmentId` in this
-project's own namespace, because a credential says who may act and never
-where.
+`oci:region`. Those five are the whole of the push. Where the stack may
+act travels with neither the credential nor the configuration: the
+compartment is a boundary this program decides, so it is code
+(`conventions.OCI_COMPARTMENTS`) and the stack reads it there.
 
-Four of the six are config secrets — the key, and the two identifiers
+Four of the five are config secrets — the key, and the two identifiers
 naming the tenancy and the user it belongs to, which are the class of fact
 the kit itself keeps as a protected attribute (§2.1). The fingerprint is
 written although §2.1 declines to store one: the provider takes it as an
 input rather than deriving it, and the command computes it from the key it
 is pushing in the same breath, so the two cannot disagree.
 
-The other two are plain, each for
-its own reason. The region is a constant in `conventions`. The compartment
-is plain **because the program reads it plain** — `stacks/physical.py` takes
-it with `require`, and a value pushed as a secret and read that way agrees
-only by way of an upstream defect (`pulumi/pulumi#7127`), so the two sides
-have to be made to say the same thing. Reading it as a secret instead would
-type-check, every component taking an input rather than a string, but
-secretness propagates: the compartment field of every resource in the stack
-would become encrypted state, and every preview line naming one would read
-`[secret]`. That is a poor trade for an identifier naming a container inside
-the tenancy rather than the account that owns it.
+The fifth is plain: the region is a constant in `conventions`, which is
+where the compartment beside it lives too.
 
 **The slot map is checked in** (`slots.py`). One row per §3 credential,
 naming the source its value comes from — recovered from escrow, minted by
@@ -702,12 +708,12 @@ that puts a value there.
     console steps. The kit is all it writes secrets to; the recovery
     row additionally writes `escrow/RECIPIENTS` into the checkout — the
     public half, and a file to commit.
-3.  `credentials derived oci-state-backend mint --compartment <ocid>` —
-    the appliance's own OCI key (§3), minted from the seed into the
-    workstation slot the next stage reads. It comes first among §3's rows
-    because it is the only one whose consumer runs before the state
-    backend exists. The compartment is named on the command line because
-    nothing in this repository knows one: it is a fact about the tenancy.
+3.  `credentials derived oci-state-backend mint` — the appliance's own
+    OCI key (§3), minted from the seed into the workstation slot the next
+    stage reads. It comes first among §3's rows because it is the only one
+    whose consumer runs before the state backend exists. The compartment
+    it is confined to is the one `conventions` names for the appliance,
+    adopted where it exists and created where it does not.
 4.  `state-backend provision` — the Pulumi state backend, which every
     stack needs before it can act, and the first thing to escrow (§2.2):
     it generates the CA and the age identity, commits their ciphertexts,
@@ -731,10 +737,12 @@ that puts a value there.
     uses `import` here instead (§4.2), which escrows that value rather
     than replacing it.
 6.  `credentials derived cloudflare-zones mint`,
-    `credentials derived oci-physical mint --compartment <ocid>` and
+    `credentials derived oci-physical mint` and
     `credentials derived b2-management mint` — the §3 rows whose slot is a
     stack's committed configuration, which is then committed. One row per
-    command, and re-running one rotates that row.
+    command, and re-running one rotates that row. The OCI row creates the
+    `physical` stack's compartment on its first run and prints the `OCID`,
+    which is recorded in `conventions` and committed with the rest.
 7.  `credentials derived unifi record` and
     `credentials derived adguard record` — the two §3 rows whose
     credential is made on a device of the estate rather than minted here.
@@ -899,7 +907,7 @@ identity domain's **self-service** endpoints instead
 (`list_my_api_keys` / `delete_my_api_key`), which act only on the
 caller's own user and require authentication rather than a policy.
 That is why the sweep of superseded keys runs as the seed and not as
-the root, and why the seed needs no permission beyond the three
+the root, and why the seed needs no permission beyond the four
 statements in its policy.
 
 Those endpoints live on a per-tenancy URL, which is discovered once —
@@ -926,7 +934,7 @@ never a hunt for per-machine environment wiring:
 | `pulumi.passphrase` | The state passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials root <name> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
-| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names, and the compartment it acts in. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. | `credentials derived oci-state-backend mint` |
+| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
