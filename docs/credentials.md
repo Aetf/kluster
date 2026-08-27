@@ -36,10 +36,7 @@ facts about them.
     *large by construction* (it must be able to mint its successors)
     and the recovery key's is larger still (it opens every escrowed
     label at once), which is exactly why nothing consumes either at
-    runtime. One kit row breaks even that: the ZeroTier Central token
-    is the provider credential as well as the seed, because Central
-    mints nothing smaller, so §3 carries a row for its delivery and
-    the excess it hands `physical` is on the record there.
+    runtime.
 5.  **Every seed mints its own successor where the platform allows**
     (the table in §2). Rotation is then a script, not a checklist, and the
     platforms that cannot do it are named rather than forgotten.
@@ -99,7 +96,11 @@ facts about them.
 Automation never consumes these; it only *unseals* them, for the
 length of one bring-up, one rotation or one recovery. The set is
 deliberately tiny — everything in §3 grows out of it or is opened by
-it.
+it, and that is also the membership rule: a credential that mints
+nothing and opens nothing is a §3 row however it is made, delivered
+into its consumer's slot even where a console is the only thing that
+can create one. Keeping such a row here would give one credential two
+homes and hand the kit a rotation it cannot perform.
 
 **Account roots are not in this set.** Console logins and their MFA
 recovery codes for the five provider accounts (OCI tenancy, GitHub,
@@ -170,7 +171,6 @@ that rotation incomplete.
 | Cloudflare seed token (**API Tokens Write**, and **Zone Read** on all zones) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
 | GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
-| ZeroTier Central API token | Nothing (it *is* the provider credential; ZT has no token API) | No — console-only |
 | **Recovery key** (an age X25519 identity; its public recipient is committed here, its private half is kit-only) | Nothing — it *opens* the escrowed copy of every locally-generated secret (§2.2) | Generated, not minted (§2.2) |
 
 The "No" rows are the whole manual surface of a rotation: the
@@ -180,11 +180,11 @@ an account login, which is the one thing the kit deliberately does not
 carry — so a rotation run by a successor starts in the personal estate
 (§2.1), and the kit's README says so.
 
-Three rows are console-only because the platform has no API for what
-they are: the two GitHub Apps' private keys and the ZeroTier Central
-token. The Cloudflare row is console-only for a different reason,
-and the distinction matters to anyone reading the API and wondering
-why it is not used — the call exists and is refused. A sub-token "is
+Two rows are console-only because the platform has no API for what they
+are: the two GitHub Apps' private keys. The Cloudflare row is
+console-only for a different reason, and the distinction matters to
+anyone reading the API and wondering why it is not used — the call
+exists and is refused. A sub-token "is
 not allowed to have permissions to manage other tokens"
 ([Cloudflare's own
 documentation](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)),
@@ -282,8 +282,9 @@ itself is self-service (§4.3).
     provider accounts exist, that their credentials live in the
     personal estate, and that the estate's own succession is arranged
     separately. Without it a successor can open every seed and still
-    not reach the console-only rotations (the two Apps, ZeroTier and
-    Cloudflare), or re-seed after a total loss.
+    not reach the console-only rotations (the two Apps and Cloudflare),
+    replace the ZeroTier Central token §3 delivers, or re-seed after a
+    total loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
     rotation (§4.2) — plus the yearly offline day, which opens one kit
     and verifies it against §2's table. It is emphatically **not** a
@@ -423,7 +424,6 @@ by hand.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
 | ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per identity domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
-| ZeroTier Central token, as delivered | the §2 seed itself — Central has no token API, so there is nothing smaller to mint | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret + CI env (`zerotierApiToken`, beside the plain `zerotierNetworkId`) | `physical` |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | postgres:// mTLS | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
@@ -435,6 +435,7 @@ by hand.
 | UDM SSH key, libvirt SSH identity | installed by the estate's other automation: gw-config puts the UDM key on the gateway, aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | gw-config push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret + CI env | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret + CI env | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `dns` rewrites |
+| ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret + CI env (`zerotierApiToken`, beside the plain `zerotierNetworkId`) | `physical` |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo `drill` Environment | Drill workflows |
@@ -482,32 +483,40 @@ rather than a per-consumer one, so the mint adopts it exactly as it adopts a
 user or a group that is already there. `--compartment` overrides the mapping
 for a drill tenancy, where none of those names mean anything.
 
-**Three rows are here for their delivery rather than their birth.** The
-ZeroTier row's value *is* the §2 seed: Central publishes no token API,
-so there is nothing smaller to mint and the seed itself is what
-`physical` authenticates with — the one kit row a stack consumes, and
-the exception rule 4 names. The UDM SSH key and the libvirt
-identity are prerequisites of the same shape: rule 7 is satisfied for
-them by another tracker's automation — gw-config installs the gateway's
-key, aconfmgr provisions the host's service user — rather than by a
-`credentials` subcommand, so the only act on this side is the paste
-into `physical`'s config. Rotating any of the three is that other
-procedure followed by that paste.
+**Two rows are here for their delivery rather than their birth.** The
+UDM SSH key and the libvirt identity are prerequisites rather than
+credentials this side creates: rule 7 is satisfied for them by another
+tracker's automation — gw-config installs the gateway's key, aconfmgr
+provisions the host's service user — rather than by a `credentials`
+subcommand, so the only act on this side is the paste into `physical`'s
+config. Rotating either is that other procedure followed by that paste.
 
-**Two more are a device's own credential.** The UniFi API key and the
-AdGuard admin login are made on the appliances that check them: the
+**Three more are made in the console that checks them.** The UniFi API
+key and the AdGuard admin login belong to the appliances themselves: the
 controller mints a key for a dedicated local admin and shows it once,
 and AdGuard Home has no scoped API at all, so its admin account *is* the
 API credential — the residual the security audit records as L11. Both
 instances answer to the same login, because a rewrite is written to
 alice and bob directly rather than synchronized (declarative/dns.md §3),
 and that account is part of the static configuration the gw-config
-estate pushes. Neither is minted here, so `credentials derived <row>
-record` (§4) is the delivery alone: the console steps, the value, the stack
-config that reads it. The consumer decides which stack — `physical`
-drives the UDM's Network API, `dns` writes the AdGuard rewrites — and
-the address travels with the credential where the program needs one, as
-the plain `unifiApiUrl` beside the key.
+estate pushes. The ZeroTier Central token is the same shape one layer
+out: Central publishes no token API, so an account token made in its web
+console is what `physical` authenticates with, as broad as the account it
+belongs to because Central offers nothing narrower. None of the three is
+minted here, so `credentials derived <row> record` (§4) is the delivery
+alone: the console steps, the value, the stack config that reads it. The
+consumer decides which stack — `physical` drives the UDM's Network API
+and the overlay's Central account, `dns` writes the AdGuard rewrites —
+and the address travels with the credential where the program needs one,
+as the plain `unifiApiUrl` beside the key and the plain
+`zerotierNetworkId` beside the token.
+
+Each of the three rotates by being made again in the same console and
+re-recorded, which is why none of them is a seed: they mint nothing, so
+there is nothing for the kit to hold or to reproduce. What guarantees a
+lost one can be replaced is the account or appliance behind it — the
+Central account is one of the account roots §2 keeps out of the kit, and
+the two appliances are the estate's own.
 
 ## 4. The scripts
 
@@ -523,8 +532,8 @@ rows. A row is named the same way everywhere — words joined by `-`, as
 What differs between §3's rows is the verb, because what differs between
 them is how the value comes into being: `mint` for a row a seed mints,
 `generate` / `import` / `recover` for a row generated here and escrowed
-(§2.2), and `record` for a row made on a device of the estate and typed
-in. The escrow *directory* keeps the `/` paths it files ciphertexts
+(§2.2), and `record` for a row made in the console that checks it and
+typed in. The escrow *directory* keeps the `/` paths it files ciphertexts
 under (`escrow/pulumi/passphrase/1.age`); only the command surface uses
 the row name.
 
@@ -547,6 +556,7 @@ the row name.
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
+| `credentials derived zerotier record` | The same again, for the ZeroTier Central API token and the id of the network it administers, into the `physical` stack's config. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
@@ -743,12 +753,13 @@ that puts a value there.
     command, and re-running one rotates that row. The OCI row creates the
     `physical` stack's compartment on its first run and prints the `OCID`,
     which is recorded in `conventions` and committed with the rest.
-7.  `credentials derived unifi record` and
-    `credentials derived adguard record` — the two §3 rows whose
-    credential is made on a device of the estate rather than minted here.
-    Each prints the steps that create it, takes the value, and writes it
-    into the config of the stack that reads it, which is then committed
-    like the rows above.
+7.  `credentials derived unifi record`,
+    `credentials derived adguard record` and
+    `credentials derived zerotier record` — the three §3 rows whose
+    credential is made in the console that checks it rather than minted
+    here. Each prints the steps that create it, takes the value, and
+    writes it into the config of the stack that reads it, which is then
+    committed like the rows above.
 8.  `credentials derived sync` — the GitHub secrets CI reads, for the §3
     rows whose value lives somewhere else (§4). Last, because a row read
     out of a stack needs that stack to have run; a row it cannot fill yet
@@ -794,8 +805,8 @@ Restic passwords will not join that list: they arrive with the
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
 above exist, a bring-up delivers the seed kit, the state backend, the
-provider credentials the `dns` and `physical` stacks run on, the two
-device credentials those stacks authenticate to the estate with, and the
+provider credentials the `dns` and `physical` stacks run on, the three
+console-made credentials those stacks authenticate with, and the
 GitHub secrets whose values a workstation can obtain; the rest of §3 is
 design rather than procedure.
 
@@ -824,9 +835,9 @@ generate`, below) touches no other credential.
 It **writes a new database file** (`--into`), and the retired one
 is left byte-for-byte as it was: unseal the old, have each seed mint its
 successor, generate a fresh recovery key, and write all of it into
-the new database. The GitHub App private keys, the ZeroTier token and
-the Cloudflare seed token are explicit pauses — the script prints the
-console steps and waits.
+the new database. The GitHub App private keys and the Cloudflare seed
+token are explicit pauses — the script prints the console steps and
+waits.
 
 **The recovery row's rotation is the re-encryption.** Rotating that row
 writes the successor identity into the new database and then, in the
@@ -848,9 +859,9 @@ that successor before the predecessor's key is retired, so a run
 interrupted anywhere leaves a working seed in one kit or the other; the
 console-made Cloudflare token is checked for both permissions the seed
 needs (§2) while the operator is still on the page that fixes either.
-The rows that are only pasted in — the two App private keys and the
-ZeroTier token — are stored as given, so a wrong value there surfaces at
-its first use rather than during the rotation.
+The rows that are only pasted in — the two App private keys — are stored
+as given, so a wrong value there surfaces at its first use rather than
+during the rotation.
 
 Nothing beyond the kit is touched. The §3 credentials minted from
 the retired seeds keep working, and each is replaced by re-running its

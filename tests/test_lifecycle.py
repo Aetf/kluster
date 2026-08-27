@@ -77,14 +77,25 @@ def test_bootstrap_resumes_rather_than_repeating(kit: KdbxStore, registry: escro
 def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
     kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr('getpass.getpass', _answers('zt-token-value'))
+    # A row of §2's shape rather than one of its members: the generic
+    # console-only path -- an identifier typed, a secret pasted hidden, no key
+    # file -- is what a seed on a platform with no API falls to, and it has to
+    # keep working whether or not the register happens to hold such a row
+    # today. Every member §2 does hold has a branch of its own in `create_seed`.
+    seed = entries.Seed(
+        member='example',
+        title='Example console seed',
+        identifier='the name the console shows it under',
+        mints='a successor of its own class',
+        self_reproducing=False,
+        console='the provider console → API tokens → New token.',
+    )
+    monkeypatch.setattr('getpass.getpass', _answers('a-pasted-secret'))
 
-    created = lifecycle.bootstrap(kit, prompt=_answers('zerotier-central'), only='zerotier')
+    lifecycle.create_seed(seed, kit=kit, prompt=_answers('an-identifier'))
 
-    assert created == ['zerotier']
-    entry = entries.SEEDS['zerotier'].entry
-    assert kit.get(entry) == 'zt-token-value'
-    assert kit.get(entry, attribute='UserName') == 'zerotier-central'
+    assert kit.get(seed.entry) == 'a-pasted-secret'
+    assert kit.get(seed.entry, attribute='UserName') == 'an-identifier'
 
 
 def test_a_key_file_is_stored_as_an_attachment(kit: KdbxStore, tmp_path: Path) -> None:

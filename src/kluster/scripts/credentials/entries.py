@@ -14,8 +14,8 @@ The rule, in full:
 -   **UserName** is the credential's public identifier -- the half that
     appears in logs and consoles and is not a secret: a B2 key id, an OCI
     user's OCID, a GitHub App's client id, the recovery key's age recipient.
-    A credential with no such half (the ZeroTier token) records what it is
-    instead, so the field is never empty and never a secret.
+    A credential with no such half records what it is instead, so the field
+    is never empty and never a secret.
 -   **Password** is the secret itself, and nothing else is.
 -   **Attachments** carry key material that is a file rather than a string
     (the GitHub App private keys, the OCI API key).
@@ -26,6 +26,14 @@ The rule, in full:
     rather than of the key. Protected rather than plain because both are
     account identifiers, and the entry has no reason to hand one out in a
     listing.
+
+**What belongs in this table** is what the rest of the register grows out of:
+a credential that mints successors, or the recovery key that opens what §2.2
+escrows. A credential a stack authenticates with is a §3 row even when a
+console is the only thing that can make one -- it is created there and
+delivered by `credentials derived <row> record` (`devices.py`), and putting it
+in the kit as well would give one credential two homes and no rotation the
+kit could perform.
 
 Adding a seed means adding a row here and a row in §2, in the same change.
 """
@@ -203,18 +211,6 @@ SEEDS: dict[str, Seed] = {
                 '  The JWT issuer is the *client id*, not the numeric app id.'
             ),
             attachment='private-key.pem',
-        ),
-        Seed(
-            member='zerotier',
-            title='ZeroTier Central API token',
-            identifier='a name for this token (Central shows it beside the value)',
-            mints='nothing; it is itself the provider credential',
-            self_reproducing=False,
-            console=(
-                'my.zerotier.com → Account → API Access Tokens → New Token.\n'
-                '  ZeroTier has no token API, so this is the one credential\n'
-                '  that cannot mint its own successor.'
-            ),
         ),
     )
 }

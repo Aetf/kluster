@@ -36,11 +36,10 @@ business of that command:
     of is read back out of state.
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
-    from a kit row the platform publishes no API for (the ZeroTier Central
-    token), some are made on a device of the estate and delivered by a command
-    of their own (the UniFi key and the AdGuard login, `devices.py`), and some
-    are installed by another tracker's automation entirely (the UDM and libvirt
-    SSH identities, §3).
+    are made in the console that checks them and delivered by a command of
+    their own (the UniFi key, the AdGuard login and the ZeroTier Central token,
+    `devices.py`), and some are installed by another tracker's automation
+    entirely (the UDM and libvirt SSH identities, §3).
 
 **A target has to be an address, not an intention.** Where §3 names a channel
 that nothing has given a name yet -- an Environment secret no workflow reads, a
@@ -421,7 +420,7 @@ def _github(name: str, environments: tuple[str, ...], repository: str = REPOSITO
 
 
 def _device(member: str) -> Row:
-    """A §3 row whose credential is made on a device and typed in (`devices.py`).
+    """A §3 row whose credential is made in a console and typed in (`devices.py`).
 
     Built from that module's table rather than restated here, so the keys this
     map advertises are the keys the command writes -- the same rule the minted
@@ -546,21 +545,6 @@ ROWS: dict[str, Row] = {
         source=ConfigRead(PHYSICAL_STACK, 'zerotierNetworkId'),
         targets=_github('ZEROTIER_NETWORK_ID', ZEROTIER_PHYSICAL + ZEROTIER_DNS),
     ),
-    'zerotier-central-token': Row(
-        register='ZeroTier Central token, as delivered',
-        source=Manual(
-            'the ZeroTier Central API token',
-            'It is the §2 kit row itself -- Central publishes no token API, so there is\n'
-            '  nothing smaller to mint and nothing to rotate from here. `credentials kit\n'
-            "  show seeds/zerotier` names it; the paste into the stack's config is the\n"
-            '  whole of the delivery (§3).',
-        ),
-        targets=(
-            PulumiConfig(PHYSICAL_STACK, 'zerotierApiToken'),
-            PulumiConfig(PHYSICAL_STACK, 'zerotierNetworkId', secret=False),
-        ),
-        pending=_IN_STACK_CONFIG,
-    ),
     'pulumi-passphrase': Row(
         register='Pulumi state passphrase',
         source=Derived(escrow.PASSPHRASE),
@@ -641,6 +625,7 @@ ROWS: dict[str, Row] = {
     ),
     'unifi': _device('unifi'),
     'adguard': _device('adguard'),
+    'zerotier': _device('zerotier'),
     'alertmanager-read': Row(
         register='Alertmanager read token',
         source=Derived(escrow.ALERTMANAGER),

@@ -34,11 +34,22 @@ def test_the_recovery_key_entry_has_one_definition() -> None:
 
 def test_console_only_seeds_are_the_manual_surface() -> None:
     # Everything a rotation must stop for: the two Apps, whose key generation
-    # is console-only; ZeroTier, which has no token API; and Cloudflare, which
-    # forbids a minted token from carrying token permissions and so has no
-    # credential able to mint the seed. The recovery key is generated rather
-    # than minted, so it is not one of them.
-    assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger', 'zerotier'}
+    # is console-only, and Cloudflare, which forbids a minted token from
+    # carrying token permissions and so has no credential able to mint the
+    # seed. The recovery key is generated rather than minted, so it is not one
+    # of them.
+    assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger'}
+
+
+def test_only_the_recovery_key_mints_nothing() -> None:
+    # §2's membership rule as a check rather than as prose: a kit row earns its
+    # place by minting successors, and the one exception is the recovery key,
+    # which opens what the escrow holds. A credential that does neither is a §3
+    # row delivered into its consumer's slot, however console-bound its
+    # creation is -- without that line the kit becomes a token drawer again.
+    barren = {member for member, seed in entries.SEEDS.items() if seed.mints.startswith('nothing')}
+
+    assert barren == {'recovery'}
 
 
 def test_the_cloudflare_console_text_asks_for_both_of_the_seed_s_permissions() -> None:
@@ -93,13 +104,14 @@ def test_listing_the_roots_needs_no_kit_and_prints_no_value(
 def test_a_row_no_api_can_create_stops_rather_than_inventing_one(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # ZeroTier has no token API, so the tree still carries the command and the
-    # command still stops -- with the console steps, not with a stack trace.
+    # No API can create the Cloudflare seed, so the tree still carries the
+    # command and the command still stops -- with the console steps, not with a
+    # stack trace.
     kit = KdbxStore.create(tmp_path / 'kit.kdbx', 'pw')
-    monkeypatch.setattr('builtins.input', lambda _prompt='': '')
+    monkeypatch.setattr('getpass.getpass', lambda _prompt='': '')
 
-    assert main(['--kdbx', str(kit.path), 'seed', 'zerotier', 'create']) == 1
-    assert 'my.zerotier.com' in caplog.text
+    assert main(['--kdbx', str(kit.path), 'seed', 'cloudflare', 'create']) == 1
+    assert 'dash.cloudflare.com' in caplog.text
 
 
 def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> None:

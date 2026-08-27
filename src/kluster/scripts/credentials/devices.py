@@ -1,14 +1,22 @@
-"""The device credentials (docs/credentials.md §3): made on a device, delivered to a stack.
+"""The device credentials (docs/credentials.md §3): made in a console, delivered to a stack.
 
-Two of §3's rows are neither minted from a seed nor generated and escrowed.
-The credential is made on the appliance that checks it, and this side of the
-system only delivers it:
+Three of §3's rows are neither minted from a seed nor generated and escrowed.
+The credential is made in the console that checks it — the appliance's own, or
+the provider's where the provider publishes no API for making one — and this
+side of the system only delivers it:
 
 -   the **UniFi API key**, which the controller mints for a dedicated local
     admin and shows once;
 -   the **AdGuard admin login**, which *is* the API credential — AdGuard Home
     has no scoped API at all (the security audit's L11), so the account both
-    instances carry is what a rewrite call authenticates as.
+    instances carry is what a rewrite call authenticates as;
+-   the **ZeroTier Central API token**, which Central mints only in its own
+    web console and scopes to the whole account.
+
+None of the three is a seed: a seed is a credential that mints successors
+(`entries.py`), and each of these mints nothing. Losing one costs a console
+visit and a re-run of its `record` command, which is also the whole of its
+rotation.
 
 A row here is therefore a console instruction plus a push, and the command's
 shape follows: print the steps that create the credential, take the value
@@ -25,9 +33,10 @@ where `-` reads standard input. A plain field is supplied as the value itself,
 being an address rather than a credential.
 
 **Which stack takes a row is not an argument.** The credential authenticates
-against one device, and the stack that talks to that device is the only
-consumer there is: `physical` drives the UDM's Network API, and `dns` writes
-the split-horizon rewrites on the AdGuard pair (declarative/dns.md §3).
+against one thing, and the stack that talks to that thing is the only consumer
+there is: `physical` drives the UDM's Network API and the overlay's Central
+account, and `dns` writes the split-horizon rewrites on the AdGuard pair
+(declarative/dns.md §3).
 
 §3's other pasted row — the UDM SSH key and the libvirt identity — has no
 member here, because there are no console steps to print for it: nobody
@@ -128,7 +137,7 @@ class Field:
 
 @dataclass(frozen=True)
 class Device:
-    """One §3 row whose credential is made on the device that checks it."""
+    """One §3 row whose credential is made in the console that checks it."""
 
     #: The `credentials derived <member> record` row name, which is also the
     #: name this row carries in the slot map.
@@ -193,6 +202,32 @@ DEVICES: dict[str, Device] = {
             fields=(
                 Field('username', 'adguardUsername', 'the admin username'),
                 Field('password', 'adguardPassword', 'the admin password'),
+            ),
+        ),
+        Device(
+            member='zerotier',
+            register='ZeroTier Central API token',
+            title='the ZeroTier Central API token',
+            stack=PHYSICAL_STACK,
+            holds='the Central API token and the id of the network it administers',
+            console=(
+                'my.zerotier.com → Account → API Access Tokens → New Token, named\n'
+                '  for this estate. Central publishes no token API, so its web\n'
+                '  console is the only thing that can make one and nothing here can\n'
+                '  mint a successor: re-running this command with a token created\n'
+                '  there is the whole of a rotation, and the superseded token is\n'
+                '  deleted on the same page.\n'
+                '  The token carries the whole Central account — the network, its\n'
+                '  members and its flow rules — because Central offers no narrower\n'
+                '  scope. That excess is why it is delivered straight into the one\n'
+                '  stack that uses it rather than kept anywhere else.\n'
+                "  The network id below is not a secret: it is on that network's\n"
+                '  page in the same console, and the stack needs it to know which\n'
+                "  of the account's networks is the estate's."
+            ),
+            fields=(
+                Field('api-token', 'zerotierApiToken', 'the token the console showed once'),
+                Field('network-id', 'zerotierNetworkId', "the estate network's id", secret=False),
             ),
         ),
     )
