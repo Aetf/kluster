@@ -33,7 +33,8 @@ further bridging; it ships its own type information, which a shelled-out
 `ssh` cannot; and pinning a host key is a parameter to it rather than a
 `known_hosts` file assembled on the runner.
 
-Not implemented: each `declare_*` raises, naming what is missing.
+Not implemented: `declare_estate` and `declare_zerotier` raise, naming what is
+missing.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from __future__ import annotations
 from ipaddress import IPv4Address
 
 import pulumi
+
+from kluster.gateway.unifi import Firewall
 
 __all__ = ('declare_estate', 'declare_firewall', 'declare_zerotier')
 
@@ -77,22 +80,32 @@ def declare_firewall(
     api_key: pulumi.Input[str],
     site: str,
     worker_gua: pulumi.Input[str],
+    peer_port: int,
     opts: pulumi.ResourceOptions | None = None,
-) -> None:
+) -> Firewall:
     """Declare the controller-side firewall census.
 
     `worker_gua` is the worker VM's global IPv6 address: the one rule that
     cannot be written against a stable object, because the zone-policy API
     matches literal addresses and the site's delegated prefix rotates.
+    `peer_port` is the bulk-transfer application's inbound peer port, which
+    the pinhole and the one port forward both name — a number inherited from
+    the deployment this cluster replaces rather than chosen here, so it is
+    read from configuration rather than fixed in code.
+
     Authentication is an API key belonging to a dedicated local
     administrator — never the SSH credential — and retries are throttled,
     the controller's login rate limit being account-wide rather than
     per-address.
     """
-    raise NotImplementedError(
-        'physical §4 gateway: the UniFi firewall census (the IoT-to-pool zone policy with '
-        'its address groups, the IPv6 pinhole, the one port forward) is not declared yet — '
-        'see docs/declarative/physical.md §4 and docs/physical/gateway.md §4.2'
+    return Firewall(
+        name,
+        api_url=api_url,
+        api_key=api_key,
+        site=site,
+        worker_gua=worker_gua,
+        peer_port=peer_port,
+        opts=opts,
     )
 
 

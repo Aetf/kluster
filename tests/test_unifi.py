@@ -1,0 +1,357 @@
+"""The controller-side firewall census, asserted against Pulumi's mock provider.
+
+Firewall rules are the worst thing to review from a diff: the interesting
+properties are relationships between rules — which one is evaluated first,
+which one names a moving target, which one is missing — and none of those are
+visible in a rendered resource. So the suite asserts them directly:
+
+-   the census is *exactly* the design's, because a rule on the controller
+    that nobody declared is drift and a rule declared beyond the census is
+    the same thing arriving the other way;
+-   the drop is preceded by its allow, and both precede the predefined
+    policies of the pair, which is the difference between a tightened VLAN
+    and a severed television;
+-   the pool is named through address groups and never as a literal, and the
+    only literal in the whole census is the media VIP the design says is one;
+-   the rules are sourced from the IoT VLAN alone, not from the internal zone
+    at large, which is what keeps the server LAN's own access to the cluster
+    intact.
+
+No controller is contacted: the boundary is Pulumi's mock monitor, which
+answers the zone lookups and hands back the inputs each resource was given.
+"""
+
+from collections.abc import Mapping
+from ipaddress import IPv4Address, IPv6Address
+from typing import Any, cast
+
+import pulumi
+import pulumi.runtime.settings
+import pytest
+import pytest_asyncio
+from pulumi.runtime.stack import wait_for_rpcs
+
+from kluster import conventions
+from kluster.gateway import unifi
+
+NAME = 'kluster'
+API_URL = 'https://gateway.invalid'
+API_KEY = 'unifi-api-key'
+SITE = 'default'
+WORKER_GUA = '2001:db8:1:80::238'
+PEER_PORT = 51413
+
+
+class Mocks(pulumi.runtime.Mocks):
+    """A monitor that answers the zone lookups and remembers what was declared."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.declared: list[tuple[str, str]] = []
+        self.inputs: dict[str, dict[str, Any]] = {}
+
+    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+        properties = dict(cast('dict[str, Any]', args.inputs))
+        self.declared.append((args.typ, args.name))
+        self.inputs[args.name] = properties
+        return args.name + '_id', properties
+
+    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        if args.token == 'unifi:index/getFirewallZone:getFirewallZone':
+            name = str(cast('dict[str, Any]', args.args)['name'])
+            return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}, []
+        return {}, []
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def mocks() -> Mocks:
+    recorded = Mocks()
+    pulumi.runtime.set_mocks(recorded, project='kluster', stack='physical', preview=False)
+    # Registrations are dispatched onto a queue that lives in module state and
+    # therefore outlives a test's event loop. Emptying it here is what lets
+    # `settled` mean "this test's declarations" rather than "every declaration
+    # any test ever made", half of them belonging to a loop that is closed.
+    pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
+    # A bridged SDK registers its own parameterized package before it may
+    # register a resource, and it gates that on a feature flag read out of a
+    # synchronous cache that only the async negotiation fills.
+    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
+    return recorded
+
+
+async def settled() -> None:
+    """Wait until every declaration this test made has reached the monitor.
+
+    Only the registration half of Pulumi's own barrier: the other half drains
+    a set of output tasks that is likewise module state, and a task left there
+    by an earlier test belongs to an event loop that no longer exists.
+    """
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+
+def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.Firewall:
+    return unifi.Firewall(
+        NAME,
+        api_url=API_URL,
+        api_key=API_KEY,
+        site=SITE,
+        worker_gua=WORKER_GUA,
+        peer_port=PEER_PORT,
+        static_hosts=static_hosts,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_census_is_exactly_the_designed_set(mocks: Mocks) -> None:
+    """Nothing beyond the census, and nothing missing from it.
+
+    The design's sentence is "a controller rule not on this census is drift";
+    this is that sentence as an assertion, in the one direction a program can
+    make it — that the program declares the census and stops there.
+    """
+    build()
+    await settled()
+
+    by_type: dict[str, list[str]] = {}
+    for typ, name in mocks.declared:
+        by_type.setdefault(typ, []).append(name)
+
+    assert sorted(by_type['unifi:index/firewallGroup:FirewallGroup']) == [
+        f'{NAME}-pool-v4',
+        f'{NAME}-pool-v6',
+    ]
+    assert sorted(by_type['unifi:index/firewallZonePolicy:FirewallZonePolicy']) == [
+        f'{NAME}-iot-media-v4',
+        f'{NAME}-iot-media-v6',
+        f'{NAME}-iot-pool-v4',
+        f'{NAME}-iot-pool-v6',
+        f'{NAME}-peer-v6',
+    ]
+    # The only port forward on the device.
+    assert by_type['unifi:index/portForward:PortForward'] == [f'{NAME}-peer-v4']
+    assert 'unifi:index/dnsRecord:DnsRecord' not in by_type
+
+
+@pytest.mark.asyncio
+async def test_the_pool_is_named_by_group_and_the_groups_are_single_family() -> None:
+    """One subnet, two groups, because a group holds one address family.
+
+    The consequence worth guarding is the failure mode: a v4 CIDR quietly
+    accepted into the v6 group would produce a rule that matches nothing and
+    reads as if it matches everything.
+    """
+    firewall = build()
+
+    assert await firewall.pool_v4.type.future() == 'address-group'
+    assert await firewall.pool_v4.members.future() == [str(conventions.LAN_POOL_V4)]
+    assert await firewall.pool_v4.name.future() == conventions.UNIFI_GROUP_LAN_POOL_V4
+
+    assert await firewall.pool_v6.type.future() == 'ipv6-address-group'
+    assert await firewall.pool_v6.members.future() == [str(conventions.LAN_POOL_V6)]
+    assert await firewall.pool_v6.name.future() == conventions.UNIFI_GROUP_LAN_POOL_V6
+
+    for policy in (firewall.iot_pool_v4, firewall.iot_pool_v6):
+        destination = await policy.destination.future()
+        assert destination is not None
+        # Through the group, never as a literal: the pool is not a network
+        # object on the controller and never will be.
+        assert destination.ip_group_id is not None
+        assert not destination.ips
+
+
+@pytest.mark.asyncio
+async def test_only_the_media_vip_is_reachable_from_the_iot_vlan() -> None:
+    """The firewall names the media VIP and no application.
+
+    Which applications the IoT VLAN may consume is decided by attaching a
+    route to the media Gateway. If any application address ever appeared
+    here, that decision would have moved into the firewall and every
+    membership change would become a gateway credential's problem.
+    """
+    firewall = build()
+
+    for policy, vip in (
+        (firewall.iot_media_v4, conventions.VIP_MEDIA_V4),
+        (firewall.iot_media_v6, conventions.VIP_MEDIA_V6),
+    ):
+        assert await policy.action.future() == 'ALLOW'
+        destination = await policy.destination.future()
+        assert destination is not None
+        assert destination.ips == [str(vip)]
+        assert destination.port == unifi.MEDIA_PORT
+        assert await policy.protocol.future() == 'tcp'
+        # The reverse zone pair is where the answer is classified; an allow
+        # without it admits a request and drops the reply.
+        assert await policy.auto_allow_return_traffic.future() is True
+
+
+@pytest.mark.asyncio
+async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
+    """The drop must not reach the server LAN.
+
+    All three home VLANs share the internal zone, so a rule that named the
+    zone instead of the VLAN would cut the homelab host and the worker VM off
+    from the cluster's own service addresses.
+    """
+    firewall = build()
+
+    families = (
+        (firewall.iot_media_v4, str(conventions.VLAN_IOT)),
+        (firewall.iot_pool_v4, str(conventions.VLAN_IOT)),
+        (firewall.iot_media_v6, str(unifi.VLAN_IOT_V6)),
+        (firewall.iot_pool_v6, str(unifi.VLAN_IOT_V6)),
+    )
+    for policy, expected in families:
+        source = await policy.source.future()
+        assert source is not None
+        assert source.ips == [expected]
+
+    assert str(unifi.VLAN_IOT_V6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
+
+
+@pytest.mark.asyncio
+async def test_both_allows_precede_both_drops_and_all_of_them_precede_the_predefined() -> None:
+    """Order is the rule, and it is declared rather than inherited from creation.
+
+    Two orderings matter and neither is observable in a resource: the allow
+    ahead of the drop, and the whole group ahead of the predefined accept the
+    uplink pair carries — which would otherwise answer first and make the
+    drop unreachable.
+    """
+    firewall = build()
+
+    assert await firewall.pool_order.before_predefined_ids.future() == [
+        f'{NAME}-iot-media-v4_id',
+        f'{NAME}-iot-media-v6_id',
+        f'{NAME}-iot-pool-v4_id',
+        f'{NAME}-iot-pool-v6_id',
+    ]
+    assert await firewall.pool_order.after_predefined_ids.future() is None
+    assert await firewall.pool_order.source_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+    assert await firewall.pool_order.destination_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
+
+    assert await firewall.peer_order.before_predefined_ids.future() == [f'{NAME}-peer-v6_id']
+    assert await firewall.peer_order.source_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
+    assert await firewall.peer_order.destination_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+
+
+@pytest.mark.asyncio
+async def test_the_pool_rules_are_declared_on_the_uplink_pair() -> None:
+    """The pool sits in no zone ipset, so its traffic is classified as uplink.
+
+    This is the one piece of measured device behaviour the whole IoT half
+    depends on. Declaring these rules on the internal-to-internal pair would
+    produce four resources that apply to nothing.
+    """
+    firewall = build()
+
+    for policy in (firewall.iot_media_v4, firewall.iot_media_v6, firewall.iot_pool_v4, firewall.iot_pool_v6):
+        source = await policy.source.future()
+        destination = await policy.destination.future()
+        assert source is not None and destination is not None
+        assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+        assert destination.zone_id == f'zone-{unifi.ZONE_EXTERNAL}'
+
+
+@pytest.mark.asyncio
+async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> None:
+    """The pinhole and the forward are one flow in two address families.
+
+    A peer that reaches the same endpoint over IPv4 and IPv6 sees one
+    participant; a mismatch between the two halves is invisible until a
+    transfer is slow for reasons nobody can name.
+    """
+    firewall = build()
+
+    destination = await firewall.peer_v6.destination.future()
+    assert destination is not None
+    assert destination.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
+    assert destination.port == PEER_PORT
+    assert await firewall.peer_v6.ip_version.future() == 'IPV6'
+
+    assert await firewall.peer_v4.dst_port.future() == str(PEER_PORT)
+    assert await firewall.peer_v4.fwd_port.future() == str(PEER_PORT)
+    assert await firewall.peer_v4.fwd_ip.future() == str(conventions.HOMELAB_NODE_IPV4)
+    assert await firewall.peer_v4.src_ip.future() == 'any'
+
+
+@pytest.mark.asyncio
+async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(mocks: Mocks) -> None:
+    """A key of its own, and a retry budget that cannot lock the account out.
+
+    The controller's login rate limit is account-wide, so an unbounded retry
+    from a runner is an outage for the people using the console. The number
+    is small on purpose and asserted so that raising it is a visible edit.
+
+    Read off the wire rather than off the resource, because a provider's
+    settings are serialized as strings and the strings are what the run
+    carries.
+    """
+    build()
+    await settled()
+    settings = mocks.inputs[f'{NAME}-unifi']
+
+    assert settings['apiUrl'] == API_URL
+    assert settings['site'] == SITE
+    assert settings['httpMaxRetries'] == str(unifi.HTTP_MAX_RETRIES)
+    assert unifi.HTTP_MAX_RETRIES <= 3
+
+    key = settings['apiKey']
+    assert isinstance(key, dict), 'the key is classified as a secret, so it is never plain text in state'
+    assert key['value'] == API_KEY
+
+    # No password and no user name: the API key is the whole credential, and
+    # a local administrator's password would authenticate far more than this.
+    assert 'password' not in settings
+    assert 'username' not in settings
+
+
+@pytest.mark.asyncio
+async def test_static_host_entries_are_empty_by_design_and_typed_when_present() -> None:
+    """The device name plane is DHCP-derived; a static entry is an exception.
+
+    Keeping the census empty is the assertion that matters — every service is
+    reached by its public name through the split-horizon rewrites, and a host
+    entry added here would be a second naming plane to keep in step. The
+    mechanism is still exercised, so the exception works the day it is needed.
+    """
+    assert unifi.STATIC_HOSTS == {}
+    assert build().static_hosts == {}
+
+    firewall = build(
+        {
+            'printer.home.arpa': IPv4Address('192.168.80.9'),
+            'sensor.iot.home.arpa': IPv6Address('fd1a:665f:8bcb:90::9'),
+        }
+    )
+    assert set(firewall.static_hosts) == {'printer.home.arpa', 'sensor.iot.home.arpa'}
+    assert await firewall.static_hosts['printer.home.arpa'].type.future() == 'A'
+    assert await firewall.static_hosts['printer.home.arpa'].record.future() == '192.168.80.9'
+    assert await firewall.static_hosts['sensor.iot.home.arpa'].type.future() == 'AAAA'
+    assert await firewall.static_hosts['sensor.iot.home.arpa'].record.future() == 'fd1a:665f:8bcb:90::9'
+
+
+@pytest.mark.asyncio
+async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
+    """The seam the `physical` stack calls, exercised through its own front door.
+
+    The port arrives as stack configuration rather than as a constant: it is
+    inherited from the deployment this cluster replaces, so the program reads
+    it instead of choosing it. A seam that dropped it would leave two rules
+    admitting a port nobody listens on.
+    """
+    from kluster import gateway
+
+    firewall = gateway.declare_firewall(
+        NAME,
+        api_url=API_URL,
+        api_key=API_KEY,
+        site=SITE,
+        worker_gua=WORKER_GUA,
+        peer_port=6881,
+    )
+
+    destination = await firewall.peer_v6.destination.future()
+    assert destination is not None
+    assert destination.port == 6881
+    assert await firewall.peer_v4.dst_port.future() == '6881'

@@ -85,8 +85,10 @@ async def main() -> None:
     pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
-    # The domains still to be written. Each is called, and each refuses by
-    # name; the first one reached ends the run.
+    # The rest of the design, written or not. A domain with no implementation
+    # is still called and refuses by name; the first one reached ends the run,
+    # which is why the domains below it are unreachable today rather than
+    # absent.
     _declare_storage(compartment_id=compartment_id, nodes=nodes)
     _declare_guardrails(compartment_id=compartment_id)
     _declare_talos_day1(cluster=cluster, nodes=nodes)
@@ -114,6 +116,7 @@ async def main() -> None:
         api_key=config.require_secret('unifiApiKey'),
         site=conventions.UNIFI_SITE,
         worker_gua=config.require('workerGua'),
+        peer_port=config.require_int('qbittorrentPeerPort'),
     )
     gateway.declare_zerotier(
         conventions.CLUSTER_NAME,
