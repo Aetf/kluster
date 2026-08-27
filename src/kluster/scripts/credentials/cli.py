@@ -111,11 +111,13 @@ _ORDER = """when to run what:
          prints the OCID to record in conventions and commit.
     7. credentials derived unifi record
        credentials derived adguard record
-         The two credentials no API here mints: each is made on the
-         device that checks it, so the command prints the steps that
+       credentials derived zerotier record
+         The three credentials no API here mints: each is made in the
+         console that checks it, so the command prints the steps that
          create it, takes the value without echoing it, and writes it
          into the stack config that reads it -- physical for the UniFi
-         key, dns for the AdGuard login. Both files are then committed.
+         key and the ZeroTier Central token, dns for the AdGuard login.
+         Those files are then committed.
     8. credentials derived sync
          The GitHub secrets CI reads, for the rows whose value lives
          somewhere else and is copied into a slot. Run it again whenever one
@@ -538,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     # rows is the verb, because what differs between them is how the value
     # comes into being: `mint` for a row a seed mints, `generate`/`import`/
     # `recover` for a row generated here and escrowed, `record` for a row made
-    # on a device of the estate and typed in.
+    # in the console that checks it and typed in.
     #
     # A row joins the tree when its consumer exists -- a mint with nowhere to
     # deliver would park a secret, which is the one thing the register forbids
@@ -553,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
             'so re-running one is how it is rotated. `generate`, `import` and `recover` belong to a row '
             'nothing external can mint: it is random, made here, and escrowed -- encrypted to the '
             "recovery key's public half and committed as a ciphertext under escrow/. `record` belongs to "
-            'a row made on a device of the estate: it prints the steps, takes the value without echoing '
+            'a row made in the console that checks it: it prints the steps, takes the value without echoing '
             'it, and delivers it. `ls`, `check` and `sync` act on the map rather than on one row.'
         ),
         epilog=_see_also('§3'),
@@ -720,19 +722,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _slot_source(management_mint)
 
-    # The rows whose credential is made on a device of the estate rather than
-    # minted from a seed. `record` prints the console steps that create it,
-    # takes the value without echoing it and pushes it into the stack that
-    # reads it (`devices.py`); nothing here mints anything, so the delivery is
-    # the whole of the act.
+    # The rows whose credential is made in the console that checks it rather
+    # than minted from a seed -- an appliance of the estate, or the platform
+    # itself where that platform publishes no API for making one. `record`
+    # prints the console steps that create it, takes the value without echoing
+    # it and pushes it into the stack that reads it (`devices.py`); nothing
+    # here mints anything, so the delivery is the whole of the act.
     for device in devices.DEVICES.values():
         device_row = rows.add_parser(
             device.member,
-            help=f'{device.title}, made on the device itself',
+            help=f'{device.title}, made in the console that checks it',
             description=(
-                f'Nothing here mints {device.title}: it is made on the appliance that checks it, and this '
-                f'side of the system only delivers it into the {device.stack} stack, which is the one '
-                'consumer that talks to that appliance.'
+                f'Nothing here mints {device.title}: it is made in the console that checks it -- an '
+                'appliance of the estate, or the platform itself where that platform publishes no API for '
+                f'making one -- and this side of the system only delivers it into the {device.stack} '
+                'stack, the one consumer that authenticates with it.'
             ),
         )
         device_verbs = device_row.add_subparsers(dest='action', required=True, metavar='<verb>')

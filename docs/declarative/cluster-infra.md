@@ -133,8 +133,10 @@ Two channels, chosen by who consumes the secret:
     is impossible, because the consumer is not the cluster (or the
     cluster doesn't exist yet): OCI credentials, the pulumi-cloudflare
     provider token, B2 management keys, the UDM SSH key, and the
-    ZeroTier Central token — the seed itself, because Central mints no
-    sub-tokens (credentials.md §3). CI's own ZeroTier *member
+    ZeroTier Central token — which `credentials derived zerotier record`
+    delivers here from Central's own web console, as broad as the account
+    it belongs to because Central publishes no token API and offers no
+    narrower scope (credentials.md §3). CI's own ZeroTier *member
     identities* are not in this channel: `physical` generates them into
     state, and they reach a job as an Environment secret.
 -   Where one external service serves several consumers (Cloudflare),

@@ -19,10 +19,17 @@ The rule enforced here, in full, and deliberately small:
     then the same thing as "in the epilog", which is where `cli._see_also` puts
     it.
 
+The second property here is about the one help text that is *not* generated
+from a register: the bring-up order the top-level epilog carries (`cli._ORDER`)
+is written out by hand, so a row added to a register reaches the tree on its
+own but reaches that order only when someone types it in. The walk below is
+what says so, for the register whose rows are all run the same way.
+
 What this cannot check is whether the prose is any good: a help text that says
 nothing at all passes, and one that leans on jargon passes. Comprehensibility
 is a reviewer's job. The mechanical part -- that no explanation has been
-replaced by a citation -- is this file's.
+replaced by a citation, and that the order names every row it walks -- is this
+file's.
 
 Rendering happens at a fixed width, because the property is about rendered
 lines and argparse wraps to the terminal it finds. A `See also` line is short
@@ -38,7 +45,7 @@ from typing import cast
 
 import pytest
 
-from kluster.scripts.credentials import cli
+from kluster.scripts.credentials import cli, devices
 
 #: The width every help text here is rendered at. Argparse reads `COLUMNS` for
 #: its own wrapping, so setting it makes the rendering the same in a test
@@ -109,6 +116,19 @@ def test_the_tree_really_does_carry_see_also_lines(monkeypatch: pytest.MonkeyPat
     every_line = [line for name in commands() for line in _rendered(name, monkeypatch)]
 
     assert [line for line in every_line if line.strip().startswith(SEE_ALSO)]
+
+
+def test_the_bring_up_order_names_every_row_made_in_a_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every row of `devices.DEVICES` is delivered the same way and belongs to
+    # the same stage of a bring-up, so an operator following the order and a
+    # tree built from that register have to agree about how many there are.
+    order = _rendered('credentials', monkeypatch)
+
+    for member in devices.DEVICES:
+        assert any(f'credentials derived {member} record' in line for line in order), (
+            f'`{member}` is a row of the device register but the bring-up order never runs it: '
+            'an operator who follows that order would finish with the credential undelivered.'
+        )
 
 
 def test_a_mention_in_the_middle_of_a_help_text_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
