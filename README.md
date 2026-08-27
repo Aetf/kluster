@@ -66,7 +66,7 @@ connection string names the bundle's certificate files absolutely, because
 nothing on the path expands a variable inside one. A checkout elsewhere needs
 those three paths corrected in `.credentials/state-backend/backend-url`.
 
-On a machine that holds the kit, `credentials escrow recover pulumi/passphrase`
+On a machine that holds the kit, `credentials derived pulumi-passphrase recover`
 writes the passphrase slot itself, and `state-backend bundle operator --address
 <ip>` writes the bundle.
 

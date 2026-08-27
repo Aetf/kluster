@@ -196,7 +196,7 @@ executes a drill nor reports one as skipped. There is no marker and no
 A drill reads its credentials through the same environment and store the
 command-line entry point uses — for the credential drills, `KdbxStore.from_env`
 on `$KLUSTER_KDBX`, unlocked from the desktop secret store. Run `credentials
-kdbx remember` first, or pass `-s`, so that the prompt can reach a terminal.
+kit password remember` first, or pass `-s`, so the prompt reaches a terminal.
 `--log-cli-level=INFO` is what makes the run a transcript worth pasting.
 
 Two properties are required of every drill, because an operator has to be
