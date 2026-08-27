@@ -119,8 +119,6 @@ def expected(path: list[str]) -> str | None:
             # own module, which is where the register's machine-readable half
             # lives.
             return f'slots.{"describe" if action == "ls" else action}'
-        case ['escrow', 'env']:
-            return 'lifecycle.environment'
         case ['escrow', 'recover']:
             return 'escrow.Vault.open'
         case ['escrow', 'import']:
@@ -231,9 +229,9 @@ class Dispatch:
         # kit when there is none; neither should write a file here.
         monkeypatch.setattr(KdbxStore, 'create', self.stub('store.create', kit))
         monkeypatch.setattr('getpass.getpass', lambda _prompt='': PASSWORD)
-        # `escrow env` and `escrow recover` refuse to print a secret to a
-        # terminal, and whether the test runner has one is not this test's
-        # business; `escrow import` reads its value from standard input.
+        # `escrow recover` refuses to print a secret to a terminal, and
+        # whether the test runner has one is not this test's business;
+        # `escrow import` reads its value from standard input.
         monkeypatch.setattr('sys.stdout', io.StringIO())
         monkeypatch.setattr('sys.stdin', io.StringIO('a-value'))
 
