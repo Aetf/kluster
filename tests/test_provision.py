@@ -11,10 +11,11 @@ import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from kluster.scripts.credentials import escrow
 from kluster.scripts.state_backend import provision
 
 
@@ -151,7 +152,12 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT)))
         monkeypatch.setattr(config, 'client_bundle', _returning(object()))
         monkeypatch.setattr(config, 'write_client_bundle', _returning(None))
-        monkeypatch.setattr(cli.seeds, 'load_seed', _returning(bytes(32)))
+        # Recovering the escrow needs the offline key and the age binary;
+        # what is under test is the converge, so the roots arrive already
+        # opened and the CA is a stand-in nothing here signs with.
+        roots = cli.config.Roots(ca=cast('Any', object()), age_recipients=())
+        monkeypatch.setattr(cli.config.Roots, 'ensure', classmethod(_returning(roots)))
+        monkeypatch.setattr(cli.escrow.Vault, 'open', classmethod(_returning(object())))
 
     return install
 
@@ -159,7 +165,13 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
 def _run(replace: bool = False) -> int:
     from kluster.scripts.state_backend import cli
 
-    return cli._provision(object(), seed_entry='e', compartment=None, replace=replace)  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+    return cli._provision(  # pyright: ignore[reportPrivateUsage]
+        object(),  # pyright: ignore[reportArgumentType]
+        seed_entry='e',
+        compartment=None,
+        replace=replace,
+        registry=escrow.Registry(root=Path('unused')),
+    )
 
 
 def test_a_box_that_matches_the_commit_is_left_alone(converge: Any) -> None:
