@@ -39,20 +39,38 @@ a file it is — the shape makes that rational:
     Offline only — reflinking a running nodatacow image yields an
     inconsistent copy.
 
-## 2. VM network: a second host bridge, HAOS-pattern but not the HAOS bridge
+## 2. VM network: a dedicated cluster VLAN on a second host bridge
 
 The *mechanism* is copied from the HAOS domain exactly — a
-systemd-networkd Linux bridge + virtio NIC tap — but the existing
-`kvmbr0` enslaves the **IoT VLAN** (192.168.90.0/24), which is where
-HAOS belongs with its devices and where the worker VM does not. The
-worker joins the host's untagged network — the **default LAN, br0 on
-the UDM** (192.168.80.0/24; the host, NAS serving, and the UDM BGP
-session all live there) — which today has **no bridge** on the host:
-`enp7s0` carries the host address directly. So the host network config
-(aconfmgr-managed systemd-networkd) gains a second bridge (say
-`kvmbr1`) enslaving `enp7s0`, with the host's address/DHCP moving onto
-the bridge — one brief connectivity blip, done in the same aconfmgr
-change-set that installs the libvirt resources (§4).
+systemd-networkd Linux bridge + virtio NIC tap — but neither existing
+network is the worker's. `kvmbr0` enslaves the **IoT VLAN**
+(192.168.90.0/24), where HAOS belongs with its devices; the host's own
+untagged **server LAN** (192.168.80.0/24 — the host address, the NAS
+serving) is a shared population the cluster node has no business
+joining. Cluster nodes get a network of their own: **VLAN id 7,
+192.168.70.0/24, statically addressed, with no DHCP server on it**.
+
+The isolation is the point. Every network in the UDM's LAN zone reaches
+every other unconditionally (gateway.md §4.1), so a node on the server
+LAN is a machine no policy can be written about; a node on its own VLAN
+is a zone the gateway can police (gateway.md §4.2). Subnet numbering
+follows the estate convention recorded in gateway.md §1.
+
+So the host network config (aconfmgr-managed systemd-networkd) gains
+three things, in the same change-set that installs the libvirt
+resources (§4):
+
+-   an **`enp7s0.7` tagged VLAN interface** on the physical NIC, which
+    presumes the host's switch port carries VLAN 7 tagged — a
+    port-profile fact on the UDM side, not a host one;
+-   **`kvmbr1`, a bridge over `enp7s0.7`**, which the worker's tap
+    joins. `enp7s0` itself is untouched and keeps carrying the host's
+    untagged 192.168.80.x address, so nothing moves and there is no
+    connectivity break to schedule;
+-   a **host leg in the VLAN: 192.168.70.2 on `kvmbr1`**. This host is
+    the NAS, and without a leg every NFS read by a VM one bridge away
+    would hairpin out to the UDM and back for both directions of every
+    packet. With it, host↔worker storage traffic stays on the box.
 
 A real bridge, **not macvtap**: macvtap trades away host↔guest
 connectivity for zero host-network reconfiguration (frames from the
@@ -65,10 +83,14 @@ severs. HAOS itself runs tap-on-bridge today (verified 2026-08-23:
 `vnet0` is a tap slaved to `kvmbr0`), so "copy the HAOS mechanism" and
 "real bridge" are the same statement.
 
-Addressing: **static IPv4 in the Talos machine config** (the UDM's FRR
-neighbor address must not depend on a DHCP lease) + SLAAC GUA/ULA for
-v6 (architecture.md §3.5's qbittorrent path expects the VM's SLAAC
-GUA).
+Addressing inside VLAN 7: **`.1` is the UDM's gateway address, `.2` the
+host leg, and nodes run from `.10`** — the worker is **192.168.70.10**.
+The v4 address is **static in the Talos machine config**, both because
+the UDM's FRR names it as a BGP neighbor and because on day 1 apid has
+no way to discover an address it was not told; with no DHCP on the VLAN
+there is no lease, reservation or pool to reconcile it against. v6 is the SLAAC
+GUA from the UDM's RA on this network (architecture.md §3.5's
+qbittorrent path expects that GUA) plus the VLAN's ULA /64.
 
 ## 3. GPU: two-phase VFIO passthrough
 
@@ -87,7 +109,9 @@ A prerequisite the Pulumi program assumes rather than manages (the
 host is not a Pulumi target; the same boundary as the NAS role). Its
 contents, so nothing is discovered mid-bootstrap:
 
--   the second bridge with the host address moved onto it (§2);
+-   the `enp7s0.7` VLAN interface, the `kvmbr1` bridge over it, and the
+    host's own 192.168.70.2 leg on that bridge (§2) — `enp7s0` and its
+    untagged address are left alone;
 -   the nodatacow subvolume (§1) + a libvirt storage pool pointing at
     it;
 -   a **dedicated service user** and its SSH identity for the libvirt
@@ -101,7 +125,9 @@ contents, so nothing is discovered mid-bootstrap:
     secret (credentials.md §3); creating and installing it is
     aconfmgr's, and pasting it into that config is the only step on the
     cluster's side;
--   the NAS NFS exports extended to the worker VM's static IP.
+-   the NAS NFS exports extended to the worker's VLAN-7 address,
+    192.168.70.10 — scoped to that host, and served over the host leg
+    rather than the untagged LAN.
 
 The vfio-pci host binding is deliberately *not* here — it lands in the
 Wave C cutover (§3, migration.md).

@@ -52,13 +52,13 @@ disable) + §6 (verification), architecture.md §4.1.
 **Attack.** The UDM↔worker BGP session (architecture.md §3.4,
 cluster-infra.md §2) had no session authentication and no import
 filter. The worker VM runs the entire homelab workload set and is the
-design's most exposed node; if compromised — or if any LAN host claims
-its static IP while it is down — it can advertise arbitrary prefixes to
-the UDM (the AdGuard DNS IPs as /32s, a more-specific of the main LAN)
-and MITM the whole home network.
+design's most exposed node; if compromised — or if anything else on
+the cluster VLAN claims its static IP while it is down — it can
+advertise arbitrary prefixes to the UDM (the AdGuard DNS IPs as /32s,
+a more-specific of the main LAN) and MITM the whole home network.
 
 **Fix.** MD5 session password on both ends, plus an inbound
-prefix-list on the UDM accepting only `192.168.70.0/24 le 32` and the
+prefix-list on the UDM accepting only `192.168.71.0/24 le 32` and the
 ULA /64 `le 128`, with a `maximum-prefix` cap. Verified at bootstrap by
 advertising a bogus prefix and confirming rejection.
 
@@ -152,7 +152,7 @@ through the equally-ACCEPT LAN→WAN chain. So every IoT device (cameras,
 no-name plugs — the LAN's most-compromised class) can reach the admin
 UIs behind `lan-gw` (immich, qbittorrent, grafana).
 
-**Fix.** Ship IoT-VLAN → `192.168.70.0/24` (+ ULA /64) **default drop
+**Fix.** Ship IoT-VLAN → `192.168.71.0/24` (+ ULA /64) **default drop
 with one enumerated allow** (the `media-gw` VIP:443) with the cluster
 rather than waiting for a future zone tightening. *Amended
 2026-08-24*: the original "recorded cross-VLAN dependencies all

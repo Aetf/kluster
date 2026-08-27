@@ -10,10 +10,27 @@ declarative/physical.md §4.
 
 ## 1. Roles on the box
 
--   **Routing**: inter-VLAN routing for the three home VLANs
-    (br0 = server LAN 192.168.80.0/24, br2 = IoT 192.168.90.0/24,
-    br5 = container VLAN 10.0.5.0/24), BGP peer for the `lan` pool
-    (192.168.70.0/24 + ULA /64) learned from the homelab worker VM.
+-   **Routing**: inter-VLAN routing for the home networks — br0 = the
+    untagged server LAN 192.168.80.0/24, br2 = IoT 192.168.90.0/24,
+    br5 = container VLAN 10.0.5.0/24, and the **cluster VLAN, id 7,
+    192.168.70.0/24**, whose only residents are Talos nodes (static
+    addresses, no DHCP server on it). The cluster VLAN is the one
+    network object the cluster brings with it, declared through the
+    unifi provider alongside the firewall rules
+    (declarative/physical.md §4). On top of that, **BGP peer for the
+    `lan` pool** (192.168.71.0/24 + its ULA /64), learned from the
+    homelab worker VM at its VLAN-7 address.
+
+    **Estate addressing convention**: every network this box hosts
+    sits inside 192.168.0.0/16 and takes its **third octet from the
+    VLAN id, times ten** — VLAN 7 → 192.168.70.0/24, VLAN 9 → IoT's
+    192.168.90.0/24 — with the network's /64 out of the site's ULA
+    prefix repeating that same third octet. The container VLAN's
+    10.0.5.0/24 is the single network outside the scheme. The `lan`
+    pool's 192.168.71.0/24 is deliberately not a multiple of ten: it
+    is no VLAN and never becomes a network object (§4.1), and
+    numbering it next to the VLAN it is announced from keeps the pair
+    legible at a glance.
 -   **nspawn estate** (units + digest-pinned rootfs pushed by the
     gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
     **ZeroTier member container** (§2) as the fourth member.
@@ -78,9 +95,10 @@ Roster and records change in the same review since both live in Pulumi.
 ### 2.2 Managed routes
 
 All LAN reachability via the UDM member's ZT address, one route per
-subnet: 192.168.80.0/24, 192.168.90.0/24, 10.0.5.0/24, and the `lan`
-pool 192.168.70.0/24 (+ its ULA /64) — the pool is reached through the
-UDM's own BGP-learned route, one hop. The legacy `10.42.0.0/24`-via-VPS
+subnet: 192.168.70.0/24 (the cluster VLAN), 192.168.80.0/24,
+192.168.90.0/24, 10.0.5.0/24, and the `lan` pool 192.168.71.0/24
+(+ its ULA /64) — the pool is reached through the UDM's own
+BGP-learned route, one hop. The legacy `10.42.0.0/24`-via-VPS
 route is deleted in Wave F. The homelab host advertises nothing.
 
 ### 2.3 Flow rules — confining the CI member
@@ -307,13 +325,15 @@ complete set and the zone-matrix target state.
 
 -   The UBIOS zone firewall classifies forwarded traffic by
     **destination ipset**, not interface pairs.
--   All three VLANs — br0 (server LAN `192.168.80.0/24`, homelab
-    host + worker VM), br2 (IoT `192.168.90.0/24`, HAOS lives here),
+-   All three pre-existing VLANs — br0 (server LAN `192.168.80.0/24`,
+    the homelab host), br2 (IoT `192.168.90.0/24`, HAOS lives here),
     br5 (containers `10.0.5.0/24`) — sit in the **LAN zone**, and
     LAN→LAN is an unconditional predefined ACCEPT: **zero inter-VLAN
     isolation today**. This is a recorded dependency-in-force, not an
-    endorsement (§4.3 is the plan to change it).
--   The `lan` pool `192.168.70.0/24` (+ ULA /64) is deliberately
+    endorsement (§4.3 is the plan to change it). The cluster VLAN
+    (§1) does not join them: it is created in a zone of its own,
+    which is the entire reason it is a separate network (§4.2).
+-   The `lan` pool `192.168.71.0/24` (+ ULA /64) is deliberately
     never a network object (it would fight the BGP /32s,
     architecture.md §3.4), so it sits in no zone ipset: pool-bound
     traffic falls through to the **LAN→WAN chain** (ACCEPT today)
@@ -324,12 +344,27 @@ complete set and the zone-matrix target state.
     FORWARD's default ACCEPT — the Central flow rules (§2.3) are its
     only policing layer.
 
-### 4.2 Declared-rules census
+### 4.2 Declared-objects census
 
-The complete set — every controller-side rule the design calls for,
-all declared in the `physical` stack via the bridged filipowm/unifi
-provider (auth discipline: dedicated local admin + API key,
-throttled retries — declarative/physical.md §4):
+The complete set — every controller-side object and rule the design
+calls for, all declared in the `physical` stack via the bridged
+filipowm/unifi provider (auth discipline: dedicated local admin + API
+key, throttled retries — declarative/physical.md §4).
+
+**The cluster VLAN and its zone.** VLAN 7 / `192.168.70.0/24` (§1) is
+a network object, and it is placed in a **zone of its own** instead of
+joining the three networks in the LAN zone. That placement is what the
+VLAN is *for*: a node inside the LAN zone is a machine no policy can
+be written about, because LAN→LAN is a predefined unconditional ACCEPT
+(§4.1); a node in its own zone has an editable policy on every
+direction it talks in, and every later tightening is then a previewed
+diff rather than a re-architecture. Phase 1 (§4.3) declares those
+directions **open**, so moving the worker off the server LAN changes
+no reachability on the day it happens — what changes is that the
+openness is now a declaration the design owns rather than a default it
+inherits.
+
+Then the rules:
 
 1.  **IoT → `lan` pool: default drop with one enumerated allow**
     (audit M2, amended 2026-08-24; ships with the cluster). The
@@ -350,24 +385,28 @@ throttled retries — declarative/physical.md §4):
     cluster→IoT" was wrong — TV/streamer → jellyfin is an
     IoT-originated dependency the census missed; a blanket drop
     would have severed it at jellyfin's migration wave.
-2.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA +
-    service port. Constraint on record: the zone-policy API matches
+2.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the
+    cluster VLAN, plus the service port. Constraint on record: the
+    zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
     embeds the current GUA and is **re-declared when the dynamic
     home prefix rotates**; a stale rule degrades to the accepted
     outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
     urgent.
-3.  **qbittorrent v4 peer-port forward** — **the only port forward
-    on the device**. No management inbound exists: cluster and
-    Talos management ride the NLB, home-side management rides ZT.
+3.  **qbittorrent v4 peer-port forward** — target the worker at
+    `192.168.70.10`, and **the only port forward on the device**. No
+    management inbound exists: cluster and Talos management ride the
+    NLB, home-side management rides ZT.
 
 Nothing else. A controller rule not on this census is drift.
 
 ### 4.3 Zone-matrix target state — two phases
 
 **Phase 1 (ships with the cluster rollout)**: exactly the census
-above. LAN→LAN stays open; the zero-isolation fact remains a
-dependency-in-force.
+above. LAN→LAN stays open and so are the cluster zone's own
+directions; the zero-isolation fact remains a dependency-in-force,
+now with the cluster VLAN sitting outside it as a zone whose policy
+can be tightened on its own schedule.
 
 **Phase 2 (deferred, adoption-triggered — the Longhorn treatment)**:
 tighten **IoT→LAN to default drop + enumerated allows**.
