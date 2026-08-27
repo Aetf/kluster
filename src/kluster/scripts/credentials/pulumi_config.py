@@ -140,3 +140,21 @@ class Stack:
         _ = self._pulumi('config', 'set', key, '--secret', '--stack', self.name, stdin=value)
         if self.get(key) != value:
             raise SlotRefused(f'{key} on the {self.name} stack does not decrypt to what was just written')
+
+    def fill(self, *, secret: Mapping[str, str], plain: Mapping[str, str], holds: str) -> None:
+        """Fill this stack's committed configuration, and say what has to be committed.
+
+        Every register row delivered to a stack closes the same way, and the
+        closing is the half an operator acts on: the stack has to exist before
+        it has a configuration to set, the secret half goes in encrypted and the
+        plain half readable, and the run ends by naming the file that publishes
+        the slot. A push that stopped at `pulumi config set` would leave the
+        credential live in the provider and invisible to everyone else's
+        checkout.
+        """
+        self.ensure()
+        for key, value in secret.items():
+            self.set_secret(key, value)
+        for key, value in plain.items():
+            self.set(key, value)
+        log.info('the %s stack holds %s; commit Pulumi.%s.yaml to publish the slot', self.name, holds, self.name)

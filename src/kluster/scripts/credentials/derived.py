@@ -21,7 +21,6 @@ slot instead (`oci_slot.py`).
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from pathlib import Path
 
 from ... import conventions
@@ -85,24 +84,6 @@ OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 
 
-def _deliver(stack: pulumi_config.Stack, *, secret: Mapping[str, str], plain: Mapping[str, str], holds: str) -> None:
-    """Fill a stack's committed configuration, and say what has to be committed.
-
-    Every §3 row delivered to a stack closes the same way, and the closing is
-    the half an operator acts on: the stack has to exist before it has a
-    configuration to set, the secret half goes in encrypted and the plain half
-    readable, and the run ends by naming the file that publishes the slot. A
-    push that stopped at `pulumi config set` would leave the credential live in
-    the provider and invisible to everyone else's checkout.
-    """
-    stack.ensure()
-    for key, value in secret.items():
-        stack.set_secret(key, value)
-    for key, value in plain.items():
-        stack.set(key, value)
-    log.info('the %s stack holds %s; commit Pulumi.%s.yaml to publish the slot', stack.name, holds, stack.name)
-
-
 def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> str:
     """Mint the zones token from the seed and install it in a stack's config.
 
@@ -115,8 +96,7 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     session = cloudflare.Session.from_entry(kit, seed_entry)
     minted = cloudflare.mint_zone_token(session, name=ZONES_TOKEN_NAME, zones=zones)
 
-    _deliver(
-        stack,
+    stack.fill(
         secret={API_TOKEN_KEY: minted.value},
         plain={ACCOUNT_KEY: minted.account_id},
         holds=f'a token scoped to {", ".join(zones)}',
@@ -149,8 +129,7 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartmen
     identifier that names a container inside the tenancy rather than the
     account that owns it.
     """
-    _deliver(
-        stack,
+    stack.fill(
         secret={
             OCI_TENANCY_KEY: key.tenancy,
             OCI_USER_KEY: key.user,
@@ -224,8 +203,7 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     log.info('opening the B2 seed from the kit')
     key_id, key = b2.mint_management(kit, seed_entry=seed_entry)
 
-    _deliver(
-        stack,
+    stack.fill(
         secret={B2_KEY_ID_KEY: key_id, B2_KEY_KEY: key},
         plain={},
         holds=f'{b2.MANAGEMENT_KEY_NAME} ({key_id})',
