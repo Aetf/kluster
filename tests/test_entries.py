@@ -62,7 +62,7 @@ def test_every_member_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture
 
 
 def test_every_account_root_is_reachable_as_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
-    # The roots are a register too (§2): one `master <root>` command each, so
+    # The roots are a register too (§2): one `root <name>` command each, so
     # a root the scripts borrow has a place to be put and to be listed.
     with pytest.raises(SystemExit):
         _ = main(['root', '--help'])
@@ -116,5 +116,5 @@ def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> N
     for landmark in ('bring-up, from nothing', 'when one seed is lost', 'rotation', 'day to day'):
         assert landmark in printed
     # Each lifecycle verb appears in the ordering, not only in the tree.
-    for verb in ('bootstrap', 'rotate', 'escrow generate', 'escrow check'):
+    for verb in ('kit bootstrap', 'kit rotate', 'derived <row> generate', 'derived check'):
         assert verb in printed

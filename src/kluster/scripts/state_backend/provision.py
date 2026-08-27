@@ -52,7 +52,7 @@ IMAGE_BUCKET = f'{settings.NAME}-images'
 #: lives here rather than beside the writer because this is the only thing
 #: that reads it, and the two have to be deleted together.
 #: TODO(kluster-ops#41): delete this and its probe below once every
-#: workstation has run `credentials derived oci state-backend`.
+#: workstation has run `credentials derived oci-state-backend mint`.
 LEGACY_CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
 
 
@@ -77,7 +77,7 @@ class Oci:
         """The appliance's own API key, out of the workstation slot that holds it.
 
         The key is a §3 credential like any other (credentials.md), minted
-        from the OCI seed by `credentials derived oci state-backend`; the slot
+        from the OCI seed by `credentials derived oci-state-backend mint`; the slot
         is a file because this command runs unattended halves of a bring-up
         and cannot stop to ask (`credentials.oci_slot`).
 
@@ -97,15 +97,15 @@ class Oci:
             elif LEGACY_CONFIG_FILE.is_file():
                 log.warning(
                     'using the OCI configuration in %s: the appliance has a minted key of its own now, '
-                    'which `credentials derived oci state-backend` writes to %s',
+                    'which `credentials derived oci-state-backend mint` writes to %s',
                     LEGACY_CONFIG_FILE,
                     slot,
                 )
                 location = str(LEGACY_CONFIG_FILE)
             else:
                 raise ValueError(
-                    'the appliance has no OCI credential on this machine: run `credentials derived oci '
-                    f'state-backend --compartment <ocid>`, which mints one into {slot}'
+                    'the appliance has no OCI credential on this machine: run `credentials derived '
+                    f'oci-state-backend mint --compartment <ocid>`, which mints one into {slot}'
                 )
         config = oci.config.from_file(location)
         compartment = compartment_id or config.get('compartment-id')

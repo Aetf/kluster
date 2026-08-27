@@ -289,7 +289,7 @@ def encrypt(source: Path, destination: Path, recipients: Sequence[str]) -> None:
     one before it, so any object still in retention opens with either.
     """
     if not recipients:
-        raise StateError('no recipient to encrypt the dump to; `credentials escrow check` says what is missing')
+        raise StateError('no recipient to encrypt the dump to; `credentials derived check` says what is missing')
     argv = [age.BINARY, '--encrypt']
     for value in recipients:
         argv += ['--recipient', value]

@@ -51,7 +51,7 @@ def kit() -> KdbxStore:
 
     `from_env` reads `$KLUSTER_KDBX`, and `unlock` takes the master password
     from the desktop secret store, falling back to a prompt -- so a drill on a
-    machine where `credentials kdbx remember` has run needs no input, and one
+    machine where `credentials kit password remember` has run needs no input, and
     where it has not needs `pytest -s` to be able to ask.
     """
     store = KdbxStore.from_env()

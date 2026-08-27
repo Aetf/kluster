@@ -79,6 +79,17 @@ COMPARTMENT_KEY = 'compartmentId'
 B2_KEY_ID_KEY = 'b2:applicationKeyId'
 B2_KEY_KEY = 'b2:applicationKey'
 
+#: The names these rows carry on the command line and in the slot map. One
+#: string per row, defined here because this is where the mint lives: the map
+#: imports them (`slots.py`), so a row cannot be spelled one way in the tree
+#: and another way in the register's machine-readable half. Each is the
+#: function below it with `-` where the identifier has `_`, which is the whole
+#: of the convention.
+ZONES_ROW = 'cloudflare-zones'
+OCI_PHYSICAL_ROW = 'oci-physical'
+OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
+B2_MANAGEMENT_ROW = 'b2-management'
+
 CLOUDFLARE_SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry

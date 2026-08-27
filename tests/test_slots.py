@@ -4,7 +4,7 @@ Two halves. The first reads `docs/credentials.md` §3 and compares it with the
 map: a credential in the table with no map row, or a map row naming a credential
 the table does not, fails here — which is the only thing keeping two
 descriptions of one inventory from drifting apart. The second drives
-`slots.push` against a `gh` that runs nothing, because what is under test is
+`slots.sync` against a `gh` that runs nothing, because what is under test is
 which slots a row fills and what it says when it cannot fill one; the subprocess
 itself is `test_github_secrets.py`.
 """
@@ -106,7 +106,7 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
         assert row.targets == tuple(
             slots.PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields
         )
-        assert f'credentials device {member}' in row.source.describe()
+        assert f'credentials derived {member} record' in row.source.describe()
 
 
 def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None:
@@ -185,7 +185,7 @@ def context(
 def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
     gh = RecordedGh()
 
-    pushed = slots.push(context(gh, open_vault=opened), only='pulumi-passphrase')
+    pushed = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
 
     # One recovery, five deliveries: the value is obtained once and fanned out,
     # so a rotation is one command rather than one per Environment.
@@ -197,7 +197,7 @@ def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
 def test_a_push_verifies_through_the_listing_because_the_value_never_comes_back() -> None:
     gh = RecordedGh()
 
-    _ = slots.push(context(gh, open_vault=opened), only='pulumi-passphrase')
+    _ = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
 
     # A secret is write-only, so the check is that the name is in the listing
     # and its timestamp moved — read before the push and again after it.
@@ -209,14 +209,14 @@ def test_a_slot_that_does_not_show_the_secret_afterwards_is_a_failure() -> None:
     gh = RecordedGh(forgets=True)
 
     with pytest.raises(SlotRefused, match='does not show it'):
-        _ = slots.push(context(gh, open_vault=opened), only='pulumi-passphrase')
+        _ = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
 
 
 def test_a_re_push_inside_one_second_is_a_warning_and_not_a_failure(caplog: pytest.LogCaptureFixture) -> None:
     gh = RecordedGh()
 
-    _ = slots.push(context(gh, open_vault=opened), only='pulumi-passphrase')
-    _ = slots.push(context(gh, open_vault=opened), only='pulumi-passphrase')
+    _ = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
+    _ = slots.sync(context(gh, open_vault=opened), only='pulumi-passphrase')
 
     # Two runs in the same second share a timestamp. The name being there is
     # what distinguishes a delivered secret from a refused one, so this is
@@ -229,8 +229,8 @@ def test_a_typed_in_row_is_asked_for_once_and_left_alone_afterwards(caplog: pyte
     gh = RecordedGh()
     webhook = {'haos-webhook': slots.ROWS['haos-webhook']}
 
-    _ = slots.push(context(gh), only='haos-webhook')
-    pushed = slots.push(context(gh), rows=webhook)
+    _ = slots.sync(context(gh), only='haos-webhook')
+    pushed = slots.sync(context(gh), rows=webhook)
 
     # A bring-up run walks the whole map; stopping to re-type a value that is
     # already in place would make that run interactive for no reason.
@@ -242,7 +242,7 @@ def test_a_typed_in_row_is_asked_for_once_and_left_alone_afterwards(caplog: pyte
 def test_naming_a_typed_in_row_replaces_what_is_there() -> None:
     gh = RecordedGh(collections={(REPOSITORY, None): {'HAOS_DEPLOY_WEBHOOK_URL': '2026-01-01T00:00:00Z'}})
 
-    pushed = slots.push(context(gh, ask=typing_in('a-new-webhook')), only='haos-webhook')
+    pushed = slots.sync(context(gh, ask=typing_in('a-new-webhook')), only='haos-webhook')
 
     # Rotating it is a new webhook id in Home Assistant and this command, so
     # naming the row has to mean "replace" rather than "leave it".
@@ -254,7 +254,7 @@ def test_a_typed_in_row_that_is_left_empty_is_refused() -> None:
     gh = RecordedGh()
 
     with pytest.raises(SlotRefused, match='is required'):
-        _ = slots.push(context(gh, ask=typing_in('  ')), only='haos-webhook')
+        _ = slots.sync(context(gh, ask=typing_in('  ')), only='haos-webhook')
 
 
 def test_the_kit_is_not_opened_for_a_row_that_does_not_need_it() -> None:
@@ -262,7 +262,7 @@ def test_the_kit_is_not_opened_for_a_row_that_does_not_need_it() -> None:
     # must not ask for a kit, an escrow or a state backend.
     gh = RecordedGh()
 
-    _ = slots.push(context(gh), only='haos-webhook')
+    _ = slots.sync(context(gh), only='haos-webhook')
 
     assert gh.values
 
@@ -271,7 +271,7 @@ def test_a_state_read_pushes_the_output_the_map_names() -> None:
     gh = RecordedGh()
     pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': 'an-identity'})
 
-    _ = slots.push(context(gh, runner=pulumi), only='zerotier-identity-dns')
+    _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
     # `--show-secrets`, because an identity is a secret output and without it
     # the string `[secret]` would be pushed as though it were the credential.
@@ -282,7 +282,7 @@ def test_a_state_read_before_the_stack_exists_says_so() -> None:
     gh = RecordedGh()
 
     with pytest.raises(SlotRefused, match='has no state'):
-        _ = slots.push(context(gh, runner=RecordedPulumi()), only='zerotier-identity-dns')
+        _ = slots.sync(context(gh, runner=RecordedPulumi()), only='zerotier-identity-dns')
 
 
 def test_a_state_read_of_an_output_the_program_does_not_export_says_so() -> None:
@@ -292,14 +292,14 @@ def test_a_state_read_of_an_output_the_program_does_not_export_says_so() -> None
     # The output name is this map's half of a contract the program has to keep,
     # so an unkept one is named rather than pushed as an empty secret.
     with pytest.raises(SlotRefused, match='exports no'):
-        _ = slots.push(context(gh, runner=pulumi), only='zerotier-identity-dns')
+        _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
 
 def test_the_network_id_is_read_from_the_stack_that_declares_it() -> None:
     gh = RecordedGh()
     pulumi = RecordedPulumi(stacks=['physical'], config={'zerotierNetworkId': 'a-network'})
 
-    pushed = slots.push(context(gh, runner=pulumi), only='zerotier-network')
+    pushed = slots.sync(context(gh, runner=pulumi), only='zerotier-network')
 
     # Not a credential, but a workflow input that has nowhere else to come from
     # and can only be passed as a secret.
@@ -312,7 +312,7 @@ def test_a_minted_row_refuses_by_naming_the_command_that_delivers_it() -> None:
     # map can only say where it goes and who puts it there.
     row = slots.ROWS['oci-physical']
 
-    with pytest.raises(SlotRefused, match='credentials derived oci physical'):
+    with pytest.raises(SlotRefused, match='credentials derived oci-physical mint'):
         _ = row.source.value(context(RecordedGh()))
 
 
@@ -320,7 +320,7 @@ def test_a_row_with_no_github_slot_is_skipped_with_its_reason(caplog: pytest.Log
     caplog.set_level(logging.INFO)
     gh = RecordedGh()
 
-    pushed = slots.push(context(gh, open_vault=opened), rows={'talos': slots.ROWS['talos']})
+    pushed = slots.sync(context(gh, open_vault=opened), rows={'talos': slots.ROWS['talos']})
 
     assert pushed == []
     assert slots.ROWS['talos'].pending in caplog.text
@@ -334,7 +334,7 @@ def test_a_row_that_cannot_produce_its_value_does_not_stop_the_walk(caplog: pyte
     # what it can and report the rest — and still exit non-zero, because the map
     # is not filled.
     with pytest.raises(SlotRefused, match='zerotier-identity-dns'):
-        _ = slots.push(context(gh, open_vault=opened), rows=both)
+        _ = slots.sync(context(gh, open_vault=opened), rows=both)
 
     assert gh.values[(REPOSITORY, 'dns', 'PULUMI_CONFIG_PASSPHRASE')] == PASSPHRASE
     assert 'has no state' in caplog.text
@@ -344,14 +344,14 @@ def test_naming_a_row_with_no_github_slot_is_refused_rather_than_ignored() -> No
     # A request for one specific row that quietly does nothing is worse than a
     # refusal: the operator walks away believing the slot is filled.
     with pytest.raises(SlotRefused, match='no GitHub secret slot'):
-        _ = slots.push(context(RecordedGh()), only='talos')
+        _ = slots.sync(context(RecordedGh()), only='talos')
 
 
 def test_an_unknown_row_name_is_refused_before_anything_is_pushed() -> None:
     gh = RecordedGh()
 
     with pytest.raises(SlotRefused, match='no slot map row named'):
-        _ = slots.push(context(gh), only='nonesuch')
+        _ = slots.sync(context(gh), only='nonesuch')
 
     assert gh.invocations == []
 

@@ -267,7 +267,7 @@ def test_the_prompt_names_the_command_that_stops_it(
     KdbxStore(path=path).unlock()
 
     assert not secret_store
-    assert 'credentials kdbx remember' in caplog.text
+    assert 'credentials kit password remember' in caplog.text
 
 
 def _refuse(_prompt: str) -> str:

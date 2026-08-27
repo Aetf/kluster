@@ -40,7 +40,7 @@ Three properties decide the shape:
     its own, so a half-remembered root asks for the half that is missing and
     nothing else.
 
-The secret-store layer is the same door as `credentials kdbx remember`, in the
+The secret-store layer is the same door as `credentials kit password remember`, in
 other direction, and it goes through the same `kdbx` plumbing so there is one
 secret-store mechanism rather than two.
 
