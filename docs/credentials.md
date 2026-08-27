@@ -422,7 +422,7 @@ by hand.
 | B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret · on-box | restic/barman, ops-repo workflow, micro cron |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
-| ZT CI member identities (`ci-deploy`, `ci-preview`) | generated in-state (`zerotier_identity`) | One per concurrency domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
+| ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per identity domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | ZeroTier Central token, as delivered | the §2 seed itself — Central has no token API, so there is nothing smaller to mint | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret + CI env (`zerotierApiToken`, beside the plain `zerotierNetworkId`) | `physical` |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
@@ -504,6 +504,8 @@ credential family plus the lifecycle commands below.
 | `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
 | `credentials derived oci physical --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
 | `credentials derived b2 management` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
+| `credentials slots ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
+| `credentials slots push [--only <row>]` | Once during bring-up, and again whenever a value behind a GitHub secret moves. Fills every GitHub secret the map can fill — resolve, push, verify, per row — so a first fill and a refill are one command. A row whose value cannot be obtained from here names the command that owns it instead. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials escrow recover <label> [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
 | `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the label's next generation and writes it into a workstation slot where the label has one — today only `pulumi/passphrase` does, and a label without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other label touched. |
@@ -518,12 +520,14 @@ credential family plus the lifecycle commands below.
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
 of these destroys something". Every
-minting subcommand is **mint → push to every slot in the map →
-verify**, and therefore idempotent: rotation is a re-run, not a second
-procedure. `escrow generate` keeps that shape — **generate → escrow →
-push → verify** — and drops the idempotence deliberately: a re-run
-produces a new generation, which is exactly what rotating that label
-means.
+minting subcommand is **mint → push to every slot → verify**, and
+therefore idempotent: rotation is a re-run, not a second procedure. The
+slot map (below) does not drive those pushes; it records where they
+land, naming each config key by importing it from the code that writes
+it, so the two cannot say different things. `escrow generate` keeps that
+shape — **generate → escrow → push → verify** — and drops the
+idempotence deliberately: a re-run produces a new generation, which is
+exactly what rotating that label means.
 
 Two global options sit in front of every family, because both defaults
 are per-checkout rather than universal: `--kdbx` names the kit
@@ -539,9 +543,10 @@ consumer exists: minting a credential
 that has no slot to be delivered into would park a secret, which rule 2
 forbids. Four are delivered today — the zones token, the two OCI keys
 and the B2 management key; the DNS-01 token and the
-gateway's ACME token join them with cert-manager and the gateway, and the
-CI Environment half of every row joins them with the Environments
-themselves (ci.md §3).
+gateway's ACME token join them with cert-manager and the gateway. The
+GitHub-secret half of a row is delivered separately, by `credentials
+slots push` rather than by the row's own command, for the rows whose
+value can be obtained without minting one (below).
 
 The zones token's scope is not a list in the script: it is the estate's
 zones as `conventions` names them, resolved to zone ids through the seed
@@ -581,18 +586,49 @@ would become encrypted state, and every preview line naming one would read
 `[secret]`. That is a poor trade for an identifier naming a container inside
 the tenancy rather than the account that owns it.
 
-Two pieces of that shape are designed and not built (`kluster-ops#1`);
-they are described here because the rest of the register is written
-against them:
+**The slot map is checked in** (`slots.py`). One row per §3 credential,
+naming the source its value comes from — recovered from escrow, minted by
+the row's own command, read out of a stack, or typed in — and every slot
+it lands in, spelled as the closed set of channels §1 rule 6 lists:
+GitHub secret (repository, Environment, name), Pulumi config secret (per
+stack and key), Pulumi state, escrow ciphertext, SealedSecret, on-box,
+workstation slot, gw-config device secret. The CI Environment secret, the
+ops-repo secret and the `kluster` repository secret are one channel there,
+differing in which repository they name and whether they name an
+Environment.
 
--   **A slot map, checked in.** A declarative manifest maps each §3 row
-    to its target slots: GitHub Environment secret (repo + environment
-    + name), ops-repo secret, Pulumi config secret (per stack),
-    SealedSecret (kubeseal → committed manifest path), on-box
-    (rendered into Butane). §3 is the human-readable view; the slot
-    map is to be the machine-readable one, and the two checked against
-    each other. Until it exists, "every slot in the map" above means
-    the slots a subcommand writes in its own code.
+§3 stays the human-readable view and the map is the machine-readable one,
+and a test reads this document and holds the two equal — so a credential
+in one and not the other fails a check rather than going unnoticed. A slot
+the register promises and nothing has given a name yet — an Environment
+secret no workflow reads, a SealedSecret with no manifest — is recorded on
+the row as what it is waiting on, rather than as an invented name a future
+workflow would have to guess right.
+
+**The GitHub secrets are filled by a `credentials` command run from the
+workstation.** Besides the Pulumi config secret, that is the only channel
+with a sink today. Deliberately not the `github` stack: that stack
+declares the *structure* — which repositories exist, which Environments,
+which of them a reviewer gates — and is applied by hand a few times a
+year, while these values rotate on their own cadence and some are
+generated in state after it last ran, so a stack cannot push what did not
+exist when it was applied. Deliberately not CI either: a workflow holding
+the credential that writes its own Environment's secrets can rewrite the
+partition confining it, which is the one property that partition exists to
+have (ci.md §3). The push shells out to `gh secret set`, because the API
+takes a secret as a sealed box and `gh` already implements that exchange —
+the alternative being handwritten cryptographic primitives for one call
+site.
+
+**Verification stops where the API does.** A pushed secret is never
+disclosed again, so what a run checks is that the name is in the listing
+and its timestamp moved. That distinguishes a delivered secret from a
+refused one, which is the failure worth guarding against; nothing on this
+channel can distinguish a correct value from a corrupted one.
+
+One piece is designed and not built (`kluster-ops#1`), and is described
+here because the rest of the register is written against it:
+
 -   **Slot-drift probe**: an ops-repo scheduled workflow comparing the
     slot map against reality in both directions — `gh` secret listings
     and `pulumi config` keys. A live slot with no map entry, or a map
@@ -657,20 +693,30 @@ that puts a value there.
     `credentials derived b2 management` — the §3 rows whose slot is a
     stack's committed configuration, which is then committed. One row per
     command, and re-running one rotates that row.
+8.  `credentials slots push` — the GitHub secrets CI reads, from the
+    slot map (§4). Last, because a row read out of a stack needs that
+    stack to have run; a row it cannot fill yet says which slot is
+    waiting on what, and the same command run again fills it.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
 
-**What is not built yet** (`kluster-ops#1`): the §3 rows below, and every
-slot that is neither a Pulumi config secret nor a workstation slot.
+**What is not built yet** (`kluster-ops#1`): the §3 rows below. Three slot
+kinds have a sink — the Pulumi config secret, the workstation slot and the
+GitHub secret — and the rest have none.
 
 -   The **device credentials** (UDM SSH key, libvirt identity, UniFi API
     key, AdGuard credentials) and the **in-cluster secrets** (the DNS-01
     token and the writer keys, sealable only once `k8s-base` has the
     sealed-secrets controller up) have neither half.
--   The **CI Environment half of every row** (ci.md §3) has no sink:
-    `state-backend bundle ci` writes a bundle to a directory, and
-    nothing carries it, or any other value, into an Environment.
+-   Most of the **CI Environment half** (ci.md §3). The sink exists (§4)
+    and fills what it can obtain from a workstation: the state passphrase,
+    into every Environment, and the deploy-failure webhook, which is typed
+    in. The rest waits on something other than the sink — the ZeroTier
+    identities on the `physical` stack that generates them, and
+    `PULUMI_BACKEND_URL` on a workflow step that materializes the `ci`
+    client certificate, a backend URL being unusable without the three
+    files it names.
 -   The **whole ops-repo channel** — every row above naming an ops-repo
     secret or the `drill` Environment — lands nowhere, because
     `kluster-ops` is an empty repository: it carries the issues this
@@ -680,16 +726,17 @@ slot that is neither a Pulumi config secret nor a workstation slot.
     that would match its header exists, so generating it now would park
     a secret in the registry, which rule 2 forbids as firmly for escrow
     as for the offline store.
--   The **slot map and its drift probe** (§4) are the machine-readable
-    half of this section, and are not built either.
+-   The **slot-drift probe** (§4). The map it would read is checked in;
+    the scheduled workflow that compares it against reality is not.
 
 Restic passwords will not join that list: they arrive with the
 `backed_pvc` helper (declarative/workloads.md §3), which is itself
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
-above exist, a bring-up delivers the seed kit, the state backend, and the
-provider credentials the `dns` and `physical` stacks run on; the rest of
-§3 is design rather than procedure.
+above exist, a bring-up delivers the seed kit, the state backend, the
+provider credentials the `dns` and `physical` stacks run on, and the
+GitHub secrets whose values a workstation can obtain; the rest of §3 is
+design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
@@ -747,8 +794,8 @@ its first use rather than during the rotation.
 Nothing beyond the kit is touched. The §3 credentials minted from
 the retired seeds keep working, and each is replaced by re-running its
 own command against the new kit: rotation neither re-mints them nor
-inspects a slot, and the slot verification §4's slot map describes is
-not built either (`kluster-ops#1`). The escrowed credentials keep
+inspects a slot, and the map §4 carries is read by the pushes rather
+than by this command. The escrowed credentials keep
 working for a stronger reason — their values are unchanged, only their
 wrapping is.
 
