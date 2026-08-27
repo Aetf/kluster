@@ -36,7 +36,10 @@ facts about them.
     *large by construction* (it must be able to mint its successors)
     and the recovery key's is larger still (it opens every escrowed
     label at once), which is exactly why nothing consumes either at
-    runtime.
+    runtime. One kit row breaks even that: the ZeroTier Central token
+    is the provider credential as well as the seed, because Central
+    mints nothing smaller, so §3 carries a row for its delivery and
+    the excess it hands `physical` is on the record there.
 5.  **Every seed mints its own successor where the platform allows**
     (the table in §2). Rotation is then a script, not a checklist, and the
     platforms that cannot do it are named rather than forgotten.
@@ -46,9 +49,13 @@ facts about them.
     secret (provider-credential channel,
     cluster-infra.md §1.1) · **Pulumi state** · SealedSecret
     (in-cluster consumption) · CI Environment secret (the per-stack
-    GitHub Environments and the `drill` Environment, ci.md §2) ·
-    ops-repo secret · **workstation slot** · on-box (delivered by
-    provisioning, e.g. Butane-embedded). A row names its channel(s); a
+    GitHub Environments and the `drill` Environment, ci.md §3) ·
+    ops-repo secret · `kluster` repository secret (the one slot that
+    belongs to no stack, and is therefore readable by every workflow in
+    the repository — ci.md §3) · **workstation slot** · on-box
+    (delivered by provisioning, e.g. Butane-embedded) · gw-config
+    device secret (pushed to the gateway beside its nspawn units,
+    physical/gateway.md §1). A row names its channel(s); a
     credential living anywhere else is misplaced.
 
     A **workstation slot** is the local half of a credential: a file
@@ -105,8 +112,10 @@ borrows them at two moments only: first bring-up, and re-seeding after
 a total seed loss. The GitHub admin token the `github` stack applies
 with (framework/github.md §1) belongs to this class rather than to
 either tier below: it is an account root used from the workstation,
-never minted from a seed and never pushed to a slot, which is exactly
-why that stack is not something CI runs.
+minted by no seed and pushed by no command. It reaches its workstation
+slot (§4.4) the way every account root reaches a machine — through
+`credentials master github remember`, which is a paste rather than a
+mint — and that is exactly why that stack is not something CI runs.
 
 Three of them are nonetheless *used* from the workstation. Two by a
 script, because the seeds they mint cannot be minted by anything
@@ -329,7 +338,10 @@ certificates under the state-backend CA fail the second test — their
 keys are generated at issuance and never escrowed, because the CA
 re-issues them (§3) — and so do the secrets a *program* generates,
 restic repository passwords among them: Pulumi state already stores
-those (rule 6), and escrowing them would buy nothing.
+those (rule 6), and escrowing them would buy nothing. The drill age key
+fails it too, for the same reason from the other side: every dump it
+opens is also encrypted to an escrowed generation, so losing it costs a
+new key and a recipient swap rather than a byte of data.
 
 Consequences, all deliberate:
 
@@ -344,9 +356,9 @@ Consequences, all deliberate:
     recovery private key, which is in the kit and nowhere else, and it
     happens during bring-up, rotation, provisioning, or a recovery —
     the Alertmanager token is read by a running poller, the key that
-    could open its escrow never is. That is what keeps §1's rule 4 —
-    nothing consumes a kit row at runtime — true rather than
-    aspirational.
+    could open its escrow never is. That is what keeps §1's rule 4 true
+    of the widest-scoped row in the register: it opens every escrowed
+    label at once, and it is consumed by nothing.
 -   **Rotating the kit is not rotating production.** The value in the
     slot is random, so re-encrypting its escrow to a new recovery key
     changes nothing any consumer sees. This is the property a derived
@@ -410,25 +422,43 @@ by hand.
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
 | ZT CI member identities (`ci-deploy`, `ci-preview`) | generated in-state (`zerotier_identity`) | One per concurrency domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
+| ZeroTier Central token, as delivered | the §2 seed itself — Central has no token API, so there is nothing smaller to mint | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret + CI env (`zerotierApiToken`, beside the plain `zerotierNetworkId`) | `physical` |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | postgres:// mTLS | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
-| age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half) · ops-repo `drill` Environment (private half, latest-dump-only) | micro cron, drill workflow |
+| age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half, a Butane recipient) | micro cron, a restore run from the kit |
+| Drill age identity | generated beside the backup identities and escrowed nowhere | Decrypts the *latest* dump alone; retention coverage stays with the escrowed generations | ops-repo `drill` Environment (private half) · on-box (public half, the third Butane recipient) | Quarterly rebuild drill (state-backend.md §7.3) |
 | restic repo passwords | generated in-state (`backed_pvc`) | Per-PVC repos | Pulumi state · SealedSecret (via `backed_pvc`) | VolSync |
 | Talos machine secrets + talosconfig | generated by `physical` | Cluster PKI roots | Pulumi state · CI env · ops-repo secret | Talos ops, etcd snapshot workflow |
 | kubeconfig | `physical` output | cluster-admin | CI env | `k8s-base`, `apps` |
-| UDM SSH key, libvirt SSH identity | generated | gw-config push (host key pinned) / virsh only | Pulumi config secret + CI env | `physical` |
+| UDM SSH key, libvirt SSH identity | installed by the estate's other automation: gw-config puts the UDM key on the gateway, aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | gw-config push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret + CI env | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret + CI env | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `apps` rewrites |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
-| HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret | alertmanager, dispatch handler |
+| HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo `drill` Environment | Drill workflows |
 
 Rows whose "From" is a seed rotate by re-running their subcommand.
 Rows whose "From" is an escrow label rotate by generating the next
 generation of that label (§4.2), which the row's own consumer then
 adopts. Rows generated by a stack (Talos secrets, kubeconfig, ZT
-identities) rotate with the resource that owns them.
+identities) rotate with the resource that owns them. The drill age
+identity is the one row that rotates by swap and destroy rather than by
+either: a new key into the Environment, the Butane recipient swapped, a
+fresh dump verified, the old key deleted (state-backend.md §5), because
+its contract covers the newest object rather than a retention window.
+
+**Three rows are here for their delivery rather than their birth.** The
+ZeroTier row's value *is* the §2 seed: Central publishes no token API,
+so there is nothing smaller to mint and the seed itself is what
+`physical` authenticates with — the one kit row a stack consumes, and
+the exception rule 4 names. The UDM SSH key and the libvirt
+identity are prerequisites of the same shape: rule 7 is satisfied for
+them by another tracker's automation — gw-config installs the gateway's
+key, aconfmgr provisions the host's service user — rather than by a
+`credentials` subcommand, so the only act on this side is the paste
+into `physical`'s config. Rotating any of the three is that other
+procedure followed by that paste.
 
 ## 4. The scripts
 
@@ -444,20 +474,23 @@ credential family plus the lifecycle commands below.
 | `credentials master github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
 | `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
+| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
+| `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials escrow init` | Once per kit: creates the recovery key (§2.2) and writes `escrow/RECIPIENTS`. `bootstrap` does it while filling a new kit, so this is the repair path for a kit that predates escrow. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
 | `eval "$(credentials escrow env)"` | Whenever a shell needs to reach the backend. Recovers the passphrase from escrow, reads the URL from the bundle. |
 | `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
-| `credentials escrow recover <label> [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. |
+| `credentials escrow recover <label> [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
-| `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, writes it to the slot §3 names and commits its ciphertext as the label's next generation — one act, no other label touched. |
-| `credentials escrow import <label>` | Escrows a value that already exists as the label's next generation, changing nothing a consumer holds (§4.2). Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
-| `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database; the retired one stays. |
-| `credentials escrow rewrap` | After a `rotate` wrote a new recovery key. Re-encrypts every generation in the registry to it and updates `escrow/RECIPIENTS`; no plaintext changes. |
-| `credentials escrow check` | Any time, kit or no kit: every label the register names is present, every ciphertext parses, generations are monotonic. It opens nothing, which is what lets CI run it. |
+| `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the label's next generation and writes it into a workstation slot where the label has one — today only `pulumi/passphrase` does, and a label without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other label touched. |
+| `credentials escrow import <label> [--from-slot]` | Escrows a value that already exists as the label's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the label's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
+| `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. |
+| `credentials escrow rewrap` | The resume and repair path for that re-wrap: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. A rotation interrupted part way, or a ciphertext added while the file already named the successor, is what it is for; an ordinary kit rotation never calls it. |
+| `credentials escrow check` | Any time, kit or no kit: every label the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though no workflow does today. |
 | `credentials kdbx ls` / `show` | Looking without changing. |
-| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run; `forget` removes it again. |
+| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
+| `credentials kdbx forget` | Drops that remembered password again, for a machine that should stop holding it. |
 
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
@@ -469,6 +502,13 @@ push → verify** — and drops the idempotence deliberately: a re-run
 produces a new generation, which is exactly what rotating that label
 means.
 
+Two global options sit in front of every family, because both defaults
+are per-checkout rather than universal: `--kdbx` names the kit
+(otherwise `$KLUSTER_KDBX`, otherwise the workstation slot §4.4 names),
+and `--escrow` names the registry directory (otherwise this checkout's
+`escrow/`). A kit on removable media and a registry in a second clone
+are the two cases they exist for.
+
 §3's minted rows are `credentials derived <row> <credential>`, one
 command per row, and its escrowed rows are `credentials escrow
 generate <label>`, one per label. A row is implemented when its
@@ -477,7 +517,7 @@ that has no slot to be delivered into would park a secret, which rule 2
 forbids. The zones token is delivered today; the DNS-01 token and the
 gateway's ACME token join it with cert-manager and the gateway, and the
 CI Environment half of every row joins it with the Environments
-themselves (ci.md §2).
+themselves (ci.md §3).
 
 The zones token's scope is not a list in the script: it is the estate's
 zones as `conventions` names them, resolved to zone ids through the seed
@@ -491,19 +531,24 @@ both resolve against the project's own name — so the committed file reads
 `kluster-py:cloudflareAccountId`, and the project name lives in
 `Pulumi.yaml` rather than a second time in the script.
 
+Two pieces of that shape are designed and not built (`kluster-ops#1`);
+they are described here because the rest of the register is written
+against them:
+
 -   **A slot map, checked in.** A declarative manifest maps each §3 row
     to its target slots: GitHub Environment secret (repo + environment
     + name), ops-repo secret, Pulumi config secret (per stack),
     SealedSecret (kubeseal → committed manifest path), on-box
     (rendered into Butane). §3 is the human-readable view; the slot
-    map is the machine-readable one, and the two are checked against
-    each other.
--   **Slot-drift probe**: an ops-repo scheduled workflow compares the
+    map is to be the machine-readable one, and the two checked against
+    each other. Until it exists, "every slot in the map" above means
+    the slots a subcommand writes in its own code.
+-   **Slot-drift probe**: an ops-repo scheduled workflow comparing the
     slot map against reality in both directions — `gh` secret listings
     and `pulumi config` keys. A live slot with no map entry, or a map
-    entry with no live slot, raises an `actionable` alert. This (plus
-    the expiry/destroy-date tripwires, operations.md §4) replaces the
-    calendar register-review.
+    entry with no live slot, would raise an `actionable` alert. This
+    (plus the expiry/destroy-date tripwires, operations.md §4) is what
+    replaces the calendar register-review.
 
 ### 4.1 Bring-up
 
@@ -528,7 +573,9 @@ that puts a value there.
 2.  `credentials bootstrap` — fills the kit with every §2 row, the
     recovery key included, creating the kit if it is absent. A row
     whose platform can mint it is minted; the rest stop and print their
-    console steps. This command touches the kit and nothing else.
+    console steps. The kit is all it writes secrets to; the recovery
+    row additionally writes `escrow/RECIPIENTS` into the checkout — the
+    public half, and a file to commit — exactly as `escrow init` does.
 3.  `state-backend provision` — the Pulumi state backend, which every
     stack needs before it can act, and the first thing to escrow (§2.2):
     it generates the CA and the age identity, commits their ciphertexts,
@@ -558,17 +605,38 @@ A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
 
 **What is not built yet** (`kluster-ops#1`): everything in §3 except the
-zones token, and every slot that is not a Pulumi config secret. The
-per-stack OCI keys and the B2 management key have minting
-code but no command that pushes them; the device credentials (UDM SSH
-key, libvirt identity, UniFi API key, AdGuard credentials), the
-in-cluster secrets (the DNS-01 token and the writer keys, sealable only
-once `k8s-base` has the sealed-secrets controller up) and the CI
-Environment half of every row (ci.md §2) have neither. Restic passwords
-will not join them: `backed_pvc` generates its own into state and seals
-it, so a new volume needs no credentials run (rule 6). Until those
-commands exist, a bring-up delivers the seed kit, the state backend and
-the zones token, and the rest of §3 is design rather than procedure.
+zones token, and every slot that is not a Pulumi config secret.
+
+-   The **B2 management key** has minting code and no command that
+    pushes it — the one row in that state.
+-   The **per-stack OCI keys** have no minting code at all: the OCI code
+    mints the seed's own successor and nothing else, so a per-stack user
+    and key is design on both halves.
+-   The **device credentials** (UDM SSH key, libvirt identity, UniFi API
+    key, AdGuard credentials) and the **in-cluster secrets** (the DNS-01
+    token and the writer keys, sealable only once `k8s-base` has the
+    sealed-secrets controller up) have neither half.
+-   The **CI Environment half of every row** (ci.md §3) has no sink:
+    `state-backend bundle ci` writes a bundle to a directory, and
+    nothing carries it, or any other value, into an Environment.
+-   The **whole ops-repo channel** — every row above naming an ops-repo
+    secret or the `drill` Environment — lands nowhere, because
+    `kluster-ops` is an empty repository: it carries the issues this
+    document cites and no workflow, no secret and no code.
+-   **`alertmanager/read`** is a label the escrow already knows and
+    nothing consumes: neither the issue-sync poller nor the HTTPRoute
+    that would match its header exists, so generating it now would park
+    a secret in the registry, which rule 2 forbids as firmly for escrow
+    as for the offline store.
+-   The **slot map and its drift probe** (§4) are the machine-readable
+    half of this section, and are not built either.
+
+Restic passwords will not join that list: they arrive with the
+`backed_pvc` helper (declarative/workloads.md §3), which is itself
+unwritten but generates its own password into state and seals it, so a
+new volume will need no `credentials` run (rule 6). Until the commands
+above exist, a bring-up delivers the seed kit, the state backend and the
+zones token, and the rest of §3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
@@ -599,12 +667,19 @@ the new database. The GitHub App private keys, the ZeroTier token and
 the Cloudflare seed token are explicit pauses — the script prints the
 console steps and waits.
 
-**The new recovery key is adopted by re-encryption.** `credentials
-escrow rewrap` opens every generation in the registry with the retired
-identity and writes it back encrypted to the successor's recipient,
-updating `escrow/RECIPIENTS`. No plaintext changes, so no consumer is
-touched, no stack is re-encrypted and no appliance is re-provisioned —
-that commit and the new database are the whole of a kit rotation.
+**The recovery row's rotation is the re-encryption.** Rotating that row
+writes the successor identity into the new database and then, in the
+same run, opens every generation in the registry — with either identity,
+so an interrupted run resumes — and writes each back encrypted to the
+successor's recipient, `escrow/RECIPIENTS` last so that the file names
+what the directory actually holds. No plaintext changes, so no consumer
+is touched, no stack is re-encrypted and no appliance is re-provisioned
+— that commit and the new database are the whole of a kit rotation.
+`credentials escrow rewrap` is the standalone form of the same
+re-encryption and takes no recipients: it re-encrypts to whatever
+`escrow/RECIPIENTS` already names, which makes it the way to finish a
+rotation that died part way through, and it refuses outright a run that
+would leave the registry with nothing in hand able to open it.
 
 **What a run proves is that the new kit's seeds work, one row at a
 time.** A seed that mints its own successor (OCI, B2) authenticates *as*
@@ -624,17 +699,17 @@ not built either (`kluster-ops#1`). The escrowed credentials keep
 working for a stronger reason — their values are unchanged, only their
 wrapping is.
 
-**The retired kit is destroyable once nothing is owed to it**: once
-`rewrap` has covered every generation and `credentials escrow check`
-passes, no ciphertext in the registry opens only with the retired
-recovery key, and every seed the retired database holds has a live
-successor. That is the whole criterion: a property to verify, not a date
-to wait out.
+**The retired kit is destroyable once nothing is owed to it**: every
+generation in the registry opens under the successor's identity,
+`credentials escrow check` passes, and every seed the retired database
+holds has a live successor. That is the whole criterion — a property to
+verify, not a date to wait out — and the rotation run is what
+establishes the first part of it.
 
 **Rotating one credential is a generation, not a kit.** `credentials
 escrow generate <label>` produces a new random value, writes it to the
-slot §3 names for that row and commits its ciphertext as the label's
-next generation; adopting it is that one consumer's business — a
+slot §3 names where the row has one and commits its ciphertext as the
+label's next generation; adopting it is that one consumer's business — a
 re-provision for the state-backend CA, a re-seal or a secret update for
 the Alertmanager token, the recipient swap that state-backend.md §5
 describes for an age generation. The recovery key is not involved,
@@ -695,15 +770,19 @@ never a hunt for per-machine environment wiring:
 | `.credentials/` | What it is | Written by |
 | --- | --- | --- |
 | `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials bootstrap` |
-| `pulumi.passphrase` | The state passphrase (§2.2), cached so a local preview needs neither the kit nor an `eval`. | `credentials escrow recover pulumi/passphrase` |
+| `pulumi.passphrase` | The state passphrase (§2.2), cached so a local preview needs neither the kit nor an `eval`. | `credentials escrow generate pulumi/passphrase`, `credentials escrow recover pulumi/passphrase` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials master <root> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
 
-The directory is `0700` and its files are `0600`. Only the kit is
-irreplaceable, and it is irreplaceable in the envelopes rather than
-here; every other entry is recovered, re-issued or re-pasted by the
-command in the right-hand column, so a lost `.credentials/` costs a
-few commands and no credential.
+**The directory is `0700`, and that is the boundary that matters**: it
+is what keeps every entry inside it private, whatever mode the file
+itself carries. One file is stricter on its own account — the client
+key is `0600`, because libpq refuses a key anything but its owner can
+read — and the rest are written at the process `umask` under that directory. Only
+the kit is irreplaceable, and it is irreplaceable in the envelopes
+rather than here; every other entry is recovered, re-issued or re-pasted
+by the command in the right-hand column, so a lost `.credentials/` costs
+a few commands and no credential.
 
 `mise.toml` reads three of them — the passphrase, the backend URL and
 the GitHub token — falling back to whatever the environment already
