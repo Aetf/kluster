@@ -12,15 +12,17 @@ redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL", "GITHUB_TOKEN"]
 [tools]
 pulumi = "3.257.0"
 uv = "0.11.26"
-# Deterministic age identities are cross-checked against the real tool, and
-# the box's dumps are age-encrypted; butane renders the appliance's Ignition.
-# This version tracks the appliance's pin (state_backend/settings.py), so the
-# cross-check exercises what actually runs there -- a test holds the two equal.
+# age is the tool this repository escrows with rather than a format it
+# reimplements: `age`/`age-keygen` write and open every ciphertext under
+# `escrow/`, and the box's dumps are age-encrypted too; butane renders the
+# appliance's Ignition. This version tracks the appliance's pin
+# (state_backend/settings.py), so the round trip the tests exercise is the one
+# that actually runs there -- a test holds the two equal.
 age = "1.3.1"
 "aqua:coreos/butane" = "0.29.0"
 
 # Three things a `pulumi` run needs that no template can compute: the state
-# passphrase, derived from the offline derivation seed (docs/credentials.md
+# passphrase, recovered from its escrow ciphertext (docs/credentials.md
 # §2.2); the backend URL, written beside the client certificate it names; and
 # the `github` stack's admin token, an account root from the personal estate.
 # Each is read from its **workstation slot** -- a git-ignored file under
