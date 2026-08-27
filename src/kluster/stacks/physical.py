@@ -40,7 +40,11 @@ KUBE_API_PORT = 6443
 
 async def main() -> None:
     config = pulumi.Config()
-    compartment_id = config.require('compartmentId')
+    # A convention rather than a config key: the compartment is the boundary
+    # this stack's own credential is confined to, decided here and created by
+    # the mint that issues that credential (credentials.md §3). A stack whose
+    # compartment does not exist yet refuses by naming that command.
+    compartment_id = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL].require()
     talos_version = config.require('talosVersion')
 
     network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id)

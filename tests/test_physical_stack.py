@@ -108,11 +108,22 @@ class Mocks(pulumi.runtime.Mocks):
                 return {}, []
 
 
+#: The compartment the stack acts in, as `conventions` will carry it once the
+#: mint has made it. It is patched in rather than configured because that is
+#: what the program reads: a compartment is a boundary this repository decides,
+#: so it is code and not a config key (credentials.md §3).
+COMPARTMENT = conventions.Compartment(
+    consumer=conventions.PHYSICAL,
+    name=f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}',
+    ocid='ocid1.compartment.test',
+)
+
+
 @pytest_asyncio.fixture(autouse=True)
-async def setup() -> None:
+async def setup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(conventions.OCI_COMPARTMENTS, conventions.PHYSICAL, COMPARTMENT)
     pulumi.runtime.set_all_config(
         {
-            'kluster:compartmentId': 'ocid1.compartment.test',
             'kluster:talosVersion': 'v1.11.0',
             **GATEWAY_CONFIG,
         }
@@ -130,6 +141,24 @@ async def test_the_stack_declares_and_then_names_its_first_gap() -> None:
     # is where a wiring mistake would surface; the gap itself is the program
     # refusing to pretend the rest of the design exists.
     with pytest.raises(NotImplementedError, match=r'physical §1/§5 storage'):
+        await physical.main()
+
+
+@pytest.mark.asyncio
+async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_makes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The one state the mapping can be in that the stack cannot act on: the
+    # compartment is named but has never been created, so there is no OCID to
+    # declare anything in. What matters is that the refusal names the command
+    # that produces one -- a lookup failure here would say nothing at all.
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.PHYSICAL,
+        conventions.Compartment(consumer=conventions.PHYSICAL, name=COMPARTMENT.name),
+    )
+
+    with pytest.raises(conventions.CompartmentMissing, match=r'credentials derived oci-physical mint'):
         await physical.main()
 
 

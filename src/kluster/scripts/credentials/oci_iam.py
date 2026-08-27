@@ -14,7 +14,10 @@ Three credentials, three lifetimes:
 -   a **per-consumer API key** (§3) — the same three IAM objects again, one
     name for all three, but scoped to a single compartment and never stored
     here: it goes straight from `mint_api_key` into its consumer's slot, and
-    rotating it is running that command again.
+    rotating it is running that command again. The compartment is part of that
+    act rather than a prerequisite of it: `conventions` names one per consumer,
+    and the mint creates the one that is not there yet — which is what the
+    seed's `manage compartments` is for.
 
 **An OCI API key is five things, and the row stores three** (§2): the user
 OCID as `UserName`, the private key as an attachment because it is a file, and
@@ -78,7 +81,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from . import entries, masters
-from ...conventions import CLUSTER_NAME, OCI_REGION, OCI_SEED_USER_EMAIL, OCI_USER_EMAIL_DOMAIN
+from ...conventions import (
+    CLUSTER_NAME,
+    OCI_COMPARTMENTS,
+    OCI_REGION,
+    OCI_SEED_USER_EMAIL,
+    OCI_USER_EMAIL_DOMAIN,
+    Compartment,
+)
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -107,13 +117,17 @@ KEY_QUOTA = 3
 
 #: What the seed may do, and the whole of it. Managing users covers their API
 #: keys, which is what makes the seed self-reproducing; managing groups and
-#: policies is what lets it give a per-stack user the access its stack needs.
-#: Nothing here touches compute, storage or networking -- the seed mints the
-#: credentials that do.
+#: policies is what lets it give a per-stack user the access its stack needs;
+#: managing compartments is what lets it create the boundary that access is
+#: confined to, so a consumer's compartment is an API call rather than a
+#: console errand. Nothing here touches compute, storage or networking -- the
+#: seed mints the credentials that do, and `manage policies in tenancy` is the
+#: ceiling anyway: a principal that can write policy can grant itself the rest.
 STATEMENTS: tuple[str, ...] = (
     f'Allow group {SEED_NAME} to manage users in tenancy',
     f'Allow group {SEED_NAME} to manage groups in tenancy',
     f'Allow group {SEED_NAME} to manage policies in tenancy',
+    f'Allow group {SEED_NAME} to manage compartments in tenancy',
 )
 
 #: OCI requires RSA for API keys, which is why these are generated rather than
@@ -155,6 +169,16 @@ class Identity:
     #: What the group may do, and the whole of it.
     statements: tuple[str, ...]
 
+    @staticmethod
+    def name_for(consumer: str) -> str:
+        """The one name a consumer's user, group and policy all carry.
+
+        Derived rather than stored, so a caller that only needs to say which
+        principal it is talking about -- a log line, a delivery -- does not
+        have to know a compartment first.
+        """
+        return f'{CLUSTER_NAME}-{consumer}'
+
     @classmethod
     def for_consumer(cls, consumer: str, *, compartment_id: str) -> Identity:
         """The identity one consumer's own key belongs to (§3).
@@ -165,7 +189,7 @@ class Identity:
         compartment rather than an edit here, and the blast radius of the key
         is a boundary the console shows rather than a list to audit.
         """
-        name = f'{CLUSTER_NAME}-{consumer}'
+        name = cls.name_for(consumer)
         return cls(
             name=name,
             email=f'{name}@{OCI_USER_EMAIL_DOMAIN}',
@@ -694,6 +718,47 @@ class Iam:
         log.info('created policy %s', identity.name)
         return created
 
+    def find_compartment(self, name: str) -> str | None:
+        """The OCID of the tenancy's compartment of that name, or None.
+
+        A compartment is IAM's own concept rather than the identity domain's,
+        so this and the create below are the calls the legacy client keeps
+        beside policy (§2): there is no domains endpoint to try first and none
+        to fall back to.
+
+        Only the tenancy's own children are considered. A compartment is a
+        tree, and `compartment_id_in_subtree` would let a same-named
+        compartment nested under somebody else's answer for this one.
+        """
+        for existing in _data(self.identity.list_compartments(compartment_id=self.tenancy, name=name)):
+            # The name filter is the service's promise rather than this code's,
+            # and a compartment keeps its name while it is being deleted:
+            # adopting one would hand a consumer a boundary that is on its way
+            # out, and it is the state rather than the name that says so.
+            if existing.name != name or str(existing.lifecycle_state) in ('DELETING', 'DELETED'):
+                continue
+            return str(existing.id)
+        return None
+
+    def create_compartment(self, intended: Compartment) -> str:
+        """Make the consumer's compartment as a child of the tenancy.
+
+        Called only where `find_compartment` found nothing: a compartment name
+        is unique among the children of one compartment, so a create whose name
+        is taken is answered with a 409 rather than with a second compartment.
+        """
+        created = _data(
+            self.identity.create_compartment(
+                oci.identity.models.CreateCompartmentDetails(
+                    compartment_id=self.tenancy,
+                    name=intended.name,
+                    description=f'What the {CLUSTER_NAME}-{intended.consumer} key may act on (credentials.md §3)',
+                )
+            )
+        )
+        log.info('created compartment %s', intended.name)
+        return str(created.id)
+
     def upload_key(self, user: Principal, public_pem: str) -> str:
         """Register a public key on the user. Returns the fingerprint OCI assigned.
 
@@ -1167,21 +1232,99 @@ class ApiKey:
         return fingerprint(self.private_key)
 
 
-def mint_api_key(kit: KdbxStore, *, identity: Identity, seed_entry: str, connect: Connect = identity_client) -> ApiKey:
+def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) -> str:
+    """The compartment one consumer's key is confined to, created if it is not there.
+
+    `override` is the drill-tenancy escape and is taken as given: a tenancy
+    that is not this estate's has neither the names nor the OCIDs `conventions`
+    records, so a run pointed at one names its compartment on the command line
+    and nothing here second-guesses it.
+
+    Otherwise the compartment is `conventions`': looked up by name, which is
+    the half of the mapping that is a decision rather than a discovery.
+
+    What happens next depends on whether the mapping already carries the OCID.
+    Where it does not, the compartment is created if the tenancy has none of
+    that name and adopted if it has — the way a user or a group is — and the
+    OCID that comes back is announced as the one-line edit to commit, because
+    the stacks read it from that file and this command has no business editing
+    it. Where the mapping does carry one, nothing is created: a recorded OCID
+    that no longer answers is a fact gone stale, and the two ways it can go
+    stale — the compartment is not there, or the name now belongs to a
+    different one — are both worth stopping over rather than papering over
+    with a second compartment.
+    """
+    if override is not None:
+        log.info('confining %s to %s, which was named on the command line', consumer, override)
+        return override
+    intended = OCI_COMPARTMENTS[consumer]
+    log.info('looking up the %s compartment', intended.name)
+    found = iam.find_compartment(intended.name)
+    if intended.ocid is None:
+        ocid = found if found is not None else iam.create_compartment(intended)
+        log.warning(
+            'the %s compartment is %s: record it as the `%s` entry of `conventions.OCI_COMPARTMENTS` and commit '
+            'that line, because the stack reads the OCID from there and refuses until it is written',
+            intended.name,
+            ocid,
+            consumer,
+        )
+        return ocid
+    if found is None:
+        raise CredentialRejected(
+            f'`conventions` records {intended.ocid} as the {intended.name} compartment, but this tenancy has '
+            'none of that name: either the mapping is stale, or this is not the tenancy it describes — a drill '
+            'names its own compartment with --compartment'
+        )
+    if found != intended.ocid:
+        raise CredentialRejected(
+            f'the compartment named {intended.name} in this tenancy is {found}, but `conventions` records '
+            f'{intended.ocid} for {consumer}: one of the two is stale, and minting against the wrong one would '
+            'confine the key to a compartment the stack does not act in'
+        )
+    return found
+
+
+def mint_api_key(
+    kit: KdbxStore,
+    *,
+    consumer: str,
+    compartment_id: str | None = None,
+    seed_entry: str,
+    connect: Connect = identity_client,
+) -> ApiKey:
     """Mint one consumer's API key from the seed, with the IAM objects under it.
 
-    The whole of a §3 OCI row's *birth*. Where the result is delivered is the
-    caller's business, because that is the half that differs between a stack —
-    a Pulumi config secret — and the state-backend provisioner, which is not a
-    stack and reads a workstation slot instead.
+    The whole of a §3 OCI row's *birth*, compartment included: the boundary the
+    key is confined to is `conventions`' to name and this command's to create,
+    so a consumer whose compartment does not exist yet is one command away
+    rather than a console errand. `compartment_id` overrides that mapping for a
+    drill tenancy. Where the result is delivered is the caller's business,
+    because that is the half that differs between a stack — a Pulumi config
+    secret — and the state-backend provisioner, which is not a stack and reads
+    a workstation slot instead.
 
-    Idempotent, so rotating the row is re-running its command: the user, group
-    and policy are converged rather than created, the successor is verified by
-    being used before anything supersedes it, and the sweep afterwards leaves
-    exactly the key this run minted.
+    Idempotent, so rotating the row is re-running its command: the compartment,
+    the user, the group and the policy are converged rather than created, the
+    successor is verified by being used before anything supersedes it, and the
+    sweep afterwards leaves exactly the key this run minted.
     """
     log.info('opening the OCI seed from the kit')
     seed = _seed_session(kit, seed_entry, connect=connect)
+
+    # The seed's own policy first, and here rather than in a verb of its own:
+    # this is the one command that needs the compartment statement, the seed
+    # may write policy in the tenancy, and a converge an operator has to
+    # remember to run is a converge that is forgotten -- with the failure
+    # landing mid-mint, as a refusal to create the compartment. `policy`
+    # corrects drift, so a seed whose policy predates a statement adopts it
+    # here; OCI takes a few seconds to honour the widened policy, which the
+    # client's retry strategy spends waiting rather than failing on.
+    log.info("converging the seed's own policy, which is what may create the compartment below")
+    _ = seed.iam.policy(SEED)
+
+    compartment = ensure_compartment(seed.iam, consumer, override=compartment_id)
+    identity = Identity.for_consumer(consumer, compartment_id=compartment)
 
     log.info('converging the user, group and policy for %s', identity.name)
     user = ensure(seed.iam, identity)

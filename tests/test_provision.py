@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 
+from kluster import conventions
 from kluster.scripts.credentials import escrow, oci_iam, oci_slot, workstation
 from kluster.scripts.state_backend import provision
 
@@ -90,7 +91,7 @@ def _mint() -> Path:
     """A slot filled the way `credentials derived oci-state-backend mint` fills it."""
     private_pem, _ = oci_iam.generate_key()
     key = oci_iam.ApiKey(tenancy=APPLIANCE_TENANCY, user=APPLIANCE_USER, private_key=private_pem)
-    return oci_slot.write(key, compartment_id=COMPARTMENT)
+    return oci_slot.write(key)
 
 
 def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
@@ -98,17 +99,20 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
 
     client = provision.Oci.load()
 
-    # One file is the whole of what a provisioning run has to be given: the
-    # signing configuration and the compartment it acts in.
-    assert client.compartment_id == COMPARTMENT
+    # The slot is the signing configuration, and where the appliance may act is
+    # a convention beside it: the mapping is the one place the compartment is
+    # written down, so nothing can drift from it.
+    assert client.compartment_id == conventions.OCI_COMPARTMENTS[conventions.STATE_BACKEND].ocid
     assert (client.config['user'], client.config['tenancy']) == (APPLIANCE_USER, APPLIANCE_TENANCY)
 
 
-def test_an_explicit_compartment_wins_over_the_recorded_one(slots: Path) -> None:
+def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
     _ = _mint()
 
     client = provision.Oci.load('ocid1.compartment.oc1..elsewhere')
 
+    # The drill escape: a run against a tenancy that is not this estate's
+    # names its own compartment, because none of the mapping applies there.
     assert client.compartment_id == 'ocid1.compartment.oc1..elsewhere'
 
 
@@ -122,6 +126,10 @@ def test_the_superseded_configuration_is_read_once_and_loudly(
     superseded = tmp_path / 'legacy' / 'config'
     superseded.parent.mkdir()
     _mint().rename(superseded)
+    # A hand-written configuration carried the compartment in the same file,
+    # which is the one place that value still comes from.
+    with superseded.open('a') as handle:
+        _ = handle.write(f'compartment-id={COMPARTMENT}\n')
     monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', superseded)
 
     with caplog.at_level(logging.WARNING):

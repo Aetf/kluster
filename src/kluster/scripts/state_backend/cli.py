@@ -43,7 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     _ = parser.add_argument(
         '--compartment',
         default=None,
-        help="OCI compartment (default: the one recorded in the appliance's OCI slot)",
+        help='OCI compartment (default: the one `conventions` names for the appliance)',
     )
     actions = parser.add_subparsers(dest='action', required=True)
 

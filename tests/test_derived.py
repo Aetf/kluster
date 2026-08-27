@@ -227,7 +227,7 @@ def _named(tenancy: Tenancy, name: str) -> str:
     return next(user.id for user in tenancy.identity.users.values() if user.name == name)
 
 
-def test_the_physical_stack_gets_a_signing_configuration_and_its_compartment(
+def test_the_physical_stack_gets_the_signing_configuration_a_provider_needs(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, runner = physical_stack
@@ -242,12 +242,12 @@ def test_the_physical_stack_gets_a_signing_configuration_and_its_compartment(
     assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(private)
     assert oci_iam.fingerprint(private) in tenancy.identity.keys[user]
     assert runner.config[derived.OCI_REGION_KEY] == conventions.OCI_REGION
-    # The credential says who may act, never where: without the compartment
-    # the stack it belongs to could not name a single resource.
-    assert runner.config[derived.COMPARTMENT_KEY] == COMPARTMENT
+    # And nothing else: the compartment the stack acts in is a convention
+    # rather than a config key, so the delivery does not restate it.
+    assert 'compartmentId' not in runner.config
 
 
-def test_the_key_is_a_secret_and_the_compartment_is_not(
+def test_the_key_is_a_secret_and_the_region_is_not(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, runner = physical_stack
@@ -255,13 +255,31 @@ def test_the_key_is_a_secret_and_the_compartment_is_not(
     _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
     # Which channel each key takes is the assertion, not merely that the value
-    # arrived: the compartment is written plain because `stacks/physical.py`
-    # reads it plain, and a secret read that way agrees only through an
-    # upstream defect.
+    # arrived: four of the five are secrets because the tenancy and user OCIDs
+    # are the class of fact the kit keeps protected, and the region is a
+    # constant of this estate that the committed file may carry in the clear.
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
     assert derived.OCI_PRIVATE_KEY_KEY in secret
-    assert sorted(plain) == sorted([derived.COMPARTMENT_KEY, derived.OCI_REGION_KEY])
+    assert plain == [derived.OCI_REGION_KEY]
+
+
+def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, _ = physical_stack
+
+    _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
+
+    # The ordinary bring-up names no compartment: `conventions` does, and the
+    # mint creates the one this consumer has no compartment for yet.
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    created = next(iter(tenancy.identity.compartments.values()))
+    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    assert created.name == intended.name
+    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+        [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+    ]
 
 
 def test_the_per_stack_identity_is_confined_to_the_compartment_it_names(
@@ -364,7 +382,9 @@ def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
     oci.config.validate_config(config)  # pyright: ignore[reportUnknownMemberType]
     user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
     assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_REGION)
-    assert config['compartment-id'] == COMPARTMENT
+    # The credential and nothing else: where the appliance may act is a
+    # convention its provisioner reads, so a copy here could only go stale.
+    assert 'compartment-id' not in config
 
 
 def test_the_appliance_key_is_a_file_only_its_owner_can_read(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:

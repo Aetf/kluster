@@ -12,6 +12,7 @@ shape (§2) is the other half of the same decision.
 from __future__ import annotations
 
 import itertools
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from memory_kit import MemoryKit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
 
@@ -60,6 +62,10 @@ class Named:
     name: str
     statements: list[str] = field(default_factory=list[str])
     handle: str = ''
+    #: Compartments alone are deleted asynchronously and keep their name while
+    #: they go, which is what makes "adopt the one of this name" a question
+    #: about state as well as about the name.
+    lifecycle_state: str = 'ACTIVE'
 
 
 def _named(kind: str, name: str) -> Named:
@@ -153,9 +159,10 @@ def _shim_refusal(endpoint: str) -> oci.exceptions.ServiceError:
 #: Every legacy endpoint that is a conversion shim over the identity domain,
 #: under the name the shim answers with. These are the calls the domains API
 #: also serves, and therefore the ones a refusal must be survivable on.
-#: `ListPolicies`, `CreatePolicy`, `UpdatePolicy` and `ListDomains` are absent
-#: because they are IAM's own concepts: no domain endpoint answers them, so a
-#: refusal there has nowhere to fall back to.
+#: `ListPolicies`, `CreatePolicy`, `UpdatePolicy`, `ListCompartments`,
+#: `CreateCompartment` and `ListDomains` are absent because they are IAM's own
+#: concepts: no domain endpoint answers them, so a refusal there has nowhere to
+#: fall back to.
 SHIMMED_ENDPOINTS = (
     'ListUsers',
     'CreateUser',
@@ -222,6 +229,9 @@ class FakeIdentity:
     groups: dict[str, Named] = field(default_factory=dict[str, Named])
     users: dict[str, Named] = field(default_factory=dict[str, Named])
     policies: dict[str, Named] = field(default_factory=dict[str, Named])
+    #: The tenancy's own children, which is the only level this program makes
+    #: one at.
+    compartments: dict[str, Named] = field(default_factory=dict[str, Named])
     memberships: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
     keys: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     #: Every key the fake has ever seen uploaded, as fingerprint -> public PEM.
@@ -304,6 +314,33 @@ class FakeIdentity:
         policy = self.policies[policy_id]
         policy.statements = list(details.statements)
         return Response(policy)
+
+    def list_compartments(self, compartment_id: str, name: str | None = None) -> Response:
+        """The children of one compartment, filtered by name where one is given.
+
+        Deleted compartments are listed like any other: the service keeps them
+        visible while they go, so telling them apart is the caller's job.
+        """
+        return Response([found for found in self.compartments.values() if name in (None, found.name)])
+
+    def create_compartment(self, details: Any) -> Response:
+        # A compartment name is unique among the children of one compartment,
+        # exactly as a policy name is: a create that means "make sure this
+        # exists" is answered with a 409, not with a second compartment, so a
+        # lookup that missed an existing one fails the run. A name released by
+        # a completed deletion is free again, which is why the state matters.
+        if any(
+            found.name == details.name and found.lifecycle_state != 'DELETED' for found in self.compartments.values()
+        ):
+            raise oci.exceptions.ServiceError(
+                status=409,
+                code='NameAlreadyExists',
+                headers=dict[str, str](),
+                message=f'compartment {details.name} already exists',
+            )
+        made = _named('compartment', details.name)
+        self.compartments[made.id] = made
+        return Response(made)
 
     def register_key(self, user_id: str, public_pem: str) -> str:
         """Put a key on a user, whichever endpoint asked. Returns the fingerprint.
@@ -736,6 +773,159 @@ def test_rotation_defaults_to_the_database_it_read(kit: KdbxStore, tenancy: Tena
     _, _, after = oci_iam.load_seed(kit, SEED_ENTRY)
     assert after != before
     assert oci_iam.fingerprint(after) == current
+
+
+# -- the compartment a consumer's key is confined to -------------------------
+
+
+@pytest.fixture
+def seeded(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> KdbxStore:
+    """A kit holding the OCI seed, which is what a mint reads."""
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    return kit
+
+
+def _compartments(tenancy: Tenancy) -> list[str]:
+    return sorted(found.name for found in tenancy.identity.compartments.values())
+
+
+def _policy(tenancy: Tenancy, name: str) -> list[str]:
+    return next(policy.statements for policy in tenancy.identity.policies.values() if policy.name == name)
+
+
+def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Nothing had to exist first: the boundary is named in `conventions`, and
+    # the run that mints the key confined to it is the run that makes it.
+    assert _compartments(tenancy) == [intended.name]
+    created = next(iter(tenancy.identity.compartments.values()))
+    name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
+    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+
+
+def test_the_ocid_of_a_new_compartment_is_announced_as_the_line_to_commit(
+    seeded: KdbxStore, tenancy: Tenancy, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The OCID is a site fact, and the file that carries it is committed: the
+    # stack reads it there and refuses until it is written, so the run that
+    # learns it says so rather than leaving it in a console it created.
+    created = next(iter(tenancy.identity.compartments.values()))
+    assert created.id in caplog.text
+    assert 'conventions.OCI_COMPARTMENTS' in caplog.text
+
+
+def test_a_compartment_that_is_already_there_is_adopted_by_name(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+    first = next(iter(tenancy.identity.compartments.values())).id
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Idempotent like the user and the group above it: a second compartment of
+    # the same name is not something the service would make anyway -- the
+    # create is answered with a 409 -- so re-running the mint has to find the
+    # one that is there.
+    assert len(tenancy.identity.compartments) == 1
+    assert next(iter(tenancy.identity.compartments.values())).id == first
+
+
+def test_a_compartment_being_deleted_is_not_adopted(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    going = _named('compartment', intended.name)
+    going.lifecycle_state = 'DELETED'
+    tenancy.identity.compartments[going.id] = going
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The name survives the compartment while it goes, so adopting on the name
+    # alone would confine the key to a boundary on its way out.
+    live = [found for found in tenancy.identity.compartments.values() if found.lifecycle_state == 'ACTIVE']
+    assert [found.name for found in live] == [intended.name]
+
+
+def test_a_recorded_compartment_is_used_rather_than_re_created(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = _named('compartment', 'kluster')
+    tenancy.identity.compartments[recorded.id] = recorded
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.STATE_BACKEND,
+        conventions.Compartment(consumer=conventions.STATE_BACKEND, name=recorded.name, ocid=recorded.id),
+    )
+
+    minted = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    name = f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}'
+    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {recorded.id}']
+    assert minted.user in tenancy.identity.keys
+
+
+def test_a_recorded_compartment_the_tenancy_does_not_have_is_refused(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.STATE_BACKEND,
+        conventions.Compartment(consumer=conventions.STATE_BACKEND, name='kluster', ocid='ocid1.compartment.oc1..gone'),
+    )
+
+    # Refused rather than created: a recorded OCID that answers to nothing is a
+    # fact gone stale, and making a second compartment beside it would hide
+    # that behind a key confined to somewhere the stack does not act.
+    with pytest.raises(oci_iam.CredentialRejected, match='none of that name'):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+    assert tenancy.identity.compartments == {}
+
+
+def test_a_compartment_whose_ocid_disagrees_with_the_mapping_is_refused(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live = _named('compartment', 'kluster')
+    tenancy.identity.compartments[live.id] = live
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.STATE_BACKEND,
+        conventions.Compartment(consumer=conventions.STATE_BACKEND, name=live.name, ocid='ocid1.compartment.oc1..old'),
+    )
+
+    with pytest.raises(oci_iam.CredentialRejected, match='is stale'):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+
+
+def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    drill = 'ocid1.compartment.oc1..drill'
+
+    _ = oci_iam.mint_api_key(
+        seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+    )
+
+    # The override is for a tenancy that is not this estate's, where neither
+    # the names nor the OCIDs `conventions` records mean anything -- so nothing
+    # is looked up, nothing is created, and nothing is compared.
+    assert tenancy.identity.compartments == {}
+    name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
+    assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {drill}']
+
+
+def test_a_mint_converges_the_seeds_own_policy_before_it_acts(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    seed_policy = next(policy for policy in tenancy.identity.policies.values() if policy.name == oci_iam.SEED_NAME)
+    # A seed whose policy predates the compartment statement: it can still
+    # write policy in the tenancy, which is what makes this self-repairing.
+    seed_policy.statements = [line for line in oci_iam.STATEMENTS if 'compartments' not in line]
+
+    _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The converge rides the mint rather than living in a verb of its own: the
+    # mint is the one command that needs the statement, and a converge an
+    # operator has to remember is one that is forgotten -- with the failure
+    # landing as a refusal to create the compartment, mid-run.
+    assert seed_policy.statements == list(oci_iam.STATEMENTS)
 
 
 @dataclass

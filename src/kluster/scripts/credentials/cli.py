@@ -27,6 +27,7 @@ import logging
 import sys
 from pathlib import Path
 
+from ... import conventions
 from . import (
     b2,
     derived,
@@ -85,9 +86,11 @@ _ORDER = """when to run what:
          The recovery key is one of them, and creating it also writes
          escrow/RECIPIENTS. Stops at each credential no API can create and
          prints the console steps. Re-run it to resume.
-    2. credentials derived oci-state-backend mint --compartment <ocid>
+    2. credentials derived oci-state-backend mint
          The appliance's own OCI key, minted from the seed into a
          workstation slot. The next step reads it there; nothing else does.
+         The compartment it is confined to is the one conventions names for
+         the appliance, created by this command if it does not exist.
     3. state-backend provision
          The Pulumi state backend, which every stack needs before it can act,
          and the first thing to escrow: it generates the CA and the backup
@@ -100,10 +103,12 @@ _ORDER = """when to run what:
          Mints the zone-scoped Cloudflare token from the seed and writes
          it into the dns stack's config, which is then committed. One
          derived row per command; re-running one rotates it.
-    6. credentials derived oci-physical mint --compartment <ocid>
+    6. credentials derived oci-physical mint
        credentials derived b2-management mint
          The two provider credentials the physical stack runs on, into its
-         config, which is then committed like the one above.
+         config, which is then committed like the one above. The first also
+         creates that stack's compartment where it does not exist yet, and
+         prints the OCID to record in conventions and commit.
     7. credentials derived unifi record
        credentials derived adguard record
          The two credentials no API here mints: each is made on the
@@ -185,7 +190,7 @@ def _slot_source(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _oci_consumer(command: argparse.ArgumentParser) -> None:
+def _oci_consumer(command: argparse.ArgumentParser, consumer: str) -> None:
     """The two arguments every minted OCI row takes.
 
     The seed the mint reads and the compartment it confines the result to are
@@ -197,11 +202,18 @@ def _oci_consumer(command: argparse.ArgumentParser) -> None:
         default=derived.OCI_SEED_ENTRY,
         help=f'the kit entry the seed is read from (default: {derived.OCI_SEED_ENTRY})',
     )
-    # Required because nothing in this repository knows it: a compartment OCID
-    # is a fact about the tenancy, and it is what the minted policy confines
-    # the key to.
+    # Optional because this repository does know it: `conventions` names one
+    # compartment per consumer, and the mint creates the one that is not there
+    # yet. The flag is for a tenancy that is not this estate's -- a drill --
+    # where those names mean nothing.
     _ = command.add_argument(
-        '--compartment', required=True, metavar='<ocid>', help='the compartment the key may administer'
+        '--compartment',
+        default=None,
+        metavar='<ocid>',
+        help=(
+            'mint against this compartment instead of the one `conventions` names for '
+            f'{consumer} ({conventions.OCI_COMPARTMENTS[consumer].name}), for a drill tenancy'
+        ),
     )
 
 
@@ -612,13 +624,14 @@ def build_parser() -> argparse.ArgumentParser:
         help='mint the user, group, policy and key from the seed into a workstation slot',
         description=(
             'Sign as the OCI seed to create a user, its group, its policy and its API key, confined to '
-            'the compartment named below, and write the signing configuration into a `0600` file under '
+            "the appliance's own compartment, and write the signing configuration into a `0600` file under "
             'the checkout. `state-backend provision` reads it from there; nothing else does, and it '
-            'never leaves this machine. A previous key of the same name is retired once the new one '
-            'answers, so re-running this is the rotation.'
+            'never leaves this machine. The compartment comes from `conventions` and is created if it is '
+            'not there yet, so nothing has to be prepared in a console first. A previous key of the same '
+            'name is retired once the new one answers, so re-running this is the rotation.'
         ),
     )
-    _oci_consumer(appliance_mint)
+    _oci_consumer(appliance_mint, conventions.STATE_BACKEND)
 
     zones_row = rows.add_parser(
         derived.ZONES_ROW,
@@ -668,15 +681,16 @@ def build_parser() -> argparse.ArgumentParser:
         'mint',
         help="mint the user, group, policy and key from the seed into that stack's config secrets",
         description=(
-            'Sign as the OCI seed to create the user, its group and the policy that confines it to the '
-            "compartment named below, then write the signing configuration into the stack's committed "
-            'config: the tenancy, the user, the fingerprint and the private key encrypted, the region and '
-            'the compartment in the clear because the program reads them that way. The compartment '
-            'travels with the credential because a key says what it may sign, not where it may act. '
+            'Sign as the OCI seed to create the compartment this stack acts in, the user, its group and '
+            'the policy that confines that group to the compartment, then write the signing configuration '
+            "into the stack's committed config: the tenancy, the user, the fingerprint and the private key "
+            'encrypted, the region in the clear. The compartment does not travel with the credential -- '
+            'it is a boundary `conventions` names, and the stack reads it there; a compartment created '
+            'here for the first time is printed, to be recorded in that file and committed. '
             'Commit the config afterwards; re-running this is the rotation.'
         ),
     )
-    _oci_consumer(physical_mint)
+    _oci_consumer(physical_mint, conventions.PHYSICAL)
     _slot_source(physical_mint)
 
     management_key = rows.add_parser(
