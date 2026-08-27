@@ -1,5 +1,5 @@
-encryptionsalt: v1:rHQmmHRH6I8=:v1:t9ysIvEkM/CaoPNY:z5doKDizSARoZkyCs+KEosogclNVHw==
+encryptionsalt: v1:WkIr5Qn+4pI=:v1:dUgXYsKsTuXvjRq1:yO4cFptPIhkqZeN8JxYnACmCddVqKA==
 config:
   cloudflare:apiToken:
-    secure: v1:abJ97pA6Wyuj34u+:irnvhowCE4+K/Z5NpKzkfvfF9q9zDUShU02fzFlulN6cvAa0VYGXueetV73paDul7x1BISua3dcQvbOhwvWpaPP++NZO
+    secure: v1:Mvco7yk+WciKtog3:DmEnmE1QbwTyTIqJUiuD/KWJeMXrE04C2yry4yX1DIhyO1KdzDIaqP1kAmECRkiynGlDUkkeM+RESthdcY5GdRYrBKhQ
   kluster-py:cloudflareAccountId: c452df7ed633d2335c980bd7cc46a550
