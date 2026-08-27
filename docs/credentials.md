@@ -560,13 +560,26 @@ is five things (§2.1) and a provider recovers none of them: it reads
 `oci:tenancyOcid`, `oci:userOcid`, `oci:fingerprint`, `oci:privateKey` and
 `oci:region`. A sixth travels beside them, `compartmentId` in this
 project's own namespace, because a credential says who may act and never
-where. Of the six, only the region is written in plain text — it is a
-constant in `conventions`, and everything else is either the key itself or
-an account identifier of the class the kit keeps as a protected attribute
-(§2.1), on a file that is public the moment the repository is. The
-fingerprint is written although §2.1 declines to store one: the provider
-takes it as an input rather than deriving it, and the command computes it
-from the key it is pushing in the same breath, so the two cannot disagree.
+where.
+
+Four of the six are config secrets — the key, and the two identifiers
+naming the tenancy and the user it belongs to, which are the class of fact
+the kit itself keeps as a protected attribute (§2.1). The fingerprint is
+written although §2.1 declines to store one: the provider takes it as an
+input rather than deriving it, and the command computes it from the key it
+is pushing in the same breath, so the two cannot disagree.
+
+The other two are plain, each for
+its own reason. The region is a constant in `conventions`. The compartment
+is plain **because the program reads it plain** — `stacks/physical.py` takes
+it with `require`, and a value pushed as a secret and read that way agrees
+only by way of an upstream defect (`pulumi/pulumi#7127`), so the two sides
+have to be made to say the same thing. Reading it as a secret instead would
+type-check, every component taking an input rather than a string, but
+secretness propagates: the compartment field of every resource in the stack
+would become encrypted state, and every preview line naming one would read
+`[secret]`. That is a poor trade for an identifier naming a container inside
+the tenancy rather than the account that owns it.
 
 Two pieces of that shape are designed and not built (`kluster-ops#1`);
 they are described here because the rest of the register is written
