@@ -113,6 +113,13 @@ class Label:
 def backup_labels() -> tuple[str, ...]:
     """The backup identities the appliance encrypts dumps to, newest first.
 
+    The current generation and the one before it, so every object still in
+    retention opens with one of the two (physical/state-backend.md §5). The
+    window is **clamped at the first generation**: until a rotation has
+    happened there is no predecessor, and naming one would have the register
+    demand a ciphertext for a generation that never existed — and a bring-up
+    mint a key nothing needs and encrypt every dump to it.
+
     Read from the appliance's own pin rather than repeated here: the Butane
     file names exactly these recipients, so bumping the generation is one
     edit in one place. `state_backend.settings` is constants over
@@ -123,7 +130,8 @@ def backup_labels() -> tuple[str, ...]:
     from kluster.scripts.state_backend import settings
 
     current = settings.AGE_GENERATION
-    return tuple(f'{BACKUP}/{number}' for number in (current, current - 1))
+    window = (current, current - 1)
+    return tuple(f'{BACKUP}/{number}' for number in window if number >= FIRST)
 
 
 def register() -> dict[str, Label]:

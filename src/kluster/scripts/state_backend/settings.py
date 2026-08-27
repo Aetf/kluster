@@ -49,8 +49,11 @@ AGE_VERSION = 'v1.3.1'
 AGE_URL = f'https://github.com/FiloSottile/age/releases/download/{AGE_VERSION}/age-{AGE_VERSION}-linux-amd64.tar.gz'
 AGE_SHA256 = 'bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377'
 
-#: Dumps are encrypted to the two newest generations, so any object in
-#: retention opens with the current or the previous key.
+#: Dumps are encrypted to this generation and the one before it, so any object
+#: in retention opens with the current or the previous key. Bumping this is
+#: what rotates the backup identity: the escrow expects a ciphertext for each
+#: generation the window names (`credentials escrow check`), and the window is
+#: clamped at the first, there being nothing before it.
 AGE_GENERATION = 1
 
 DUMP_SCHEDULE = '*-*-* 02:30:00'
