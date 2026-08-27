@@ -21,6 +21,7 @@ slot instead (`oci_slot.py`).
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 from ... import conventions
@@ -84,6 +85,24 @@ OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 
 
+def _deliver(stack: pulumi_config.Stack, *, secret: Mapping[str, str], plain: Mapping[str, str], holds: str) -> None:
+    """Fill a stack's committed configuration, and say what has to be committed.
+
+    Every §3 row delivered to a stack closes the same way, and the closing is
+    the half an operator acts on: the stack has to exist before it has a
+    configuration to set, the secret half goes in encrypted and the plain half
+    readable, and the run ends by naming the file that publishes the slot. A
+    push that stopped at `pulumi config set` would leave the credential live in
+    the provider and invisible to everyone else's checkout.
+    """
+    stack.ensure()
+    for key, value in secret.items():
+        stack.set_secret(key, value)
+    for key, value in plain.items():
+        stack.set(key, value)
+    log.info('the %s stack holds %s; commit Pulumi.%s.yaml to publish the slot', stack.name, holds, stack.name)
+
+
 def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> str:
     """Mint the zones token from the seed and install it in a stack's config.
 
@@ -96,19 +115,16 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     session = cloudflare.Session.from_entry(kit, seed_entry)
     minted = cloudflare.mint_zone_token(session, name=ZONES_TOKEN_NAME, zones=zones)
 
-    stack.ensure()
-    stack.set_secret(API_TOKEN_KEY, minted.value)
-    stack.set(ACCOUNT_KEY, minted.account_id)
-    log.info(
-        'the %s stack holds a token scoped to %s; commit Pulumi.%s.yaml to publish the slot',
-        stack.name,
-        ', '.join(zones),
-        stack.name,
+    _deliver(
+        stack,
+        secret={API_TOKEN_KEY: minted.value},
+        plain={ACCOUNT_KEY: minted.account_id},
+        holds=f'a token scoped to {", ".join(zones)}',
     )
     return minted.account_id
 
 
-def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartment_id: str) -> None:
+def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartment_id: str, holds: str) -> None:
     """Write one OCI signing configuration into a stack's committed config.
 
     The four keys the provider signs with are secrets. The key obviously is;
@@ -133,18 +149,22 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartmen
     identifier that names a container inside the tenancy rather than the
     account that owns it.
     """
-    stack.ensure()
-    stack.set_secret(OCI_TENANCY_KEY, key.tenancy)
-    stack.set_secret(OCI_USER_KEY, key.user)
-    stack.set_secret(OCI_FINGERPRINT_KEY, key.fingerprint)
-    # The PEM goes in without its trailing newline: a push proves itself by
-    # reading the value back through `pulumi config get`, which is
-    # line-oriented, so a value ending in a newline can never compare equal to
-    # what was written. The end marker is the end of a PEM to every reader of
-    # one, this provider included.
-    stack.set_secret(OCI_PRIVATE_KEY_KEY, key.private_key.strip())
-    stack.set(COMPARTMENT_KEY, compartment_id)
-    stack.set(OCI_REGION_KEY, key.region)
+    _deliver(
+        stack,
+        secret={
+            OCI_TENANCY_KEY: key.tenancy,
+            OCI_USER_KEY: key.user,
+            OCI_FINGERPRINT_KEY: key.fingerprint,
+            # The PEM goes in without its trailing newline: a push proves
+            # itself by reading the value back through `pulumi config get`,
+            # which is line-oriented, so a value ending in a newline can never
+            # compare equal to what was written. The end marker is the end of a
+            # PEM to every reader of one, this provider included.
+            OCI_PRIVATE_KEY_KEY: key.private_key.strip(),
+        },
+        plain={COMPARTMENT_KEY: compartment_id, OCI_REGION_KEY: key.region},
+        holds=holds,
+    )
 
 
 def oci_physical(
@@ -166,13 +186,7 @@ def oci_physical(
     identity = oci_iam.Identity.for_consumer(PHYSICAL_STACK, compartment_id=compartment_id)
     minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
 
-    _push_api_key(stack, minted, compartment_id=compartment_id)
-    log.info(
-        'the %s stack holds a key for %s; commit Pulumi.%s.yaml to publish the slot',
-        stack.name,
-        identity.name,
-        stack.name,
-    )
+    _push_api_key(stack, minted, compartment_id=compartment_id, holds=f'a key for {identity.name}')
     return minted.user
 
 
@@ -210,14 +224,10 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     log.info('opening the B2 seed from the kit')
     key_id, key = b2.mint_management(kit, seed_entry=seed_entry)
 
-    stack.ensure()
-    stack.set_secret(B2_KEY_ID_KEY, key_id)
-    stack.set_secret(B2_KEY_KEY, key)
-    log.info(
-        'the %s stack holds %s (%s); commit Pulumi.%s.yaml to publish the slot',
-        stack.name,
-        b2.MANAGEMENT_KEY_NAME,
-        key_id,
-        stack.name,
+    _deliver(
+        stack,
+        secret={B2_KEY_ID_KEY: key_id, B2_KEY_KEY: key},
+        plain={},
+        holds=f'{b2.MANAGEMENT_KEY_NAME} ({key_id})',
     )
     return key_id
