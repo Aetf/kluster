@@ -559,9 +559,7 @@ Environment half of every row (ci.md §2) have neither. Restic passwords
 will not join them: `backed_pvc` generates its own into state and seals
 it, so a new volume needs no credentials run (rule 6). Until those
 commands exist, a bring-up delivers the seed kit, the state backend and
-the zones token, and the rest of §3 is design rather than procedure. The
-escrow registry and its command family are design here too, in the same
-sense: their implementation is `kluster-ops#37`.
+the zones token, and the rest of §3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
