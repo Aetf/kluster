@@ -217,8 +217,9 @@ All decided behavior from architecture.md §3, expressed as config:
     the v6 GUAs + the augmented node's secondary private IP — OCI
     1:1-NATs public v4 to private, so public v4 literals would never
     match (architecture.md §3.2); all from physical outputs) and `lan`
-    (`192.168.70.0/24` + the ULA /64). Pool membership via the `serviceSelector` label from
-    `conventions.py`. Bootstrap verification: pool-contains-node-IP.
+    (`192.168.71.0/24` + the ULA /64, outside every home network and
+    the nodes' own VLAN 7 alike). Pool membership via the
+    `serviceSelector` label from `conventions.py`. Bootstrap verification: pool-contains-node-IP.
 -   **BGP**: Cilium **BGPv2** resources — `CiliumBGPClusterConfig`
     (node-selected to the homelab worker only) +
     `CiliumBGPPeerConfig` + `CiliumBGPAdvertisement`; the v1
@@ -235,7 +236,7 @@ All decided behavior from architecture.md §3, expressed as config:
     `--bgp-secrets-namespace` (kube-system by default), so its
     SealedSecret is sealed for that namespace — and a gw-config
     device secret on the UDM side. The UDM's
-    FRR config applies an inbound **prefix-list** (`192.168.70.0/24
+    FRR config applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap — without the filter, a compromised worker
     VM (or anything claiming its static IP while it's down) could

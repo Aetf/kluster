@@ -377,6 +377,10 @@ scheduled migration cutover (physical/homelab-host.md §3, migration.md Wave C).
     the workload set plus qbittorrent with comfortable slack. **A RAM
     upgrade remains the relief valve** (board verified: ROG Maximus
     Z690 Hero, DDR5, 4×DIMM up to 128 GB).
+-   **Addressing**: the worker sits on the **dedicated cluster VLAN**
+    (id 7, `192.168.70.0/24`) rather than the host's untagged server
+    LAN, at the static address **`192.168.70.10`** — the network shape
+    and the reasons for it are physical/homelab-host.md §2.
 -   **Disk**: target 100+ GB on NVMe (concrete shape — raw sparse file
     on a nodatacow subvolume, virtio-blk — physical/homelab-host.md §1), but only ~85 GB is free
     while both clusters coexist. The migration plan must interleave

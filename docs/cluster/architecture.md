@@ -68,10 +68,10 @@ graph TD
  DMSE[Ubiquiti UDM SE Router <br> BGP AS 65000]  
    
 subgraph "Homelab Physical Server"  
- Homelab_VM[Talos Worker VM <br> LAN IP: 192.168.80.238]  
+ Homelab_VM[Talos Worker VM <br> cluster VLAN 7: 192.168.70.10]  
  end  
    
- LB_Pool(Cilium lan LB pool <br> v4 192.168.70.0/24 <br> v6 ULA /64)  
+ LB_Pool(Cilium lan LB pool <br> v4 192.168.71.0/24 <br> v6 ULA /64)  
  ZT_Net(ZeroTier Personal Devices)  
  end  
   
@@ -142,7 +142,7 @@ reach the VIP differs:
 | Pool | Addresses | How traffic reaches the VIP |
 | --- | --- | --- |
 | `internet` | The three cloud nodes' primary addresses **as seen on the wire** (§3.2): v4 = the primary **private** IPs (OCI 1:1-NATs each public IPv4 to its VNIC private IP — the interface never carries the public address), v6 = the GUAs (no NAT, on-interface) | OCI routes each public IP to its node; the free NLB fans the stable public front IP out across healthy nodes; no announcement needed |
-| `lan` | Dedicated dual-stack subnet, e.g. `192.168.70.0/24` + a ULA `/64` — deliberately *not* inside the LAN's `192.168.80.0/24` | BGP-announced to the UDM SE (§3.4) |
+| `lan` | Dedicated dual-stack subnet, `192.168.71.0/24` + a ULA `/64` — deliberately *not* inside any home network, the nodes' own VLAN 7 (`192.168.70.0/24`) included | BGP-announced to the UDM SE (§3.4) |
 
 This works because Cilium's kube-proxy replacement installs BPF service
 entries for LoadBalancer frontends on the node regardless of whether any
@@ -262,8 +262,9 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
 
 ### 3.4 LAN specifics: BGP to the UDM, dedicated subnet, split DNS
 
-1.  **Dedicated subnet**: the `lan` pool (`192.168.70.0/24` + ULA `/64`)
-    sits outside any existing VLAN subnet, so there is no ARP/ND ambiguity
+1.  **Dedicated subnet**: the `lan` pool (`192.168.71.0/24` + ULA `/64`)
+    sits outside every VLAN subnet, the nodes' own VLAN 7
+    (`192.168.70.0/24`) included, so there is no ARP/ND ambiguity
     and no L2 announcement machinery — it is a purely routed subnet whose
     next hop (the Talos VM) is learned via BGP. It is deliberately **not a
     VLAN/network object on the UDM**: the UDM never hosts this subnet at
@@ -277,17 +278,19 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
 3.  **Firewall semantics of the routed pool** (ground truth read off the
     UDM's iptables, 2026-08-23): UniFi's zone firewall classifies
     forwarded traffic by **destination ipset**, not interface pairs —
-    all three VLANs (br0/br2/br5) sit in the LAN zone and LAN→LAN is an
-    unconditional predefined ACCEPT (no inter-VLAN isolation is
-    configured today). `192.168.70.0/24` is *not* a network object, so
-    it appears in no zone ipset: LAN-sourced traffic to the pool falls
-    through to the **LAN→WAN policy chain** (currently also ACCEPT).
+    the three pre-existing VLANs (br0/br2/br5) sit in the LAN zone and
+    LAN→LAN is an unconditional predefined ACCEPT (no inter-VLAN
+    isolation is configured today; the nodes' VLAN 7 is the one network
+    created outside that zone, gateway.md §4.2). `192.168.71.0/24` is
+    *not* a network object, so it appears in no zone ipset: LAN-sourced
+    traffic to the pool falls through to the **LAN→WAN policy chain**
+    (currently also ACCEPT).
     Consequences: (a) no allow rules are needed today; (b) the pool
     inherits WAN-zone side effects — if IPS/content filtering/geoip
     ever applies to LAN→WAN, it silently applies to cluster VIP
     traffic (**bootstrap verification: confirm no NAT/IPS interference
     on the LAN→pool path**); (c) any future tightening of zone policy
-    must name `192.168.70.0/24` via an address group, since no network
+    must name `192.168.71.0/24` via an address group, since no network
     object will ever exist for it. One tightening ships with the
     cluster rather than waiting (decided 2026-08-23, amended
     2026-08-24): **IoT-VLAN → pool default drop with one enumerated
@@ -319,7 +322,7 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
     metered-egress cloud path.
 -   **qbittorrent's IPv6** (the reason it never joined the legacy cluster):
     outbound v6 works via Cilium's IPv6 masquerade to the homelab VM's GUA
-    (SLAAC on the LAN bridge); inbound v6 peers need a UDM firewall
+    (SLAAC on the cluster VLAN); inbound v6 peers need a UDM firewall
     pinhole to the VM's GUA plus the service port — a zone policy
     declared in `physical` via the unifi provider (§5.1), *not*
     gw-config territory. Constraint on record: the zone-policy API
@@ -752,10 +755,10 @@ the host would put a single non-gateway machine on the management data
 path. Moving the daemon to the UDM puts ZT termination where routing
 already lives:
 
--   **Routes become trivial**: ZT Central managed routes for the three
-    VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.80.0/24`,
-    `192.168.90.0/24`, `192.168.70.0/24` + its ULA /64) all via the
-    UDM's ZT address. The UDM reaches the pool through its own
+-   **Routes become trivial**: ZT Central managed routes for the home
+    VLAN subnets and the `lan` pool (`10.0.5.0/24`, `192.168.70.0/24`,
+    `192.168.80.0/24`, `192.168.90.0/24`, and `192.168.71.0/24` + its
+    ULA /64) all via the UDM's ZT address. The UDM reaches the pool through its own
     BGP-learned route (§3.4) — one hop, no host in the path. The
     legacy `10.42.0.0/24`-via-VPS route retires with the VPS.
 -   **Management-path independence**: CI's per-run ZT join (ci.md §2)

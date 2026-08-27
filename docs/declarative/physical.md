@@ -148,8 +148,8 @@ machine_secrets
 -   **Where a machine is reached**: each node is administered at its own
     address rather than through the NLB — an apply names one node and a
     balancer would pick whichever backend it liked. On the cloud nodes
-    that address is the public one; the worker is reached on its LAN
-    address, over the overlay (physical/gateway.md §2).
+    that address is the public one; the worker is reached at its
+    cluster-VLAN address, over the overlay (physical/gateway.md §2).
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying
     data; node replacement is explicit (drain, etcd leave, destroy,
@@ -172,10 +172,12 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 ## 3. Homelab (pulumi-libvirt)
 
 -   **Worker VM**: 12–16 vCPU / 20 GiB end-state (nodes.md §4.2),
-    bridged to the LAN, disk on NVMe — both disk *and* RAM start
+    bridged onto the cluster VLAN (id 7, `192.168.70.0/24`) at the
+    static `192.168.70.10`, disk on NVMe — both disk *and* RAM start
     smaller during migration and grow per wave (~60 GB / ~10 GiB at
     bootstrap; migration.md §0.4). The VM's **system design** — disk shape (raw sparse on a
-    nodatacow subvolume, virtio-blk), the second host bridge, the
+    nodatacow subvolume, virtio-blk), the second host bridge over the
+    tagged VLAN interface with the host's own leg beside it, the
     two-phase GPU passthrough, and the host-prep aconfmgr change-set
     the program assumes — is
     **[physical/homelab-host.md](../physical/homelab-host.md)**; this
@@ -228,13 +230,16 @@ architecture.md §5.1)** manages the controller-side resources, **all
 in this stack** — the co-location exception on record: gateway
 resources follow the gateway's credential tier, so the `apps` CI
 environment never holds a controller credential; app components keep
-a pointer (workloads.md §4). The census: the IoT→lan-pool zone
+a pointer (workloads.md §4). The census: the **cluster VLAN network
+object** (id 7, `192.168.70.0/24`) and the **firewall zone of its
+own** it is placed in — the isolation the shared server LAN could not
+offer (physical/gateway.md §4.2) — the IoT→lan-pool zone
 policy with its address groups (architecture.md §3.4 — the v4 CIDR
 group and the ULA group are separate objects, UniFi address groups
 being single-family), the qbittorrent v6 pinhole and its v4
-peer-port forward (**the only port forward**; no management inbound
-exists), and any static LAN host entries (dns.md §4). Auth: a
-dedicated local admin with an **API key** — never the SSH
+peer-port forward to `192.168.70.10` (**the only port forward**; no
+management inbound exists), and any static LAN host entries (dns.md
+§4). Auth: a dedicated local admin with an **API key** — never the SSH
 credential — and failure retries are throttled: the UniFi global
 login rate-limit is not per-IP and has locked out real users before
 (the HA-integration incident).
