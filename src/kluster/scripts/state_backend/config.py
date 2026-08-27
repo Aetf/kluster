@@ -42,6 +42,27 @@ KEY_FILE = 'client.key'
 URL_FILE = 'backend-url'
 
 
+def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
+    """The public halves of every identity the appliance encrypts dumps to.
+
+    One function behind two callers, which is the point: the box's recipient
+    list is rendered from this, and so is the encryption of a dump an
+    operator takes by hand (`state.py`). A dump written to a different set
+    than the box's would be a file the drill and the escrow disagree about.
+    """
+    return tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels())
+
+
+def backup_identities(vault: escrow.Vault) -> list[str]:
+    """The private halves, for opening a dump — the other direction of the same list.
+
+    All of them at once, newest first, because which generation a given
+    object was written under is not a fact the object carries (§5): any dump
+    still in retention opens with one of these.
+    """
+    return [vault.recover(label) for label in escrow.backup_labels()]
+
+
 @dataclass(frozen=True, eq=False)
 class Roots:
     """What the appliance is built from that only the escrow can produce.
@@ -66,10 +87,7 @@ class Roots:
 
     @classmethod
     def recover(cls, vault: escrow.Vault) -> Roots:
-        return cls(
-            ca=pki.Authority.from_pem(vault.recover(escrow.CA)),
-            age_recipients=tuple(age.recipient(vault.recover(label)) for label in escrow.backup_labels()),
-        )
+        return cls(ca=pki.Authority.from_pem(vault.recover(escrow.CA)), age_recipients=age_recipients(vault))
 
     @classmethod
     def ensure(cls, vault: escrow.Vault) -> Roots:
