@@ -1,78 +1,58 @@
-"""age identities derived from the derivation seed.
+"""The `age` command line tool, as this repository uses it.
 
-The state-backend's dumps are age-encrypted (physical/state-backend.md §5) to
-a pair of generations plus the drill key. A generation is a *label*, not a
-stored file: its identity is `backup/age/<generation>` derived from the
-derivation seed, so rotating means deriving the next and re-provisioning —
-nothing to escrow, nothing to lose.
+Two things are age-encrypted here: every secret in the escrow
+(`escrow.py`), and the state-backend's nightly pg_dump on the box itself
+(physical/state-backend.md §5). This module is the first of those, and the
+recipients for the second.
 
-age's X25519 identity is exactly a 32-byte scalar in Bech32 clothing, which is
-what makes the derivation possible: the derived bytes *are* the key.
+**The tool, not a binding.** Encryption and key generation shell out to the
+pinned `age` and `age-keygen` binaries (mise.toml). The wire format's value is
+that its reference implementation can still read an old ciphertext years from
+now on a machine that has none of this repository, so a second implementation
+of it — a Python binding, or a hand-written encoder — buys nothing and can
+disagree.
 
-The Bech32 encoder below is the repo's one hand-written piece of what looks
-like cryptography, and is a deliberate exception. It is an *encoding*, not a
-primitive: it has no secret input and no security property to weaken, and a
-mistake in it produces a string age refuses rather than a key that silently
-opens to someone else. Two tests hold it: the BIP-173 vectors, and a
-round-trip against real `age-keygen`. The alternative -- a PyPI bech32
-package unmaintained since 2020 -- would trade forty tested lines for a
-supply-chain dependency. The X25519 half, where a mistake *would* be silent,
-comes from `cryptography`.
+**The private half never lands on a filesystem.** Both `age --decrypt` and
+`age-keygen -y` take `-` for their identity argument and read it from standard
+input, so a recovery key exists only in this process and in the tool's memory.
+Recipients are public and travel on argv; ciphertexts travel as files, because
+standard input is spoken for.
+
+A backup generation is a **label with a stored ciphertext**, not a derivation:
+the identity behind `backup/age/<generation>` is random at creation, its age
+ciphertext is committed under `escrow/`, and that ciphertext is the only copy.
+Rotating is generating the next one and re-provisioning; losing its ciphertext
+is losing every dump encrypted to it, which is the property `escrow check`
+exists to defend.
 """
 
 from __future__ import annotations
 
+import subprocess as sp
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+#: The pinned binaries. Named rather than inlined so a failure can say which
+#: tool was missing and where it is pinned.
+BINARY = 'age'
+KEYGEN = 'age-keygen'
 
-from . import seeds
+#: Long enough for a cold start, short enough that a hung tool fails the run
+#: rather than the operator's afternoon. Every call here is bytes-in,
+#: bytes-out with no network.
+TIMEOUT = 30
 
-_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
+SECRET_PREFIX = 'AGE-SECRET-KEY-1'
+PUBLIC_PREFIX = 'age1'
 
-_SECRET_HRP = 'age-secret-key-'
-_PUBLIC_HRP = 'age'
-
-
-def _polymod(values: list[int]) -> int:
-    generator = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
-    chk = 1
-    for value in values:
-        top = chk >> 25
-        chk = (chk & 0x1FFFFFF) << 5 ^ value
-        for i, g in enumerate(generator):
-            if (top >> i) & 1:
-                chk ^= g
-    return chk
+#: ASCII armour, because a ciphertext in the escrow is a file git carries.
+ARMOR_BEGIN = '-----BEGIN AGE ENCRYPTED FILE-----'
+ARMOR_END = '-----END AGE ENCRYPTED FILE-----'
 
 
-def _hrp_expand(hrp: str) -> list[int]:
-    return [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
-
-
-def _convert_bits(data: bytes, frombits: int, tobits: int) -> list[int]:
-    acc = 0
-    bits = 0
-    out: list[int] = []
-    maxv = (1 << tobits) - 1
-    for value in data:
-        acc = (acc << frombits) | value
-        bits += frombits
-        while bits >= tobits:
-            bits -= tobits
-            out.append((acc >> bits) & maxv)
-    if bits:
-        out.append((acc << (tobits - bits)) & maxv)
-    return out
-
-
-def bech32_encode(hrp: str, data: bytes) -> str:
-    """Bech32 (BIP-173) — age's encoding for both halves of an identity."""
-    values = _convert_bits(data, 8, 5)
-    checksum_input = _hrp_expand(hrp) + values + [0, 0, 0, 0, 0, 0]
-    polymod = _polymod(checksum_input) ^ 1
-    checksum = [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
-    return hrp + '1' + ''.join(_CHARSET[d] for d in values + checksum)
+class AgeError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -83,16 +63,73 @@ class Identity:
     public: str
 
 
-def identity_from_scalar(scalar: bytes) -> Identity:
-    if len(scalar) != 32:
-        raise ValueError('an X25519 scalar is 32 bytes')
-    public = X25519PrivateKey.from_private_bytes(scalar).public_key().public_bytes_raw()
-    return Identity(
-        secret=bech32_encode(_SECRET_HRP, scalar).upper(),
-        public=bech32_encode(_PUBLIC_HRP, public),
-    )
+def _run(argv: list[str], *, stdin: str) -> str:
+    try:
+        proc = sp.run(argv, input=stdin, capture_output=True, text=True, timeout=TIMEOUT)
+    except FileNotFoundError as exc:
+        raise AgeError(f'{argv[0]} is not on PATH; mise.toml pins it, so run under `mise x -- ...`') from exc
+    if proc.returncode != 0:
+        raise AgeError(f'{argv[0]} refused: {proc.stderr.strip() or f"exit {proc.returncode}"}')
+    return proc.stdout
 
 
-def generation(seed: bytes, number: int) -> Identity:
-    """The identity of backup key generation `number`."""
-    return identity_from_scalar(seeds.age_seed(seed, number))
+def generate() -> Identity:
+    """A fresh identity from the tool that defines the format.
+
+    The public half is computed back out of the secret rather than read off
+    the comment line `age-keygen` prints beside it: the pair is then proven by
+    the same call every later recipient lookup makes.
+    """
+    printed = _run([KEYGEN], stdin='')
+    secret = next((line.strip() for line in printed.splitlines() if line.startswith(SECRET_PREFIX)), '')
+    if not secret:
+        raise AgeError(f'{KEYGEN} printed no identity')
+    return Identity(secret=secret, public=recipient(secret))
+
+
+def recipient(secret: str) -> str:
+    """The public half of an identity.
+
+    Computed by the tool rather than in-process: a mistake here would produce
+    a recipient that looks like a key and encrypts to nobody, which is the one
+    class of mistake nothing downstream can catch.
+    """
+    public = _run([KEYGEN, '-y', '-'], stdin=secret.strip() + '\n').strip()
+    if not public.startswith(PUBLIC_PREFIX):
+        raise AgeError(f'{KEYGEN} returned {public!r}, which is not a recipient')
+    return public
+
+
+def encrypt(plaintext: str, recipients: Sequence[str]) -> str:
+    """Armoured ciphertext readable by every recipient given.
+
+    Multi-recipient is the point rather than a nicety: it is what lets the
+    escrow be re-wrapped for a successor custodian, and what lets a dump be
+    readable by two generations at once.
+    """
+    if not recipients:
+        raise AgeError('no recipient to encrypt to')
+    argv = [BINARY, '--encrypt', '--armor']
+    for value in recipients:
+        argv += ['--recipient', value]
+    return _run(argv, stdin=plaintext)
+
+
+def decrypt(path: Path, identities: Sequence[str]) -> str:
+    """The plaintext of a ciphertext *file*, opened by whichever identity fits.
+
+    A path rather than bytes because standard input carries the identities,
+    which is what keeps them off every filesystem. Several identities are
+    accepted so a re-wrap can run without first knowing which key a given
+    file is currently under.
+    """
+    if not identities:
+        raise AgeError(f'no identity to open {path} with')
+    stdin = ''.join(f'{value.strip()}\n' for value in identities)
+    return _run([BINARY, '--decrypt', '--identity', '-', str(path)], stdin=stdin)
+
+
+def is_armoured(text: str) -> bool:
+    """Whether this looks like an age file at all — the check that needs no key."""
+    stripped = text.strip()
+    return stripped.startswith(ARMOR_BEGIN) and stripped.endswith(ARMOR_END)

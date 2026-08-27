@@ -1,14 +1,21 @@
-"""The state-backend's PKI, derived from the derivation seed.
+"""The state-backend's PKI: one escrowed CA key, three re-issuable leaves.
 
 A single-purpose private CA with exactly three certificates under it — the
-server and the `ci`/`operator` clients (physical/state-backend.md §3). Nothing
-here is escrowed: every private key is an HKDF derivation of the derivation
-seed, so losing the box (or the CA file) costs a re-provision, not a recovery.
+server and the `ci`/`operator` clients (physical/state-backend.md §3).
 
-P-256 rather than RSA because a private scalar is a deterministic function of
-the seed, which deterministic RSA generation is not (credentials.md §2.2).
-Certificates themselves are re-issued rather than reproduced byte-for-byte:
-re-provision is the only apply path this appliance has.
+**The CA key is the only escrowed half.** It is random at creation and its
+ciphertext lives under `escrow/state-backend/ca` (credentials.md §2.2); losing
+it costs a new CA, which is a re-provision and a redistribution of all three
+client bundles. **Leaf keys are random at issuance and escrowed nowhere**:
+they are re-issuable from the CA, so keeping a copy would add an exposure that
+buys back nothing. Issuing one twice therefore produces two different keys,
+which is why a caller that needs a certificate and its key takes both halves
+from a single `issue_*` call.
+
+P-256 rather than RSA: the live CA is a P-256 key and re-keying it is a
+re-provision, so the curve stays where the appliance's own history put it.
+Nothing constrains the algorithm any more — the determinism that once required
+an elliptic scalar is gone with the derivation model.
 """
 
 from __future__ import annotations
@@ -22,8 +29,6 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from . import seeds
-
 CURVE = ec.SECP256R1()
 
 #: Long enough that the CA is not an operational concern, short enough to be a
@@ -34,25 +39,7 @@ LEAF_VALIDITY = dt.timedelta(days=1096)
 #: Postgres maps a client certificate's Common Name to a database user.
 CLIENT_NAMES = ('ci', 'operator')
 
-
-def _private_key(scalar: bytes) -> ec.EllipticCurvePrivateKey:
-    """A P-256 key whose scalar is a function of the seed.
-
-    The derived bytes are reduced into [1, n-1] rather than rejected-and-
-    retried, so the key exists for every possible seed.
-    """
-    n = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551  # P-256 group order
-    value = int.from_bytes(scalar, 'big') % (n - 1) + 1
-    return ec.derive_private_key(value, CURVE)
-
-
-def _serial(seed: bytes, label: str) -> int:
-    """A stable serial, so re-issuing a certificate does not invent identity."""
-    return int.from_bytes(seeds.derive(seed, f'state-backend/serial/{label}', 20), 'big') >> 1
-
-
-def _name(common_name: str) -> x509.Name:
-    return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+CA_COMMON_NAME = 'kluster state-backend CA'
 
 
 @dataclass(frozen=True)
@@ -71,96 +58,121 @@ def _pem_key(key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
-def ca_key(seed: bytes) -> ec.EllipticCurvePrivateKey:
-    return _private_key(seeds.ca_scalar(seed))
+def _name(common_name: str) -> x509.Name:
+    return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
 
 
-def ca_credential(seed: bytes, *, now: dt.datetime | None = None) -> Credential:
-    now = now or dt.datetime.now(dt.timezone.utc)
-    key = ca_key(seed)
-    name = _name('kluster state-backend CA')
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(_serial(seed, 'ca'))
-        .not_valid_before(now)
-        .not_valid_after(now + CA_VALIDITY)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .add_extension(
-            x509.KeyUsage(
-                digital_signature=False,
-                content_commitment=False,
-                key_encipherment=False,
-                data_encipherment=False,
-                key_agreement=False,
-                key_cert_sign=True,
-                crl_sign=True,
-                encipher_only=False,
-                decipher_only=False,
-            ),
-            critical=True,
-        )
-        .sign(key, hashes.SHA256())
-    )
-    return Credential(key_pem=_pem_key(key), cert_pem=cert.public_bytes(serialization.Encoding.PEM))
+def generate_ca_key() -> str:
+    """A fresh CA private key as PKCS8 PEM — what `escrow generate` stores.
 
-
-def _leaf(
-    seed: bytes,
-    *,
-    label: str,
-    common_name: str,
-    usage: x509.ExtendedKeyUsage,
-    san: x509.SubjectAlternativeName | None,
-    now: dt.datetime,
-) -> Credential:
-    key = _private_key(seeds.cert_scalar(seed, label))
-    issuer = ca_key(seed)
-    builder = (
-        x509.CertificateBuilder()
-        .subject_name(_name(common_name))
-        .issuer_name(_name('kluster state-backend CA'))
-        .public_key(key.public_key())
-        .serial_number(_serial(seed, label))
-        .not_valid_before(now)
-        .not_valid_after(now + LEAF_VALIDITY)
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(usage, critical=False)
-    )
-    if san is not None:
-        builder = builder.add_extension(san, critical=False)
-    cert = builder.sign(issuer, hashes.SHA256())
-    return Credential(key_pem=_pem_key(key), cert_pem=cert.public_bytes(serialization.Encoding.PEM))
-
-
-def server_credential(seed: bytes, address: str, *, now: dt.datetime | None = None) -> Credential:
-    """The Postgres server certificate.
-
-    Its SAN is the reserved public IP as a literal: clients connect with
-    `sslmode=verify-full` by IP, keeping the state backend's hot path free of
-    any DNS dependency.
+    Text rather than bytes because the escrow's unit is a plaintext string:
+    one registry, one shape, whether the secret is a passphrase or a key.
     """
-    return _leaf(
-        seed,
-        label='server',
-        common_name=address,
-        usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
-        san=x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]),
-        now=now or dt.datetime.now(dt.timezone.utc),
-    )
+    return _pem_key(ec.generate_private_key(CURVE)).decode()
 
 
-def client_credential(seed: bytes, name: str, *, now: dt.datetime | None = None) -> Credential:
-    """A client certificate; its Common Name is the Postgres role it becomes."""
-    if name not in CLIENT_NAMES:
-        raise ValueError(f'unknown client {name!r}; the CA issues to {CLIENT_NAMES}')
-    return _leaf(
-        seed,
-        label=f'client/{name}',
-        common_name=name,
-        usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
-        san=None,
-        now=now or dt.datetime.now(dt.timezone.utc),
-    )
+@dataclass(frozen=True, eq=False)
+class Authority:
+    """The CA, in hand: the recovered private key and what it will sign.
+
+    Certificates are re-issued rather than reproduced byte for byte — serial
+    numbers are random and validity starts now — so two runs produce two
+    certificates that assert the same thing. What identifies the CA across
+    them is its public key, which is stable because the private half comes
+    from escrow.
+    """
+
+    key: ec.EllipticCurvePrivateKey
+
+    @classmethod
+    def from_pem(cls, pem: str | bytes) -> Authority:
+        data = pem.encode() if isinstance(pem, str) else pem
+        key = serialization.load_pem_private_key(data, password=None)
+        if not isinstance(key, ec.EllipticCurvePrivateKey):
+            raise ValueError(f'the escrowed CA key is a {type(key).__name__}, not an elliptic-curve key')
+        return cls(key=key)
+
+    @property
+    def key_pem(self) -> bytes:
+        return _pem_key(self.key)
+
+    def certificate(self, *, now: dt.datetime | None = None) -> Credential:
+        """The self-signed CA certificate, with the key that signed it."""
+        now = now or dt.datetime.now(dt.timezone.utc)
+        name = _name(CA_COMMON_NAME)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(self.key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + CA_VALIDITY)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=False,
+                    content_commitment=False,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=True,
+                    crl_sign=True,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .sign(self.key, hashes.SHA256())
+        )
+        return Credential(key_pem=self.key_pem, cert_pem=cert.public_bytes(serialization.Encoding.PEM))
+
+    def _leaf(
+        self,
+        *,
+        common_name: str,
+        usage: x509.ExtendedKeyUsage,
+        san: x509.SubjectAlternativeName | None,
+        now: dt.datetime,
+    ) -> Credential:
+        key = ec.generate_private_key(CURVE)
+        builder = (
+            x509.CertificateBuilder()
+            .subject_name(_name(common_name))
+            .issuer_name(_name(CA_COMMON_NAME))
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + LEAF_VALIDITY)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(usage, critical=False)
+        )
+        if san is not None:
+            builder = builder.add_extension(san, critical=False)
+        cert = builder.sign(self.key, hashes.SHA256())
+        return Credential(key_pem=_pem_key(key), cert_pem=cert.public_bytes(serialization.Encoding.PEM))
+
+    def issue_server(self, address: str, *, now: dt.datetime | None = None) -> Credential:
+        """The Postgres server certificate.
+
+        Its SAN is the reserved public IP as a literal: clients connect with
+        `sslmode=verify-full` by IP, keeping the state backend's hot path free
+        of any DNS dependency.
+        """
+        return self._leaf(
+            common_name=address,
+            usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
+            san=x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]),
+            now=now or dt.datetime.now(dt.timezone.utc),
+        )
+
+    def issue_client(self, name: str, *, now: dt.datetime | None = None) -> Credential:
+        """A client certificate; its Common Name is the Postgres role it becomes."""
+        if name not in CLIENT_NAMES:
+            raise ValueError(f'unknown client {name!r}; the CA issues to {CLIENT_NAMES}')
+        return self._leaf(
+            common_name=name,
+            usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
+            san=None,
+            now=now or dt.datetime.now(dt.timezone.utc),
+        )
