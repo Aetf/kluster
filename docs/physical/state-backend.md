@@ -134,10 +134,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 (Decisions from ci.md §1, 2026-08-24; this is the owning section now.)
 
 -   **One single-purpose private CA** (~10-year validity), generated
-    offline; the CA key never touches the micro, CI, or Pulumi state —
-    it lives at the never-in-automation tier with the B2 master
-    credential (storage.md §4). It is **random at creation and
-    escrowed** as `state-backend/ca` (credentials.md §2.2): a
+    on the workstation; the CA key never reaches the micro, CI, or
+    Pulumi state — the only processes that hold it are the
+    `state-backend` runs that issue a certificate. It is **random at
+    creation and escrowed** as `state-backend/ca` (credentials.md §2.2): a
     ciphertext in the repository that only the offline recovery key
     opens, which is the copy a rebuild reads. The bring-up run that
     first provisions the appliance is what generates and commits it
@@ -277,16 +277,17 @@ there is nothing for it to edit.)
     -   **Old keys get a definite end of life**: generation N−1
         becomes destroyable **30 days after the rotation to N+1** —
         every object it can uniquely decrypt has aged out, and
-        everything newer also carries key N. The offline register
-        records each generation with its rotate date and
-        earliest-destroy date; destroying a generation is deleting its
-        ciphertext under `escrow/`, which is the only copy, and doing
-        so on that date is what actually ends the old generation's
-        exposure. At most two *generational* private keys are ever
-        live — the ops-repo-held drill key sits outside the
-        generations. (The offline register is §2 of the
+        everything newer also carries key N. Destroying a generation is
+        deleting its ciphertext under `escrow/`, which is the only copy,
+        and doing so is what actually ends that generation's exposure.
+        **No field holds that date**: a ciphertext carries no expiry and
+        the register has nowhere to write one, so the yearly offline day
+        is what honors it (operations.md §4). At most two *generational*
+        private keys are ever live — the ops-repo-held drill key sits
+        outside the generations. (The register is the
         [credential register](../credentials.md), which inventories
-        every credential in the system.)
+        every credential in the system; this label is one of its
+        escrowed rows.)
     -   **Compromise variant**: drop the compromised key from the
         recipients entirely (don't keep dual-encrypting to it),
         take a fresh dump, delete the old objects early (their
@@ -300,8 +301,9 @@ there is nothing for it to edit.)
     and rejected: coupling makes either key's compromise or rotation
     drag the other along, and the two rotate on different triggers
     and cadences (CA: expiry/compromise over ~years; age: yearly
-    generations). The saving would be one line in the offline
-    register. Both live at the never-in-automation tier.
+    generations). The saving would be one row in the register. Both are
+    escrowed labels of their own (credentials.md §2.2), which is what
+    lets them rotate on their own clocks.
 
 ## 6. Monitoring
 
@@ -366,11 +368,15 @@ is the moment nobody can afford to find out later:
     and flattening them would hand CI's tables to the operator.
 
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: expiry alert
-    (<30 days) or key compromise. Outline: re-provision, which
-    re-issues the server certificate under the same CA. On compromise
-    of the CA itself: `credentials escrow generate state-backend/ca`
-    for a new generation, re-provision against it, redistribute the
-    `ci` and `operator` bundles → `verify-full` check.
+    (<30 days) or key compromise. Outline: `state-backend dump` →
+    re-provision, which re-issues the server certificate under the same
+    CA → `state-backend restore <the dump>`. The bracket is not
+    optional: the server certificate rides in Ignition, so re-issuing it
+    replaces the instance and its data directory with it — the same
+    shape as §7.2, for the same reason. On compromise of the CA itself:
+    `credentials escrow generate state-backend/ca` for a new generation,
+    the same dump/re-provision/restore against it, redistribute the `ci`
+    and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: `state-backend dump` → merge → `state-backend provision`
     (the new major initdb's a fresh data directory) → `state-backend
@@ -389,9 +395,10 @@ is the moment nobody can afford to find out later:
     which inherently decrypts with it.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
     compromise, custody change. Outline: `credentials escrow generate
-    backup/age/<N+1>` + register entry (rotate / earliest-destroy
-    dates) → bump the generation pin, which swaps the Butane
-    recipients `[N, N−1] → [N+1, N]` → re-provision → verify both
-    decrypt paths → destroy N−1 on its date by deleting its escrow
+    backup/age/<N+1>` → note the rotation date and N−1's
+    earliest-destroy date where the next offline day will read them
+    (nothing stores either — §5) → bump the generation pin, which swaps
+    the Butane recipients `[N, N−1] → [N+1, N]` → re-provision → verify
+    both decrypt paths → destroy N−1 on its date by deleting its escrow
     ciphertext (compromise: drop the key from recipients now, fresh
     dump, early-delete old objects).
