@@ -51,7 +51,10 @@ BRIDGE = 'kvmbr1'
 URI = 'qemu+ssh://virt@192.0.2.7/system'
 VCPUS = 12
 MEMORY_GIB = 10
-DISK_GB = 60
+
+#: Where the Talos `nocloud` image has been decompressed for the provider to
+#: upload. What matters below is that the volume is created *from* it.
+IMAGE_PATH = '/var/tmp/kluster-talos-images/talos-v1.11.0-nocloud-amd64-abc123.raw'
 
 #: A domain as the libvirt provider builds one before it defines it: a virtio
 #: data disk and the seed as a cdrom. The stylesheet under test is applied to
@@ -129,7 +132,7 @@ def build(**kwargs: Any) -> Any:
     kwargs.setdefault('bridge', BRIDGE)
     kwargs.setdefault('vcpus', VCPUS)
     kwargs.setdefault('memory_gib', MEMORY_GIB)
-    kwargs.setdefault('disk_gb', DISK_GB)
+    kwargs.setdefault('image_path', IMAGE_PATH)
     kwargs.setdefault('haos_domain_uuid', HAOS_UUID)
     return HomelabHost(CLUSTER, **kwargs)
 
@@ -221,7 +224,6 @@ async def test_the_worker_disk_is_a_raw_image_in_its_own_pool() -> None:
     host = build()
 
     assert await host.volume.format.future() == 'raw'
-    assert await host.volume.size.future() == DISK_GB * 1000**3
     # Not the host's existing image pool: this one points at the nodatacow
     # subvolume, which is what makes a VM image on btrfs behave.
     assert await host.volume.pool.future() == await host.pool.name.future()
@@ -231,16 +233,51 @@ async def test_the_worker_disk_is_a_raw_image_in_its_own_pool() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_worker_boots_because_the_volume_is_created_from_the_talos_image() -> None:
+    host = build()
+
+    # The difference between a declared VM and a bootable one. The provider
+    # reads this path where the program runs and uploads the bytes into the
+    # pool; without it the domain comes up on an empty disk.
+    assert await host.volume.source.future() == IMAGE_PATH
+
+
+@pytest.mark.asyncio
+async def test_the_disk_is_not_sized_by_the_declaration() -> None:
+    host = build()
+    request = await registration(host.volume)
+
+    # The provider refuses `size` beside `source` outright — it takes the
+    # volume's capacity from the image — so stating the worker's intended disk
+    # size here would not shrink-wrap anything, it would fail the apply.
+    assert 'size' not in dict(request.object)
+    assert await host.volume.size.future() is None
+
+
+@pytest.mark.asyncio
 async def test_growing_the_disk_is_a_host_operation_not_a_diff() -> None:
     host = build()
     request = await registration(host.volume)
 
-    # Growth is `truncate` plus `virsh blockresize` on the host, so the file
-    # and the declaration part company by design. Every field of a libvirt
-    # volume replaces the volume, so a program that insisted on the original
-    # size would propose destroying the worker's disk after the first refresh.
+    # The volume is created at the image's size and grown on the host with
+    # `truncate` plus `virsh blockresize`, so the file and the state part
+    # company from the first day. Every field of a libvirt volume replaces the
+    # volume, so a refresh that read the grown file back and diffed against it
+    # would propose destroying the worker's disk.
     assert 'size' in set(request.ignoreChanges)
     assert host.volume._protect is True  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_a_talos_upgrade_is_not_a_proposal_to_rewrite_the_disk() -> None:
+    request = await registration(build().volume)
+
+    # `source` says what the disk was written with, and Talos upgrades itself
+    # in place over its machine API — so the declaration stops describing the
+    # volume as soon as the node is upgraded. Left diffable, the next
+    # `talosVersion` bump would propose replacing a running node's boot disk,
+    # and `protect` would then refuse every apply until the bump was reverted.
+    assert 'source' in set(request.ignoreChanges)
 
 
 @pytest.mark.asyncio

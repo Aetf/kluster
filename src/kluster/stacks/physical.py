@@ -34,7 +34,7 @@ from kluster.physical import homelab
 from kluster.physical.backup import BackupBucket
 from kluster.physical.cloud import CloudNetwork
 from kluster.physical.guardrails import Guardrails
-from kluster.physical.image import TalosImage
+from kluster.physical.image import TalosImage, TalosNocloudImage
 from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
 from kluster.physical.storage import CHUNK_IDENTITY, CacheVolume, ChunkStore
 from kluster.physical.talos import TalosCluster, TalosDay1
@@ -66,6 +66,10 @@ async def main() -> None:
 
     network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id)
     image = TalosImage(conventions.CLUSTER_NAME, compartment_id=compartment_id, talos_version=talos_version)
+    # The worker's own artefact: the same Talos version, a schematic of its
+    # own (x86, and the i915 firmware the GPU cutover wants present from day
+    # 0), and a disk image on this machine rather than in a cloud catalogue.
+    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
 
     load_balancer = NodeLoadBalancer(
         conventions.CLUSTER_NAME,
@@ -135,7 +139,7 @@ async def main() -> None:
         bridge=conventions.HOMELAB_BRIDGE,
         vcpus=conventions.HOMELAB_VCPUS,
         memory_gib=conventions.HOMELAB_MEMORY_GIB,
-        disk_gb=conventions.HOMELAB_DISK_GB,
+        image_path=worker_image.path,
         haos_domain_uuid=config.require('haosDomainUuid'),
     )
     declare_gateway(config)
