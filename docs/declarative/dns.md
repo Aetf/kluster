@@ -169,11 +169,26 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     then needs no LAN access at all.
 -   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
     config, the sync service is redundant *and* a conflict source (it
-    would overwrite bob's Pulumi-written rewrites). Consequence,
-    accepted: static-config parity (filters, upstreams) between the two
-    instances is now the gw-config estate's job — both instances'
-    configs are declared there, and one standing service leaves the
-    homelab host.
+    would overwrite bob's Pulumi-written rewrites), and one standing
+    service leaves the homelab host. What the gw-config estate takes
+    over is the static half (listeners, upstreams) as a **seed**, not as
+    live state: it declares one `AdGuardHome.seed.yaml` per instance,
+    under a name the instance itself never reads, and the recovery
+    script copies it to the `AdGuardHome.yaml` the instance does read
+    only when the working directory holds no such file — after a wipe,
+    and at no other time.
+-   **A seed, because the file is the instance's own.** AdGuard Home
+    keeps its whole configuration in one YAML file that a running
+    instance rewrites whenever it accepts a change through its API, and
+    it has no include or multi-file mechanism: `upstream_dns_file`
+    externalizes the upstream list and nothing else, while the rewrites
+    above land in `filtering.rewrites` inside that same file. Declaring
+    the live file would therefore delete this stack's rewrites on every
+    apply. The two instances start identical because both seeds come
+    from one template (only the listen address differs), and their
+    dynamic halves stay identical because Pulumi writes both; a change
+    made in one instance's web UI afterward is reconciled by nothing.
+    See `gateway/estate.py` for the estate's side of this.
 -   **Placement**: rewrites are emitted automatically for any app
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
