@@ -329,6 +329,13 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     # both before and after: the verification is the last word, not the log
     # line above it.
     assert tools.programs() == ['pulumi', state.PG_RESTORE, state.PG_RESTORE, 'pulumi']
+    # A provisioned box already carries an empty pulumi_state from first
+    # boot, so the landing call must drop before it recreates — inside the
+    # one transaction — or every restore onto a fresh appliance aborts.
+    landing = next(argv for argv in tools.calls if Path(argv[0]).name == state.PG_RESTORE and '--list' not in argv)
+    assert '--single-transaction' in landing
+    assert '--clean' in landing
+    assert '--if-exists' in landing
 
 
 def test_a_restore_refuses_a_backend_that_already_serves_stacks(

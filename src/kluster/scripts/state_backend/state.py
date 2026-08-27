@@ -132,7 +132,10 @@ def _run(argv: Sequence[str], *, what: str, timeout: int, stdin: str | None = No
         raise StateError(f'{what} did not finish within {timeout}s') from exc
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip().splitlines()
-        raise StateError(f'{what} failed: {detail[-1] if detail else f"exit {proc.returncode}"}')
+        # The pg tools echo the failing statement after the diagnosis, so the
+        # last line is as likely to be a fragment of SQL as the error itself.
+        found = next((line for line in reversed(detail) if 'error' in line.lower()), None)
+        raise StateError(f'{what} failed: {found or (detail[-1] if detail else f"exit {proc.returncode}")}')
     return proc.stdout
 
 
@@ -213,12 +216,20 @@ def pg_restore(url: str, archive: Path) -> None:
     rolls the database back to what it was, so a restore that goes wrong
     leaves a box to re-run against rather than a half-populated backend that
     `pulumi` will happily read.
+
+    `--clean --if-exists` is what lets the archive land on a provisioned
+    box at all: Ignition's first boot already creates an empty
+    `pulumi_state`, so replaying the archive's own CREATE would abort the
+    transaction on every fresh appliance. The drops run inside the same
+    transaction, so the all-or-nothing shape survives.
     """
     log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(url))
     _ = _run(
         [
             PG_RESTORE,
             '--single-transaction',
+            '--clean',
+            '--if-exists',
             '--no-password',
             f'--dbname={url}',
             str(archive),
