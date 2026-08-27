@@ -524,17 +524,29 @@ Costs and facts on record:
     App's private key is a seed held offline (credentials.md §2) —
     GitHub has no API for creating personal access tokens, which
     is what makes the App the programmatic shape here rather than
-    a matter of taste. The excess permission is **fenced instead
-    of shrugged at**: a ruleset on the ops repo's default branch
-    forbids direct pushes (PR-only) — a leaked installation token
-    can dispatch and nothing else; the App carries no `workflows`
-    permission (GitHub separately refuses workflow-file edits
-    without it); and the ops repo's workflows are self-contained
-    (inline `run:` steps, no repo-local scripts), so even a landed
-    commit offers no code path a workflow executes. Permissions
-    are per-App, not per-installation, which is why the
-    drift-trigger credential is a **second** App (ci.md §3) rather
-    than another permission on this one.
+    a matter of taste. The excess permission is **fenced by what a
+    pushed commit can reach, not by who may push**: the ops repo is
+    private, and GitHub Free gives a private repository neither
+    branch protection nor rulesets (framework/github.md §2), so a
+    PR-only default branch is unavailable there rather than a
+    switch left off. Two mechanisms carry the fence in its place. The
+    App holds **no `workflows` permission**, and GitHub refuses
+    every write under `.github/workflows/` without it, so
+    contents:write cannot add or edit a workflow. And every ops-repo
+    workflow is **self-contained** — inline `run:` steps only, no
+    repo-local script or executable that a step checks out and
+    invokes — so a commit that does land leaves no path any workflow
+    would execute. Together they bound a leaked installation token
+    to writing non-workflow files onto the default branch, which is
+    the **accepted residual**: that write is noise and a corrupted
+    document rather than execution, and it reaches none of the
+    repository's secrets, which are handed to workflow jobs alone.
+    The self-contained rule is therefore load-bearing security
+    rather than a style preference, and it binds every workflow ever
+    added to the ops repo. Permissions are per-App, not
+    per-installation, which is why the drift-trigger credential is a
+    **second** App (ci.md §3) rather than another permission on this
+    one.
     Register row in credentials.md.
 -   **The ops repo burns private-repo Actions minutes** (billed
     per-minute, min 1/run): hourly poller ≈ 720 min/mo, the hourly

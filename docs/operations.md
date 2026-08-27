@@ -77,12 +77,23 @@ and the human appears exactly where an offline secret or physical
 action is irreducible.
 
 **The enabler for the biggest drill**: pg_dumps gain a third age
-recipient — an **ops-repo-held drill key** (credentials.md). This
-adds no new *class* of exposure: the kluster CI already reads the
-live database through its client cert, and the ops repo holding the
-drill key is fenced at the same private tier (PR-only default
-branch, architecture.md §4.3); the offline generations keep their
-actual role, surviving the loss of GitHub itself. With it, the
+recipient — an **ops-repo-held drill key** (credentials.md §3),
+living in that repository's `drill` Environment. This adds no new
+*class* of exposure. The kluster CI already reads the live database
+through its client cert, so a dump-decrypting key in a second GitHub
+repository widens the reach of a forge compromise by one repository
+rather than by a kind of access. Privacy is all the repository
+setting can give — GitHub Free grants a private repository neither
+branch protection nor rulesets (framework/github.md §2) — so the
+containment is the one architecture.md §4.3 builds in their place:
+an Environment secret is delivered only to a job whose workflow
+names that Environment, and the sole credential aimed at the ops
+repo (the dispatch App) cannot write a workflow file, holding no
+`workflows` permission. Its accepted residual, writing non-workflow
+files to the default branch, buys no path to this key. The key's own
+scope is the remainder of the argument: it opens the *latest* dump
+alone, while the escrowed offline generations keep their actual
+role and survive the loss of GitHub itself. With it, the
 state-backend rebuild drill runs unattended end to end.
 
 | Drill | Cadence | Form |
