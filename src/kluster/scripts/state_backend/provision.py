@@ -39,6 +39,7 @@ from typing import Any
 
 import oci
 
+from ..credentials import oci_slot
 from . import settings
 
 log = logging.getLogger(__name__)
@@ -62,17 +63,33 @@ class Oci:
     compartment_id: str
     config: dict[str, Any]
 
-    #: The SDK defaults to ~/.oci/config; this estate keeps it under XDG,
-    #: where the containerized CLI reads it from too.
-    CONFIG_FILE = Path.home() / '.config' / 'oci' / 'config'
-
     @classmethod
     def load(cls, compartment_id: str | None = None) -> Oci:
-        location = os.environ.get('OCI_CLI_CONFIG_FILE') or str(cls.CONFIG_FILE)
+        """The appliance's own API key, out of the workstation slot that holds it.
+
+        The key is a §3 credential like any other (credentials.md), minted
+        from the OCI seed by `credentials derived oci state-backend`; the slot
+        is a file because this command runs unattended halves of a bring-up
+        and cannot stop to ask (`credentials.oci_slot`).
+
+        `OCI_CLI_CONFIG_FILE` still wins, because pointing one run at another
+        tenancy is a thing an operator does and a slot is not where that
+        belongs.
+        """
+        location = os.environ.get('OCI_CLI_CONFIG_FILE')
+        if not location:
+            found = oci_slot.config_file(oci_slot.STATE_BACKEND)
+            if found is None:
+                slot = oci_slot.config_path(oci_slot.STATE_BACKEND)
+                raise ValueError(
+                    'the appliance has no OCI credential on this machine: run `credentials derived oci '
+                    f'state-backend --compartment <ocid>`, which mints one into {slot}'
+                )
+            location = str(found)
         config = oci.config.from_file(location)
         compartment = compartment_id or config.get('compartment-id')
         if not compartment:
-            raise ValueError('no compartment: pass --compartment or set compartment-id in ~/.oci/config')
+            raise ValueError(f'no compartment: pass --compartment or set compartment-id in {location}')
         return cls(compartment_id=str(compartment), config=config)
 
     @property

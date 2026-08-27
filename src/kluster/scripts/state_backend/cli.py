@@ -40,7 +40,11 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help=f'the escrow registry (default: the {escrow.DIRECTORY}/ directory of this checkout)',
     )
-    _ = parser.add_argument('--compartment', default=None, help='OCI compartment (default: ~/.oci/config)')
+    _ = parser.add_argument(
+        '--compartment',
+        default=None,
+        help="OCI compartment (default: the one recorded in the appliance's OCI slot)",
+    )
     actions = parser.add_subparsers(dest='action', required=True)
 
     render = actions.add_parser('render', help='render the Ignition config without touching the cloud')
