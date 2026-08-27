@@ -53,6 +53,12 @@ ACCOUNT_KEY = 'cloudflareAccountId'
 
 #: The stack that runs on the cloud account and the backup account, and
 #: therefore the slot the OCI and B2 credentials below are delivered into.
+#:
+#: Not an argument, unlike the zones token's stack. What each of those two
+#: rows mints is named after the row -- one IAM user, one B2 key name -- and
+#: the mint retires every other credential of that name, so a delivery aimed
+#: somewhere else would revoke this stack's live credential on its way to
+#: filling another stack's slot. Identity is fixed, so delivery is too.
 PHYSICAL_STACK = 'physical'
 
 #: Where the OCI provider reads its credential, namespaced to the provider as
@@ -60,7 +66,8 @@ PHYSICAL_STACK = 'physical'
 #: than the provider's, so it carries no namespace at all, for the reason
 #: `cloudflareAccountId` carries none: `pulumi config set` and
 #: `pulumi.Config()` resolve an unqualified key against the same project name,
-#: which then lives in `Pulumi.yaml` alone.
+#: which then lives in `Pulumi.yaml` alone. It is also the one key here whose
+#: name a stack program already spells (`stacks/physical.py`).
 OCI_TENANCY_KEY = 'oci:tenancyOcid'
 OCI_USER_KEY = 'oci:userOcid'
 OCI_FINGERPRINT_KEY = 'oci:fingerprint'
@@ -104,12 +111,27 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartment_id: str) -> None:
     """Write one OCI signing configuration into a stack's committed config.
 
-    Everything but the region is a secret. The key obviously is; the three
-    OCIDs are account identifiers, which the kit itself keeps as protected
-    attributes (§2.1) and a public repository has no reason to publish. The
-    fingerprint is stored here although §2 refuses to store it, because the
-    provider takes it as a separate input rather than deriving it — and it is
-    computed from the key at push time, so the two cannot disagree.
+    The four keys the provider signs with are secrets. The key obviously is;
+    the tenancy and user OCIDs are account identifiers, which the kit itself
+    keeps as protected attributes (§2.1) and a public repository has no reason
+    to publish. The fingerprint is written here although §2.1 declines to store
+    one, because the provider takes it as a separate input rather than deriving
+    it — and it is computed from the key at push time, so the two cannot
+    disagree.
+
+    The other two are plain, and each for its own reason. The region is a
+    constant of this estate (`conventions`).
+
+    The compartment is plain because the program reads it plain:
+    `stacks/physical.py` takes it with `require`, and a value pushed as a
+    secret and read that way agrees only by way of an upstream defect
+    (pulumi/pulumi#7127) — the two sides have to say the same thing. Reading
+    it with `require_secret` instead would type-check, every component here
+    taking an `Input[str]`, but secretness propagates: the compartment field
+    of every resource in the stack would become encrypted state and every
+    preview line naming one would read `[secret]`. That is a poor trade for an
+    identifier that names a container inside the tenancy rather than the
+    account that owns it.
     """
     stack.ensure()
     stack.set_secret(OCI_TENANCY_KEY, key.tenancy)
@@ -121,7 +143,7 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, compartmen
     # what was written. The end marker is the end of a PEM to every reader of
     # one, this provider included.
     stack.set_secret(OCI_PRIVATE_KEY_KEY, key.private_key.strip())
-    stack.set_secret(COMPARTMENT_KEY, compartment_id)
+    stack.set(COMPARTMENT_KEY, compartment_id)
     stack.set(OCI_REGION_KEY, key.region)
 
 

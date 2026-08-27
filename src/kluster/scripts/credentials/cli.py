@@ -254,19 +254,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _slot_source(zones)
 
-    # One member per consumer rather than one `oci` command with a stack
+    # One member per consumer rather than one `oci` command with a consumer
     # argument: the two differ in where they deliver, not only in what they
     # name, and a tree shaped like the register is the point (§3).
+    #
+    # Neither takes a `--stack`, and the B2 row below does not either. What
+    # they mint is named after the row and the mint retires everything else of
+    # that name, so a delivery aimed elsewhere would revoke the real stack's
+    # live credential on its way to filling another stack's slot (`derived`).
     oci_row = rows.add_parser('oci', help='the per-consumer users and API keys the OCI seed mints (§3)')
     oci_actions = oci_row.add_subparsers(dest='action', required=True, metavar='<consumer>')
     oci_physical = oci_actions.add_parser(
         'physical',
         help="the physical stack's user, group, policy and key, into its config secrets",
-    )
-    _ = oci_physical.add_argument(
-        '--stack',
-        default=derived.PHYSICAL_STACK,
-        help=f'the stack whose config takes the key (default: {derived.PHYSICAL_STACK})',
     )
     _slot_source(oci_physical)
     oci_appliance = oci_actions.add_parser(
@@ -292,11 +292,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _ = management.add_argument(
         '--entry', default=derived.B2_SEED_ENTRY, help=f'the seed row (default: {derived.B2_SEED_ENTRY})'
-    )
-    _ = management.add_argument(
-        '--stack',
-        default=derived.PHYSICAL_STACK,
-        help=f'the stack whose config takes the key (default: {derived.PHYSICAL_STACK})',
     )
     _slot_source(management)
 
@@ -364,16 +359,21 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     return KdbxStore.from_env(args.kdbx)
 
 
-def _stack(args: argparse.Namespace, store: KdbxStore) -> pulumi_config.Stack:
+def _stack(args: argparse.Namespace, store: KdbxStore, name: str) -> pulumi_config.Stack:
     """The config slot a §3 row is pushed into.
 
     Opened with the same two variables a `pulumi` run needs, recovered with the
     kit that is already open rather than expected in the environment: one
     command is one credential delivered, not a shell that has to be prepared
     first.
+
+    The stack is named by the caller rather than read off `args`, because only
+    one row has a stack to choose: the zones token is scoped to zones and can
+    be delivered anywhere, while a row whose credential is named after its
+    consumer can only be delivered to that consumer (`derived`).
     """
     return pulumi_config.Stack(
-        name=args.stack,
+        name=name,
         directory=pulumi_config.project_dir(),
         env=lifecycle.environment(store, args.bundle_dir),
     )
@@ -554,10 +554,13 @@ def main(argv: list[str] | None = None) -> int:
             # §3's rows, one command per row (`_stack` is the slot most of
             # them are pushed into).
             case ('derived', 'cloudflare', 'zones'):
-                _ = derived.cloudflare_zones(store, stack=_stack(args, store), seed_entry=args.entry)
+                _ = derived.cloudflare_zones(store, stack=_stack(args, store, args.stack), seed_entry=args.entry)
             case ('derived', 'oci', 'physical'):
                 _ = derived.oci_physical(
-                    store, stack=_stack(args, store), compartment_id=args.compartment, seed_entry=args.entry
+                    store,
+                    stack=_stack(args, store, derived.PHYSICAL_STACK),
+                    compartment_id=args.compartment,
+                    seed_entry=args.entry,
                 )
             # The one §3 row that opens no stack: its consumer is what builds
             # the backend a stack's configuration lives in, so the push is a
@@ -565,7 +568,9 @@ def main(argv: list[str] | None = None) -> int:
             case ('derived', 'oci', 'state-backend'):
                 _ = derived.oci_state_backend(store, compartment_id=args.compartment, seed_entry=args.entry)
             case ('derived', 'b2', 'management'):
-                _ = derived.b2_management(store, stack=_stack(args, store), seed_entry=args.entry)
+                _ = derived.b2_management(
+                    store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry
+                )
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
