@@ -96,11 +96,11 @@ state-backend rebuild drill runs unattended end to end.
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 **Destroy dates are not on that clock, and only one of them is a date.**
-A retired **kit** owes nothing forward: once `credentials escrow rewrap`
-has covered every generation and `credentials escrow check` passes, no
-ciphertext in the registry opens with the retired recovery key alone, so
-the retired database is destroyable on a property rather than after a
-wait (credentials.md §4.2). A retired **backup generation** keeps a real
+A retired **kit** owes nothing forward: `credentials rotate` re-wraps
+every generation to the successor recovery key inside its own run, so
+once `credentials escrow check` passes and each generation is confirmed
+to open under that key, the retired database is destroyable on a
+property rather than after a wait (credentials.md §4.2). A retired **backup generation** keeps a real
 clock — its escrow ciphertext is the only copy of the identity that
 opens the dumps written under it, so it stays until the last of those
 objects falls out of the B2 prefix's retention (state-backend.md §5).
