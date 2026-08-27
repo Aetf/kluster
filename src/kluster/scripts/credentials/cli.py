@@ -20,6 +20,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from ... import conventions
 from . import b2, derived, entries, escrow, lifecycle, masters, oci_iam, pulumi_config, workstation
 from .age import AgeError
 from .escrow import EscrowError
@@ -128,6 +129,24 @@ def _slot_source(command: argparse.ArgumentParser) -> None:
         type=Path,
         default=workstation.bundle_dir(),
         help='where `state-backend` wrote the client bundle',
+    )
+
+
+def _oci_consumer(command: argparse.ArgumentParser) -> None:
+    """The two arguments every §3 OCI row is minted with.
+
+    The seed the mint reads and the compartment it confines the result to are
+    the same question for each consumer; where the rows differ is where the
+    answer is delivered, which is what makes them separate subcommands.
+    """
+    _ = command.add_argument(
+        '--entry', default=derived.OCI_SEED_ENTRY, help=f'the seed row (default: {derived.OCI_SEED_ENTRY})'
+    )
+    # Required because nothing in this repository knows it: a compartment OCID
+    # is a fact about the tenancy, and it is what the minted policy confines
+    # the key to.
+    _ = command.add_argument(
+        '--compartment', required=True, metavar='<ocid>', help='the compartment the key may administer'
     )
 
 
@@ -268,21 +287,13 @@ def build_parser() -> argparse.ArgumentParser:
         'physical',
         help="the physical stack's user, group, policy and key, into its config secrets",
     )
+    _oci_consumer(oci_physical)
     _slot_source(oci_physical)
     oci_appliance = oci_actions.add_parser(
-        'state-backend',
+        conventions.STATE_BACKEND,
         help="the appliance provisioner's own key, into its workstation slot (§4.4)",
     )
-    for command in (oci_physical, oci_appliance):
-        _ = command.add_argument(
-            '--entry', default=derived.OCI_SEED_ENTRY, help=f'the seed row (default: {derived.OCI_SEED_ENTRY})'
-        )
-        # Required because nothing in this repository knows it: a compartment
-        # OCID is a fact about the tenancy, and it is what the minted policy
-        # confines the key to.
-        _ = command.add_argument(
-            '--compartment', required=True, metavar='<ocid>', help='the compartment the key may administer'
-        )
+    _oci_consumer(oci_appliance)
 
     b2_row = rows.add_parser('b2', help='the keys the B2 seed mints (§3)')
     b2_actions = b2_row.add_subparsers(dest='action', required=True, metavar='<key>')
@@ -565,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
             # The one §3 row that opens no stack: its consumer is what builds
             # the backend a stack's configuration lives in, so the push is a
             # workstation slot and this command needs no `pulumi` at all.
-            case ('derived', 'oci', 'state-backend'):
+            case ('derived', 'oci', conventions.STATE_BACKEND):
                 _ = derived.oci_state_backend(store, compartment_id=args.compartment, seed_entry=args.entry)
             case ('derived', 'b2', 'management'):
                 _ = derived.b2_management(
