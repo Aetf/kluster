@@ -29,6 +29,8 @@ LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
 ZT_NETWORK_ID = '0123456789abcdef'
+KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
+TALOSCONFIG = 'context: kluster\n'
 
 #: What the gateway's three channels read out of stack configuration: the site
 #: facts the program cannot derive. Every value here is invented; what the test
@@ -44,6 +46,7 @@ GATEWAY_CONFIG = {
     'kluster:gatewayAddresses': json.dumps(
         {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
     ),
+    'kluster:gatewayBgpPeer': '192.168.80.1/32',
     'kluster:unifiApiUrl': 'https://gateway.invalid',
     'kluster:unifiApiKey': 'a-controller-key',
     'kluster:workerGua': '2001:db8:1:80::238',
@@ -72,6 +75,8 @@ class Mocks(pulumi.runtime.Mocks):
             ]
         if args.typ == 'talos:machine/secrets:Secrets':
             outputs['machineSecrets'] = {'cluster': {'id': 'test'}}
+        if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
+            outputs['kubeconfigRaw'] = KUBECONFIG
         if args.typ == 'zerotier:index/identity:Identity':
             outputs |= {'identityId': f'{args.name}-node', 'publicKey': 'public', 'privateKey': 'private'}
         if args.typ == 'zerotier:index/network:Network':
@@ -93,7 +98,11 @@ class Mocks(pulumi.runtime.Mocks):
                 return {'faultDomains': [{'name': f'FAULT-DOMAIN-{n}'} for n in (1, 2, 3)]}, []
             case 'talos:machine/getConfiguration:getConfiguration':
                 return {'machineConfiguration': 'machine: {}'}, []
-            case 'talos:imagefactory/getUrls:getUrls':
+            case 'talos:client/getConfiguration:getConfiguration':
+                return {'talosConfig': TALOSCONFIG}, []
+            case 'talos:cluster/getHealth:getHealth':
+                return {'id': 'healthy'}, []
+            case 'talos:imageFactory/getUrls:getUrls':
                 return {'urls': {'diskImage': 'https://factory.talos.dev/image/test/v1.11.0/oracle-arm64.qcow2'}}, []
             case _:
                 return {}, []
@@ -161,6 +170,35 @@ async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
 
 
 @pytest.mark.asyncio
+async def test_the_cluster_credentials_are_exported_and_stay_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two outputs every stack that speaks to the cluster is built on.
+
+    They are cluster-admin credentials, so the interesting half of this is not
+    that they exist but that they carry their secret marking all the way out to
+    the stack export — an export that lost it would print the cluster's keys in
+    a deployment log.
+    """
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    with pytest.raises(NotImplementedError):
+        await physical.main()
+
+    kubeconfig = cast('pulumi.Output[str]', exported['kubeconfig'])
+    talosconfig = cast('pulumi.Output[str]', exported['talosconfig'])
+    assert await kubeconfig.is_secret()
+    assert await talosconfig.is_secret()
+    assert await kubeconfig.future() == KUBECONFIG
+    assert await talosconfig.future() == TALOSCONFIG
+
+
+@pytest.mark.asyncio
 async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need() -> None:
     """The one domain below the gap that is written, exercised on its own.
 
@@ -187,13 +225,6 @@ SEAMS: list[tuple[str, Callable[[], object]]] = [
     (
         'physical §1 guardrails',
         lambda: physical._declare_guardrails(compartment_id='ocid1.compartment.test'),  # pyright: ignore[reportPrivateUsage]
-    ),
-    (
-        'physical §2 Talos day-1',
-        lambda: physical._declare_talos_day1(  # pyright: ignore[reportPrivateUsage]
-            cluster=cast('Any', None),
-            nodes=cast('Any', None),
-        ),
     ),
     (
         'physical §3 homelab',

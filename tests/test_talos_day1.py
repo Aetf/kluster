@@ -10,6 +10,9 @@ second bootstrap starts a second etcd cluster, a simultaneous reboot takes the
 quorum, and a kubeconfig handed out before the cluster is healthy sends the
 next stack at an API that is not there yet. None of those show up in a diff,
 so they are asserted here against the resource graph.
+
+The other half of the file is the seam between the two days: what a machine
+boots with, and what is only applied to it afterwards.
 """
 
 from __future__ import annotations
@@ -50,6 +53,7 @@ SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
 ADDRESSES = {'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13', 'homelab': '192.168.80.51'}
+SECONDARY = '10.20.0.42'
 
 
 class Fake(pulumi.runtime.Mocks):
@@ -110,13 +114,12 @@ async def fake() -> Fake:
     return mocks
 
 
-def build(**kwargs: Any) -> Any:
+def build_cluster(**kwargs: Any) -> Any:
+    """Day 0: the PKI and the configuration each machine boots with."""
     from kluster.physical.talos import TalosCluster
 
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
-    kwargs.setdefault('addresses', ADDRESSES)
-    kwargs.setdefault('secondary_addresses', {'cp1': '10.20.0.42'})
     kwargs.setdefault('bgp_peers', {'homelab': '192.168.80.1/32'})
     return TalosCluster(
         'kluster',
@@ -128,13 +131,23 @@ def build(**kwargs: Any) -> Any:
     )
 
 
+def build(**kwargs: Any) -> Any:
+    """Day 1, on top of a day 0 the caller may hand in to inspect."""
+    from kluster.physical.talos import TalosDay1
+
+    kwargs.setdefault('cluster', build_cluster())
+    kwargs.setdefault('addresses', ADDRESSES)
+    kwargs.setdefault('secondary_addresses', {'cp1': SECONDARY})
+    return TalosDay1('kluster', **kwargs)
+
+
 async def urns_of(output: pulumi.Output[Any]) -> set[str]:
     return {await resource.urn.future() or '' for resource in await output.resources()}
 
 
 @pytest.mark.asyncio
 async def test_every_node_gets_the_role_it_was_declared_with(fake: Fake) -> None:
-    cluster = build()
+    cluster = build_cluster()
     assert cluster.roles == {
         'cp1': 'controlplane',
         'cp2': 'controlplane',
@@ -147,32 +160,30 @@ async def test_every_node_gets_the_role_it_was_declared_with(fake: Fake) -> None
 @pytest.mark.asyncio
 async def test_a_node_cannot_be_both_roles(fake: Fake) -> None:
     with pytest.raises(ValueError, match='both a control plane and a worker'):
-        build(worker_nodes=('cp1',))
+        build_cluster(worker_nodes=('cp1',))
 
 
 @pytest.mark.asyncio
-async def test_day_one_needs_an_address_for_every_node_or_none(fake: Fake) -> None:
-    with pytest.raises(ValueError, match='an address for every node'):
-        build(addresses={'cp1': '10.20.0.11'})
+async def test_day_one_needs_an_address_for_every_node(fake: Fake) -> None:
+    # A cluster is not healthy because the nodes somebody listed are.
+    with pytest.raises(ValueError, match=r'an address for every node.*homelab'):
+        build(addresses={'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13'})
 
 
 @pytest.mark.asyncio
-async def test_configuration_alone_is_a_usable_component(fake: Fake) -> None:
+async def test_day_zero_stands_on_its_own(fake: Fake) -> None:
     # Day 0 delivers the configuration out of band (instance metadata, a seed
     # ISO); day 1 needs machines that answer, which the stack only has later.
-    cluster = build(addresses=None, secondary_addresses=None, bgp_peers=None)
-    assert cluster.applies == {}
-    assert cluster.bootstrap is None
-    with pytest.raises(ValueError, match='no node addresses'):
-        _ = cluster.kubeconfig
-    with pytest.raises(ValueError, match='no node addresses'):
-        _ = cluster.talosconfig
+    cluster = build_cluster()
+    await asyncio.gather(*(config.future() for config in cluster.machine_configs.values()))
+    assert 'kluster-bootstrap' not in DEPENDS_ON
+    assert not [name for name in DEPENDS_ON if name.endswith('-config')]
 
 
 @pytest.mark.asyncio
 async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(fake: Fake) -> None:
-    cluster = build()
-    for node, applied in cluster.applies.items():
+    day1 = build()
+    for node, applied in day1.applies.items():
         assert await applied.node.future() == ADDRESSES[node]
         # A reboot-needing change is staged, so the reboot is an operator's
         # decision rather than a side effect of an apply.
@@ -183,8 +194,8 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
 async def test_destroying_an_apply_never_wipes_the_disk(fake: Fake) -> None:
     # `reset` wipes STATE and EPHEMERAL — every partition (provider issue
     # #205). Node replacement is an explicit procedure, never a side effect.
-    cluster = build()
-    for applied in cluster.applies.values():
+    day1 = build()
+    for applied in day1.applies.values():
         on_destroy = await applied.on_destroy.future()
         assert on_destroy is not None
         assert on_destroy.reset is False
@@ -194,38 +205,34 @@ async def test_destroying_an_apply_never_wipes_the_disk(fake: Fake) -> None:
 async def test_nodes_are_applied_one_after_another(fake: Fake) -> None:
     # A configuration change that reboots the machine is applied to one node
     # at a time, so the quorum never goes down together.
-    cluster = build()
-    order = list(cluster.applies)
+    day1 = build()
+    order = list(day1.applies)
     # Registration is asynchronous; the graph is only complete once it is.
-    await asyncio.gather(*(applied.urn.future() for applied in cluster.applies.values()))
+    await asyncio.gather(*(applied.urn.future() for applied in day1.applies.values()))
     for earlier, later in zip(order, order[1:]):
         waits_for = DEPENDS_ON[f'kluster-{later}-config']
-        assert await cluster.applies[earlier].urn.future() in waits_for, f'{later} does not wait for {earlier}'
+        assert await day1.applies[earlier].urn.future() in waits_for, f'{later} does not wait for {earlier}'
 
 
 @pytest.mark.asyncio
 async def test_only_the_first_control_plane_bootstraps(fake: Fake) -> None:
     # A second bootstrap does not join etcd, it starts a second etcd cluster.
-    cluster = build()
-    assert cluster.bootstrap is not None
-    assert await cluster.bootstrap.node.future() == ADDRESSES['cp1']
-    assert await cluster.applies['cp1'].urn.future() in DEPENDS_ON['kluster-bootstrap']
+    day1 = build()
+    assert await day1.bootstrap.node.future() == ADDRESSES['cp1']
+    assert await day1.applies['cp1'].urn.future() in DEPENDS_ON['kluster-bootstrap']
 
 
 @pytest.mark.asyncio
 async def test_the_kubeconfig_comes_from_the_bootstrapped_node(fake: Fake) -> None:
-    cluster = build()
-    assert cluster.kubeconfig_source is not None
-    assert await cluster.kubeconfig_source.node.future() == ADDRESSES['cp1']
-    assert cluster.bootstrap is not None
-    assert await cluster.bootstrap.urn.future() in DEPENDS_ON['kluster-kubeconfig']
+    day1 = build()
+    assert await day1.kubeconfig_source.node.future() == ADDRESSES['cp1']
+    assert await day1.bootstrap.urn.future() in DEPENDS_ON['kluster-kubeconfig']
 
 
 @pytest.mark.asyncio
 async def test_the_health_check_knows_which_node_is_which(fake: Fake) -> None:
-    cluster = build()
-    assert cluster.health is not None
-    _ = await cluster.health.future()
+    day1 = build()
+    _ = await day1.health.future()
     health = fake.calls['talos:cluster/getHealth:getHealth']
     assert health['controlPlaneNodes'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
     assert health['workerNodes'] == [ADDRESSES['homelab']]
@@ -235,37 +242,35 @@ async def test_the_health_check_knows_which_node_is_which(fake: Fake) -> None:
 
 @pytest.mark.asyncio
 async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Fake) -> None:
-    cluster = build()
-    assert cluster.health is not None
-    assert await cluster.kubeconfig.future() == KUBECONFIG
+    day1 = build()
+    assert await day1.kubeconfig.future() == KUBECONFIG
     # The gate is the dependency: whatever consumes the kubeconfig is ordered
     # behind a cluster that reported healthy, not merely behind a resource
     # that finished registering.
-    assert await urns_of(cluster.health) <= await urns_of(cluster.kubeconfig)
-    assert cluster.bootstrap is not None
-    assert await cluster.bootstrap.urn.future() in await urns_of(cluster.kubeconfig)
+    assert await urns_of(day1.health) <= await urns_of(day1.kubeconfig)
+    assert await day1.bootstrap.urn.future() in await urns_of(day1.kubeconfig)
 
 
 @pytest.mark.asyncio
 async def test_the_credentials_are_secret(fake: Fake) -> None:
     # Both are cluster-admin: a stack export must not print them.
-    cluster = build()
-    assert await cluster.kubeconfig.is_secret()
-    assert await cluster.talosconfig.is_secret()
+    day1 = build()
+    assert await day1.kubeconfig.is_secret()
+    assert await day1.talosconfig.is_secret()
 
 
 @pytest.mark.asyncio
 async def test_the_talosconfig_names_every_node_and_the_control_plane_endpoints(fake: Fake) -> None:
-    cluster = build()
-    assert await cluster.talosconfig.future() == TALOSCONFIG
+    day1 = build()
+    assert await day1.talosconfig.future() == TALOSCONFIG
     configuration = fake.calls['talos:client/getConfiguration:getConfiguration']
     assert configuration['nodes'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3', 'homelab')]
     assert configuration['endpoints'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
 
 
-async def patches_of(cluster: Any, node: str) -> list[dict[str, Any]]:
+async def patches_of(component: Any, node: str) -> list[dict[str, Any]]:
     """The patches one node's machine configuration was generated from."""
-    configuration = await cast('pulumi.Output[Any]', cluster.configurations[node]).future()
+    configuration = await cast('pulumi.Output[Any]', component.configurations[node]).future()
     assert configuration is not None
     patches = cast('list[str]', configuration.config_patches or [])
     return [cast('dict[str, Any]', json.loads(patch)) for patch in patches]
@@ -273,7 +278,7 @@ async def patches_of(cluster: Any, node: str) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_the_generated_secretbox_key_reaches_the_control_planes(fake: Fake) -> None:
-    cluster = build()
+    cluster = build_cluster()
     for node in ('cp1', 'cp2', 'cp3'):
         sections = [patch['cluster'] for patch in await patches_of(cluster, node) if 'cluster' in patch]
         assert SECRETBOX in [section.get('secretboxEncryptionSecret') for section in sections]
@@ -286,32 +291,48 @@ async def test_a_bundle_without_a_secretbox_key_is_an_error(fake: Fake, caplog: 
     # snapshot, so an error diagnostic is raised — which fails the deployment
     # — rather than inventing key material or saying nothing.
     fake.secretbox = None
-    cluster = build()
+    cluster = build_cluster()
     for patch in await patches_of(cluster, 'cp1'):
         assert 'secretboxEncryptionSecret' not in patch.get('cluster', {})
     assert 'secretbox' in caplog.text
     assert 'ERROR' in caplog.text
 
 
-@pytest.mark.asyncio
-async def test_only_the_augmented_node_configures_the_second_address(fake: Fake) -> None:
-    cluster = build()
-    augmented = [
-        patch
-        for patch in await patches_of(cluster, 'cp1')
-        if 'interfaces' in patch.get('machine', {}).get('network', {})
+def interfaces(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        interface
+        for patch in patches
+        for interface in patch.get('machine', {}).get('network', {}).get('interfaces', [])
     ]
-    assert augmented[0]['machine']['network']['interfaces'][0]['addresses'] == ['10.20.0.42/32']
+
+
+@pytest.mark.asyncio
+async def test_the_second_address_is_applied_and_never_booted_with(fake: Fake) -> None:
+    # The address is assigned by OCI to the VNIC of an instance whose user_data
+    # *is* the booted configuration. Naming it there would make the instance
+    # wait on an address that waits on the instance, so it arrives on day 1.
+    cluster = build_cluster()
+    day1 = build(cluster=cluster)
+    assert interfaces(await patches_of(day1, 'cp1'))[0]['addresses'] == [f'{SECONDARY}/32']
+    assert not interfaces(await patches_of(cluster, 'cp1'))
+
+
+@pytest.mark.asyncio
+async def test_only_the_augmented_node_is_configured_twice(fake: Fake) -> None:
+    # Every other node is applied the very configuration it booted, rather than
+    # a second rendering of it that happens to come out the same.
+    cluster = build_cluster()
+    day1 = build(cluster=cluster)
     for node in ('cp2', 'cp3', 'homelab'):
-        for patch in await patches_of(cluster, node):
-            assert 'interfaces' not in patch.get('machine', {}).get('network', {})
+        assert day1.configurations[node] is cluster.configurations[node]
+        assert not interfaces(await patches_of(day1, node))
 
 
 @pytest.mark.asyncio
 async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
     from kluster.physical.talos import BGP_PORT
 
-    cluster = build()
+    cluster = build_cluster()
 
     async def bgp_rules(node: str) -> list[dict[str, Any]]:
         return [
@@ -323,3 +344,11 @@ async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
     assert (await bgp_rules('homelab'))[0]['ingress'] == [{'subnet': '192.168.80.1/32'}]
     for node in ('cp1', 'cp2', 'cp3'):
         assert not await bgp_rules(node)
+
+
+@pytest.mark.asyncio
+async def test_a_stranger_cannot_be_named_by_either_component(fake: Fake) -> None:
+    with pytest.raises(ValueError, match='BGP peers name nodes that are not in the cluster'):
+        build_cluster(bgp_peers={'nowhere': '192.168.80.1/32'})
+    with pytest.raises(ValueError, match='secondary addresses name nodes that are not in the cluster'):
+        build(secondary_addresses={'nowhere': SECONDARY})
