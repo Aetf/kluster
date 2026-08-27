@@ -8,13 +8,16 @@ written and is not.
 
 from __future__ import annotations
 
+import logging
+import types
 from collections.abc import Callable
 from pathlib import Path
 
+import keyring.errors
 import pytest
 
 from kluster.scripts.credentials import workstation
-from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxError, KdbxStore
+from kluster.scripts.credentials.kdbx import KEYRING_SERVICE, PATH_ENV, KdbxError, KdbxStore
 
 PASSWORD = 'correct horse battery staple'
 
@@ -22,6 +25,33 @@ PASSWORD = 'correct horse battery staple'
 @pytest.fixture
 def store(tmp_path: Path) -> KdbxStore:
     return KdbxStore.create(tmp_path / 'kit.kdbx', PASSWORD)
+
+
+@pytest.fixture
+def secret_store(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, str], str]:
+    """The desktop secret store as a dictionary, for the length of one test.
+
+    A stand-in rather than the real thing: the tests below both read and write
+    it, and a suite that writes to the operator's login keyring leaves entries
+    behind on a machine it does not own.
+    """
+    stored: dict[tuple[str, str], str] = {}
+
+    def get_password(service: str, account: str) -> str | None:
+        return stored.get((service, account))
+
+    def set_password(service: str, account: str, password: str) -> None:
+        stored[(service, account)] = password
+
+    def delete_password(service: str, account: str) -> None:
+        if stored.pop((service, account), None) is None:
+            raise keyring.errors.PasswordDeleteError(account)
+
+    monkeypatch.setattr('keyring.get_password', get_password)
+    monkeypatch.setattr('keyring.set_password', set_password)
+    monkeypatch.setattr('keyring.delete_password', delete_password)
+    monkeypatch.setattr('keyring.get_keyring', lambda: types.SimpleNamespace(name='a dictionary'))
+    return stored
 
 
 def test_created_database_round_trips_a_secret(store: KdbxStore) -> None:
@@ -164,6 +194,80 @@ def test_no_secret_store_is_not_an_error(tmp_path: Path, monkeypatch: pytest.Mon
 
     store.unlock()
     assert store.entries() == []
+
+
+def test_the_secret_store_is_keyed_by_the_resolved_path(
+    tmp_path: Path, secret_store: dict[tuple[str, str], str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / 'checkout' / '.credentials'
+    real.mkdir(parents=True)
+    kit = real / 'kit.kdbx'
+    _ = KdbxStore.create(kit, PASSWORD)
+    KdbxStore(path=kit).remember(PASSWORD)
+
+    # One file, three spellings: as stored, through a symlinked checkout, and
+    # relative to the directory the operator happens to be in. A store keyed
+    # on the spelling makes each of them a separate entry, and every kit open
+    # from a spelling that is not the stored one prompts again.
+    link = tmp_path / 'link'
+    link.symlink_to(tmp_path / 'checkout')
+    monkeypatch.chdir(real)
+
+    assert list(secret_store) == [(KEYRING_SERVICE, str(kit))]
+    assert KdbxStore(path=link / '.credentials' / 'kit.kdbx')._remembered() == PASSWORD  # pyright: ignore[reportPrivateUsage]
+    assert KdbxStore(path=Path('kit.kdbx'))._remembered() == PASSWORD  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_kit_named_another_way_opens_without_a_prompt(
+    tmp_path: Path, secret_store: dict[tuple[str, str], str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kit = tmp_path / 'checkout' / 'kit.kdbx'
+    kit.parent.mkdir()
+    _ = KdbxStore.create(kit, PASSWORD)
+    KdbxStore(path=kit).remember(PASSWORD)
+    link = tmp_path / 'link'
+    link.symlink_to(tmp_path / 'checkout')
+    monkeypatch.setattr('getpass.getpass', _refuse)
+
+    store = KdbxStore(path=link / 'kit.kdbx')
+    store.unlock()
+
+    assert store.entries() == []
+    assert len(secret_store) == 1
+
+
+def test_forget_removes_the_entry_whichever_way_the_kit_is_named(
+    tmp_path: Path, secret_store: dict[tuple[str, str], str]
+) -> None:
+    kit = tmp_path / 'checkout' / 'kit.kdbx'
+    kit.parent.mkdir()
+    _ = KdbxStore.create(kit, PASSWORD)
+    KdbxStore(path=kit).remember(PASSWORD)
+    link = tmp_path / 'link'
+    link.symlink_to(tmp_path / 'checkout')
+
+    KdbxStore(path=link / 'kit.kdbx').forget()
+
+    assert not secret_store
+
+
+def test_the_prompt_names_the_command_that_stops_it(
+    tmp_path: Path,
+    secret_store: dict[tuple[str, str], str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A ceremony is a dozen commands; a machine that has never opted in
+    # prompts on each one, and nothing in the prompt says that is a choice.
+    path = tmp_path / 'kit.kdbx'
+    _ = KdbxStore.create(path, PASSWORD)
+    monkeypatch.setattr('getpass.getpass', _types(PASSWORD))
+    caplog.set_level(logging.INFO)
+
+    KdbxStore(path=path).unlock()
+
+    assert not secret_store
+    assert 'credentials kdbx remember' in caplog.text
 
 
 def _refuse(_prompt: str) -> str:
