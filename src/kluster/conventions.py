@@ -29,6 +29,11 @@ CLUSTER_NAME = 'kluster'
 #: packages have to agree on is a convention, not a setting of any one of them.
 STATE_BACKEND = 'state-backend'
 
+#: The stack that owns the cloud estate (declarative/physical.md), which is
+#: likewise one name in three places: the stack itself, the IAM principal it
+#: signs as, and the compartment that principal administers.
+PHYSICAL = 'physical'
+
 #: Prefix for every label/annotation key this program owns. A k8s label key
 #: prefix must be a DNS subdomain; this one is a zone we control, so the keys
 #: can never collide with an upstream chart's.
@@ -51,6 +56,79 @@ OCI_USER_EMAIL_DOMAIN = 'unlimited-code.works'
 
 #: The seed user's primary email.
 OCI_SEED_USER_EMAIL = f'pulumi@{OCI_USER_EMAIL_DOMAIN}'
+
+
+class CompartmentMissing(LookupError):
+    """A consumer's compartment is named here but does not exist in the tenancy yet."""
+
+
+@dataclass(frozen=True)
+class Compartment:
+    """The OCI compartment one consumer administers, under both of its names.
+
+    A compartment is the whole of what a §3 OCI key may touch
+    (docs/credentials.md §3): each consumer administers its own and is a
+    stranger outside it. That makes the boundary a decision of this program
+    rather than a fact of the tenancy, so it is named here — and named twice,
+    because the two halves are established at different moments.
+
+    The **name** is a convention: it is chosen here, it is what the mint
+    creates or adopts, and it is the only form OCI's quota statements accept
+    (`physical/guardrails.py`). The **OCID** is the site fact that follows
+    from creating it — an identifier the committed file may carry in the clear,
+    for the reason `cloudflareAccountId` may: it names a container inside the
+    tenancy rather than the account that owns it, and everything it admits is
+    still behind a key.
+
+    A compartment that has not been created yet therefore has a name and no
+    OCID. That is a state rather than a gap: `credentials derived oci-<consumer>
+    mint` creates it, prints the OCID, and the edit that records it here is one
+    line to commit. Until then `require` refuses by naming that command, which
+    is what keeps a stack from failing on a lookup instead.
+    """
+
+    #: The `credentials derived oci-<consumer>` row, and the stack or command
+    #: the compartment belongs to.
+    consumer: str
+    #: What the compartment is called in the tenancy.
+    name: str
+    #: What OCI calls it, once it exists.
+    ocid: str | None = None
+
+    @property
+    def mint(self) -> str:
+        """The command that creates the compartment and mints the key confined to it."""
+        return f'credentials derived oci-{self.consumer} mint'
+
+    def require(self) -> str:
+        """The OCID, or a refusal naming the command that produces one."""
+        if self.ocid is None:
+            raise CompartmentMissing(
+                f'the {self.name} compartment does not exist yet, so nothing can be declared in it: '
+                f'`{self.mint}` creates it and prints the OCID to record as the `{self.consumer}` entry '
+                'of `conventions.OCI_COMPARTMENTS`'
+            )
+        return self.ocid
+
+
+#: One compartment per consumer, which is what makes the §3 OCI rows
+#: independent of each other.
+#:
+#: The appliance's is the tenancy's original compartment: it was made by hand
+#: before this program existed, so it carries the estate's own name rather than
+#: a per-consumer one, and the mint adopts it exactly as it adopts a user or a
+#: group that is already there.
+OCI_COMPARTMENTS: dict[str, Compartment] = {
+    compartment.consumer: compartment
+    for compartment in (
+        Compartment(
+            consumer=STATE_BACKEND,
+            name=CLUSTER_NAME,
+            ocid='ocid1.compartment.oc1..aaaaaaaaapllt64sf7e4gwnbka7l6d2hrblj6wvca7avtu6mrt6jaouallaq',
+        ),
+        Compartment(consumer=PHYSICAL, name=f'{CLUSTER_NAME}-{PHYSICAL}'),
+    )
+}
 
 #: The cloud fleet: three combined control-plane/ingress nodes, one of which
 #: additionally carries the block volume, the secondary private IP and the
