@@ -164,7 +164,6 @@ def oci_physical(
     cannot aim.
     """
     identity = oci_iam.Identity.for_consumer(PHYSICAL_STACK, compartment_id=compartment_id)
-    log.info('opening the OCI seed from the kit')
     minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
 
     _push_api_key(stack, minted, compartment_id=compartment_id)
@@ -192,7 +191,6 @@ def oci_state_backend(
     is what a non-interactive reader can be pointed at (`oci_slot.py`).
     """
     identity = oci_iam.Identity.for_consumer(oci_slot.STATE_BACKEND, compartment_id=compartment_id)
-    log.info('opening the OCI seed from the kit')
     minted = oci_iam.mint_api_key(kit, identity=identity, seed_entry=seed_entry, connect=connect)
 
     written = oci_slot.write(
