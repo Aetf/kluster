@@ -247,6 +247,23 @@ def test_the_physical_stack_gets_a_signing_configuration_and_its_compartment(
     assert runner.config[derived.COMPARTMENT_KEY] == COMPARTMENT
 
 
+def test_the_key_is_a_secret_and_the_compartment_is_not(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # Which channel each key takes is the assertion, not merely that the value
+    # arrived: the compartment is written plain because `stacks/physical.py`
+    # reads it plain, and a secret read that way agrees only through an
+    # upstream defect.
+    secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
+    plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
+    assert derived.OCI_PRIVATE_KEY_KEY in secret
+    assert sorted(plain) == sorted([derived.COMPARTMENT_KEY, derived.OCI_REGION_KEY])
+
+
 def test_the_per_stack_identity_is_confined_to_the_compartment_it_names(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
@@ -361,6 +378,22 @@ def test_the_appliance_key_is_a_file_only_its_owner_can_read(oci_kit: KdbxStore,
     assert oci_iam.fingerprint(key.read_text()) == config['fingerprint']
     assert key.stat().st_mode & 0o777 == 0o600
     assert key.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_checkout_path_with_a_percent_in_it_is_still_written(
+    oci_kit: KdbxStore, tenancy: Tenancy, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The slot is a configuration file, and a configuration parser reads `%` as
+    # the start of a substitution unless told otherwise. Nothing chooses the
+    # path this file sits at, so a checkout under one would fail the write --
+    # after the key it describes is already live in the tenancy.
+    awkward = tmp_path / 'build%20one' / '.credentials'
+    monkeypatch.setattr(workstation, 'directory', lambda: awkward)
+
+    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
+
+    key = Path(str(oci.config.from_file(str(written))['key_file']))
+    assert key.read_text().startswith('-----BEGIN PRIVATE KEY-----')
 
 
 def test_the_appliance_row_is_its_own_principal(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:

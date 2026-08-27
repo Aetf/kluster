@@ -304,6 +304,38 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
     assert 'lifecycle.environment' in dispatch.reached
 
 
+def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own() -> None:
+    # What these two mint is named after the row -- one IAM user, one B2 key
+    # name -- and the mint retires every other credential of that name, so a
+    # `--stack` would revoke the real stack's live credential on its way to
+    # filling a different stack's slot. The flag is absent rather than
+    # documented as dangerous.
+    for argv in (
+        ['derived', 'oci', 'physical', '--compartment', 'ocid1.compartment.test', '--stack', 'elsewhere'],
+        ['derived', 'b2', 'management', '--stack', 'elsewhere'],
+    ):
+        with pytest.raises(SystemExit):
+            _ = cli.build_parser().parse_args(argv)
+
+
+def test_the_fixed_rows_are_pushed_into_the_stack_they_are_named_after(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'oci', 'physical', '--compartment', 'ocid1.compartment.test']) == 0
+    assert cli.main(['derived', 'b2', 'management']) == 0
+
+    pushed = [kwargs['stack'].name for name, _, kwargs in dispatch.calls if name.startswith('derived.')]
+    assert pushed == [cli.derived.PHYSICAL_STACK, cli.derived.PHYSICAL_STACK]
+
+
+def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch: Dispatch) -> None:
+    assert cli.main(['derived', 'oci', 'physical', '--compartment', 'ocid1.compartment.test']) == 0
+
+    # The policy the mint writes names this compartment, so a command that
+    # dropped it would mint a key confined to somewhere else entirely.
+    (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'derived.oci_physical']
+    assert not rest
+    assert kwargs['compartment_id'] == 'ocid1.compartment.test'
+
+
 def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:
     assert cli.main(['escrow', 'recover', 'pulumi/passphrase']) == 0
 
