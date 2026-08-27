@@ -56,7 +56,9 @@ PATH_ENV = 'KLUSTER_KDBX'
 
 #: Secret Service collection entries are keyed by (service, account); the
 #: database's path is the account, so the kit and the estate never collide and
-#: a database moved to a new path simply stops matching.
+#: a database moved to a new path simply stops matching. The path is resolved
+#: first (`KdbxStore.account`), so the several ways of naming one file are one
+#: account rather than several.
 KEYRING_SERVICE = 'kluster-credentials'
 
 #: The attributes an entry carries natively; anything else is a custom
@@ -182,20 +184,39 @@ class KdbxStore:
                 log.warning('the stored password for %s no longer opens it', self.path.name)
             else:
                 return
+        else:
+            # A ceremony is a dozen commands, and a machine that has never
+            # opted in prompts on every one of them. Naming the command that
+            # ends that is cheaper than the operator wondering whether the
+            # store is broken.
+            log.info('no password stored for %s; `credentials kdbx remember` stops this prompt', self.path.name)
         self.unlock_with(getpass.getpass(f'master password for {self.path.name}: '))
+
+    @property
+    def account(self) -> str:
+        """This kit's key in the desktop secret store: the resolved path.
+
+        Resolved rather than as typed, because the same file is reached by a
+        relative path, an absolute one, and through a symlinked checkout, and
+        a store keyed on the spelling turns each of those into a separate
+        entry that never matches the others. `resolve` does not require the
+        file to exist, so `forget` still names the right entry for a kit that
+        has since been moved away.
+        """
+        return str(self.path.resolve())
 
     def _remembered(self) -> str | None:
         """The stored master password, or None if there is no store at all."""
-        return remembered(str(self.path))
+        return remembered(self.account)
 
     def remember(self, password: str) -> None:
         """Put the master password in the desktop secret store."""
-        store(str(self.path), password)
+        store(self.account, password)
 
     def forget(self) -> None:
         """Remove it again."""
         try:
-            unstore(str(self.path))
+            unstore(self.account)
         except KdbxError as exc:
             raise KdbxError(f'no stored password for {self.path}') from exc
 
