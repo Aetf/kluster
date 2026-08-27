@@ -31,8 +31,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import os
 import subprocess as sp
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -84,13 +86,38 @@ def dump_name(now: dt.datetime | None = None) -> str:
     return f'{settings.NAME}-{stamp}.dump.age'
 
 
-def backend_url(bundle_dir: Path) -> str:
-    """The connection string beside the client bundle, or a refusal naming the fix.
+@dataclass(frozen=True)
+class Connection:
+    """What it takes to reach the backend: a string, and where the bundle is.
 
-    The same file `mise.toml` turns into `PULUMI_BACKEND_URL`, so a dump talks
-    to the backend the operator's `pulumi` runs talk to, over the same
-    certificate. It names its three files by absolute path, which is why
-    moving a bundle invalidates the string beside it.
+    Two halves because the connection string is machine-independent by
+    design (`config.ClientBundle.url`) — the certificate, its key and the CA
+    are named by the `PGSSL*` variables, which libpq and the driver behind
+    Pulumi's Postgres backend both read. Carried together so that no caller
+    can pass one without the other: a URL on its own authenticates as nobody
+    and is refused by the box.
+    """
+
+    url: str
+    env: dict[str, str]
+
+
+#: The connection-string parameters that name a file. A bundle written before
+#: the paths moved into the environment has them, and they win over the
+#: variables — which is what keeps such a bundle working, and why the fix for
+#: a checkout that has since moved is to rewrite the file rather than to set
+#: a variable.
+_FILE_PARAMETERS = ('sslrootcert=', 'sslcert=', 'sslkey=')
+
+
+def connection(bundle_dir: Path) -> Connection:
+    """The connection string beside a client bundle, plus that bundle's files.
+
+    The URL is the same file `mise.toml` turns into `PULUMI_BACKEND_URL`, so a
+    dump talks to the backend the operator's `pulumi` runs talk to, over the
+    same certificate. The variables are derived from where the file was
+    actually found rather than from where it was looked for, so a bundle still
+    in its pre-`.credentials/` location is used with its own certificates.
     """
     path = lifecycle.backend_url_file(bundle_dir)
     if path is None:
@@ -100,29 +127,54 @@ def backend_url(bundle_dir: Path) -> str:
     url = path.read_text().strip()
     if not url:
         raise StateError(f'{path} is empty; re-run `state-backend bundle operator --address <ip>`')
-    return url
+    if any(parameter in url for parameter in _FILE_PARAMETERS):
+        log.warning(
+            '%s names its certificate files inside the URL, so this checkout cannot be moved without '
+            'rewriting it: `state-backend bundle operator --address <ip>` writes the portable form',
+            path,
+        )
+    return Connection(url=url, env=config.ssl_env(path.parent))
 
 
 def endpoint(url: str) -> str:
     """A connection string with its query dropped — what a log line may say.
 
-    The query is three absolute paths to a client certificate and its key.
-    Nothing secret, but nothing informative either, and it is longer than
-    everything else the run prints.
+    The query is the TLS mode, and on a bundle written before the certificate
+    paths moved into the environment it is three absolute paths as well:
+    nothing secret, nothing informative, and longer than everything else the
+    run prints.
     """
     return url.split('?', 1)[0]
 
 
-def _run(argv: Sequence[str], *, what: str, timeout: int, stdin: str | None = None) -> str:
+def _run(
+    argv: Sequence[str],
+    *,
+    what: str,
+    timeout: int,
+    stdin: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """One external tool, with its failure turned into something readable.
 
     Every caller here is a long-running local process or a network transfer,
     so a timeout is a real outcome rather than a guard, and it says which
     step ran out rather than surfacing a `TimeoutExpired` from three frames
     down.
+
+    `env` is overlaid on this process's environment rather than replacing it:
+    what a caller adds is the bundle's three `PGSSL*` paths, while `PATH`, a
+    home directory and the rest still have to reach the tool.
     """
     try:
-        proc = sp.run(list(argv), input=stdin, capture_output=True, text=True, timeout=timeout)
+        proc = sp.run(
+            list(argv),
+            input=stdin,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, **env} if env else None,
+        )
     except FileNotFoundError as exc:
         raise StateError(
             f'{argv[0]} is not on PATH: {PG_DUMP}/{PG_RESTORE} come from a Postgres client package, '
@@ -139,7 +191,7 @@ def _run(argv: Sequence[str], *, what: str, timeout: int, stdin: str | None = No
     return proc.stdout
 
 
-def pg_dump(url: str, destination: Path) -> None:
+def pg_dump(target: Connection, destination: Path) -> None:
     """`pg_dump -Fc` over the bundle's connection, into a local file.
 
     The custom format because that is what the appliance's own timer writes
@@ -148,7 +200,11 @@ def pg_dump(url: str, destination: Path) -> None:
     subjects that exist on every box (`ci`, `operator`) and flattening
     ownership would hand CI's tables to the operator.
     """
-    log.info('running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes', PG_DUMP, endpoint(url))
+    log.info(
+        'running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes',
+        PG_DUMP,
+        endpoint(target.url),
+    )
     _ = _run(
         [
             PG_DUMP,
@@ -157,10 +213,11 @@ def pg_dump(url: str, destination: Path) -> None:
             # password to type: the client certificate is the credential.
             '--no-password',
             f'--file={destination}',
-            f'--dbname={url}',
+            f'--dbname={target.url}',
         ],
-        what=f'{PG_DUMP} against {endpoint(url)}',
+        what=f'{PG_DUMP} against {endpoint(target.url)}',
         timeout=TRANSFER_TIMEOUT,
+        env=target.env,
     )
     log.info('wrote %.1f MiB of archive', destination.stat().st_size / 2**20)
 
@@ -209,7 +266,7 @@ def verify_dump(archive: Path) -> list[str]:
     return found
 
 
-def pg_restore(url: str, archive: Path) -> None:
+def pg_restore(target: Connection, archive: Path) -> None:
     """Restore the archive over the bundle's connection, all of it or none of it.
 
     `--single-transaction` is the whole failure model: an error anywhere
@@ -223,7 +280,7 @@ def pg_restore(url: str, archive: Path) -> None:
     transaction on every fresh appliance. The drops run inside the same
     transaction, so the all-or-nothing shape survives.
     """
-    log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(url))
+    log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(target.url))
     _ = _run(
         [
             PG_RESTORE,
@@ -231,16 +288,17 @@ def pg_restore(url: str, archive: Path) -> None:
             '--clean',
             '--if-exists',
             '--no-password',
-            f'--dbname={url}',
+            f'--dbname={target.url}',
             str(archive),
         ],
-        what=f'{PG_RESTORE} into {endpoint(url)}',
+        what=f'{PG_RESTORE} into {endpoint(target.url)}',
         timeout=TRANSFER_TIMEOUT,
+        env=target.env,
     )
     log.info('the archive went in')
 
 
-def stacks(url: str) -> list[str]:
+def stacks(target: Connection) -> list[str]:
     """Every stack the backend serves, asked through the CLI that will use it.
 
     The verification a restore ends on, and deliberately not a SQL query: what
@@ -250,12 +308,12 @@ def stacks(url: str) -> list[str]:
     `--all` because the question is about the backend rather than about the
     project directory the answer is asked from.
     """
-    log.info('asking pulumi which stacks %s serves', endpoint(url))
+    log.info('asking pulumi which stacks %s serves', endpoint(target.url))
     try:
         printed = pulumi_config.run_pulumi(
             ['stack', 'ls', '--all', '--json'],
             cwd=pulumi_config.project_dir(),
-            env={'PULUMI_BACKEND_URL': url},
+            env={'PULUMI_BACKEND_URL': target.url, **target.env},
             stdin=None,
         )
     except pulumi_config.SlotRefused as exc:

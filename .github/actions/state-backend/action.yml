@@ -1,0 +1,58 @@
+name: Materialize the state-backend client bundle
+description: >
+  Write the `ci` client bundle into this checkout's workstation slot
+  (`.credentials/state-backend/`), which is where `mise.toml` resolves both
+  `PULUMI_BACKEND_URL` and the three `PGSSL*` variables naming its files. A job
+  that has run this reaches the Pulumi state backend exactly the way a
+  workstation does — same slot, same resolution, no per-step environment of its
+  own (physical/state-backend.md §3).
+
+inputs:
+  url:
+    description: The backend connection string, which names no path
+    required: true
+  ca:
+    description: The CA certificate the appliance's server certificate chains to
+    required: true
+  certificate:
+    description: The `ci` client certificate
+    required: true
+  key:
+    description: The `ci` client key
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write the bundle into the checkout's slot
+      shell: bash
+      # Via env rather than `${{ }}` inline: a certificate is multi-line, and
+      # interpolating one into a shell script would end the command.
+      env:
+        URL: ${{ inputs.url }}
+        CA: ${{ inputs.ca }}
+        CERT: ${{ inputs.certificate }}
+        KEY: ${{ inputs.key }}
+      run: |
+        set -euo pipefail
+        missing=()
+        for name in URL CA CERT KEY; do
+          [ -n "${!name}" ] || missing+=("$name")
+        done
+        # Failing here rather than three steps later: a bundle with a hole in
+        # it reaches Postgres as a TLS handshake the box rejects, which reads
+        # like an outage rather than like an unfilled Environment secret.
+        if [ ${#missing[@]} -ne 0 ]; then
+          echo "::error::the ci client bundle is incomplete (${missing[*]} empty): this Environment needs" \
+               "PULUMI_BACKEND_URL, PULUMI_BACKEND_CA, PULUMI_BACKEND_CERT and PULUMI_BACKEND_KEY"
+          exit 1
+        fi
+        slot="${GITHUB_WORKSPACE}/.credentials/state-backend"
+        mkdir -p "$slot"
+        chmod 700 "$slot"
+        printf '%s\n' "$URL" >"$slot/backend-url"
+        printf '%s\n' "$CA" >"$slot/ca.crt"
+        printf '%s\n' "$CERT" >"$slot/client.crt"
+        # libpq refuses a client key that anyone but its owner can read.
+        install -m 600 /dev/null "$slot/client.key"
+        printf '%s\n' "$KEY" >"$slot/client.key"

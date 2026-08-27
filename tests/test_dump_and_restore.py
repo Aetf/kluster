@@ -19,7 +19,7 @@ import logging
 import os
 import shutil
 import subprocess as sp
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +28,7 @@ from memory_kit import MemoryKit
 
 from kluster.scripts.credentials import age, escrow
 from kluster.scripts.credentials.kdbx import PATH_ENV, KdbxStore
-from kluster.scripts.state_backend import cli, settings, state
+from kluster.scripts.state_backend import cli, config, settings, state
 
 age_binary = shutil.which(age.BINARY)
 needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
@@ -53,10 +53,12 @@ LISTING = """;
 216; 1259 16390 SEQUENCE public stacks_id_seq ci
 """
 
-URL = (
-    'postgres://operator@192.0.2.10:5432/pulumi_state?sslmode=verify-full'
-    '&sslrootcert=/nowhere/ca.crt&sslcert=/nowhere/client.crt&sslkey=/nowhere/client.key'
-)
+URL = 'postgres://operator@192.0.2.10:5432/pulumi_state?sslmode=verify-full'
+
+#: What a bundle written before the certificate paths moved into the
+#: environment holds. Still a working connection wherever those paths resolve:
+#: a connection-string parameter beats the variable of the same meaning.
+LEGACY_URL = f'{URL}&sslrootcert=/nowhere/ca.crt&sslcert=/nowhere/client.crt&sslkey=/nowhere/client.key'
 
 
 def _completed(argv: Sequence[str], *, stdout: str = '', stderr: str = '', code: int = 0) -> sp.CompletedProcess[str]:
@@ -91,6 +93,7 @@ class Double:
         self.answers_before: bool = answers_before
         self.real: Any = sp.run
         self.calls: list[list[str]] = []
+        self.environments: list[Mapping[str, str] | None] = []
         self.restored: bytes | None = None
 
     def programs(self) -> list[str]:
@@ -100,6 +103,19 @@ class Double:
 
     def argv(self, program: str) -> list[str]:
         return next(argv for argv in self.calls if Path(argv[0]).name == program)
+
+    def connections(self) -> list[tuple[str, Mapping[str, str]]]:
+        """Every doubled call that opens one, with the environment it was handed.
+
+        A `pg_restore --list` reads a local file and connects to nothing, so
+        it is not one of these; what makes a call a connection is a `--dbname`
+        or being the `pulumi` CLI, which is told the backend a different way.
+        """
+        return [
+            (Path(argv[0]).name, env or {})
+            for argv, env in zip(self.calls, self.environments, strict=True)
+            if Path(argv[0]).name == 'pulumi' or any(value.startswith('--dbname=') for value in argv)
+        ]
 
     def _listing(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
         data = Path(argv[-1]).read_bytes()
@@ -116,6 +132,7 @@ class Double:
 
     def __call__(self, argv: Sequence[str], **kwargs: Any) -> Any:
         self.calls.append(list(argv))
+        self.environments.append(kwargs.get('env'))
         match Path(argv[0]).name:
             case state.PG_DUMP:
                 destination = next(value for value in argv if value.startswith('--file='))
@@ -592,4 +609,67 @@ def test_both_commands_are_on_the_command_line() -> None:
 
 def test_a_bundle_that_is_not_there_names_the_command_that_writes_one(tmp_path: Path) -> None:
     with pytest.raises(state.StateError, match='state-backend bundle operator'):
-        _ = state.backend_url(tmp_path / 'nothing-here')
+        _ = state.connection(tmp_path / 'nothing-here')
+
+
+def test_the_connection_is_the_url_plus_the_bundle_beside_it(bundle: Path) -> None:
+    """Where the certificates are comes from where the URL was found.
+
+    The URL says nothing about this machine, so a run that did not add the
+    three variables would authenticate as nobody -- which the box refuses.
+    """
+    target = state.connection(bundle)
+
+    assert target.url == URL
+    assert target.env == {
+        'PGSSLROOTCERT': str(bundle / config.CA_FILE),
+        'PGSSLCERT': str(bundle / config.CERT_FILE),
+        'PGSSLKEY': str(bundle / config.KEY_FILE),
+    }
+
+
+def test_every_tool_that_connects_is_handed_the_bundle(
+    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
+) -> None:
+    """`pg_dump`, `pg_restore` and `pulumi` all read the same three variables.
+
+    They are three different clients of one connection -- libpq twice and the
+    driver behind Pulumi's Postgres backend once -- and a path-free URL is
+    unusable to any of them without this.
+    """
+    tools = double()
+    taken = tmp_path / 'taken.dump.age'
+    assert _dump(kit, registry, bundle, taken) == 0
+    assert _restore(kit, registry, bundle, taken) == 0
+
+    expected = state.connection(bundle).env
+    opened = tools.connections()
+    assert {program for program, _ in opened} == {state.PG_DUMP, state.PG_RESTORE, 'pulumi'}
+    for program, environment in opened:
+        assert expected.items() <= environment.items(), program
+
+
+def test_a_url_that_still_carries_its_paths_works_and_says_what_to_re_run(
+    double: Callable[..., Double],
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    bundle: Path,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A slot written before this split keeps working, loudly.
+
+    Nothing has to be converted: a connection-string parameter overrides the
+    variable of the same meaning, so the paths in an older URL are what libpq
+    uses and the bundle they name is the bundle it connects with. What the
+    operator is told is that this string is the one thing in the slot that a
+    moved checkout invalidates, and which command rewrites it.
+    """
+    tools = double()
+    _ = (bundle / config.URL_FILE).write_text(f'{LEGACY_URL}\n')
+
+    with caplog.at_level(logging.WARNING):
+        assert _dump(kit, registry, bundle, tmp_path / 'taken.dump.age') == 0
+
+    assert f'--dbname={LEGACY_URL}' in tools.argv(state.PG_DUMP)
+    assert any('state-backend bundle operator' in record.getMessage() for record in caplog.records)
