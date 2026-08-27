@@ -86,7 +86,11 @@ def write(
     absent or complete rather than one pointing at a key that is not there.
     """
     key = workstation.write(key_path(consumer), private_key)
-    profile = configparser.ConfigParser()
+    # No interpolation, which is what the SDK's own reader does: the values
+    # here are paths and OCIDs rather than a template, and the default
+    # `BasicInterpolation` would refuse a checkout path containing a `%` --
+    # after the key it describes is already live in the tenancy.
+    profile = configparser.ConfigParser(interpolation=None)
     profile[PROFILE] = {
         'user': user,
         'fingerprint': fingerprint,
