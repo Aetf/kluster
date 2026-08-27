@@ -154,6 +154,91 @@ def test_import_appends_rather_than_overwriting(vault: escrow.Vault) -> None:
     assert vault.recover(escrow.PASSPHRASE) == 'from-elsewhere'
 
 
+def test_import_after_import_appends_and_leaves_the_first_file_alone(vault: escrow.Vault) -> None:
+    # Two imports in a row is the shape a retried ceremony step has, and the
+    # retry must not land on top of the generation the first one wrote: the
+    # file is compared byte for byte, because an overwrite that happened to
+    # re-encrypt the same plaintext would still have destroyed the original.
+    _ = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'the-live-passphrase')
+    first = vault.registry.path(escrow.PASSPHRASE, 1)
+    written = first.read_bytes()
+
+    second = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'a-second-value')
+
+    assert vault.registry.generations(escrow.PASSPHRASE) == [1, 2]
+    assert second == vault.registry.path(escrow.PASSPHRASE, 2)
+    assert first.read_bytes() == written
+    assert vault.recover(escrow.PASSPHRASE, 1) == 'the-live-passphrase'
+    assert vault.recover(escrow.PASSPHRASE, 2) == 'a-second-value'
+
+
+@pytest.mark.parametrize('value', ['', '   ', '\n'])
+@pytest.mark.parametrize('label', [escrow.PASSPHRASE, escrow.CA])
+def test_import_refuses_a_value_that_is_not_there(vault: escrow.Vault, label: str, value: str) -> None:
+    # A producer that crashed writes nothing and exits, and its traceback is
+    # off the top of the screen by the time the import reports success. An
+    # escrowed empty string is only discovered by the recovery that needed it.
+    # Said as emptiness whatever the label expects: "this is not a PEM private
+    # key" would send the operator looking at the wrong end of the pipe.
+    with pytest.raises(escrow.EscrowError, match='empty'):
+        _ = escrow.adopt(vault.registry, label, value)
+
+    assert vault.registry.generations(label) == []
+
+
+def test_import_refuses_something_that_is_not_an_age_identity(vault: escrow.Vault) -> None:
+    label = escrow.backup_labels()[0]
+
+    # A wrong-but-non-empty pipe: the recipient rather than the identity is
+    # the mistake the labels invite, and it survives every check but the shape.
+    with pytest.raises(escrow.EscrowError, match='age identity'):
+        _ = escrow.adopt(vault.registry, label, age.generate().public)
+
+    assert vault.registry.generations(label) == []
+
+
+def test_import_takes_a_real_age_identity(vault: escrow.Vault) -> None:
+    label = escrow.backup_labels()[0]
+    identity = age.generate()
+
+    _ = escrow.adopt(vault.registry, label, identity.secret)
+
+    assert vault.recover(label) == identity.secret
+
+
+def test_import_refuses_something_that_is_not_a_private_key(vault: escrow.Vault) -> None:
+    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+        _ = escrow.adopt(vault.registry, escrow.CA, 'BEGIN PRIVATE KEY')
+
+    assert vault.registry.generations(escrow.CA) == []
+
+
+def test_import_refuses_a_private_key_that_stops_half_way(vault: escrow.Vault) -> None:
+    truncated = pki.generate_ca_key()[:80]
+
+    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+        _ = escrow.adopt(vault.registry, escrow.CA, truncated)
+
+    assert vault.registry.generations(escrow.CA) == []
+
+
+def test_import_takes_a_real_ca_key(vault: escrow.Vault) -> None:
+    key = pki.generate_ca_key()
+
+    _ = escrow.adopt(vault.registry, escrow.CA, key)
+
+    assert vault.recover(escrow.CA) == key
+
+
+def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> None:
+    # Nothing recognisable about a passphrase or a bearer token, so the shape
+    # is the empty check and no more: a check that guessed at length or
+    # alphabet would refuse values the consumers accept.
+    _ = escrow.adopt(vault.registry, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
+
+    assert vault.recover(escrow.ALERTMANAGER) == 'a-token-from-somewhere-else'
+
+
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:
     with pytest.raises(escrow.EscrowError, match='no label'):
         _ = escrow.generate(vault.registry, 'made/up')

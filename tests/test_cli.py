@@ -321,6 +321,33 @@ def test_the_passphrase_can_still_be_piped_to_another_machine(dispatch: Dispatch
     assert 'workstation.write' not in dispatch.reached
 
 
+def test_import_refuses_an_empty_pipe_and_says_where_it_came_from(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The failure this exists for: `producer | credentials escrow import ...`
+    # where the producer died. Import still gets a value, and escrowing it
+    # files an empty string as a generation nobody notices until a recovery.
+    monkeypatch.setattr('sys.stdin', io.StringIO('\n'))
+
+    assert cli.main(['escrow', 'import', 'pulumi/passphrase']) == 1
+
+    assert 'standard input was empty' in caplog.text
+    assert 'escrow.adopt' not in dispatch.reached
+
+
+def test_import_refuses_an_empty_slot(
+    dispatch: Dispatch, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    empty = tmp_path / 'passphrase'
+    _ = empty.write_text('')
+    monkeypatch.setitem(cli.escrow.SLOTS, 'pulumi/passphrase', lambda: empty)
+
+    assert cli.main(['escrow', 'import', 'pulumi/passphrase', '--from-slot']) == 1
+
+    assert str(empty) in caplog.text
+    assert 'escrow.adopt' not in dispatch.reached
+
+
 def test_check_runs_without_opening_a_kit(dispatch: Dispatch) -> None:
     # The one command a stranger with a clone can run. Opening the kit here
     # would make a check into a ceremony.
