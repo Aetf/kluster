@@ -116,5 +116,5 @@ def test_the_help_says_when_to_run_what(capsys: pytest.CaptureFixture[str]) -> N
     for landmark in ('bring-up, from nothing', 'when one seed is lost', 'rotation', 'day to day'):
         assert landmark in printed
     # Each lifecycle verb appears in the ordering, not only in the tree.
-    for verb in ('bootstrap', 'rotate', 'escrow env', 'escrow check'):
+    for verb in ('bootstrap', 'rotate', 'escrow generate', 'escrow check'):
         assert verb in printed

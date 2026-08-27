@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
-import shlex
 import sys
 from pathlib import Path
 
@@ -70,25 +69,22 @@ _ORDER = """when to run what (docs/credentials.md §4):
     4. credentials escrow generate pulumi/passphrase
          The one escrowed label no other command mints. It writes the
          workstation slot as well as the ciphertext, so mise.toml finds it.
-    5. eval "$(credentials escrow env)"
-         PULUMI_CONFIG_PASSPHRASE (recovered from escrow) and
-         PULUMI_BACKEND_URL (from the bundle step 3 wrote).
-    6. credentials derived cloudflare zones
+    5. credentials derived cloudflare zones
          Mints the zone-scoped Cloudflare token from the seed and writes
          it into the dns stack's config, which is then committed. One
          §3 row per command; re-running one rotates it.
-    7. credentials derived oci physical --compartment <ocid>
+    6. credentials derived oci physical --compartment <ocid>
        credentials derived b2 management
          The two provider credentials the physical stack runs on, into its
          config, which is then committed like the one above.
-    8. credentials device unifi
+    7. credentials device unifi
        credentials device adguard
          The two §3 credentials no API here mints: each is made on the
          device that checks it, so the command prints the steps that
          create it, takes the value without echoing it, and writes it
          into the stack config that reads it -- physical for the UniFi
          key, dns for the AdGuard login. Both files are then committed.
-    9. credentials slots push
+    8. credentials slots push
          The GitHub secrets CI reads, from the slot map (§4). Run it again
          whenever a value behind one of them moves; a row it cannot fill
          yet says which slot is waiting on what.
@@ -231,13 +227,6 @@ def build_parser() -> argparse.ArgumentParser:
     _ = recover.add_argument('--stdout', action='store_true', help='print it even though it has a slot')
     _ = esc_actions.add_parser('rewrap', help='re-encrypt every ciphertext to the recipients now on file')
     _ = esc_actions.add_parser('check', help='what is missing or malformed; needs no kit')
-    env = esc_actions.add_parser('env', help='shell exports for a Pulumi run; use with eval')
-    _ = env.add_argument(
-        '--bundle-dir',
-        type=Path,
-        default=workstation.bundle_dir(),
-        help='where `state-backend` wrote the client bundle',
-    )
 
     rot = subjects.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
     _ = rot.add_argument('--into', type=Path, required=True, help='path for the successor kit; must not exist')
@@ -604,15 +593,6 @@ def main(argv: list[str] | None = None) -> int:
                 return _recovered(args, escrow.Vault.open(store, registry))
             case ('escrow', _, 'rewrap'):
                 _ = escrow.rewrap(registry, identities=[store.get(escrow.RECOVERY_ENTRY)])
-            case ('escrow', _, 'env'):
-                # Written to stdout for `eval`, and refused when stdout is the
-                # terminal: a passphrase in the scrollback is a passphrase in
-                # the next screen-share.
-                if sys.stdout.isatty():
-                    log.error('this prints a passphrase; pipe it: eval "$(credentials escrow env)"')
-                    return 1
-                for name, value in lifecycle.environment(store, args.bundle_dir, registry).items():
-                    print(f'export {name}={shlex.quote(value)}')
             case ('bootstrap', _, _):
                 created = lifecycle.bootstrap(store, prompt=input, only=args.only, registry=registry)
                 log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
