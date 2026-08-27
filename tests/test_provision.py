@@ -87,7 +87,7 @@ def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _mint() -> Path:
-    """A slot filled the way `credentials derived oci state-backend` fills it."""
+    """A slot filled the way `credentials derived oci-state-backend mint` fills it."""
     private_pem, _ = oci_iam.generate_key()
     key = oci_iam.ApiKey(tenancy=APPLIANCE_TENANCY, user=APPLIANCE_USER, private_key=private_pem)
     return oci_slot.write(key, compartment_id=COMPARTMENT)
@@ -128,13 +128,13 @@ def test_the_superseded_configuration_is_read_once_and_loudly(
         client = provision.Oci.load()
 
     assert client.compartment_id == COMPARTMENT
-    assert 'credentials derived oci state-backend' in caplog.text
+    assert 'credentials derived oci-state-backend mint' in caplog.text
 
 
 def test_a_machine_with_no_credential_is_told_what_mints_one(slots: Path) -> None:
     # The SDK's own answer is a missing file; this one names the command that
     # creates it, which is the whole difference between a stop and a step.
-    with pytest.raises(ValueError, match='credentials derived oci state-backend'):
+    with pytest.raises(ValueError, match='credentials derived oci-state-backend mint'):
         _ = provision.Oci.load()
 
 

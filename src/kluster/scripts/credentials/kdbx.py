@@ -90,7 +90,7 @@ def store(account: str, secret: str) -> None:
     """Put a secret in the desktop store under `account`.
 
     Every write to the store is one of these, and every one of them is
-    something the operator asked for by name (`kdbx remember`, `master
+    something the operator asked for by name (`kit password remember`, `root
     remember`): nothing lands there as a side effect of a run.
     """
     import keyring
@@ -189,7 +189,7 @@ class KdbxStore:
             # opted in prompts on every one of them. Naming the command that
             # ends that is cheaper than the operator wondering whether the
             # store is broken.
-            log.info('no password stored for %s; `credentials kdbx remember` stops this prompt', self.path.name)
+            log.info('no password stored for %s; `credentials kit password remember` stops this prompt', self.path.name)
         self.unlock_with(getpass.getpass(f'master password for {self.path.name}: '))
 
     @property
@@ -223,7 +223,7 @@ class KdbxStore:
     def unlock_with(self, password: str) -> None:
         """Open with a password already in hand.
 
-        A caller that has prompted for itself -- `kdbx remember` proves the
+        A caller that has prompted for itself -- `kit password remember` proves the
         password before storing it, `rotate` creates the successor -- should
         not be made to prompt again through this class.
         """
@@ -247,7 +247,7 @@ class KdbxStore:
         if isinstance(found, list):
             found = found[0] if found else None
         if found is None:
-            raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kdbx ls)')
+            raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kit ls)')
         return found
 
     def entries(self, group: str = '/') -> list[str]:

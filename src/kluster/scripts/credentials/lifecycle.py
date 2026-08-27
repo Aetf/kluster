@@ -193,7 +193,7 @@ def bootstrap(
     the repair path when one seed is lost -- `--only <member>`.
 
     It fills the kit and stops there. The escrow's own labels are minted one
-    command at a time (`credentials escrow generate <label>`), because
+    command at a time (`credentials derived <row> generate`), because
     generating the state passphrase is a decision with consequences for every
     stack, not a step a fill-everything command should take on its own.
     """

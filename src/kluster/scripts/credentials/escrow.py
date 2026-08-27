@@ -221,6 +221,24 @@ def register() -> dict[str, Label]:
     return {row.name: row for row in rows}
 
 
+def row_name(label: str) -> str:
+    """The name a label's row carries on the command line.
+
+    The registry files a label under a path — `escrow/pulumi/passphrase/1.age`
+    — while every §3 row is addressed as one word, joined by `-`, in the
+    command tree and in the slot map alike. This is the whole of the
+    translation between the two, and it is a function of the label rather than
+    a second table, so a row name cannot come to mean a label that is not the
+    one it was derived from.
+    """
+    return label.replace('/', '-')
+
+
+def rows() -> dict[str, Label]:
+    """Every escrowed row of the register, keyed by the name the CLI gives it."""
+    return {row_name(label): row for label, row in register().items()}
+
+
 def _row(label: str) -> Label:
     rows = register()
     if label not in rows:
@@ -256,7 +274,9 @@ class Registry:
 
     def recipients(self) -> list[str]:
         if not self.recipients_file.is_file():
-            raise EscrowError(f'no {self.recipients_file}; `credentials escrow init` writes it')
+            raise EscrowError(
+                f'no {self.recipients_file}; `credentials kit bootstrap` writes it while creating the recovery key'
+            )
         lines = (line.strip() for line in self.recipients_file.read_text().splitlines())
         values = [line for line in lines if line and not line.startswith('#')]
         if not values:
@@ -279,7 +299,9 @@ class Registry:
     def latest(self, label: str) -> int:
         found = self.generations(label)
         if not found:
-            raise EscrowError(f'nothing escrowed for {label!r}; `credentials escrow generate {label}` mints one')
+            raise EscrowError(
+                f'nothing escrowed for {label!r}; `credentials derived {row_name(label)} generate` mints one'
+            )
         return found[-1]
 
     def labels(self) -> list[str]:
@@ -318,15 +340,24 @@ def _store(registry: Registry, label: str, secret: str, *, generation: int, reci
 def init(kit: KdbxStore, registry: Registry, *, entry: str = RECOVERY_ENTRY) -> age.Identity:
     """Create the recovery keypair: private half into the kit, recipient into the repo.
 
+    Reached through `credentials kit bootstrap`, which creates this row like any
+    other §2 row and so is also the repair path for a kit that predates the
+    escrow: `--only recovery`.
+
     Refuses to replace either half. Every ciphertext under `escrow/` opens with
-    this key and nothing else, so overwriting it is losing all of them at once;
-    replacing a live recovery key is `credentials rotate`, which re-wraps the
-    registry before the predecessor stops being needed.
+    this key and nothing else, so overwriting it is losing all of them at once.
     """
     if kit.has(entry):
-        raise EscrowError(f'{entry!r} already holds a recovery key; replacing one is `credentials rotate`')
+        raise EscrowError(
+            f'{entry!r} already holds a recovery key, and every ciphertext under {DIRECTORY}/ opens with it: '
+            'replacing it is `credentials kit rotate`, and writing the recipients file afresh for the key '
+            'already there is `credentials kit rewrap`'
+        )
     if registry.recipients_file.exists():
-        raise EscrowError(f'{registry.recipients_file} already exists; it belongs to a recovery key already in a kit')
+        raise EscrowError(
+            f'{registry.recipients_file} already exists; it belongs to a recovery key already in a kit, and '
+            're-writing it to name that key is `credentials kit rewrap`'
+        )
     identity = age.generate()
     kit.put(entry, identity.public, identity.secret)
     registry.set_recipients([identity.public])

@@ -130,7 +130,8 @@ class Field:
 class Device:
     """One §3 row whose credential is made on the device that checks it."""
 
-    #: The `credentials device <member>` name, and the slot map's row name.
+    #: The `credentials derived <member> record` row name, which is also the
+    #: name this row carries in the slot map.
     member: str
     #: The §3 "Credential" cell, verbatim. The slot map quotes it and a test
     #: holds the two against the document.

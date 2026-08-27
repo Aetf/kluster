@@ -20,7 +20,7 @@ name an Environment.
     recovered with the recovery key and pushed, so a first fill and a re-fill
     are the same command and neither rotates anything.
 -   **minted** -- created by the run that delivers it: a provider mint by the
-    row's own `credentials derived` command, or a secret a program generates
+    row's own `credentials derived <row> mint`, or a secret a program generates
     for its own resource. The value is disclosed once, to the code that made
     it, so this map cannot re-push one -- obtaining it again means minting
     again, which is a rotation. Such a row names its producer instead of
@@ -43,8 +43,8 @@ name an Environment.
 that nothing has given a name yet -- an Environment secret no workflow reads, a
 SealedSecret whose manifest does not exist -- the row records that in `pending`
 rather than inventing a name a future workflow would have to guess right.
-`slots ls` prints it, `slots push` skips the row saying so, and `slots push
---only <row>` refuses by name. That is the discipline the seed layer already
+`derived ls` prints it, `derived sync` skips the row saying so, and `derived
+sync --only <row>` refuses by name. That is the discipline the seed layer already
 uses: a register row with no implementation is a command that refuses, not a
 command that is missing.
 
@@ -205,7 +205,7 @@ class Context:
 
     Everything here is lazy on purpose. Pushing the one manual row asks for no
     kit, pushing an escrowed row opens no state backend, and a machine holding
-    neither can still run `slots ls`.
+    neither can still run `derived ls`.
     """
 
     forge: Forge
@@ -238,7 +238,7 @@ class Context:
 class Source(Protocol):
     """Where one row's value comes from, and what to call that in a listing."""
 
-    #: One word for `slots ls`: derived, minted, state-read, manual.
+    #: One word for `derived ls`: derived, minted, state-read, manual.
     kind: ClassVar[str]
 
     def describe(self) -> str:
@@ -256,7 +256,7 @@ class Derived:
 
     Re-running a push is not a rotation: the plaintext is whatever generation
     the registry currently holds, and producing a new one is `credentials
-    escrow generate`, which this map deliberately cannot do.
+    derived <row> generate`, which this map deliberately cannot do.
     """
 
     kind: ClassVar[str] = 'derived'
@@ -427,7 +427,7 @@ def _device(member: str) -> Row:
     device = devices.DEVICES[member]
     return Row(
         register=device.register,
-        source=Manual(device.title, device.console, command=f'credentials device {device.member}'),
+        source=Manual(device.title, device.console, command=f'credentials derived {device.member} record'),
         targets=tuple(PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields),
         pending=_IN_STACK_CONFIG,
     )
@@ -450,11 +450,12 @@ _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so 
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
-#: The map, in §3's own order. Keys are the `slots push --only` names.
+#: The map, in §3's own order. Keys are the `credentials derived` row names:
+#: the same string the command tree gives the row, so a row has one spelling.
 ROWS: dict[str, Row] = {
-    'oci-physical': Row(
+    derived.OCI_PHYSICAL_ROW: Row(
         register='OCI API key (`physical`)',
-        source=Minted('credentials derived oci physical'),
+        source=Minted(f'credentials derived {derived.OCI_PHYSICAL_ROW} mint'),
         targets=(
             PulumiConfig(PHYSICAL_STACK, derived.OCI_TENANCY_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_USER_KEY),
@@ -465,14 +466,14 @@ ROWS: dict[str, Row] = {
         ),
         pending=_IN_STACK_CONFIG,
     ),
-    'oci-state-backend': Row(
+    derived.OCI_STATE_BACKEND_ROW: Row(
         register='OCI API key (state backend)',
-        source=Minted(f'credentials derived oci {conventions.STATE_BACKEND}'),
+        source=Minted(f'credentials derived {derived.OCI_STATE_BACKEND_ROW} mint'),
         targets=(WorkstationSlot(f'oci/{conventions.STATE_BACKEND}/'),),
     ),
-    'cloudflare-zones': Row(
+    derived.ZONES_ROW: Row(
         register='Cloudflare token (zones)',
-        source=Minted('credentials derived cloudflare zones'),
+        source=Minted(f'credentials derived {derived.ZONES_ROW} mint'),
         targets=(
             PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY),
             PulumiConfig(DNS_STACK, derived.ACCOUNT_KEY, secret=False),
@@ -481,19 +482,23 @@ ROWS: dict[str, Row] = {
     ),
     'cloudflare-dns01': Row(
         register='Cloudflare token (DNS-01)',
-        source=Minted('credentials derived cloudflare dns01', unbuilt='cert-manager has no slot to be sealed into'),
+        source=Minted(
+            'credentials derived cloudflare-dns01 mint', unbuilt='cert-manager has no slot to be sealed into'
+        ),
         targets=(SealedSecret("cert-manager's DNS-01 solver token"),),
         pending=_CLUSTER_UNBUILT,
     ),
     'cloudflare-gateway-acme': Row(
         register='Cloudflare token (gateway ACME)',
-        source=Minted('credentials derived cloudflare gateway', unbuilt='the gateway push is another tracker'),
+        source=Minted(
+            'credentials derived cloudflare-gateway-acme mint', unbuilt='the gateway push is another tracker'
+        ),
         targets=(GwConfigSecret("the UDM caddy's ACME token"),),
         pending="the gw-config push is the estate's other automation, so this side has no command",
     ),
-    'b2-management': Row(
+    derived.B2_MANAGEMENT_ROW: Row(
         register='B2 management key',
-        source=Minted('credentials derived b2 management'),
+        source=Minted(f'credentials derived {derived.B2_MANAGEMENT_ROW} mint'),
         targets=(
             PulumiConfig(PHYSICAL_STACK, derived.B2_KEY_ID_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.B2_KEY_KEY),
@@ -544,7 +549,7 @@ ROWS: dict[str, Row] = {
         source=Manual(
             'the ZeroTier Central API token',
             'It is the §2 kit row itself -- Central publishes no token API, so there is\n'
-            '  nothing smaller to mint and nothing to rotate from here. `credentials kdbx\n'
+            '  nothing smaller to mint and nothing to rotate from here. `credentials kit\n'
             "  show seeds/zerotier` names it; the paste into the stack's config is the\n"
             '  whole of the delivery (§3).',
         ),
@@ -664,14 +669,17 @@ ROWS: dict[str, Row] = {
     ),
     'drill-credentials': Row(
         register='Drill-environment credentials',
-        source=Minted('credentials derived drill', unbuilt='the drill compartment and its keys are not declared'),
+        source=Minted(
+            'credentials derived drill-credentials mint',
+            unbuilt='the drill compartment and its keys are not declared',
+        ),
         pending=_OPS_UNBUILT,
     ),
 }
 
 
 def describe(rows: Mapping[str, Row] | None = None) -> Iterator[str]:
-    """`slots ls`: the whole map, one paragraph per row. No value is touched."""
+    """`derived ls`: the whole map, one paragraph per row. No value is touched."""
     for name, row in (rows if rows is not None else ROWS).items():
         yield f'{name} ({row.source.kind}) - {row.register}'
         yield f'    from  {row.source.describe()}'
@@ -698,7 +706,7 @@ def _verify(forge: Forge, slot: Slot, before: str | None) -> None:
         log.info('%s: updated %s', slot, after)
 
 
-def push(context: Context, *, rows: Mapping[str, Row] | None = None, only: str | None = None) -> list[str]:
+def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str | None = None) -> list[str]:
     """Fill every GitHub secret in the map that can be filled. Returns what was pushed.
 
     Resolve, push, verify -- per row, every run -- so a first fill and a refill
@@ -717,7 +725,7 @@ def push(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     """
     table = rows if rows is not None else ROWS
     if only is not None and only not in table:
-        raise SlotRefused(f'no slot map row named {only!r}; `credentials slots ls` lists them')
+        raise SlotRefused(f'no slot map row named {only!r}; `credentials derived ls` lists them')
 
     pushed: list[str] = []
     refused: list[str] = []
@@ -780,5 +788,5 @@ __all__ = (
     'Slot',
     'StateRead',
     'describe',
-    'push',
+    'sync',
 )
