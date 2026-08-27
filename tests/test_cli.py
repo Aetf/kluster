@@ -257,7 +257,7 @@ def test_the_walk_finds_every_register_row() -> None:
         assert ['seed', member, 'create'] in found
         assert (['seed', member, 'rotate'] in found) == seed.self_reproducing
         if seed.repair is not None:
-            assert ['seed', member, seed.repair[0]] in found
+            assert ['seed', member, seed.repair.verb] in found
     for member in masters.ROOTS:
         assert ['root', member, 'remember'] in found
     for member in devices.DEVICES:

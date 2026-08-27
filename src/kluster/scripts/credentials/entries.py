@@ -48,8 +48,30 @@ OCI_DOMAIN_ATTRIBUTE = 'Identity domain URL'
 
 
 @dataclass(frozen=True)
+class Repair:
+    """An action one seed needs beyond `create` and `rotate`.
+
+    A row that grew an attribute after kits were already in the field needs an
+    explicit way to fill it in on an old one -- explicit because the repair
+    borrows an account root, and routine rotation must not quietly start
+    needing one.
+
+    Both texts live here rather than in the tree that shows them: the
+    subcommand is generated from this table, so the sentence that explains it
+    has to be a property of the row. `summary` is the one line the sibling
+    listing has room for; `detail` is what the verb's own `--help` shows, and
+    it stands on its own.
+    """
+
+    #: The `credentials seed <member> <verb>` name.
+    verb: str
+    summary: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class Seed:
-    """One row of credentials.md §2."""
+    """One row of the seed layer."""
 
     #: The `credentials seed <member>` name.
     member: str
@@ -59,7 +81,7 @@ class Seed:
     identifier: str
     #: What this seed mints, in the register's words.
     mints: str
-    #: Whether it can mint its own successor, or a console must (§2).
+    #: Whether it can mint its own successor, or a console must.
     self_reproducing: bool
 
     #: What a human has to do in a console when no API can do it. Empty for
@@ -76,12 +98,8 @@ class Seed:
     #: rather than against someone's memory of it.
     attributes: tuple[str, ...] = ()
 
-    #: An action this row needs beyond `create` and `rotate`, as (name,
-    #: help). A row that grew an attribute after kits were already in the
-    #: field needs an explicit way to fill it in on an old one -- explicit
-    #: because the repair borrows an account root, and routine rotation must
-    #: not quietly start needing one.
-    repair: tuple[str, str] | None = None
+    #: An action this row needs beyond `create` and `rotate`, or None.
+    repair: Repair | None = None
 
     @property
     def entry(self) -> str:
@@ -100,7 +118,7 @@ SEEDS: dict[str, Seed] = {
             member='recovery',
             title='Recovery key',
             identifier='the age recipient (its public half)',
-            mints='nothing; it opens the escrow, which holds the generated secrets (§2.2)',
+            mints='nothing; it is what opens the escrowed secrets generated here',
             self_reproducing=False,
         ),
         Seed(
@@ -111,7 +129,18 @@ SEEDS: dict[str, Seed] = {
             self_reproducing=True,
             attachment=OCI_KEY_ATTACHMENT,
             attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
-            repair=('domain', 'record the tenancy identity domain on a row that predates it'),
+            repair=Repair(
+                verb='domain',
+                summary='record the tenancy identity domain on a row that predates it',
+                detail=(
+                    "Read the tenancy's identity domain from OCI and record it on the seed row. Retiring "
+                    'an API key goes through that domain, and rows written before the attribute existed '
+                    'hold no such URL: a rotation on one of them mints a successor and then cannot retire '
+                    'what it supersedes, because the older endpoint refuses the call. Reading the '
+                    "tenancy's domains is the account root's privilege, so this is the one seed command "
+                    'that borrows a root -- once, on a kit that needs the repair.'
+                ),
+            ),
         ),
         Seed(
             member='cloudflare',
