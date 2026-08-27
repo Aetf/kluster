@@ -12,6 +12,12 @@ rather than through a metadata service: there is no cloud platform here to
 serve one. That seed carries cluster secrets, so it lives beside the disk
 image on the same root-only, snapshot-excluded subvolume.
 
+**The disk is created from the Talos image, not created empty.** The volume's
+`source` is the decompressed `nocloud` artefact on the machine running the
+program (`physical/image.py`), and the provider uploads it into the pool over
+the same connection it defines the domains through. So the first boot is a
+consequence of an apply rather than an operator writing an image by hand.
+
 The system this assumes of the host — the disk shape, the second bridge, the
 two-phase GPU passthrough, and the host preparation that must happen before
 any of it — is docs/physical/homelab-host.md. This module owns only the
@@ -29,16 +35,25 @@ operation:
     drained window.
 -   *Disk* grows on the host — `truncate` plus `virsh blockresize`, and Talos
     extends its EPHEMERAL partition into the new space (homelab-host.md §1).
-    The declared size is therefore the size the image is *created* at and is
-    ignored afterwards: a program insisting on it would propose replacing the
-    worker's disk the first time a refresh read the grown file back.
+    The declaration cannot state a size at all: the provider refuses `size`
+    beside `source` and sets the volume's capacity from the image, which is
+    the Talos artefact's own ~1.25 GB. Reaching the worker's working size is
+    therefore the *first* use of that host-side step rather than a later one,
+    and the file and the declaration part company from the moment it runs —
+    which is why `size` is ignored here as well. Every field of a libvirt
+    volume replaces the volume, so a program insisting on a size would propose
+    destroying the worker's disk the first time a refresh read the grown file
+    back.
 
-**Not declared here yet**: the Talos image itself. The volume is created
-empty, and nothing in the program writes the `nocloud` disk image onto it —
-the worker's schematic (amd64, `nocloud`, the i915 extension that the Wave C
-GPU cutover needs present from day 0) has no declaration, and this function is
-handed no image to install. Until that seam exists the VM is declared,
-adopted and previewable but not bootable.
+The image is a creation-time fact for the same reason. Talos upgrades itself
+in place over its machine API — the declared artefact is what the disk was
+*written* with, not what is on it now — so the declaration stops describing the
+volume the first time the node is upgraded, and a later `talosVersion` bump
+must not propose rewriting a running node's disk. Rebuilding the worker from a
+newer image is therefore a deliberate act rather than a diff: unprotect the
+volume, replace it, protect it again, and let the day-1 chain bring the node
+back. It destroys everything the node held, which is why nothing does it by
+accident.
 """
 
 from __future__ import annotations
@@ -55,9 +70,9 @@ from putils import Component
 
 __all__ = ('HomelabHost', 'declare')
 
-#: Disk sizes are quoted in GB (nodes.md §4.2) and libvirt volumes are sized
-#: in bytes; memory is quoted in GiB and libvirt domains are sized in MiB.
-BYTES_PER_GB = 1000**3
+#: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
+#: MiB. Disk sizes have no counterpart here: a volume created from a source
+#: image takes that image's size, and the rest is host-side growth.
 MIB_PER_GIB = 1024
 
 #: Raw, not qcow2: the image lives on a nodatacow subvolume, where qcow2's
@@ -187,6 +202,9 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
     :param storage_dir: the nodatacow subvolume that holds the disk image and
         the seed. The pool that points at it is declared here; the subvolume
         and its `chattr +C` are host preparation (homelab-host.md §4).
+    :param image_path: the decompressed Talos `nocloud` image, on the machine
+        running the program. The provider reads it there and uploads it into
+        the pool; nothing about it is fetched by the host.
     :param haos_domain_uuid: the domain to adopt.
     """
 
@@ -200,7 +218,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         bridge: pulumi.Input[str],
         vcpus: int,
         memory_gib: int,
-        disk_gb: int,
+        image_path: pulumi.Input[str],
         haos_domain_uuid: pulumi.Input[str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -230,14 +248,25 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             name=f'{domain_name}.{DISK_FORMAT}',
             pool=self.pool.name,
             format=DISK_FORMAT,
-            size=disk_gb * BYTES_PER_GB,
+            # The bytes the worker boots. No `size` beside it: the provider
+            # refuses the pair and takes the volume's capacity from the image.
+            source=image_path,
             opts=self._opts(
                 protect=True,
-                # The declared size is the creation size. Growth happens on
-                # the host, and a refresh that read the grown file back would
-                # otherwise diff against this number — and every field of a
-                # libvirt volume, `size` included, replaces the volume.
-                ignore_changes=['size'],
+                # Both are facts about the volume's *creation*, and every field
+                # of a libvirt volume replaces the volume, so neither may
+                # become a diff afterwards:
+                #
+                # -   `size` is the image's at creation and the host's from the
+                #     first `truncate` onwards.
+                # -   `source` describes the bytes the disk was written with,
+                #     and stops describing what is on it the moment Talos
+                #     upgrades itself over the machine API. Insisting on it
+                #     would turn a routine `talosVersion` bump — which this
+                #     stack makes for the machine configuration anyway — into a
+                #     proposal to rewrite a running node's disk, which `protect`
+                #     would then refuse for as long as the bump stood.
+                ignore_changes=['size', 'source'],
             ),
         )
 
@@ -318,7 +347,7 @@ def declare(
     bridge: str,
     vcpus: int,
     memory_gib: int,
-    disk_gb: int,
+    image_path: pulumi.Input[str],
     haos_domain_uuid: pulumi.Input[str],
     opts: pulumi.ResourceOptions | None = None,
 ) -> None:
@@ -329,6 +358,11 @@ def declare(
     both the raw disk image and the seed, and `haos_domain_uuid` identifies
     the domain to adopt — libvirt imports domains by UUID, and the UUID is the
     one attribute of that domain nothing may change.
+
+    `image_path` is where the Talos `nocloud` image has been decompressed on
+    the machine running the program: a path rather than a URL, because the
+    factory serves the artefact compressed and the provider does not
+    decompress what it is given.
 
     The Talos component comes in whole rather than as a rendered string: a
     worker's configuration and the secrets the seed must carry both come out
@@ -342,7 +376,7 @@ def declare(
         bridge=bridge,
         vcpus=vcpus,
         memory_gib=memory_gib,
-        disk_gb=disk_gb,
+        image_path=image_path,
         haos_domain_uuid=haos_domain_uuid,
         opts=opts,
     )

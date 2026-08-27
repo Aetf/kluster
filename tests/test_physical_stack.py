@@ -131,7 +131,13 @@ class Mocks(pulumi.runtime.Mocks):
             case 'oci:ObjectStorage/getNamespace:getNamespace':
                 return {'namespace': OBJECT_NAMESPACE}, []
             case 'talos:imageFactory/getUrls:getUrls':
-                return {'urls': {'diskImage': 'https://factory.talos.dev/image/test/v1.11.0/oracle-arm64.qcow2'}}, []
+                # Two artefacts of the same family: the cloud nodes' OCI image
+                # and the worker's `nocloud` disk image, which the factory
+                # serves compressed.
+                platform = str(cast('dict[str, Any]', args.args)['platform'])
+                suffix = 'raw.xz' if platform == 'nocloud' else 'qcow2'
+                url = f'https://factory.talos.dev/image/test/v1.11.0/{platform}-arch.{suffix}'
+                return {'urls': {'diskImage': url}}, []
             case _:
                 return {}, []
 
