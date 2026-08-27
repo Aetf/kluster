@@ -11,7 +11,9 @@ import logging
 import sys
 from pathlib import Path
 
-from kluster.scripts.credentials import b2, entries, seeds, workstation
+from kluster.scripts.credentials import b2, entries, escrow, pki, workstation
+from kluster.scripts.credentials.age import AgeError
+from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 from . import config, provision, settings
@@ -26,6 +28,12 @@ def _parser() -> argparse.ArgumentParser:
         '--seed-entry',
         default=entries.SEEDS['b2'].entry,
         help='entry holding the B2 seed key',
+    )
+    _ = parser.add_argument(
+        '--escrow',
+        type=Path,
+        default=None,
+        help=f'the escrow registry (default: the {escrow.DIRECTORY}/ directory of this checkout)',
     )
     _ = parser.add_argument('--compartment', default=None, help='OCI compartment (default: ~/.oci/config)')
     actions = parser.add_subparsers(dest='action', required=True)
@@ -61,7 +69,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _drift(
-    seed: bytes,
+    roots: config.Roots,
     session: b2.Session,
     existing: object | None,
     *,
@@ -94,7 +102,7 @@ def _drift(
         # secret only exists inside the Ignition it booted with.
         reasons.append(f'the dump key the box holds ({dump_key_id or "none recorded"}) is not the intended one')
 
-    intended = config.digests(seed, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id)
+    intended = config.digests(roots, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id)
     changed = config.drift(intended, recorded)
     if changed and not recorded:
         reasons.append('the box predates this bookkeeping, so what it was built from cannot be compared')
@@ -103,12 +111,19 @@ def _drift(
     return reasons
 
 
-def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, replace: bool) -> int:
+def _provision(
+    store: KdbxStore,
+    *,
+    seed_entry: str,
+    compartment: str | None,
+    replace: bool,
+    registry: escrow.Registry,
+) -> int:
     # Each stage says what it is starting, not only what it finished: the
     # image import and the first boot are minutes-long, and a log that only
     # speaks on success is indistinguishable from a hang while they run.
-    log.info('[1/6] reading the derivation seed and the B2 seed key out of the offline store')
-    seed = seeds.load_seed(store)
+    log.info('[1/6] opening the escrow with the kit, and reading the B2 seed key out of it')
+    roots = config.Roots.ensure(escrow.Vault.open(store, registry))
 
     log.info('[2/6] authorizing with B2, then converging bucket %s', settings.B2_BUCKET)
     session = b2.Session.from_entry(store, seed_entry)
@@ -128,7 +143,7 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
 
     log.info('[4/6] comparing the running box against this commit')
     existing = provision.find_instance(client)
-    reasons = _drift(seed, session, existing, address=address, bucket_id=bucket_id, replace=replace)
+    reasons = _drift(roots, session, existing, address=address, bucket_id=bucket_id, replace=replace)
     if existing is not None and not reasons:
         log.info('appliance %s matches the repository; nothing to rebuild', existing.id)
         instance_id = str(existing.id)
@@ -151,7 +166,7 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
         )
         log.info('rendering the Ignition config for %s', address)
         ignition = config.render_ignition(
-            seed, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
+            roots, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
         )
         log.info('[5/6] converging the custom image — a release not imported yet takes the better part of an hour')
         image_id = provision.ensure_image(client)
@@ -162,13 +177,13 @@ def _provision(store: KdbxStore, *, seed_entry: str, compartment: str | None, re
             nsg_id=nsg_id,
             image_id=image_id,
             ignition=ignition,
-            digests=config.digests(seed, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id),
+            digests=config.digests(roots, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id),
             dump_key_id=dump_key_id,
         )
     provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
 
     bundle_dir = workstation.bundle_dir()
-    config.write_client_bundle(config.client_bundle(seed, name='operator', address=address), bundle_dir)
+    config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=address), bundle_dir)
     log.info('operator certificate bundle written to %s', bundle_dir)
 
     if not provision.wait_for_backend(address):
@@ -189,11 +204,12 @@ def main(argv: list[str] | None = None) -> int:
             return provision.ssh(provision.Oci.load(args.compartment), args.command)
 
         store = KdbxStore.from_env(args.kdbx)
+        registry = escrow.Registry.open(args.escrow)
         match args.action:
             case 'render':
                 print(
                     config.render_ignition(
-                        seeds.load_seed(store),
+                        config.Roots.recover(escrow.Vault.open(store, registry)),
                         address=args.address,
                         dump_key_id='rendered-without-a-key',
                         dump_key='rendered-without-a-key',
@@ -201,15 +217,25 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             case 'provision':
-                return _provision(store, seed_entry=args.seed_entry, compartment=args.compartment, replace=args.replace)
+                return _provision(
+                    store,
+                    seed_entry=args.seed_entry,
+                    compartment=args.compartment,
+                    replace=args.replace,
+                    registry=registry,
+                )
             case 'bundle':
                 config.write_client_bundle(
-                    config.client_bundle(seeds.load_seed(store), name=args.name, address=args.address),
+                    config.client_bundle(
+                        pki.Authority.from_pem(escrow.Vault.open(store, registry).recover(escrow.CA)),
+                        name=args.name,
+                        address=args.address,
+                    ),
                     args.directory,
                 )
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled action {args.action}')
-    except KdbxError as exc:
+    except (KdbxError, EscrowError, AgeError) as exc:
         log.error('%s', exc)
         return 1
     return 0
