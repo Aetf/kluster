@@ -6,6 +6,7 @@ come up or comes up quietly insecure.
 """
 
 import json
+from ipaddress import IPv4Interface
 from typing import Any, cast
 
 from kluster import conventions
@@ -119,8 +120,41 @@ def test_the_augmented_node_answers_for_its_second_address() -> None:
     assert interfaces[0]['dhcp'] is True
 
 
-def test_only_the_augmented_node_gets_an_extra_address() -> None:
+def test_a_node_nothing_addresses_is_left_to_its_lease() -> None:
+    # Every cloud node: the platform gives it an address, and the machine
+    # configuration says nothing about interfaces at all.
     assert 'interfaces' not in merged('machine').get('network', {})
+
+
+def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
+    # The gateway's FRR neighbour statement, the qbittorrent port forward and
+    # day 1's apid endpoint all name this address as a constant; a lease would
+    # make each of them a guess (physical/homelab-host.md §2).
+    static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
+    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
+    assert interface['addresses'] == [f'{conventions.HOMELAB_NODE_IPV4}/{conventions.VLAN_SERVER.prefixlen}']
+    assert interface['dhcp'] is False
+
+
+def test_the_static_address_brings_the_routes_the_lease_used_to() -> None:
+    static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
+    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
+    # The subnet route comes from the address carrying the LAN's prefix rather
+    # than /32 — with DHCP off there is no leased subnet route to conflict
+    # with, and without one the node cannot reach its own LAN.
+    assert IPv4Interface(interface['addresses'][0]).network == conventions.VLAN_SERVER
+    # Everything else was the lease's other job, and now has to be said.
+    assert interface['routes'] == [{'network': talos.DEFAULT_ROUTE_V4, 'gateway': str(talos.HOME_ROUTER_IPV4)}]
+    assert talos.HOME_ROUTER_IPV4 in conventions.VLAN_SERVER
+
+
+def test_the_interface_is_selected_rather_than_named() -> None:
+    # `eth0`/`ens3`/`enp1s0` is a property of the PCI topology QEMU builds and
+    # of the kernel's naming policy; neither is this program's to decide.
+    static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
+    interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
+    assert interface['deviceSelector'] == {'physical': True}
+    assert 'interface' not in interface
 
 
 def test_a_worker_carries_no_control_plane_configuration() -> None:
