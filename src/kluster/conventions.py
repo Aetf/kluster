@@ -326,10 +326,12 @@ ZT_SUBNET = IPv4Network('10.144.0.0/16')
 
 #: Static managed addresses. The UDM is the nexthop of every managed route;
 #: the two CI identities are confined by the tag-based flow rules to exactly
-#: the four targets they need.
+#: the four targets they need. There is one identity per *stack* that joins,
+#: not one per kind of run: ZeroTier maps a node to one endpoint at a time, so
+#: two jobs sharing an identity would flap it (physical/gateway.md §2.6).
 ZT_UDM = IPv4Address('10.144.1.1')
-ZT_CI_DEPLOY = IPv4Address('10.144.2.1')
-ZT_CI_PREVIEW = IPv4Address('10.144.2.2')
+ZT_CI_PHYSICAL = IPv4Address('10.144.2.1')
+ZT_CI_DNS = IPv4Address('10.144.2.2')
 
 #: Role tags on the network (tag id 1000). `personal` is the permissive
 #: default; membership itself is Pulumi-gated, so an undeclared member never
