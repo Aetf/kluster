@@ -7,3 +7,8 @@ config:
   kluster-py:libvirtPrivateKey:
     secure: v1:IQ2HXHNaJp73eoRk:VrNFyWkzwHmQH29mJ2+1jYWujKLKXScgGShPHSfZHUm6+lZKDczr2CkafQR+gmkFu7uejO0lX3FqR398KyqaxSB95pVDA/XNlMZTFLfL728iV78sf+IibBN6wJ2GAJ1WOJBBZzUa840wvFGWpxK/5NsxWhVSn+8G/XCV28jv1l3V7XDH61rHR12Q/N4Qri2Q4Iz++bXhv+KdXD61O8H8AtKynmhDzjI4RGoqQ4JL0OVEkDRUfGv2zTqRcfEhDHeOlnmSi+XX6VBAiK4zq42ztPVXo/YpyVyB/OcAxaMXfUyjD93sDoy/nMXs8oYBkW8dU5QetUyPBsGz+8W2cxGCex9HhNjeRZKTud8d+bq98CCKQyioidc5dBsVA4Or5/aOA1XRwKY6RPRVpFTGIFvGWyZv10B816Gg6A6z0O8GPPt+N+SmaPrDMGwABf4iHQWJO0vGtwmRSyMpo+E4bVeBbwcEcyps9Dw/M7dYF75wnIvRtOnXxgoDaiv39VA0MpyhWSmcrmAIE7mCJYfJadwxUpxsNkpe8kDiuX+tv9eoK9BQPD4ont0G/t4clnOCcFPa0hA=
   kluster-py:talosVersion: v1.13.9
+  kluster-py:unifiApiKey:
+    secure: v1:G8s8IlA98mNsmmH0:TIsSpQQ4A9yddYX+PArOPYhetkJZesk0ifds525LI4Em71voPpptqq2ryVFJmDD2
+  kluster-py:zerotierApiToken:
+    secure: v1:mPQdF7Bt/dIs+Zk2:kUnNwex6+nJqdcxCP4+Epj9hStliiNwgbyJO0xDTdy09nZEqDhSlloUB/hB2lQ7x
+  kluster-py:zerotierNetworkId: 83048a0632b6ba9b
