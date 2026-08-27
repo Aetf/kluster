@@ -990,6 +990,46 @@ def load_domain(store: KdbxStore, entry: str) -> str | None:
     return store.attribute(entry, entries.OCI_DOMAIN_ATTRIBUTE)
 
 
+@dataclass(frozen=True)
+class _Session:
+    """The seed, authorized, together with the row it was opened from."""
+
+    iam: Iam
+    #: The tenancy the seed user belongs to, and therefore the one everything
+    #: minted from it belongs to.
+    tenancy: str
+    user: str
+    private_key: str
+    #: The identity domain the session is addressed at, or None where the
+    #: tenancy has none and where reading it was refused.
+    domain: str | None
+
+
+def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _Session:
+    """Read the seed row and authorize as it, repairing a pre-domain row on the way.
+
+    The one preamble of every command the seed performs, its own rotation and
+    a consumer's mint alike, because the repair below must not be maintained
+    twice: it runs only for a kit written before the row carried an identity
+    domain, which is the least exercised and worst place for two copies to
+    drift apart.
+
+    A row from before the attribute existed gets one chance at the domain from
+    the seed itself. Reading the tenancy's domains is an administrator's call
+    and the seed's policy does not include it, so where the tenancy refuses,
+    the warning names the repair (`credentials seed oci domain`) and the run
+    goes on through the legacy shim.
+    """
+    tenancy, user_id, private_pem = load_seed(store, seed_entry)
+    domain = load_domain(store, seed_entry)
+    iam = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
+    if domain is None:
+        domain = _discovered_domain(iam, whose='seed')
+        if domain is not None:
+            iam = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
+    return _Session(iam=iam, tenancy=tenancy, user=user_id, private_key=private_pem, domain=domain)
+
+
 def adopt_domain(
     store: KdbxStore, *, seed_entry: str, root: masters.Credential, connect: Connect = identity_client
 ) -> str:
@@ -1073,31 +1113,29 @@ def rotate_seed(
     predecessor came from — a whole-kit rotation writes a *new* file (§4.2)
     and the retired one must stay exactly as it was.
     """
-    tenancy, user_id, previous_pem = load_seed(store, seed_entry)
-    domain = load_domain(store, seed_entry)
-    iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect, domain_url=domain)
-    if domain is None:
-        # A row from before the attribute existed. The seed may be able to
-        # read the domain itself; where the tenancy refuses it, the warning
-        # names the repair and the run goes on with the legacy delete.
-        domain = _discovered_domain(iam, whose='seed')
-        if domain is not None:
-            iam = Iam.authorize(tenancy, user_id, previous_pem, connect=connect, domain_url=domain)
+    seed = _seed_session(store, seed_entry, connect=connect)
 
     # Everything but the signing key is dead weight, and the quota (three)
     # must have room for the successor before it can be minted.
-    _sweep(iam, user_id, fingerprint(previous_pem))
-    _room_for_one_more(iam, user_id, name=SEED.name)
+    _sweep(seed.iam, seed.user, fingerprint(seed.private_key))
+    _room_for_one_more(seed.iam, seed.user, name=SEED.name)
     # The row stores the OCID and nothing else, which is all a rotation needs:
     # the key it registers goes on its own user, and the self-service endpoint
     # takes no subject at all.
-    private_pem = _mint_verified(iam, Principal(ocid=user_id, handle=user_id), name=SEED.name)
-    _store(into or store, seed_entry, tenancy=tenancy, user_id=user_id, private_pem=private_pem, domain=domain)
+    private_pem = _mint_verified(seed.iam, Principal(ocid=seed.user, handle=seed.user), name=SEED.name)
+    _store(
+        into or store,
+        seed_entry,
+        tenancy=seed.tenancy,
+        user_id=seed.user,
+        private_pem=private_pem,
+        domain=seed.domain,
+    )
 
-    previous = fingerprint(previous_pem)
+    previous = fingerprint(seed.private_key)
     current = fingerprint(private_pem)
-    successor = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
-    _sweep(successor, user_id, current)
+    successor = Iam.authorize(seed.tenancy, seed.user, private_pem, connect=connect, domain_url=seed.domain)
+    _sweep(successor, seed.user, current)
     log.info('seed rotated: %s -> %s', previous, current)
     return current
 
@@ -1142,27 +1180,19 @@ def mint_api_key(kit: KdbxStore, *, identity: Identity, seed_entry: str, connect
     being used before anything supersedes it, and the sweep afterwards leaves
     exactly the key this run minted.
     """
-    tenancy, seed_user, seed_pem = load_seed(kit, seed_entry)
-    domain = load_domain(kit, seed_entry)
-    iam = Iam.authorize(tenancy, seed_user, seed_pem, connect=connect, domain_url=domain)
-    if domain is None:
-        # A row from before the attribute existed, exactly as in `rotate_seed`:
-        # the seed may be able to read the domain itself, and where the tenancy
-        # refuses, the warning names the repair and the run goes on.
-        domain = _discovered_domain(iam, whose='seed')
-        if domain is not None:
-            iam = Iam.authorize(tenancy, seed_user, seed_pem, connect=connect, domain_url=domain)
+    log.info('opening the OCI seed from the kit')
+    seed = _seed_session(kit, seed_entry, connect=connect)
 
     log.info('converging the user, group and policy for %s', identity.name)
-    user = ensure(iam, identity)
-    _room_for_one_more(iam, user.ocid, name=identity.name)
-    private_pem = _mint_verified(iam, user, name=identity.name, domain_url=domain)
+    user = ensure(seed.iam, identity)
+    _room_for_one_more(seed.iam, user.ocid, name=identity.name)
+    private_pem = _mint_verified(seed.iam, user, name=identity.name, domain_url=seed.domain)
 
     # Swept as the key just minted rather than as the seed, the way a bring-up
     # sweeps as the seed it just created: the self-service endpoints authorize
     # on authentication alone (§4.3), so retiring what this run supersedes --
     # the predecessor on a re-run, an orphan from a run that died between
     # upload and push -- asks nothing of the seed's policy.
-    minted = Iam.authorize(tenancy, user.ocid, private_pem, connect=connect, domain_url=domain)
+    minted = Iam.authorize(seed.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
     _sweep(minted, user.ocid, fingerprint(private_pem))
-    return ApiKey(tenancy=tenancy, user=user.ocid, private_key=private_pem)
+    return ApiKey(tenancy=seed.tenancy, user=user.ocid, private_key=private_pem)
