@@ -276,6 +276,18 @@ def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch,
     assert [kwargs['only'] for name, _, kwargs in dispatch.calls if name == 'lifecycle.rotate'] == ['oci']
 
 
+def test_rotate_refuses_an_unknown_member_before_creating_the_successor(
+    dispatch: Dispatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The command owns the successor file, not `rotate`, so a `--only` nothing
+    # answers has to be refused here or the typo leaves an empty kit behind.
+    assert cli.main(['rotate', '--into', str(tmp_path / 'next.kdbx'), '--only', 'nonesuch']) == 1
+
+    assert 'no seed named' in caplog.text
+    assert 'store.create' not in dispatch.reached
+    assert 'lifecycle.rotate' not in dispatch.reached
+
+
 def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> None:
     assert cli.main(['derived', 'cloudflare', 'zones', '--stack', 'elsewhere']) == 0
 
