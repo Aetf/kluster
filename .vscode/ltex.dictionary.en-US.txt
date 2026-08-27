@@ -176,6 +176,7 @@ JuiceFS-sidecar
 jupyter
 KeePassXC
 keygen
+keypair
 keypairs
 kluster
 kluster-code
