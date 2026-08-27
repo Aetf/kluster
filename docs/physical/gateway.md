@@ -23,6 +23,20 @@ declarative/physical.md §4.
 -   **ZeroTier router**: the home side's ZT terminator (§2) — a
     net-new role; today ZT and the home LANs are not connected at
     all (no member routes anything).
+-   **Its own TLS issuer**: caddy serves the box's vhosts (the UniFi
+    console, both AdGuard UIs) under public-zone names and issues their
+    certificates itself over ACME DNS-01, rather than consuming
+    cert-manager's — the gateway's TLS has to keep renewing while the
+    cluster is down or mid-rebuild, and pushing certificates from the
+    cluster into the device would invert that dependency
+    (declarative/dns.md §4). The credential that buys it is a **third
+    Cloudflare token, zone-scoped and minted from the Cloudflare seed**
+    (credentials.md §3), delivered as a **gw-config device secret**
+    beside the nspawn units and read by nothing else. It is separate
+    from cert-manager's DNS-01 token on purpose: two issuers that must
+    survive each other's outage do not share a credential, and the
+    device holding one of them is the one machine the cluster cannot
+    re-seal.
 
 ## 2. ZeroTier network design
 

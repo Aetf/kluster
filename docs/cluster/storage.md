@@ -223,8 +223,10 @@ be able to destroy the safety net it lives inside.
     **hide**, which the ≥30-day lifecycle rule purges. Retention
     semantics are preserved while nothing in automation can destroy
     a version before it ages out.) **No delete-capable key exists in
-    any automation**; the B2 master credential lives offline only,
-    account 2FA on. The one genuine write-only key is the micro's
+    any automation**; the B2 account's master key is an account root in
+    the operator's personal estate — deliberately not in the seed kit
+    (credentials.md §2) — and is borrowed only to re-seed, account 2FA
+    on. The one genuine write-only key is the micro's
     pg_dump uploader (`writeFiles` alone — it keeps no index,
     state-backend.md §5).
 -   Verification item (physical.md §6): a scoped key must fail to
