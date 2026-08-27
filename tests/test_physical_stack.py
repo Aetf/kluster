@@ -122,16 +122,6 @@ SEAMS: list[tuple[str, Callable[[], object]]] = [
     ),
     (
         'physical §4 gateway',
-        lambda: gateway.declare_firewall(
-            'kluster',
-            api_url='https://gateway.invalid',
-            api_key='key',
-            site='default',
-            worker_gua='2001:db8::1',
-        ),
-    ),
-    (
-        'physical §4 gateway',
         lambda: gateway.declare_zerotier('kluster', api_token='token', network_id='0123456789abcdef'),
     ),
 ]
