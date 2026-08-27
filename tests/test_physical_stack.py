@@ -10,19 +10,53 @@ of that — the declared graph really is declared, and the first gap really does
 say which domain it is.
 """
 
+import json
 from collections.abc import Callable
 from typing import Any, cast
 
 import pulumi
+import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
+from pulumi.runtime.stack import wait_for_rpcs
 
-from kluster import gateway
+from kluster import conventions
+from kluster.gateway import zerotier
 from kluster.physical import homelab
 from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
 VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
+ZT_NETWORK_ID = '0123456789abcdef'
+
+#: What the gateway's three channels read out of stack configuration: the site
+#: facts the program cannot derive. Every value here is invented; what the test
+#: is for is that the keys line up and the values reach the right resource.
+GATEWAY_CONFIG = {
+    'kluster:gatewayHostKey': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample',
+    'kluster:gatewayPrivateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n',
+    'kluster:gatewayBgpPassword': 'a-session-password',
+    'kluster:gatewayAcmeToken': 'a-zone-scoped-token',
+    'kluster:gatewayRootfs': json.dumps(
+        {name: {'url': f'https://example.invalid/{name}.raw', 'sha256': 'f' * 64} for name in conventions.GW_ESTATE}
+    ),
+    'kluster:gatewayAddresses': json.dumps(
+        {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
+    ),
+    'kluster:unifiApiUrl': 'https://gateway.invalid',
+    'kluster:unifiApiKey': 'a-controller-key',
+    'kluster:workerGua': '2001:db8:1:80::238',
+    'kluster:qbittorrentPeerPort': '51413',
+    'kluster:zerotierApiToken': 'a-central-token',
+    'kluster:zerotierNetworkId': ZT_NETWORK_ID,
+    'kluster:zerotierMembers': json.dumps(
+        {
+            entry.name: {'id': f'{index:010x}'} | ({} if entry.address else {'address': f'10.144.200.{index}'})
+            for index, entry in enumerate(zerotier.ROSTER)
+            if not entry.generated
+        }
+    ),
+}
 
 
 class Mocks(pulumi.runtime.Mocks):
@@ -34,10 +68,17 @@ class Mocks(pulumi.runtime.Mocks):
             outputs['ipAddresses'] = [{'ipAddress': LB_ADDRESS, 'isPublic': True}]
         if args.typ == 'talos:machine/secrets:Secrets':
             outputs['machineSecrets'] = {'cluster': {'id': 'test'}}
+        if args.typ == 'zerotier:index/identity:Identity':
+            outputs |= {'identityId': f'{args.name}-node', 'publicKey': 'public', 'privateKey': 'private'}
+        if args.typ == 'zerotier:index/network:Network':
+            outputs['networkId'] = ZT_NETWORK_ID
         return args.name + '_id', outputs
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
         match args.token:
+            case 'unifi:index/getFirewallZone:getFirewallZone':
+                name = str(cast('dict[str, Any]', args.args)['name'])
+                return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': 'default'}, []
             case 'oci:Core/getServices:getServices':
                 return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}, []
             case 'oci:Core/getVnicAttachments:getVnicAttachments':
@@ -60,9 +101,14 @@ async def setup() -> None:
         {
             'kluster:compartmentId': 'ocid1.compartment.test',
             'kluster:talosVersion': 'v1.11.0',
+            **GATEWAY_CONFIG,
         }
     )
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
+    # A bridged SDK registers its own parameterized package before it may
+    # register a resource, and it gates that on a feature flag read out of a
+    # synchronous cache that only the async negotiation fills.
+    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
 
 
 @pytest.mark.asyncio
@@ -72,6 +118,19 @@ async def test_the_stack_declares_and_then_names_its_first_gap() -> None:
     # refusing to pretend the rest of the design exists.
     with pytest.raises(NotImplementedError, match=r'physical §1/§5 storage'):
         await physical.main()
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need() -> None:
+    """The one domain below the gap that is written, exercised on its own.
+
+    A run stops at the first unwritten domain, so the gateway is unreachable
+    through `main` today; declaring it directly is what keeps its wiring —
+    every configuration key, and which of them is a secret — under test until
+    the domains above it are written.
+    """
+    physical.declare_gateway(pulumi.Config())
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
 #: Every domain of the design that has no implementation, and the text its
@@ -109,20 +168,6 @@ SEAMS: list[tuple[str, Callable[[], object]]] = [
             disk_gb=60,
             haos_domain_uuid='00000000-0000-0000-0000-000000000000',
         ),
-    ),
-    (
-        'physical §4 gateway',
-        lambda: gateway.declare_estate(
-            'kluster',
-            host='10.144.1.1',
-            host_key='ssh-ed25519 AAAA',
-            private_key='-----BEGIN OPENSSH PRIVATE KEY-----',
-            bgp_neighbour=cast('Any', None),
-        ),
-    ),
-    (
-        'physical §4 gateway',
-        lambda: gateway.declare_zerotier('kluster', api_token='token', network_id='0123456789abcdef'),
     ),
 ]
 
