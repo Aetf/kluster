@@ -413,7 +413,8 @@ by hand.
 
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
-| OCI API key (per stack) | OCI seed key | `physical` user/compartment | Pulumi config secret + CI env | `physical` |
+| OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret + CI env | `physical` |
+| OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
 | Cloudflare token (zones) | CF seed token | DNS edit, estate zones only | Pulumi config secret + CI env | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret | cert-manager |
 | Cloudflare token (gateway ACME) | CF seed token | zone-scoped, gateway's own issuance | gw-config device secret | UDM caddy |
@@ -448,6 +449,25 @@ either: a new key into the Environment, the Butane recipient swapped, a
 fresh dump verified, the old key deleted (state-backend.md §5), because
 its contract covers the newest object rather than a retention window.
 
+**The OCI rows are one mint and two slots.** Both are the same act — the
+seed creates a user, the group that holds it and a policy confining that
+group to one compartment, then mints the user's API key — and they differ
+only in where the key is delivered, which follows from what consumes it.
+`physical` is a program, so its key is a Pulumi config secret it reads
+before it can run. `state-backend provision` is not: it is the command that
+*builds* the backend every config secret is stored in, it runs from a
+workstation at bring-up and at every rebuild, and it is never run by CI. Its
+key is therefore a **workstation slot** (§4.4), for the reason the operator
+bundle beside it is one: a file a non-interactive reader can be pointed at,
+and one a command can write again, so losing it costs a command rather than
+a credential.
+
+Scope is a compartment rather than a list of verbs, which is what makes the
+two rows independent. Each user administers its own compartment and is a
+stranger everywhere else, so what a consumer may do widens by declaring a
+resource in its own compartment rather than by editing a policy, and a
+compromise of either key is confined to a boundary the console shows.
+
 **Three rows are here for their delivery rather than their birth.** The
 ZeroTier row's value *is* the §2 seed: Central publishes no token API,
 so there is nothing smaller to mint and the seed itself is what
@@ -478,9 +498,12 @@ credential family plus the lifecycle commands below.
 | `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials escrow init` | Once per kit: creates the recovery key (§2.2) and writes `escrow/RECIPIENTS`. `bootstrap` does it while filling a new kit, so this is the repair path for a kit that predates escrow. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
-| `state-backend provision` | After the kit exists; every stack needs the backend before it can act. |
+| `credentials derived oci state-backend --compartment <ocid>` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4). Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
+| `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `eval "$(credentials escrow env)"` | Whenever a shell needs to reach the backend. Recovers the passphrase from escrow, reads the URL from the bundle. |
 | `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
+| `credentials derived oci physical --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
+| `credentials derived b2 management` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials escrow recover <label> [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
 | `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the label's next generation and writes it into a workstation slot where the label has one — today only `pulumi/passphrase` does, and a label without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other label touched. |
@@ -514,9 +537,10 @@ command per row, and its escrowed rows are `credentials escrow
 generate <label>`, one per label. A row is implemented when its
 consumer exists: minting a credential
 that has no slot to be delivered into would park a secret, which rule 2
-forbids. The zones token is delivered today; the DNS-01 token and the
-gateway's ACME token join it with cert-manager and the gateway, and the
-CI Environment half of every row joins it with the Environments
+forbids. Four are delivered today — the zones token, the two OCI keys
+and the B2 management key; the DNS-01 token and the
+gateway's ACME token join them with cert-manager and the gateway, and the
+CI Environment half of every row joins them with the Environments
 themselves (ci.md §3).
 
 The zones token's scope is not a list in the script: it is the estate's
@@ -530,6 +554,19 @@ plain text. The script writes the account id under the unqualified key
 both resolve against the project's own name — so the committed file reads
 `kluster-py:cloudflareAccountId`, and the project name lives in
 `Pulumi.yaml` rather than a second time in the script.
+
+An OCI key is pushed the same way and fills more keys, because an API key
+is five things (§2.1) and a provider recovers none of them: it reads
+`oci:tenancyOcid`, `oci:userOcid`, `oci:fingerprint`, `oci:privateKey` and
+`oci:region`. A sixth travels beside them, `compartmentId` in this
+project's own namespace, because a credential says who may act and never
+where. Of the six, only the region is written in plain text — it is a
+constant in `conventions`, and everything else is either the key itself or
+an account identifier of the class the kit keeps as a protected attribute
+(§2.1), on a file that is public the moment the repository is. The
+fingerprint is written although §2.1 declines to store one: the provider
+takes it as an input rather than deriving it, and the command computes it
+from the key it is pushing in the same breath, so the two cannot disagree.
 
 Two pieces of that shape are designed and not built (`kluster-ops#1`);
 they are described here because the rest of the register is written
@@ -576,14 +613,20 @@ that puts a value there.
     console steps. The kit is all it writes secrets to; the recovery
     row additionally writes `escrow/RECIPIENTS` into the checkout — the
     public half, and a file to commit — exactly as `escrow init` does.
-3.  `state-backend provision` — the Pulumi state backend, which every
+3.  `credentials derived oci state-backend --compartment <ocid>` — the
+    appliance's own OCI key (§3), minted from the seed into the workstation
+    slot the next stage reads. It comes first among §3's rows because it is
+    the only one whose consumer runs before the state backend exists. The
+    compartment is named on the command line because nothing in this
+    repository knows one: it is a fact about the tenancy.
+4.  `state-backend provision` — the Pulumi state backend, which every
     stack needs before it can act, and the first thing to escrow (§2.2):
     it generates the CA and the age identity, commits their ciphertexts,
     and the appliance's Ignition carries what is public about them — the
     server certificate issued under that CA and the age identity's public
     half — plus a B2 dump key minted from the B2 seed. The run ends by
     writing the `operator` client bundle into its workstation slot (§4.4).
-4.  `credentials escrow generate pulumi/passphrase` — the one escrowed
+5.  `credentials escrow generate pulumi/passphrase` — the one escrowed
     label no stage above mints, because it has no single installer: the
     state backend owns the CA and the backup identities and generates
     them in the run that installs them, while the state passphrase
@@ -592,26 +635,22 @@ that puts a value there.
     finds the passphrase on every later run. A kit that predates escrow
     carries a live passphrase already and uses `import` here instead
     (§4.2), which escrows that value rather than replacing it.
-5.  `eval "$(credentials escrow env)"` — the two variables a `pulumi`
+6.  `eval "$(credentials escrow env)"` — the two variables a `pulumi`
     run needs: `PULUMI_CONFIG_PASSPHRASE`, recovered from escrow and
     stored in no slot, and `PULUMI_BACKEND_URL`, read from the bundle the
-    previous stage wrote.
-6.  `credentials derived cloudflare zones` — mints the zone-scoped
-    Cloudflare token from the seed into the `dns` stack's config, which
-    is then committed. One §3 row per command, and re-running one rotates
-    that row.
+    appliance's provisioning wrote.
+7.  `credentials derived cloudflare zones`,
+    `credentials derived oci physical --compartment <ocid>` and
+    `credentials derived b2 management` — the §3 rows whose slot is a
+    stack's committed configuration, which is then committed. One row per
+    command, and re-running one rotates that row.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
 
-**What is not built yet** (`kluster-ops#1`): everything in §3 except the
-zones token, and every slot that is not a Pulumi config secret.
+**What is not built yet** (`kluster-ops#1`): the §3 rows below, and every
+slot that is neither a Pulumi config secret nor a workstation slot.
 
--   The **B2 management key** has minting code and no command that
-    pushes it — the one row in that state.
--   The **per-stack OCI keys** have no minting code at all: the OCI code
-    mints the seed's own successor and nothing else, so a per-stack user
-    and key is design on both halves.
 -   The **device credentials** (UDM SSH key, libvirt identity, UniFi API
     key, AdGuard credentials) and the **in-cluster secrets** (the DNS-01
     token and the writer keys, sealable only once `k8s-base` has the
@@ -635,8 +674,9 @@ Restic passwords will not join that list: they arrive with the
 `backed_pvc` helper (declarative/workloads.md §3), which is itself
 unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
-above exist, a bring-up delivers the seed kit, the state backend and the
-zones token, and the rest of §3 is design rather than procedure.
+above exist, a bring-up delivers the seed kit, the state backend, and the
+provider credentials the `dns` and `physical` stacks run on; the rest of
+§3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
@@ -773,16 +813,17 @@ never a hunt for per-machine environment wiring:
 | `pulumi.passphrase` | The state passphrase (§2.2), cached so a local preview needs neither the kit nor an `eval`. | `credentials escrow generate pulumi/passphrase`, `credentials escrow recover pulumi/passphrase` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials master <root> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
+| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names, and the compartment it acts in. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. | `credentials derived oci state-backend` |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file
-itself carries. One file is stricter on its own account — the client
-key is `0600`, because libpq refuses a key anything but its owner can
-read — and the rest are written at the process `umask` under that directory. Only
-the kit is irreplaceable, and it is irreplaceable in the envelopes
-rather than here; every other entry is recovered, re-issued or re-pasted
-by the command in the right-hand column, so a lost `.credentials/` costs
-a few commands and no credential.
+itself carries. Two files are stricter on their own account — the client
+key, because libpq refuses a key anything but its owner can read, and the
+OCI key beside its configuration — and the rest are written at the process
+`umask` under that directory. Only the kit is irreplaceable, and it is
+irreplaceable in the envelopes rather than here; every other entry is
+recovered, re-issued or re-pasted by the command in the right-hand column,
+so a lost `.credentials/` costs a few commands and no credential.
 
 `mise.toml` reads three of them — the passphrase, the backend URL and
 the GitHub token — falling back to whatever the environment already
@@ -796,16 +837,19 @@ minus `kit.kdbx` unless that machine is meant to hold the kit — one
 copy in place of the mixture of an `rsync` under `~/.config`, a piped
 passphrase and a handwritten token file that it replaces. The one
 thing the copy assumes is that both checkouts sit at the same path:
-libpq expands nothing, so the bundle's URL names its three certificate
-files absolutely, and a checkout somewhere else needs those paths in
-`state-backend/backend-url` corrected — three edits in a plain string,
-or a re-run of `state-backend bundle operator` on a machine that holds
-the kit.
+neither libpq nor the OCI SDK expands anything, so the bundle's URL names
+its three certificate files absolutely and the OCI configuration names its
+key the same way. A checkout somewhere else corrects those paths in
+`state-backend/backend-url` — three edits in a plain string, or a re-run of
+`state-backend bundle operator` — and re-runs the OCI mint on a machine
+that holds the kit.
 
-Two of these slots had other homes before, and both old locations are
-still read — the bundle by `credentials`, with a warning naming the
-move; the passphrase and token files by `mise.toml`, silently, because
-a template has no way to warn. A workstation that predates the move
-therefore keeps working untouched, and converges by running the
-commands above once. The fallbacks are marked in the code and in
-`.gitignore` for deletion (`kluster-ops#34`).
+Three of these slots had other homes before, and every old location is
+still read — the bundle and the appliance's OCI configuration by
+`credentials`, with a warning naming the move; the passphrase and token
+files by `mise.toml`, silently, because a template has no way to warn. A
+workstation that predates the move therefore keeps working untouched, and
+converges by running the commands above once. The fallbacks are marked in
+the code and in `.gitignore` for deletion (`kluster-ops#34`, and
+`kluster-ops#41` for the OCI one, whose predecessor is a hand-made
+configuration under `~/.config` rather than a minted credential at all).
