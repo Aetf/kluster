@@ -173,7 +173,7 @@ def test_the_fallback_prompt_says_where_the_credential_comes_from(
     # A headless run is exactly the case where the operator cannot open the
     # app and look, so the console steps travel with the prompt.
     assert 'Application Keys' in caplog.text
-    assert 'credentials master b2 remember' in caplog.text
+    assert 'credentials root b2 remember' in caplog.text
 
 
 def test_a_half_remembered_root_asks_only_for_the_rest(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:

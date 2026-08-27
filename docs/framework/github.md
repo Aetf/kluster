@@ -33,7 +33,7 @@ The credential itself is an account-root-scoped token from the
 personal estate (credentials.md §2), used on the operator machine and
 minted by nothing in this repository. It is one of that section's
 account roots and is acquired through the same chain as the rest:
-`credentials master github remember` puts it on a machine, and because
+`credentials root github remember` puts it on a machine, and because
 the reader is a template rather than a script, the layer it lands in is
 the token file — `.credentials/roots/github.token`, from which
 `mise.toml` materializes `GITHUB_TOKEN`, falling back to the
