@@ -19,27 +19,30 @@ The credential this stack needs can edit branch protection and
 environment gates. A workflow holding it means anything that reaches
 `main` can also unguard `main` — including a dependency bump that
 noop-automerge waved through. That collapses the credential partition
-ci.md §2 is built on, where no stack holds more than its own layer.
+ci.md §3 is built on, where no stack holds more than its own layer.
 
 The trade is cheap in the direction that matters: the forge changes a
 few times a year, so a manual `pulumi up -s github` costs almost
 nothing, while the credential would otherwise sit in CI permanently.
 CI may **preview** this stack — drift detection is a read — and may
 not apply it. The same reasoning the `physical` gate rests on
-(ci.md §2), taken one step further: `physical` can root the gateway,
+(ci.md §3), taken one step further: `physical` can root the gateway,
 `github` can remove the gate that guards `physical`.
 
 The credential itself is an account-root-scoped token from the
 personal estate (credentials.md §2), used on the operator machine and
-pushed to no slot. It is one of that section's account roots and is
-acquired through the same chain as the rest: `credentials master github
-remember` puts it on a machine, and because the reader is a template
-rather than a script, the layer it lands in is the token file —
-`.credentials/roots/github.token`, from which `mise.toml` materializes
-`GITHUB_TOKEN`, falling back to the environment. Unlike the passphrase
-it is derived from nothing, so no command here can recreate the
-*value*: it comes from the estate each time, and its absence is what
-stops this stack from being applied by accident.
+minted by nothing in this repository. It is one of that section's
+account roots and is acquired through the same chain as the rest:
+`credentials master github remember` puts it on a machine, and because
+the reader is a template rather than a script, the layer it lands in is
+the token file — `.credentials/roots/github.token`, from which
+`mise.toml` materializes `GITHUB_TOKEN`, falling back to the
+environment. That paste is the only way the value ever arrives: the
+state passphrase is random too, but it is escrowed, so a machine that
+lost it runs one `recover` and has it back, while this token has no
+copy anywhere the scripts can reach and must come from the estate each
+time. Its absence is what stops this stack from being applied by
+accident.
 
 ## 2. What the plan permits today
 
@@ -57,7 +60,7 @@ Two consequences, both load-bearing:
 -   **The public flip was a prerequisite for this repository's own CI
     security model**, not only for the arm64 runners images.yml needs
     (ci.md §4). "The preview was empty" can be a required check, and
-    the reviewer gate in front of `up-physical` (ci.md §2) can exist,
+    the reviewer gate in front of `up-physical` (ci.md §3) can exist,
     only because of it.
 -   **`kluster-ops` stays private, so it will never have branch
     protection** on this plan. Nothing in the design asks it to: its
