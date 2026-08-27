@@ -317,15 +317,31 @@ def _imported(args: argparse.Namespace) -> str:
     Standard input rather than an argument so the value is never in an argv
     another process can read; the slot is there because the passphrase is
     already sitting in one on the workstation that is doing the migration.
+
+    Empty is refused here, where the source is still known, so the error can
+    name it: a command substitution or a pipe whose producer failed hands this
+    an empty string, and the traceback that says why has already scrolled past
+    by the time the import logs what it escrowed.
     """
     if args.from_slot:
         slot = escrow.SLOTS.get(args.label)
         if slot is None:
             raise EscrowError(f'{args.label} has no workstation slot; pipe the value in instead')
-        return slot().read_text().strip()
+        path = slot()
+        value = path.read_text().strip()
+        if not value:
+            raise EscrowError(f'{path} is empty, so there is nothing to escrow as {args.label}')
+        return value
     if sys.stdin.isatty():
         log.info('reading the value for %s from standard input; end it with ctrl-d', args.label)
-    return sys.stdin.read().strip()
+    value = sys.stdin.read().strip()
+    if not value:
+        raise EscrowError(
+            f'standard input was empty, so there is nothing to escrow as {args.label}; '
+            'a producer that failed writes no output, so run it on its own and check what it prints '
+            'before piping it in again'
+        )
+    return value
 
 
 def _pushed(value: str, *, label: str) -> str:

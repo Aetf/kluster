@@ -99,6 +99,50 @@ def _identity() -> str:
 
 
 @dataclass(frozen=True)
+class Shape:
+    """What a label's plaintext looks like, and how to say so in an error.
+
+    A generated secret has its shape by construction; an imported one is
+    whatever the operator's pipe produced. A pipe that produced the wrong
+    thing is found out either at the import or on the day something has to be
+    rebuilt from the ciphertext, and only one of those two days is cheap.
+
+    Deliberately shallow — a prefix, a PEM header — because a check that
+    really parsed each secret would need every consumer's tooling in here to
+    reject values no plausible producer emits.
+    """
+
+    #: The shape in the register's words, as the tail of "this is not ...".
+    looks_like: str
+    #: Whether a value has it. Every shape rejects a blank value; `validate`
+    #: reports that one case in words of its own, because it has a cause the
+    #: others do not.
+    matches: Callable[[str], bool]
+
+
+def _is_identity(value: str) -> bool:
+    return value.strip().upper().startswith(age.SECRET_PREFIX)
+
+
+#: Whichever of PKCS8, EC or RSA the operator happens to be holding: adoption
+#: escrows a key exactly as it already exists.
+_PEM_PRIVATE_KEY = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----')
+
+
+def _is_private_key(value: str) -> bool:
+    stripped = value.strip()
+    # Both ends, so a pipe that died mid-key is a refusal rather than a
+    # ciphertext holding half a key.
+    return _PEM_PRIVATE_KEY.match(stripped) is not None and stripped.endswith('-----')
+
+
+#: A password, a token: nothing to recognise beyond there being something.
+TEXT = Shape('a value', lambda value: bool(value.strip()))
+IDENTITY = Shape(f'an age identity, which starts {age.SECRET_PREFIX}', _is_identity)
+PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----END ... -----', _is_private_key)
+
+
+@dataclass(frozen=True)
 class Label:
     """One row of the escrow register."""
 
@@ -108,6 +152,26 @@ class Label:
     what: str
     #: How a fresh one is made. Every one of these is randomness plus a format.
     mint: Callable[[], str]
+    #: What a value has to look like to be this label's secret.
+    shape: Shape = TEXT
+
+    def validate(self, value: str) -> None:
+        """Raise unless `value` could be this label's secret.
+
+        The empty case is called out on its own because it is the one a
+        pipeline produces by accident: a producer that crashes before writing
+        anything still leaves `escrow import` a value to escrow, and an
+        escrowed empty string is indistinguishable from a lost secret at the
+        moment its consumer is being rebuilt.
+        """
+        if self.shape.matches(value):
+            return
+        if not value.strip():
+            raise EscrowError(
+                f'nothing to escrow as {self.name}: the value is empty, which is what a producer that '
+                'wrote no output leaves in the pipe'
+            )
+        raise EscrowError(f'this is not {self.shape.looks_like}, which is what {self.name} holds ({self.what})')
 
 
 def backup_labels() -> tuple[str, ...]:
@@ -147,10 +211,10 @@ def register() -> dict[str, Label]:
     """
     rows = [
         Label(PASSPHRASE, 'the Pulumi state passphrase, for every stack', _token),
-        Label(CA, "the state-backend CA's private key", pki.generate_ca_key),
+        Label(CA, "the state-backend CA's private key", pki.generate_ca_key, shape=PRIVATE_KEY),
         Label(ALERTMANAGER, 'the bearer token the issue-sync poller presents', _token),
         *(
-            Label(name, 'an age identity the state-backend encrypts its pg_dumps to', _identity)
+            Label(name, 'an age identity the state-backend encrypts its pg_dumps to', _identity, shape=IDENTITY)
             for name in backup_labels()
         ),
     ]
@@ -285,6 +349,10 @@ def generate(registry: Registry, label: str) -> str:
     existing = registry.generations(label)
     generation = existing[-1] + 1 if existing else FIRST
     secret = row.mint()
+    # The row's own mint against the row's own shape: the register says what a
+    # label holds in one place, and a mint that stopped agreeing with it fails
+    # here rather than at the recovery.
+    row.validate(secret)
     path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
     log.info('escrow: %s generation %d written to %s (%s)', label, generation, path, row.what)
     log.warning('nothing has adopted it yet: re-run what consumes %s, and commit %s', label, path)
@@ -302,8 +370,15 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
     The *next* generation rather than a fixed first one, so importing can
     never overwrite what is already filed under this label. On a registry
     that holds nothing for it, next is first, which is the migration case.
+
+    The value is checked against the register's shape for the label before
+    anything is written. An import is the only way a value the escrow did not
+    mint gets in, so it is also the only place where "this is not the secret
+    you think it is" can be caught before the ciphertext is committed and
+    trusted.
     """
-    _ = _row(label)
+    row = _row(label)
+    row.validate(secret)
     existing = registry.generations(label)
     generation = existing[-1] + 1 if existing else FIRST
     path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
