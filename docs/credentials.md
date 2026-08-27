@@ -114,7 +114,7 @@ with (framework/github.md §1) belongs to this class rather than to
 either tier below: it is an account root used from the workstation,
 minted by no seed and pushed by no command. It reaches its workstation
 slot (§4.4) the way every account root reaches a machine — through
-`credentials master github remember`, which is a paste rather than a
+`credentials root github remember`, which is a paste rather than a
 mint — and that is exactly why that stack is not something CI runs.
 
 Three of them are nonetheless *used* from the workstation. Two by a
@@ -144,7 +144,7 @@ that is missing and nothing else, and the file and variable names are
 recorded in the register itself (`masters.py`) rather than being
 conventions a reader has to reconstruct.
 
-`credentials master <root> remember` is the only thing that ever writes
+`credentials root <name> remember` is the only thing that ever writes
 a root, and which layer it writes follows from who reads it. A root a
 *script* asks for goes to the secret store, so a value that can stay
 out of the filesystem does — falling back to the token file on a machine
@@ -152,9 +152,9 @@ that has no store at all, which is what makes `remember` meaningful on a
 headless box. The GitHub token goes to its file, because what reads it
 is a `mise.toml` template that can open neither a keyring nor a prompt;
 a second copy in the store would be exposure bought for nothing.
-`credentials master ls` says which roots this machine holds and which
-layer each came from, printing no values, and `credentials master
-<root> forget` removes both writable layers. Neither the estate
+`credentials root ls` says which roots this machine holds and which
+layer each came from, printing no values, and `credentials root <name>
+forget` removes both writable layers. Neither the estate
 database nor its master password is ever opened by anything in this
 repository.
 
@@ -348,7 +348,7 @@ Consequences, all deliberate:
 -   **Generation and escrow are one act.** No command produces a random
     secret without committing its ciphertext in the same run, so a
     secret that reached a slot but not the registry is a state the
-    scripts do not create and `credentials escrow check` (§4) exists to
+    scripts do not create and `credentials derived check` (§4) exists to
     catch. A value born outside that path — one a predecessor hands
     over, or one that predates the model — joins the registry by being
     imported as a generation, not by being replaced (§4.2).
@@ -488,8 +488,8 @@ API credential — the residual the security audit records as L11. Both
 instances answer to the same login, because a rewrite is written to
 alice and bob directly rather than synchronized (declarative/dns.md §3),
 and that account is part of the static configuration the gw-config
-estate pushes. Neither is minted here, so `credentials device <name>`
-(§4) is the delivery alone: the console steps, the value, the stack
+estate pushes. Neither is minted here, so `credentials derived <row>
+record` (§4) is the delivery alone: the console steps, the value, the stack
 config that reads it. The consumer decides which stack — `physical`
 drives the UDM's Network API, `dns` writes the AdGuard rewrites — and
 the address travels with the credential where the program needs one, as
@@ -497,42 +497,54 @@ the plain `unifiApiUrl` beside the key.
 
 ## 4. The scripts
 
-The register's executable form: `credentials`, a console script in
-this repo (`src/kluster/scripts/credentials/`), one subcommand per
-credential family plus the lifecycle commands below.
+The register's executable form: `credentials`, a console script in this
+repo (`src/kluster/scripts/credentials/`). Every command reads
+`credentials <subject> [<row>] <verb>`, and the subjects are the
+register's own tiers: **`root`** for the account roots a workstation
+borrows (§2), **`seed`** for §2's rows, **`kit`** for the offline store
+and what is done to the whole of it (§2.1), and **`derived`** for §3's
+rows. A row is named the same way everywhere — words joined by `-`, as
+`oci-physical` — in the tree, in the slot map and in the tables here.
+
+What differs between §3's rows is the verb, because what differs between
+them is how the value comes into being: `mint` for a row a seed mints,
+`generate` / `import` / `recover` for a row generated here and escrowed
+(§2.2), and `record` for a row made on a device of the estate and typed
+in. The escrow *directory* keeps the `/` paths it files ciphertexts
+under (`escrow/pulumi/passphrase/1.age`); only the command surface uses
+the row name.
 
 | Command | When |
 | --- | --- |
-| `credentials master <root> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Keeps one account root (§2) where its readers reach it. Skipping it costs a prompt, not a failure. |
-| `credentials master ls` | Which roots this machine holds, and which layer of the chain each comes from. Prints no values. |
-| `credentials master <root> forget` | Removes one root from the secret store and from its token file. |
-| `credentials master github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
-| `credentials bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
-| `credentials bootstrap --only <member>` | One seed was lost. Re-creates that row alone. |
-| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
-| `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
-| `credentials escrow init` | Once per kit: creates the recovery key (§2.2) and writes `escrow/RECIPIENTS`. `bootstrap` does it while filling a new kit, so this is the repair path for a kit that predates escrow. |
+| `credentials root <name> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Keeps one account root (§2) where its readers reach it. Skipping it costs a prompt, not a failure. |
+| `credentials root ls` | Which roots this machine holds, and which layer of the chain each comes from. Prints no values. |
+| `credentials root <name> forget` | Removes one root from the secret store and from its token file. |
+| `credentials root github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
+| `credentials kit bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
+| `credentials kit bootstrap --only <member>` | One seed was lost. Re-creates that row alone. `--only recovery` is also the repair path for a kit that predates the escrow: creating that row writes the recovery key (§2.2) into the kit and `escrow/RECIPIENTS` into the checkout. It refuses a kit that already holds a live recovery key, because every ciphertext opens with that one and nothing else. |
+| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
+| `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
-| `credentials derived oci state-backend --compartment <ocid>` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4). Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
+| `credentials derived oci-state-backend mint --compartment <ocid>` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4). Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
-| `eval "$(credentials escrow env)"` | Whenever a shell needs to reach the backend. Recovers the passphrase from escrow, reads the URL from the bundle. |
-| `credentials derived cloudflare zones` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
-| `credentials derived oci physical --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
-| `credentials derived b2 management` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
-| `credentials device unifi` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
-| `credentials device adguard` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
-| `credentials slots ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
-| `credentials slots push [--only <row>]` | Once during bring-up, and again whenever a value behind a GitHub secret moves. Fills every GitHub secret the map can fill — resolve, push, verify, per row — so a first fill and a refill are one command. A row whose value cannot be obtained from here names the command that owns it instead. `--only` addresses one row, and is what replaces a value that was typed in. |
-| `credentials escrow recover <label> [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `recover pulumi/passphrase` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
+| `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
+| `credentials derived cloudflare-zones mint` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
+| `credentials derived oci-physical mint --compartment <ocid>` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets together with the compartment it may act in; the stack file is then committed. |
+| `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
+| `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
+| `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
+| `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
+| `credentials derived sync [--only <row>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
+| `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip>` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. |
-| `credentials escrow generate <label>` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the label's next generation and writes it into a workstation slot where the label has one — today only `pulumi/passphrase` does, and a label without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other label touched. |
-| `credentials escrow import <label> [--from-slot]` | Escrows a value that already exists as the label's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the label's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
-| `credentials rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. |
-| `credentials escrow rewrap` | The resume and repair path for that re-wrap: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. A rotation interrupted part way, or a ciphertext added while the file already named the successor, is what it is for; an ordinary kit rotation never calls it. |
-| `credentials escrow check` | Any time, kit or no kit: every label the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though no workflow does today. |
-| `credentials kdbx ls` / `show` | Looking without changing. |
-| `credentials kdbx remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
-| `credentials kdbx forget` | Drops that remembered password again, for a machine that should stop holding it. |
+| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — today only `pulumi-passphrase` does, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
+| `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
+| `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. |
+| `credentials kit rewrap` | The resume and repair path for that re-wrap: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. A rotation interrupted part way, or a ciphertext added while the file already named the successor, is what it is for; an ordinary kit rotation never calls it. |
+| `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though no workflow does today. |
+| `credentials kit ls` / `show` | Looking without changing. |
+| `credentials kit password remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
+| `credentials kit password forget` | Drops that remembered password again, for a machine that should stop holding it. |
 
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
@@ -541,32 +553,31 @@ minting subcommand is **mint → push to every slot → verify**, and
 therefore idempotent: rotation is a re-run, not a second procedure. The
 slot map (below) does not drive those pushes; it records where they
 land, naming each config key by importing it from the code that writes
-it, so the two cannot say different things. `escrow generate` keeps that
+it, so the two cannot say different things. `generate` keeps that
 shape — **generate → escrow → push → verify** — and drops the
 idempotence deliberately: a re-run produces a new generation, which is
-exactly what rotating that label means.
+exactly what rotating that row means.
 
-Two global options sit in front of every family, because both defaults
+Two global options sit in front of every subject, because both defaults
 are per-checkout rather than universal: `--kdbx` names the kit
 (otherwise `$KLUSTER_KDBX`, otherwise the workstation slot §4.4 names),
 and `--escrow` names the registry directory (otherwise this checkout's
 `escrow/`). A kit on removable media and a registry in a second clone
 are the two cases they exist for.
 
-§3's minted rows are `credentials derived <row> <credential>`, one
-command per row, and its escrowed rows are `credentials escrow
-generate <label>`, one per label. A row is implemented when its
-consumer exists: minting a credential
+§3's minted rows are `credentials derived <row> mint`, and its escrowed
+rows are `credentials derived <row> generate`. A row is implemented when
+its consumer exists: minting a credential
 that has no slot to be delivered into would park a secret, which rule 2
 forbids. Four are delivered today — the zones token, the two OCI keys
 and the B2 management key; the DNS-01 token and the
 gateway's ACME token join them with cert-manager and the gateway. The
 GitHub-secret half of a row is delivered separately, by `credentials
-slots push` rather than by the row's own command, for the rows whose
+derived sync` rather than by the row's own command, for the rows whose
 value can be obtained without minting one (below).
 
 §3's **device rows** are neither minted nor escrowed, so they are
-`credentials device <name>`, one per row: the command prints the console
+`credentials derived <row> record`: the command prints the console
 steps that create the credential, takes the value without echoing it,
 and pushes it into the config of the stack that reads it, proven by
 reading it back like every other config secret. A value may be handed in
@@ -676,27 +687,27 @@ borrow are not in a database this repository reads — they come from the
 chain in §2: the **desktop secret store**, a token file, an environment
 variable, or a prompt where a machine has none of them. The kit's own
 master password is asked of the same store first
-(`credentials kdbx remember` puts it there),
+(`credentials kit password remember` puts it there),
 because a run that then goes on for minutes should not be guarded by a
 password typed into a process nobody is watching. Nothing is ever
 written to the store implicitly: a `remember` command is the only thing
 that puts a value there.
 
-1.  `credentials master <root> remember` — once per machine and root,
+1.  `credentials root <name> remember` — once per machine and root,
     for the account roots the mints borrow (§2). Skipping it costs a
     prompt rather than a failure, which is also how a headless run works.
-2.  `credentials bootstrap` — fills the kit with every §2 row, the
+2.  `credentials kit bootstrap` — fills the kit with every §2 row, the
     recovery key included, creating the kit if it is absent. A row
     whose platform can mint it is minted; the rest stop and print their
     console steps. The kit is all it writes secrets to; the recovery
     row additionally writes `escrow/RECIPIENTS` into the checkout — the
-    public half, and a file to commit — exactly as `escrow init` does.
-3.  `credentials derived oci state-backend --compartment <ocid>` — the
-    appliance's own OCI key (§3), minted from the seed into the workstation
-    slot the next stage reads. It comes first among §3's rows because it is
-    the only one whose consumer runs before the state backend exists. The
-    compartment is named on the command line because nothing in this
-    repository knows one: it is a fact about the tenancy.
+    public half, and a file to commit.
+3.  `credentials derived oci-state-backend mint --compartment <ocid>` —
+    the appliance's own OCI key (§3), minted from the seed into the
+    workstation slot the next stage reads. It comes first among §3's rows
+    because it is the only one whose consumer runs before the state
+    backend exists. The compartment is named on the command line because
+    nothing in this repository knows one: it is a fact about the tenancy.
 4.  `state-backend provision` — the Pulumi state backend, which every
     stack needs before it can act, and the first thing to escrow (§2.2):
     it generates the CA and the age identity, commits their ciphertexts,
@@ -704,33 +715,37 @@ that puts a value there.
     server certificate issued under that CA and the age identity's public
     half — plus a B2 dump key minted from the B2 seed. The run ends by
     writing the `operator` client bundle into its workstation slot (§4.4).
-5.  `credentials escrow generate pulumi/passphrase` — the one escrowed
-    label no stage above mints, because it has no single installer: the
+5.  `credentials derived pulumi-passphrase generate` — the one escrowed
+    row no stage above mints, because it has no single installer: the
     state backend owns the CA and the backup identities and generates
     them in the run that installs them, while the state passphrase
     belongs to every stack and to none of them. The command writes the
-    workstation slot (§4.4) as well as the ciphertext, so `mise.toml`
-    finds the passphrase on every later run. A kit that predates escrow
-    carries a live passphrase already and uses `import` here instead
-    (§4.2), which escrows that value rather than replacing it.
-6.  `eval "$(credentials escrow env)"` — the two variables a `pulumi`
-    run needs: `PULUMI_CONFIG_PASSPHRASE`, recovered from escrow and
-    stored in no slot, and `PULUMI_BACKEND_URL`, read from the bundle the
-    appliance's provisioning wrote.
-7.  `credentials derived cloudflare zones`,
-    `credentials derived oci physical --compartment <ocid>` and
-    `credentials derived b2 management` — the §3 rows whose slot is a
+    workstation slot (§4.4) as well as the ciphertext, and that slot is
+    what a `pulumi` run reads from here on: `mise.toml` puts the
+    passphrase and the bundle's `PULUMI_BACKEND_URL` into the
+    environment of every later run, so no stage below prepares a shell.
+    A second workstation that holds the kit fills the same slot once with
+    `credentials derived pulumi-passphrase recover`, and one that does not
+    hold the kit gets it in the copied `.credentials/` directory (§4.4).
+    A kit that predates the escrow carries a live passphrase already and
+    uses `import` here instead (§4.2), which escrows that value rather
+    than replacing it.
+6.  `credentials derived cloudflare-zones mint`,
+    `credentials derived oci-physical mint --compartment <ocid>` and
+    `credentials derived b2-management mint` — the §3 rows whose slot is a
     stack's committed configuration, which is then committed. One row per
     command, and re-running one rotates that row.
-8.  `credentials device unifi` and `credentials device adguard` — the
-    two §3 rows whose credential is made on a device of the estate
-    rather than minted here. Each prints the steps that create it,
-    takes the value, and writes it into the config of the stack that
-    reads it, which is then committed like the rows above.
-9.  `credentials slots push` — the GitHub secrets CI reads, from the
-    slot map (§4). Last, because a row read out of a stack needs that
-    stack to have run; a row it cannot fill yet says which slot is
-    waiting on what, and the same command run again fills it.
+7.  `credentials derived unifi record` and
+    `credentials derived adguard record` — the two §3 rows whose
+    credential is made on a device of the estate rather than minted here.
+    Each prints the steps that create it, takes the value, and writes it
+    into the config of the stack that reads it, which is then committed
+    like the rows above.
+8.  `credentials derived sync` — the GitHub secrets CI reads, for the §3
+    rows whose value lives somewhere else (§4). Last, because a row read
+    out of a stack needs that stack to have run; a row it cannot fill yet
+    says which slot is waiting on what, and the same command run again
+    fills it.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
@@ -776,7 +791,7 @@ device credentials those stacks authenticate to the estate with, and the
 GitHub secrets whose values a workstation can obtain; the rest of §3 is
 design rather than procedure.
 
-**Resumable by probing, not by bookkeeping.** `bootstrap` asks whether
+**Resumable by probing, not by bookkeeping.** `kit bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
 is resumed by re-running the same command, and `--only <member>` is the
 repair path when a single seed is lost. `state-backend provision`
@@ -787,15 +802,15 @@ skip the repair.
 
 **The console steps live in the register, not in a runbook.** Each §2
 row that no API can create carries the instructions for creating it
-(`entries.py`), so `bootstrap` prints them at the moment it stops
+(`entries.py`), so `kit bootstrap` prints them at the moment it stops
 rather than sending the operator to look for a document.
 
-### 4.2 `credentials rotate`
+### 4.2 `credentials kit rotate`
 
 Two rotations live here, and the model's point is that they are
 independent: rotating **the kit** (this command) touches no production
-value, and rotating **one credential** (`credentials escrow generate`,
-below) touches no other credential.
+value, and rotating **one credential** (`credentials derived <row>
+generate`, below) touches no other credential.
 
 `--only <member>` re-runs one row; the default rotates the whole kit.
 It **writes a new database file** (`--into`), and the retired one
@@ -813,7 +828,7 @@ successor's recipient, `escrow/RECIPIENTS` last so that the file names
 what the directory actually holds. No plaintext changes, so no consumer
 is touched, no stack is re-encrypted and no appliance is re-provisioned
 — that commit and the new database are the whole of a kit rotation.
-`credentials escrow rewrap` is the standalone form of the same
+`credentials kit rewrap` is the standalone form of the same
 re-encryption and takes no recipients: it re-encrypts to whatever
 `escrow/RECIPIENTS` already names, which makes it the way to finish a
 rotation that died part way through, and it refuses outright a run that
@@ -839,34 +854,34 @@ wrapping is.
 
 **The retired kit is destroyable once nothing is owed to it**: every
 generation in the registry opens under the successor's identity,
-`credentials escrow check` passes, and every seed the retired database
+`credentials derived check` passes, and every seed the retired database
 holds has a live successor. That is the whole criterion — a property to
 verify, not a date to wait out — and the rotation run is what
 establishes the first part of it.
 
 **Rotating one credential is a generation, not a kit.** `credentials
-escrow generate <label>` produces a new random value, writes it to the
+derived <row> generate` produces a new random value, writes it to the
 slot §3 names where the row has one and commits its ciphertext as the
-label's next generation; adopting it is that one consumer's business — a
+row's next generation; adopting it is that one consumer's business — a
 re-provision for the state-backend CA, a re-seal or a secret update for
 the Alertmanager token, the recipient swap that state-backend.md §5
 describes for an age generation. The recovery key is not involved,
-and no other label moves.
+and no other row moves.
 
 **A value that already exists is imported rather than replaced.**
-`credentials escrow import <label>` escrows what a slot or a predecessor
-already holds as that label's next generation. That is how a kit written
-before escrow joins the model: the live state passphrase, CA key and age
-identities become first generations, nothing production-facing rotates,
-and the superseded kit is destroyable as soon as `escrow check` and a
-recovery of each imported label prove the registry holds them.
+`credentials derived <row> import` escrows what a slot or a predecessor
+already holds as that row's next generation. That is how a kit written
+before the escrow joins the model: the live state passphrase, CA key and
+age identities become first generations, nothing production-facing
+rotates, and the superseded kit is destroyable as soon as `derived check`
+and a recovery of each imported row prove the registry holds them.
 
 **A compromised recovery key is a full production rotation.** The
 registry is public, so an attacker who holds that key holds every
 escrowed value; re-wrapping is no answer, because it changes none of
 them. The order is a new kit first — so that what comes next is wrapped
 to a key the attacker does not have — and then a new generation of every
-label, adopted consumer by consumer. No design escapes this: one offline
+row, adopted consumer by consumer. No design escapes this: one offline
 secret able to reproduce every generated credential is what buys the
 ability to recover them at all, and the derivation seed concentrated
 exposure the same way.
@@ -907,11 +922,11 @@ never a hunt for per-machine environment wiring:
 
 | `.credentials/` | What it is | Written by |
 | --- | --- | --- |
-| `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials bootstrap` |
-| `pulumi.passphrase` | The state passphrase (§2.2), cached so a local preview needs neither the kit nor an `eval`. | `credentials escrow generate pulumi/passphrase`, `credentials escrow recover pulumi/passphrase` |
-| `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials master <root> remember` |
+| `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials kit bootstrap` |
+| `pulumi.passphrase` | The state passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
+| `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials root <name> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
-| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names, and the compartment it acts in. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. | `credentials derived oci state-backend` |
+| `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names, and the compartment it acts in. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. | `credentials derived oci-state-backend mint` |
 
 **The directory is `0700`, and that is the boundary that matters**: it
 is what keeps every entry inside it private, whatever mode the file

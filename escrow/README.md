@@ -37,7 +37,9 @@ that is the whole list, and deliberately so:
 
     age --decrypt --identity <key file> escrow/pulumi/passphrase/1.age
 
-`credentials escrow recover <label>` is the same thing with the key
-taken out of the offline database instead of a file. `credentials escrow
-check` needs no key at all: it reports missing labels, files that are
-not age files, and generations that skip a number.
+`credentials derived <row> recover` is the same thing with the key taken
+out of the offline database instead of a file — a row being the label
+with `-` for `/`, so `pulumi/passphrase` above is `pulumi-passphrase`
+there. `credentials derived check` needs no key at all: it reports
+missing labels, files that are not age files, and generations that skip
+a number.

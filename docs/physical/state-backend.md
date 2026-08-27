@@ -267,11 +267,11 @@ there is nothing for it to edit.)
         recipient, forces a fresh dump, verifies, and destroys the
         old key — one slot, no N−1 bookkeeping.
     -   **Rotate at least yearly** (and on compromise or custody
-        change): `credentials escrow generate backup/age/<N+1>`, then
+        change): `credentials derived backup-age-<N+1> generate`, then
         bump the appliance's generation pin, which swaps the Butane
         recipients `[N, N−1] → [N+1, N]`, then re-provision —
         playbook §7.4. The pin and the escrow's expectations come from
-        the same constant, so `credentials escrow check` fails until
+        the same constant, so `credentials derived check` fails until
         the new generation exists. The path stays warm because the
         apply is the same re-provision as everything else.
     -   **Old keys get a definite end of life**: generation N−1
@@ -374,7 +374,7 @@ is the moment nobody can afford to find out later:
     optional: the server certificate rides in Ignition, so re-issuing it
     replaces the instance and its data directory with it — the same
     shape as §7.2, for the same reason. On compromise of the CA itself:
-    `credentials escrow generate state-backend/ca` for a new generation,
+    `credentials derived state-backend-ca generate` for a new generation,
     the same dump/re-provision/restore against it, redistribute the `ci`
     and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
@@ -394,8 +394,8 @@ is the moment nobody can afford to find out later:
     age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
-    compromise, custody change. Outline: `credentials escrow generate
-    backup/age/<N+1>` → note the rotation date and N−1's
+    compromise, custody change. Outline: `credentials derived
+    backup-age-<N+1> generate` → note the rotation date and N−1's
     earliest-destroy date where the next offline day will read them
     (nothing stores either — §5) → bump the generation pin, which swaps
     the Butane recipients `[N, N−1] → [N+1, N]` → re-provision → verify
