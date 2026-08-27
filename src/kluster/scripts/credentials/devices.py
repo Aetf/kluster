@@ -168,10 +168,14 @@ DEVICES: dict[str, Device] = {
             holds="the Network API key and the controller's address",
             console=(
                 'The UniFi console → Settings → Admins & Users → Add Admin, as a\n'
-                '  *local* admin restricted to this site rather than a Ubiquiti SSO\n'
-                '  account: a key inherits the reach of the account it belongs to,\n'
-                '  and a site-limited local admin is the smallest thing the Network\n'
-                '  API accepts.\n'
+                '  *local* admin rather than a Ubiquiti SSO account: a key inherits\n'
+                '  the reach of the account it belongs to, so the account exists for\n'
+                '  this credential and nothing else.\n'
+                '  The controller offers API-key creation to a Super Admin alone, so\n'
+                '  the confinement is cut at the application layer rather than at the\n'
+                '  role: give that admin Full Management on the Network application\n'
+                '  and no access to any other application. The key carries exactly\n'
+                '  that, and no smaller key exists to ask for.\n'
                 '  Then open that account → Create API Key. The key is shown once,\n'
                 '  and re-running this command with a fresh one is the whole of a\n'
                 '  rotation — delete the superseded key on the same page.\n'
