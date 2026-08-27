@@ -95,13 +95,19 @@ state-backend rebuild drill runs unattended end to end.
 | Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
-**Destroy dates are not on that clock.** A retired derivation seed and
-a retired age generation each have an earliest-destroy date
-(credentials.md §2.2), but nothing records it: `credentials rotate`
-writes the successor kit and leaves the retired one byte-for-byte as it
-was, stamping no date, so a probe has no field to read. Honoring those
-dates is part of the yearly offline day until the register carries
-them.
+**Destroy dates are not on that clock, and only one of them is a date.**
+A retired **kit** owes nothing forward: once `credentials escrow rewrap`
+has covered every generation and `credentials escrow check` passes, no
+ciphertext in the registry opens with the retired recovery key alone, so
+the retired database is destroyable on a property rather than after a
+wait (credentials.md §4.2). A retired **backup generation** keeps a real
+clock — its escrow ciphertext is the only copy of the identity that
+opens the dumps written under it, so it stays until the last of those
+objects falls out of the B2 prefix's retention (state-backend.md §5).
+Nothing records that date: `credentials rotate` leaves the retired kit
+byte-for-byte as it was and a generation's ciphertext carries no expiry,
+so a probe has no field to read. Honoring it is part of the yearly
+offline day until the register carries it.
 
 Every scheduled drill above runs in the **ops repo** (ci.md §3 —
 the deployment repo carries no scheduled workflows; the two
