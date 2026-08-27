@@ -1,7 +1,10 @@
-"""`state-backend` — provision, inspect, and re-provision the appliance.
+"""`state-backend` — provision, inspect, re-provision, dump and restore the appliance.
 
 `provision` is idempotent end to end: it is equally the bring-up command and
-the re-provision command, which is what keeps the rebuild path warm.
+the re-provision command, which is what keeps the rebuild path warm. `dump`
+and `restore` are the other half of that path — every playbook that replaces
+the box is a dump, a provision and a restore (physical/state-backend.md §7),
+and each of them verifies rather than reports.
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import tempfile
 from pathlib import Path
 
 from kluster.scripts.credentials import b2, entries, escrow, pki, workstation
@@ -16,7 +20,8 @@ from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
-from . import config, provision, settings
+from . import config, provision, settings, state
+from .state import StateError
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +69,44 @@ def _parser() -> argparse.ArgumentParser:
     _ = bundle.add_argument('name', choices=['ci', 'operator'])
     _ = bundle.add_argument('--address', required=True)
     _ = bundle.add_argument('--directory', type=Path, default=workstation.bundle_dir())
+
+    dump = actions.add_parser('dump', help='take a dump of the live state, encrypted like the nightly one')
+    _ = dump.add_argument(
+        '--output',
+        type=Path,
+        default=None,
+        help=f'where to write it (default: ./{settings.NAME}-<UTC stamp>.dump.age)',
+    )
+    _ = dump.add_argument(
+        '--bundle',
+        type=Path,
+        default=workstation.bundle_dir(),
+        help='the client bundle whose connection string to dump over',
+    )
+
+    restore = actions.add_parser('restore', help='feed a dump into a provisioned box')
+    _ = restore.add_argument('dump', type=Path, help='an age-encrypted dump, or a raw pg_dump custom-format archive')
+    # The unattended drill (§7.3) runs in the ops repo with one age key in a
+    # repository secret and no kit at all, so naming a key here has to be
+    # enough on its own -- including for opening the kit this run then never
+    # touches.
+    _ = restore.add_argument(
+        '--identity-file',
+        type=Path,
+        default=None,
+        help='decrypt with the age identity in this file instead of opening the escrow',
+    )
+    _ = restore.add_argument(
+        '--bundle',
+        type=Path,
+        default=workstation.bundle_dir(),
+        help='the client bundle whose connection string to restore over',
+    )
+    _ = restore.add_argument(
+        '--force',
+        action='store_true',
+        help='restore even though the target backend already serves stacks',
+    )
 
     return parser
 
@@ -193,6 +236,112 @@ def _provision(
     return 0
 
 
+def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, output: Path | None) -> int:
+    """A dump on demand, in the form the appliance's own timer writes.
+
+    Encrypted to the escrow's recipients rather than left in plain text, and
+    verified before it is called a dump: the operator taking one is usually
+    about to destroy the box it came from (§7.2), which is the worst moment
+    to learn that a file of the right size has no readable contents.
+    """
+    destination = (output if output is not None else Path(state.dump_name())).resolve()
+    if destination.exists():
+        raise StateError(f'{destination} already exists; a dump never overwrites one')
+    url = state.backend_url(bundle_dir)
+
+    log.info('[1/4] opening the escrow with the kit, for the recipients the appliance encrypts its dumps to')
+    recipients = config.age_recipients(escrow.Vault.open(store, registry))
+
+    # The plaintext archive never lands beside the encrypted one: it is the
+    # whole state in the clear, and it exists only for as long as the two
+    # steps that read it. `TemporaryDirectory` makes it 0700.
+    with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
+        archive = Path(tmp) / 'state.dump'
+        log.info('[2/4] dumping the live state over the client bundle in %s', bundle_dir)
+        state.pg_dump(url, archive)
+        log.info('[3/4] verifying the archive before calling it a dump')
+        _ = state.verify_dump(archive)
+        log.info('[4/4] encrypting the dump')
+        state.encrypt(archive, destination, recipients)
+    log.info(
+        '%s holds %.1f MiB, readable by the %d escrowed recipient(s) the appliance encrypts to',
+        destination,
+        destination.stat().st_size / 2**20,
+        len(recipients),
+    )
+    return 0
+
+
+def _served(url: str) -> list[str]:
+    """The stacks the backend serves, or nothing if it cannot answer at all.
+
+    Used before a restore, where a backend that refuses the question is the
+    ordinary case: a box provisioned minutes ago has an empty database that
+    no `pulumi` has ever written a layout into. So this only ever reports a
+    positive answer, and the caller's guard only ever fires on one.
+    """
+    try:
+        return state.stacks(url)
+    except StateError as exc:
+        log.info('the backend cannot list stacks yet (%s); a box provisioned minutes ago cannot either', exc)
+        return []
+
+
+def _restore(
+    store: KdbxStore | None,
+    *,
+    registry: escrow.Registry,
+    bundle_dir: Path,
+    source: Path,
+    identity: Path | None,
+    force: bool,
+) -> int:
+    """Feed a dump into a provisioned box, and prove afterwards that it took.
+
+    The order is the one that makes each failure cheap: refuse to overwrite a
+    populated backend before anything is decrypted, verify the archive before
+    it touches the database, restore in one transaction, and only then
+    report — by asking `pulumi` what the backend now serves.
+    """
+    url = state.backend_url(bundle_dir)
+    log.info('[1/5] asking the target backend what it already holds')
+    occupied = _served(url)
+    if occupied and not force:
+        log.error('%s already serves %d stack(s): %s', state.endpoint(url), len(occupied), ', '.join(occupied))
+        log.error('restoring over live state is `--force`; a rebuild restores into a box that has none')
+        return 1
+    if occupied:
+        log.warning('--force: restoring over the %d stack(s) %s already serves', len(occupied), state.endpoint(url))
+
+    with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
+        archive = source
+        if state.encrypted(source):
+            archive = Path(tmp) / 'state.dump'
+            if identity is not None:
+                log.info('[2/5] decrypting with the identity in %s', identity)
+                identities = state.identity_file(identity)
+            else:
+                if store is None:  # pragma: no cover - main opens a kit whenever there is no identity file
+                    raise StateError('no kit and no --identity-file: nothing can open this dump')
+                log.info('[2/5] opening the escrow with the kit, for the identities the dump may be under')
+                identities = config.backup_identities(escrow.Vault.open(store, registry))
+            state.decrypt(source, archive, identities)
+        else:
+            log.info('[2/5] %s is a plain archive; nothing to decrypt', source)
+        log.info('[3/5] verifying the archive before it touches the database')
+        _ = state.verify_dump(archive)
+        log.info('[4/5] restoring over the client bundle in %s', bundle_dir)
+        state.pg_restore(url, archive)
+
+    log.info('[5/5] verifying: a restore is done when pulumi can log in to what it restored')
+    restored = state.stacks(url)
+    if not restored:
+        log.error('%s serves no stacks after the restore, so the state did not arrive', state.endpoint(url))
+        return 1
+    log.info('the restored backend serves %d stack(s): %s', len(restored), ', '.join(restored))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     args = _parser().parse_args(argv)
@@ -202,6 +351,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if provision.verify_pins() else 1
         if args.action == 'ssh':
             return provision.ssh(provision.Oci.load(args.compartment), args.command)
+        if args.action == 'restore' and args.identity_file is not None:
+            # The drill machine holds one age key and no kit; asking for a
+            # database it does not have would fail before the restore starts.
+            return _restore(
+                None,
+                registry=escrow.Registry.open(args.escrow),
+                bundle_dir=args.bundle,
+                source=args.dump,
+                identity=args.identity_file,
+                force=args.force,
+            )
 
         store = KdbxStore.from_env(args.kdbx)
         registry = escrow.Registry.open(args.escrow)
@@ -233,9 +393,20 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     args.directory,
                 )
+            case 'dump':
+                return _dump(store, registry=registry, bundle_dir=args.bundle, output=args.output)
+            case 'restore':
+                return _restore(
+                    store,
+                    registry=registry,
+                    bundle_dir=args.bundle,
+                    source=args.dump,
+                    identity=None,
+                    force=args.force,
+                )
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled action {args.action}')
-    except (KdbxError, EscrowError, AgeError) as exc:
+    except (KdbxError, EscrowError, AgeError, StateError) as exc:
         log.error('%s', exc)
         return 1
     return 0

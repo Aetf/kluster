@@ -1,0 +1,323 @@
+"""Taking the Pulumi state out of the appliance, and putting it back.
+
+The box dumps itself nightly (`deploy/state-backend/state-dump.py`, §5); this
+module is the operator's side of the same artefact — an on-demand dump, and
+the only thing that reads one back. Both halves of every playbook that
+rebuilds the box are built out of it: a Postgres major upgrade is a dump, a
+re-provision and a restore (§7.2), and the quarterly drill is the same
+sequence against a scratch box (§7.3).
+
+**The artefact is the same artefact.** A dump written here is `pg_dump -Fc`
+under `age`, encrypted to the recipients the escrow names — the ones the
+appliance itself encrypts to, taken from the same function (`config`). A
+restore therefore does not care which of the two produced its input, and an
+operator's dump is exactly as recoverable as a nightly one.
+
+**Verification is part of the command, not of the playbook.** A truncated
+dump has a plausible size and a plausible name; what it does not have is a
+readable table of contents, so every dump is listed before it is called one.
+A restore ends by asking the `pulumi` CLI what the restored backend serves,
+because a database that is full of rows but cannot be logged in to has
+restored nothing anyone needs.
+
+**Bytes, which is why this is not `credentials.age`.** That wrapper is text
+in, text out, and a custom-format archive is neither. The invocations here
+keep its discipline — the pinned binary, identities on standard input,
+recipients on argv — and add the file-to-file form the archive needs.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+import subprocess as sp
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
+from kluster.scripts.credentials import age, lifecycle, pulumi_config
+
+from . import config, settings
+
+log = logging.getLogger(__name__)
+
+#: The client tools. `pg_dump` and `pg_restore` come from a Postgres client
+#: package rather than from `mise.toml`: they are the one part of this path
+#: the appliance cannot supply, and libpq is what reads the client bundle.
+PG_DUMP = 'pg_dump'
+PG_RESTORE = 'pg_restore'
+
+#: The state is tens of megabytes over a TLS connection to Phoenix, so these
+#: are transfer budgets rather than formalities. `age` gets less than the
+#: transfer because it is local work on a file that already exists.
+TRANSFER_TIMEOUT = 1800
+AGE_TIMEOUT = 600
+LISTING_TIMEOUT = 120
+
+#: What the two file formats announce themselves as, in their first bytes.
+#: The appliance writes `age` binary output; the escrow's ciphertexts are
+#: armoured, and a hand-decrypted archive is the `pg_dump` custom format.
+AGE_MAGIC = b'age-encryption.org/'
+ARMOUR_MAGIC = age.ARMOR_BEGIN.encode()
+ARCHIVE_MAGIC = b'PGDMP'
+
+#: What a table entry says it is in a `pg_restore --list` line, and the word
+#: that follows it when the entry is the rows rather than the definition.
+TABLE = 'TABLE'
+DATA = 'DATA'
+
+
+class StateError(RuntimeError):
+    """A dump or a restore did not happen, and says which step refused."""
+
+
+def dump_name(now: dt.datetime | None = None) -> str:
+    """What a dump is called when the operator does not name one.
+
+    The appliance's own objects are `<prefix>/<stamp>.dump.age` (§5); this
+    keeps the stamp and the suffixes so that a local file and a B2 object
+    sort and read the same way, and prefixes the appliance's name because
+    this one lands in whatever directory the operator is standing in.
+    """
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).strftime('%Y%m%dT%H%M%SZ')
+    return f'{settings.NAME}-{stamp}.dump.age'
+
+
+def backend_url(bundle_dir: Path) -> str:
+    """The connection string beside the client bundle, or a refusal naming the fix.
+
+    The same file `mise.toml` turns into `PULUMI_BACKEND_URL`, so a dump talks
+    to the backend the operator's `pulumi` runs talk to, over the same
+    certificate. It names its three files by absolute path, which is why
+    moving a bundle invalidates the string beside it.
+    """
+    path = lifecycle.backend_url_file(bundle_dir)
+    if path is None:
+        raise StateError(
+            f'no {bundle_dir / config.URL_FILE}: `state-backend bundle operator --address <ip>` writes one'
+        )
+    url = path.read_text().strip()
+    if not url:
+        raise StateError(f'{path} is empty; re-run `state-backend bundle operator --address <ip>`')
+    return url
+
+
+def endpoint(url: str) -> str:
+    """A connection string with its query dropped — what a log line may say.
+
+    The query is three absolute paths to a client certificate and its key.
+    Nothing secret, but nothing informative either, and it is longer than
+    everything else the run prints.
+    """
+    return url.split('?', 1)[0]
+
+
+def _run(argv: Sequence[str], *, what: str, timeout: int, stdin: str | None = None) -> str:
+    """One external tool, with its failure turned into something readable.
+
+    Every caller here is a long-running local process or a network transfer,
+    so a timeout is a real outcome rather than a guard, and it says which
+    step ran out rather than surfacing a `TimeoutExpired` from three frames
+    down.
+    """
+    try:
+        proc = sp.run(list(argv), input=stdin, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        raise StateError(
+            f'{argv[0]} is not on PATH: {PG_DUMP}/{PG_RESTORE} come from a Postgres client package, '
+            f'and {age.BINARY} is pinned in mise.toml (`mise x -- ...`)'
+        ) from exc
+    except sp.TimeoutExpired as exc:
+        raise StateError(f'{what} did not finish within {timeout}s') from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        raise StateError(f'{what} failed: {detail[-1] if detail else f"exit {proc.returncode}"}')
+    return proc.stdout
+
+
+def pg_dump(url: str, destination: Path) -> None:
+    """`pg_dump -Fc` over the bundle's connection, into a local file.
+
+    The custom format because that is what the appliance's own timer writes
+    and what `pg_restore` can list and reorder; no `--no-owner` and no
+    `--no-privileges`, because the roles a dump names are certificate
+    subjects that exist on every box (`ci`, `operator`) and flattening
+    ownership would hand CI's tables to the operator.
+    """
+    log.info('running %s -Fc against %s — tens of MB over TLS, expect seconds to minutes', PG_DUMP, endpoint(url))
+    _ = _run(
+        [
+            PG_DUMP,
+            '--format=custom',
+            # A password prompt in a script is a hang, and there is no
+            # password to type: the client certificate is the credential.
+            '--no-password',
+            f'--file={destination}',
+            f'--dbname={url}',
+        ],
+        what=f'{PG_DUMP} against {endpoint(url)}',
+        timeout=TRANSFER_TIMEOUT,
+    )
+    log.info('wrote %.1f MiB of archive', destination.stat().st_size / 2**20)
+
+
+def tables(listing: str) -> list[str]:
+    """The tables a `pg_restore --list` output names, as `schema.name`.
+
+    An entry line is `<id>; <catalogue oid> <oid> <what> <schema> <name>
+    <owner>`, and `<what>` is one word for a table's definition and two —
+    `TABLE DATA` — for its rows. Comment lines, which is the whole header,
+    start with the semicolon.
+    """
+    found: set[str] = set()
+    for line in listing.splitlines():
+        entry = line.split(';', 1)
+        if line.startswith(';') or len(entry) != 2:
+            continue
+        parts = entry[1].split()
+        if len(parts) < 4 or parts[2] != TABLE:
+            continue
+        start = 4 if parts[3] == DATA else 3
+        if len(parts) >= start + 2:
+            found.add('.'.join(parts[start : start + 2]))
+    return sorted(found)
+
+
+def verify_dump(archive: Path) -> list[str]:
+    """The tables the archive carries. A dump that cannot list them is not a dump.
+
+    This is the check that separates a dump from a file of the right size:
+    `pg_restore --list` reads the archive's own table of contents, so a
+    transfer that stopped early, an out-of-space write, or a decryption that
+    produced something else fails here rather than at the restore that
+    needed it.
+    """
+    log.info('checking the archive: asking %s to list what it contains', PG_RESTORE)
+    listing = _run(
+        [PG_RESTORE, '--list', str(archive)],
+        what=f'{PG_RESTORE} --list {archive}',
+        timeout=LISTING_TIMEOUT,
+    )
+    found = tables(listing)
+    if not found:
+        raise StateError(f'{archive} lists no tables, so it is not a dump of the state backend')
+    log.info('the archive carries %d table(s): %s', len(found), ', '.join(found))
+    return found
+
+
+def pg_restore(url: str, archive: Path) -> None:
+    """Restore the archive over the bundle's connection, all of it or none of it.
+
+    `--single-transaction` is the whole failure model: an error anywhere
+    rolls the database back to what it was, so a restore that goes wrong
+    leaves a box to re-run against rather than a half-populated backend that
+    `pulumi` will happily read.
+    """
+    log.info('restoring into %s — this writes the whole archive in one transaction', endpoint(url))
+    _ = _run(
+        [
+            PG_RESTORE,
+            '--single-transaction',
+            '--no-password',
+            f'--dbname={url}',
+            str(archive),
+        ],
+        what=f'{PG_RESTORE} into {endpoint(url)}',
+        timeout=TRANSFER_TIMEOUT,
+    )
+    log.info('the archive went in')
+
+
+def stacks(url: str) -> list[str]:
+    """Every stack the backend serves, asked through the CLI that will use it.
+
+    The verification a restore ends on, and deliberately not a SQL query: what
+    has to be true afterwards is that `pulumi` can log in to this backend and
+    read what is in it, which is a different claim from "the rows are there".
+
+    `--all` because the question is about the backend rather than about the
+    project directory the answer is asked from.
+    """
+    log.info('asking pulumi which stacks %s serves', endpoint(url))
+    try:
+        printed = pulumi_config.run_pulumi(
+            ['stack', 'ls', '--all', '--json'],
+            cwd=pulumi_config.project_dir(),
+            env={'PULUMI_BACKEND_URL': url},
+            stdin=None,
+        )
+    except pulumi_config.SlotRefused as exc:
+        raise StateError(str(exc)) from exc
+    listing = list[dict[str, Any]](json.loads(printed or '[]'))
+    return sorted(str(entry.get('name', '')) for entry in listing)
+
+
+def encrypted(path: Path) -> bool:
+    """Whether this file is age output rather than a bare archive.
+
+    Read off the first bytes rather than the file name: what an operator
+    downloads from B2 keeps the name the box gave it, what a drill writes
+    keeps whatever the workflow called it, and a wrong guess here is either
+    a decryption of plaintext or a restore of ciphertext.
+    """
+    if not path.is_file():
+        raise StateError(f'no dump at {path}')
+    head = path.read_bytes()[: len(ARMOUR_MAGIC)]
+    if head.startswith(AGE_MAGIC) or head.startswith(ARMOUR_MAGIC):
+        return True
+    if head.startswith(ARCHIVE_MAGIC):
+        return False
+    raise StateError(f'{path} is neither an age file nor a pg_dump custom-format archive')
+
+
+def encrypt(source: Path, destination: Path, recipients: Sequence[str]) -> None:
+    """Age-encrypt an archive to every recipient given.
+
+    Multi-recipient is the design (§5): the current backup generation and the
+    one before it, so any object still in retention opens with either.
+    """
+    if not recipients:
+        raise StateError('no recipient to encrypt the dump to; `credentials escrow check` says what is missing')
+    argv = [age.BINARY, '--encrypt']
+    for value in recipients:
+        argv += ['--recipient', value]
+    log.info('encrypting the archive to %d recipient(s) with %s', len(recipients), age.BINARY)
+    _ = _run(
+        [*argv, '--output', str(destination), str(source)],
+        what=f'{age.BINARY} --encrypt',
+        timeout=AGE_TIMEOUT,
+    )
+
+
+def decrypt(source: Path, destination: Path, identities: Sequence[str]) -> None:
+    """Open an age-encrypted dump with whichever identity fits.
+
+    Several are passed for the same reason a re-wrap passes several: a dump
+    in retention was written under the current generation or the previous
+    one, and which is not knowable from the file. The private halves travel
+    on standard input, so none of them lands on a filesystem.
+    """
+    if not identities:
+        raise StateError(f'no identity to open {source} with')
+    log.info('decrypting %s, trying %d identity/identities', source, len(identities))
+    _ = _run(
+        [age.BINARY, '--decrypt', '--identity', '-', '--output', str(destination), str(source)],
+        what=f'{age.BINARY} --decrypt',
+        timeout=AGE_TIMEOUT,
+        stdin=''.join(f'{value.strip()}\n' for value in identities),
+    )
+
+
+def identity_file(path: Path) -> list[str]:
+    """The age identities in a file — the drill key's delivery form.
+
+    The unattended drill (§7.3) holds one key in a repository secret and no
+    kit at all, so it writes that key to a file and names it. Comment lines
+    are skipped, which is what `age-keygen` puts above the key it prints.
+    """
+    lines = [line.strip() for line in path.read_text().splitlines()]
+    found = [line for line in lines if line and not line.startswith('#')]
+    if not found:
+        raise StateError(f'{path} holds no age identity')
+    return found
