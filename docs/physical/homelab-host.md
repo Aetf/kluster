@@ -90,12 +90,17 @@ contents, so nothing is discovered mid-bootstrap:
 -   the second bridge with the host address moved onto it (§2);
 -   the nodatacow subvolume (§1) + a libvirt storage pool pointing at
     it;
--   an SSH identity for the libvirt provider (`qemu+ssh://` over the
-    CI ZeroTier join — a user in the `libvirt` group, no root; note
-    that `libvirt`-group access is root-*equivalent* in effect —
-    domain XML can map any host device or disk — so this identity is
-    guarded at the same tier as the UDM key, not as an unprivileged
-    account);
+-   a **dedicated service user** and its SSH identity for the libvirt
+    provider (`qemu+ssh://` over the CI ZeroTier join), declared like
+    every other system account in the change-set — a `systemd-sysusers`
+    entry plus the key — and a member of the `libvirt` group and no
+    other. Note that `libvirt`-group access is root-*equivalent* in
+    effect — domain XML can map any host device or disk — so this
+    identity is guarded at the same tier as the UDM key, not as an
+    unprivileged account. The private half is a `physical` config
+    secret (credentials.md §3); creating and installing it is
+    aconfmgr's, and pasting it into that config is the only step on the
+    cluster's side;
 -   the NAS NFS exports extended to the worker VM's static IP.
 
 The vfio-pci host binding is deliberately *not* here — it lands in the
