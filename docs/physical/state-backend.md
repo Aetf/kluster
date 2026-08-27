@@ -64,11 +64,18 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     of what it was built from — the Butane file, the operator keys,
     each pin, the certificate identities, the dump key's id — and a
     converge run recomputes them and replaces the box when any differs,
-    naming the ones that did. Certificates are compared by subject,
-    public key and SANs rather than by bytes, because they are
-    re-issued on every render and would otherwise read as permanent
-    drift. A box with no such record (built before this existed) counts
-    as drifted: silence is not evidence that it matches.
+    naming the ones that did. Certificates are compared by what they
+    assert rather than by bytes, because they are re-issued on every
+    render and would otherwise read as permanent drift. The two
+    comparisons differ, and the difference is which key is stable: the
+    **CA** is compared by subject *and public key*, its private half
+    coming from escrow and outliving every render, while the **server
+    certificate** is compared by subject and SANs alone, its key being
+    random at each issuance (§3). The server's private key is therefore
+    outside the bill of materials on purpose — rotating it is
+    `provision --replace`, which is what that flag is for. A box with
+    no such record (built before this existed) counts as drifted:
+    silence is not evidence that it matches.
 -   **The B2 dump key is one of those components, not a special case.**
     B2 returns an application key's secret once, so the box's copy
     cannot be read back and minting a replacement revokes what it is
@@ -126,7 +133,14 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **One single-purpose private CA** (~10-year validity), generated
     offline; the CA key never touches the micro, CI, or Pulumi state —
     it lives at the never-in-automation tier with the B2 master
-    credential (storage.md §4). Exactly three certificates under it:
+    credential (storage.md §4). It is **random at creation and
+    escrowed** as `state-backend/ca` (credentials.md §2.2): a
+    ciphertext in the repository that only the offline recovery key
+    opens, which is the copy a rebuild reads. The bring-up run that
+    first provisions the appliance is what generates and commits it
+    (credentials.md §4.1); every run after that reads it and mints
+    nothing, because generating over a live CA would invalidate every
+    certificate under it. Exactly three certificates under it:
 -   **Server cert, 2–3 years, SAN = the micro's reserved public IP.**
     Clients connect by literal IP with `sslmode=verify-full` (libpq
     matches IP SANs), keeping the state-backend hot path free of any
@@ -141,6 +155,15 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     key is `0600` and the directory `0700`; and libpq expands no
     variables, so the string names its three files by absolute path
     rather than through a placeholder.
+-   **The three leaf keys are random at issuance and escrowed
+    nowhere.** They are re-issuable from the CA at any time, so a
+    stored copy would be an exposure that buys nothing back: writing a
+    client bundle mints a certificate rather than reproducing one, and
+    the box authenticates the CA rather than a particular leaf, so a
+    workstation re-running `state-backend bundle operator` needs no
+    notice given to anything. Issuing twice yields two different keys,
+    which is why a caller that needs a certificate and its key takes
+    both halves from one issuance.
 -   **No CRL/OCSP.** At three certificates, revocation infrastructure
     is standing rent for nothing: the compromise response is
     "regenerate the CA, reissue all three, re-provision" — playbook
@@ -199,12 +222,16 @@ there is nothing for it to edit.)
     scheduled workflow (object-age on the prefix, ci.md §3) — the
     box monitors nothing about itself.
 -   **The age identity rotates by generations; no key is assumed
-    immortal.** A generation is a *label*, not a stored file: the
-    identity is derived from the derivation seed as
-    `backup/age/<generation>` (credentials.md §2.2), so rotating one
-    means deriving the next — and a retired seed stays in the kit until
-    the last dump under it expires. Rotation is a designed path,
-    not an emergency improvisation:
+    immortal.** A generation is a label with a **stored ciphertext**:
+    the identity for `backup/age/<generation>` is random at creation
+    and its age ciphertext is committed under `escrow/`
+    (credentials.md §2.2), where the offline recovery key alone opens
+    it. Like the CA, generation N is minted by the bring-up run that
+    first installs it, and read unchanged by every run after.
+    Rotating means generating the next one and re-provisioning, and a
+    retired generation's ciphertext stays in the repository until the
+    last dump under it expires. Rotation is a designed path, not an
+    emergency improvisation:
     -   **Every dump is encrypted to the two newest generations plus
         the ops-repo-held drill key** — age is natively multi-recipient,
         and all three public keys sit in the Butane file. The
@@ -226,20 +253,24 @@ there is nothing for it to edit.)
         recipient, forces a fresh dump, verifies, and destroys the
         old key — one slot, no N−1 bookkeeping.
     -   **Rotate at least yearly** (and on compromise or custody
-        change): generate generation N+1 offline, swap the Butane
-        recipients `[N, N−1] → [N+1, N]`, re-provision — playbook
-        §7.4, via the rotation script (§1). The path stays warm
-        because it is the same re-provision as everything else.
+        change): `credentials escrow generate backup/age/<N+1>`, then
+        bump the appliance's generation pin, which swaps the Butane
+        recipients `[N, N−1] → [N+1, N]`, then re-provision —
+        playbook §7.4. The pin and the escrow's expectations come from
+        the same constant, so `credentials escrow check` fails until
+        the new generation exists. The path stays warm because the
+        apply is the same re-provision as everything else.
     -   **Old keys get a definite end of life**: generation N−1
         becomes destroyable **30 days after the rotation to N+1** —
         every object it can uniquely decrypt has aged out, and
         everything newer also carries key N. The offline register
         records each generation with its rotate date and
-        earliest-destroy date; destroying the key on that date is
-        what actually ends the old generation's exposure. At most
-        two *generational* private keys are ever live — the ops-repo-held
-        drill key sits outside the generations. (The offline
-        register is §2 of the
+        earliest-destroy date; destroying a generation is deleting its
+        ciphertext under `escrow/`, which is the only copy, and doing
+        so on that date is what actually ends the old generation's
+        exposure. At most two *generational* private keys are ever
+        live — the ops-repo-held drill key sits outside the
+        generations. (The offline register is §2 of the
         [credential register](../credentials.md), which inventories
         every credential in the system.)
     -   **Compromise variant**: drop the compromised key from the
@@ -288,9 +319,11 @@ executable playbooks (the §1 scripts plus their runbooks in
 `deploy/state-backend/`) are written with the implementation.
 
 -   **§7.1 Certificate rotation / CA reissue.** Trigger: expiry alert
-    (<30 days) or key compromise. Outline: issue offline (compromise:
-    regenerate CA, reissue all three certs, redistribute client
-    certs) → update Butane → re-provision → `verify-full` check.
+    (<30 days) or key compromise. Outline: re-provision, which
+    re-issues the server certificate under the same CA. On compromise
+    of the CA itself: `credentials escrow generate state-backend/ca`
+    for a new generation, re-provision against it, redistribute the
+    `ci` and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
     Outline: fresh dump → merge → re-provision (new major initdb's) →
     restore → clean `pulumi preview`.
@@ -303,8 +336,10 @@ executable playbooks (the §1 scripts plus their runbooks in
     age identity is proven separately by the yearly rotation (§7.4),
     which inherently decrypts with it.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
-    compromise, custody change. Outline: generate N+1 offline +
-    register entry (rotate / earliest-destroy dates) → swap Butane
+    compromise, custody change. Outline: `credentials escrow generate
+    backup/age/<N+1>` + register entry (rotate / earliest-destroy
+    dates) → bump the generation pin, which swaps the Butane
     recipients `[N, N−1] → [N+1, N]` → re-provision → verify both
-    decrypt paths → destroy N−1 on its date (compromise: drop the
-    key from recipients now, fresh dump, early-delete old objects).
+    decrypt paths → destroy N−1 on its date by deleting its escrow
+    ciphertext (compromise: drop the key from recipients now, fresh
+    dump, early-delete old objects).
