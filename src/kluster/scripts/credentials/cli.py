@@ -46,20 +46,27 @@ _ORDER = """when to run what (docs/credentials.md §4):
          The recovery key is one of them, and creating it also writes
          escrow/RECIPIENTS. Stops at each credential no API can create and
          prints the console steps. Re-run it to resume.
-    2. state-backend provision
+    2. credentials derived oci state-backend --compartment <ocid>
+         The appliance's own OCI key, minted from the seed into a
+         workstation slot. The next step reads it there; nothing else does.
+    3. state-backend provision
          The Pulumi state backend, which every stack needs before it can act,
          and the first thing to escrow: it generates the CA and the backup
          identities it is about to install and commits their ciphertexts.
-    3. credentials escrow generate pulumi/passphrase
+    4. credentials escrow generate pulumi/passphrase
          The one escrowed label no other command mints. It writes the
          workstation slot as well as the ciphertext, so mise.toml finds it.
-    4. eval "$(credentials escrow env)"
+    5. eval "$(credentials escrow env)"
          PULUMI_CONFIG_PASSPHRASE (recovered from escrow) and
-         PULUMI_BACKEND_URL (from the bundle step 2 wrote).
-    5. credentials derived cloudflare zones
+         PULUMI_BACKEND_URL (from the bundle step 3 wrote).
+    6. credentials derived cloudflare zones
          Mints the zone-scoped Cloudflare token from the seed and writes
          it into the dns stack's config, which is then committed. One
          §3 row per command; re-running one rotates it.
+    7. credentials derived oci physical --compartment <ocid>
+       credentials derived b2 management
+         The two provider credentials the physical stack runs on, into its
+         config, which is then committed like the one above.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -106,6 +113,22 @@ _ORDER = """when to run what (docs/credentials.md §4):
                                   desktop secret store, so a long run is not
                                   guarded by a password typed into it
 """
+
+
+def _slot_source(command: argparse.ArgumentParser) -> None:
+    """Say where the state backend's client bundle is.
+
+    Every §3 row delivered into a Pulumi config secret needs it: the stack's
+    configuration lives in the state backend, so pushing into it means
+    reaching the backend, which is this bundle plus the passphrase the kit
+    recovers.
+    """
+    _ = command.add_argument(
+        '--bundle-dir',
+        type=Path,
+        default=workstation.bundle_dir(),
+        help='where `state-backend` wrote the client bundle',
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -219,18 +242,63 @@ def build_parser() -> argparse.ArgumentParser:
         'zones',
         help="the zone-scoped provider token, into the dns stack's config secret",
     )
-    _ = zones.add_argument('--entry', default=derived.SEED_ENTRY, help=f'the seed row (default: {derived.SEED_ENTRY})')
+    _ = zones.add_argument(
+        '--entry',
+        default=derived.CLOUDFLARE_SEED_ENTRY,
+        help=f'the seed row (default: {derived.CLOUDFLARE_SEED_ENTRY})',
+    )
     _ = zones.add_argument(
         '--stack',
         default=derived.ZONES_STACK,
         help=f'the stack whose config takes the token (default: {derived.ZONES_STACK})',
     )
-    _ = zones.add_argument(
-        '--bundle-dir',
-        type=Path,
-        default=workstation.bundle_dir(),
-        help='where `state-backend` wrote the client bundle',
+    _slot_source(zones)
+
+    # One member per consumer rather than one `oci` command with a stack
+    # argument: the two differ in where they deliver, not only in what they
+    # name, and a tree shaped like the register is the point (§3).
+    oci_row = rows.add_parser('oci', help='the per-consumer users and API keys the OCI seed mints (§3)')
+    oci_actions = oci_row.add_subparsers(dest='action', required=True, metavar='<consumer>')
+    oci_physical = oci_actions.add_parser(
+        'physical',
+        help="the physical stack's user, group, policy and key, into its config secrets",
     )
+    _ = oci_physical.add_argument(
+        '--stack',
+        default=derived.PHYSICAL_STACK,
+        help=f'the stack whose config takes the key (default: {derived.PHYSICAL_STACK})',
+    )
+    _slot_source(oci_physical)
+    oci_appliance = oci_actions.add_parser(
+        'state-backend',
+        help="the appliance provisioner's own key, into its workstation slot (§4.4)",
+    )
+    for command in (oci_physical, oci_appliance):
+        _ = command.add_argument(
+            '--entry', default=derived.OCI_SEED_ENTRY, help=f'the seed row (default: {derived.OCI_SEED_ENTRY})'
+        )
+        # Required because nothing in this repository knows it: a compartment
+        # OCID is a fact about the tenancy, and it is what the minted policy
+        # confines the key to.
+        _ = command.add_argument(
+            '--compartment', required=True, metavar='<ocid>', help='the compartment the key may administer'
+        )
+
+    b2_row = rows.add_parser('b2', help='the keys the B2 seed mints (§3)')
+    b2_actions = b2_row.add_subparsers(dest='action', required=True, metavar='<key>')
+    management = b2_actions.add_parser(
+        'management',
+        help="the bucket, key and lifecycle admin key, into the physical stack's config secret",
+    )
+    _ = management.add_argument(
+        '--entry', default=derived.B2_SEED_ENTRY, help=f'the seed row (default: {derived.B2_SEED_ENTRY})'
+    )
+    _ = management.add_argument(
+        '--stack',
+        default=derived.PHYSICAL_STACK,
+        help=f'the stack whose config takes the key (default: {derived.PHYSICAL_STACK})',
+    )
+    _slot_source(management)
 
     # The account roots (§2) are not in the kit and not in any database this
     # repository opens: each is looked up through one chain -- desktop secret
@@ -294,6 +362,21 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
         log.info('no kit at %s; creating it', path)
         return KdbxStore.create(path, getpass.getpass(f'new master password for {path.name}: '))
     return KdbxStore.from_env(args.kdbx)
+
+
+def _stack(args: argparse.Namespace, store: KdbxStore) -> pulumi_config.Stack:
+    """The config slot a §3 row is pushed into.
+
+    Opened with the same two variables a `pulumi` run needs, recovered with the
+    kit that is already open rather than expected in the environment: one
+    command is one credential delivered, not a shell that has to be prepared
+    first.
+    """
+    return pulumi_config.Stack(
+        name=args.stack,
+        directory=pulumi_config.project_dir(),
+        env=lifecycle.environment(store, args.bundle_dir),
+    )
 
 
 def _check(registry: escrow.Registry) -> int:
@@ -468,18 +551,21 @@ def main(argv: list[str] | None = None) -> int:
                 _ = oci_iam.adopt_domain(store, seed_entry=args.entry, root=lifecycle.root('oci', input))
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
-            # §3's rows. The stack's configuration is opened with the same two
-            # variables a `pulumi` run needs, recovered with the kit that is
-            # already open rather than expected in the environment: one command
-            # is one credential delivered, not a shell that has to be prepared
-            # first.
+            # §3's rows, one command per row (`_stack` is the slot most of
+            # them are pushed into).
             case ('derived', 'cloudflare', 'zones'):
-                stack = pulumi_config.Stack(
-                    name=args.stack,
-                    directory=pulumi_config.project_dir(),
-                    env=lifecycle.environment(store, args.bundle_dir),
+                _ = derived.cloudflare_zones(store, stack=_stack(args, store), seed_entry=args.entry)
+            case ('derived', 'oci', 'physical'):
+                _ = derived.oci_physical(
+                    store, stack=_stack(args, store), compartment_id=args.compartment, seed_entry=args.entry
                 )
-                _ = derived.cloudflare_zones(store, stack=stack, seed_entry=args.entry)
+            # The one §3 row that opens no stack: its consumer is what builds
+            # the backend a stack's configuration lives in, so the push is a
+            # workstation slot and this command needs no `pulumi` at all.
+            case ('derived', 'oci', 'state-backend'):
+                _ = derived.oci_state_backend(store, compartment_id=args.compartment, seed_entry=args.entry)
+            case ('derived', 'b2', 'management'):
+                _ = derived.b2_management(store, stack=_stack(args, store), seed_entry=args.entry)
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else

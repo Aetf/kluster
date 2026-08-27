@@ -1,26 +1,50 @@
-"""§3's rows end to end: minted from the seed, delivered into a stack's config.
+"""§3's rows end to end: minted from a seed, delivered into the slot the row names.
 
-Against the fake Cloudflare API and a recorded `pulumi`, because what is under
-test is the shape of the procedure — mint, prove, push, prove — and its
-idempotence. Both are properties of this repository rather than of either
-platform.
+Against fakes of the three platforms and a recorded `pulumi`, because what is
+under test is the shape of the procedure — mint, prove, push, prove — and its
+idempotence. Both are properties of this repository rather than of any
+provider.
+
+The OCI tenancy is the fake `test_oci_iam` drives, imported rather than
+rebuilt: one fake per platform, and the module that owns the API is where it
+lives. What it encodes matters here — the identity domain serves the
+self-service endpoints to anyone who authenticates and the administrative ones
+only to a domain administrator, which the seed is not, so a mint for somebody
+else's user is served by the legacy shim.
 """
+
+# The SDK ships no stubs; the same waiver `oci_iam.py` itself carries.
+# pyright: reportMissingTypeStubs=false
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
 
+import b2_api
+import oci
 import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
+from test_oci_iam import ROOT_USER, TENANCY, Tenancy
 
 from kluster import conventions
-from kluster.scripts.credentials import cloudflare, derived, pulumi_config
+from kluster.scripts.credentials import (
+    b2,
+    cloudflare,
+    derived,
+    entries,
+    masters,
+    oci_iam,
+    oci_slot,
+    pulumi_config,
+    workstation,
+)
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 STACK = derived.ZONES_STACK
+COMPARTMENT = 'ocid1.compartment.oc1..physical'
 
 
 @pytest.fixture
@@ -36,7 +60,7 @@ def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
 @pytest.fixture
 def kit(api: FakeApi) -> KdbxStore:
     store = MemoryKit()
-    _ = cloudflare.adopt_seed(token=console_seed(api), seeds=store, seed_entry=derived.SEED_ENTRY)
+    _ = cloudflare.adopt_seed(token=console_seed(api), seeds=store, seed_entry=derived.CLOUDFLARE_SEED_ENTRY)
     return store
 
 
@@ -86,8 +110,8 @@ def test_the_minted_token_never_touches_the_kit(
 
     # Rule 2: the offline store is not a staging area. The kit holds the seed
     # it held before, and the minted value exists only in the slot.
-    assert kit.entries() == [derived.SEED_ENTRY]
-    assert runner.config[derived.API_TOKEN_KEY] != kit.get(derived.SEED_ENTRY)
+    assert kit.entries() == [derived.CLOUDFLARE_SEED_ENTRY]
+    assert runner.config[derived.API_TOKEN_KEY] != kit.get(derived.CLOUDFLARE_SEED_ENTRY)
 
 
 def test_a_re_run_rotates_the_row_and_leaves_one_live_token(
@@ -166,3 +190,250 @@ def test_a_push_that_fails_is_healed_by_running_it_again(
     runner.corrupts = False
     _ = derived.cloudflare_zones(kit, stack=slot)
     assert _live(api) == [api.values[runner.config[derived.API_TOKEN_KEY]]]
+
+
+# -- the OCI rows: a user, a group, a policy and the key that signs as them --
+
+
+@pytest.fixture
+def physical_stack() -> tuple[pulumi_config.Stack, RecordedPulumi]:
+    runner = RecordedPulumi()
+    return (
+        pulumi_config.Stack(name=derived.PHYSICAL_STACK, directory=pulumi_config.project_dir(), run=runner),
+        runner,
+    )
+
+
+@pytest.fixture
+def tenancy() -> Tenancy:
+    return Tenancy()
+
+
+@pytest.fixture
+def oci_kit(tenancy: Tenancy) -> KdbxStore:
+    """A kit holding the OCI seed, created the way a bring-up creates it."""
+    store = MemoryKit()
+    private_pem, _ = oci_iam.generate_key()
+    root = masters.Credential(
+        root=masters.ROOTS['oci'],
+        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},
+    )
+    _ = oci_iam.create_seed(root=root, seeds=store, seed_entry=derived.OCI_SEED_ENTRY, connect=tenancy)
+    return store
+
+
+def _named(tenancy: Tenancy, name: str) -> str:
+    """The OCID of the user of that name, which the mint is expected to create."""
+    return next(user.id for user in tenancy.identity.users.values() if user.name == name)
+
+
+def test_the_physical_stack_gets_a_signing_configuration_and_its_compartment(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # A provider cannot sign with three of the five: the fingerprint is
+    # computed from the key that was pushed, and the region is the estate's.
+    assert runner.config[derived.OCI_TENANCY_KEY] == TENANCY
+    assert runner.config[derived.OCI_USER_KEY] == user
+    private = runner.config[derived.OCI_PRIVATE_KEY_KEY]
+    assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(private)
+    assert oci_iam.fingerprint(private) in tenancy.identity.keys[user]
+    assert runner.config[derived.OCI_REGION_KEY] == conventions.OCI_REGION
+    # The credential says who may act, never where: without the compartment
+    # the stack it belongs to could not name a single resource.
+    assert runner.config[derived.COMPARTMENT_KEY] == COMPARTMENT
+
+
+def test_the_per_stack_identity_is_confined_to_the_compartment_it_names(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, _ = physical_stack
+
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # One name for the user, its group and its policy, and the policy is the
+    # whole of what the key may do — a compartment rather than a verb list.
+    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    group = next(candidate for candidate in tenancy.identity.groups.values() if candidate.name == name)
+    assert (user, group.id) in tenancy.identity.memberships
+    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+        [f'Allow group {name} to manage all-resources in compartment id {COMPARTMENT}']
+    ]
+    # The seed's own objects are untouched beside them: a per-stack mint adds
+    # a principal, it does not widen the one that made it.
+    assert sorted(user.name for user in tenancy.identity.users.values()) == [name, oci_iam.SEED_NAME]
+
+
+def test_the_seed_mints_for_a_user_that_is_not_its_own(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, _ = physical_stack
+
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # The domain's administrative half needs domain-admin rights the seed does
+    # not hold, so creating somebody else's user falls through to the legacy
+    # shim — the bidirectional fallback §2 describes, on the path that needs it
+    # most. The sweep afterwards runs as the minted key, whose self-service
+    # endpoints authorize on authentication alone.
+    assert 'CreateUser' in tenancy.identity.shim_calls
+    assert 'list_my_api_keys' in tenancy.policy.served
+    # …and the key that verified and swept is the minted one, signing as the
+    # user it was minted for rather than as the seed.
+    assert tenancy.domain_connections[-1][1] == user
+
+
+def test_the_minted_oci_key_never_touches_the_kit(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # Rule 2 again: the kit holds the seed it held before, and the key the
+    # stack runs on exists in the slot and nowhere else.
+    assert oci_kit.entries() == [derived.OCI_SEED_ENTRY]
+    seed_pem = oci_kit.attachment(derived.OCI_SEED_ENTRY, entries.OCI_KEY_ATTACHMENT).decode()
+    assert runner.config[derived.OCI_PRIVATE_KEY_KEY] != seed_pem
+
+
+def test_a_re_run_rotates_the_key_and_reuses_the_identity(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+    first = runner.config[derived.OCI_PRIVATE_KEY_KEY]
+
+    again = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # Rotating the row is re-running the command: the same principal, a new
+    # key, and the predecessor retired once the successor is verified — so the
+    # user never accumulates towards the quota of three.
+    assert again == user
+    second = runner.config[derived.OCI_PRIVATE_KEY_KEY]
+    assert second != first
+    assert tenancy.identity.keys[user] == [oci_iam.fingerprint(second)]
+    assert len(tenancy.identity.users) == len(tenancy.identity.groups) == len(tenancy.identity.policies) == 2
+
+
+# -- the appliance's key, which is a workstation slot rather than a stack ----
+
+
+@pytest.fixture
+def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`.credentials/` somewhere that is not this checkout.
+
+    The slots are repo-relative by design (§4.4), and a suite that wrote into
+    the checkout it runs from would leave a placeholder credential where a
+    real one belongs.
+    """
+    directory = tmp_path / '.credentials'
+    monkeypatch.setattr(workstation, 'directory', lambda: directory)
+    return directory
+
+
+def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
+    oci_kit: KdbxStore, tenancy: Tenancy, slots: Path
+) -> None:
+    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # The slot is an SDK configuration file because the SDK is the whole of the
+    # reader: what proves the push is that `from_file` accepts what it wrote.
+    assert written == slots / oci_slot.DIRECTORY / oci_slot.STATE_BACKEND / oci_slot.CONFIG
+    config = oci.config.from_file(str(written))
+    oci.config.validate_config(config)  # pyright: ignore[reportUnknownMemberType]
+    user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{oci_slot.STATE_BACKEND}')
+    assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_REGION)
+    assert config['compartment-id'] == COMPARTMENT
+
+
+def test_the_appliance_key_is_a_file_only_its_owner_can_read(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:
+    written = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # Named absolutely, because the SDK expands nothing (§4.4), and `0600`
+    # under a `0700` directory like every other slot.
+    config = oci.config.from_file(str(written))
+    key = Path(str(config['key_file']))
+    assert key.is_absolute()
+    assert oci_iam.fingerprint(key.read_text()) == config['fingerprint']
+    assert key.stat().st_mode & 0o777 == 0o600
+    assert key.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_the_appliance_row_is_its_own_principal(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:
+    _ = derived.oci_state_backend(oci_kit, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # Two §3 OCI rows, two principals: the appliance provisioner and the
+    # physical stack are separate consumers, so a compromise of either is
+    # confined to its own compartment.
+    name = f'{conventions.CLUSTER_NAME}-{oci_slot.STATE_BACKEND}'
+    assert sorted(user.name for user in tenancy.identity.users.values()) == [oci_iam.SEED_NAME, name]
+    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+        [f'Allow group {name} to manage all-resources in compartment id {COMPARTMENT}']
+    ]
+
+
+# -- the B2 management key --------------------------------------------------
+
+
+@pytest.fixture
+def b2_api_fake(monkeypatch: pytest.MonkeyPatch) -> b2_api.FakeApi:
+    fake = b2_api.FakeApi()
+    monkeypatch.setattr(b2.requests, 'get', fake.get)
+    monkeypatch.setattr(b2.requests, 'post', fake.post)
+    return fake
+
+
+@pytest.fixture
+def b2_kit(b2_api_fake: b2_api.FakeApi) -> KdbxStore:
+    store = MemoryKit()
+    root = masters.Credential(
+        root=masters.ROOTS['b2'],
+        values={'account-id': b2_api_fake.master.key_id, 'key': b2_api_fake.master.secret},
+    )
+    _ = b2.create_seed(root=root, seeds=store, seed_entry=derived.B2_SEED_ENTRY)
+    return store
+
+
+def test_the_management_key_lands_in_the_stack_config_with_its_id(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    key_id = derived.b2_management(b2_kit, stack=slot)
+
+    # Both halves, because a B2 credential is a pair: the id names the key and
+    # the key is the secret, and neither authenticates on its own.
+    assert runner.config[derived.B2_KEY_ID_KEY] == key_id
+    assert b2_api_fake.keys[key_id].secret == runner.config[derived.B2_KEY_KEY]
+    # Bucket, key and lifecycle administration, and no file capability at all:
+    # what manages the backup buckets cannot read a byte out of them.
+    assert b2_api_fake.keys[key_id].capabilities == b2.CAPABILITIES
+
+
+def test_the_management_key_never_touches_the_kit(
+    b2_kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, _ = physical_stack
+
+    _ = derived.b2_management(b2_kit, stack=slot)
+
+    assert b2_kit.entries() == [derived.B2_SEED_ENTRY]
+
+
+def test_a_re_run_rotates_the_management_key(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    first = derived.b2_management(b2_kit, stack=slot)
+
+    second = derived.b2_management(b2_kit, stack=slot)
+
+    # One live key of that name afterwards, and the slot names it: the seed
+    # signs the retirement and survives it, so the predecessor really goes.
+    assert second != first
+    assert b2_api_fake.named(b2.MANAGEMENT_KEY_NAME) == [second]
+    assert runner.config[derived.B2_KEY_ID_KEY] == second
