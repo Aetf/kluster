@@ -9,15 +9,19 @@ rather than being invented.
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import entries, lifecycle, masters, seeds, workstation
+from kluster.scripts.credentials import age, entries, escrow, lifecycle, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 PASSWORD = 'kit-password'
+
+age_binary = shutil.which(age.BINARY)
+needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (mise x -- ...)')
 
 
 def _answers(*values: str) -> Callable[[str], str]:
@@ -41,23 +45,33 @@ def kit(tmp_path: Path) -> KdbxStore:
     return KdbxStore.create(tmp_path / 'kit.kdbx', PASSWORD)
 
 
-def test_the_derivation_seed_is_generated_without_asking_anyone(kit: KdbxStore) -> None:
-    created = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
-
-    assert created == ['derivation']
-    assert len(seeds.load_seed(kit)) == seeds.SEED_LENGTH
+@pytest.fixture
+def registry(tmp_path: Path) -> escrow.Registry:
+    return escrow.Registry.open(tmp_path / 'escrow')
 
 
-def test_bootstrap_resumes_rather_than_repeating(kit: KdbxStore) -> None:
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
-    before = seeds.load_seed(kit)
+@needs_age
+def test_the_recovery_key_is_generated_without_asking_anyone(kit: KdbxStore, registry: escrow.Registry) -> None:
+    created = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
 
-    # The second run must not overwrite it: everything derived from the old
-    # seed -- the backups above all -- would be orphaned (§2.2).
-    created = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+    assert created == ['recovery']
+    # Both halves land in one act: the private one in the kit, the public one
+    # in the file every ciphertext is written to.
+    assert kit.get(escrow.RECOVERY_ENTRY).startswith(age.SECRET_PREFIX)
+    assert registry.recipients() == [kit.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
+
+
+@needs_age
+def test_bootstrap_resumes_rather_than_repeating(kit: KdbxStore, registry: escrow.Registry) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    before = kit.get(escrow.RECOVERY_ENTRY)
+
+    # The second run must not overwrite it: every ciphertext under escrow/
+    # opens with this key and nothing else (§2.2).
+    created = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
 
     assert created == []
-    assert seeds.load_seed(kit) == before
+    assert kit.get(escrow.RECOVERY_ENTRY) == before
 
 
 def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
@@ -107,7 +121,7 @@ def test_every_seed_that_needs_a_root_has_one_registered() -> None:
     # A minter whose account root is not in the register is one that can only
     # fail at the moment it is reached.
     for member, seed in entries.SEEDS.items():
-        if member == 'derivation' or seed.manual:
+        if member == 'recovery' or seed.manual:
             continue
         assert member in masters.ROOTS
 
@@ -117,41 +131,56 @@ def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
         _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
 
 
-def test_rotation_writes_a_new_seed_and_leaves_the_retired_kit_untouched(kit: KdbxStore, tmp_path: Path) -> None:
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
-    retired = seeds.load_seed(kit)
+@needs_age
+def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    retired = kit.get(escrow.RECOVERY_ENTRY)
 
     successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
-    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, only='derivation')
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, only='recovery', registry=registry)
 
-    assert rotated == ['derivation']
-    assert seeds.load_seed(successor) != retired
-    # §2.2: the retired seed outlives its rotation, because backups encrypted
-    # under it cannot be re-encrypted retroactively.
-    assert seeds.load_seed(kit) == retired
+    assert rotated == ['recovery']
+    assert successor.get(escrow.RECOVERY_ENTRY) != retired
+    # The plaintext is untouched, which is what makes this rotation free of
+    # production consequences -- and the retired kit destroyable.
+    assert escrow.Vault.open(successor, registry).recover(escrow.PASSPHRASE) == passphrase
+    assert kit.get(escrow.RECOVERY_ENTRY) == retired
 
 
-def test_the_environment_derives_the_passphrase_and_reads_the_url(kit: KdbxStore, tmp_path: Path) -> None:
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+@needs_age
+def test_the_environment_recovers_the_passphrase_and_reads_the_url(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
     bundle = tmp_path / 'bundle'
     bundle.mkdir()
     _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
 
-    values = lifecycle.environment(kit, bundle)
+    values = lifecycle.environment(kit, bundle, registry)
 
-    # Derived, never stored: the passphrase lives in no slot an operator can
-    # read, which is why there was no way to obtain it before.
-    assert values['PULUMI_CONFIG_PASSPHRASE'] == seeds.pulumi_passphrase(seeds.load_seed(kit))
+    # The one place it exists outside its consumers is a committed ciphertext
+    # nobody can open without the kit.
+    assert values['PULUMI_CONFIG_PASSPHRASE'] == passphrase
     assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
 
 
+@needs_age
 def test_a_bundle_left_where_it_used_to_live_is_read_once_and_loudly(
-    kit: KdbxStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # The bundle became a workstation slot inside the checkout; a machine that
     # still has one under ~/.config keeps working, and is told where it now
     # belongs rather than being left to wonder why nothing changed.
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
     legacy = tmp_path / 'legacy'
     legacy.mkdir()
     _ = (legacy / lifecycle.URL_FILE).write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
@@ -159,34 +188,40 @@ def test_a_bundle_left_where_it_used_to_live_is_read_once_and_loudly(
     monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
     monkeypatch.setattr(workstation, 'bundle_dir', lambda: slot)
 
-    values = lifecycle.environment(kit, slot)
+    values = lifecycle.environment(kit, slot, registry)
 
     assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
     assert 'state-backend bundle operator' in caplog.text
 
 
+@needs_age
 def test_the_moved_bundle_is_only_looked_for_under_the_default(
-    kit: KdbxStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # `--bundle-dir somewhere-else` means that directory and no other: a
     # fallback that fired for an explicit path would answer a question the
     # operator did not ask.
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
     legacy = tmp_path / 'legacy'
     legacy.mkdir()
     _ = (legacy / lifecycle.URL_FILE).write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
     monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
     monkeypatch.setattr(workstation, 'bundle_dir', lambda: tmp_path / '.credentials' / 'state-backend')
 
-    values = lifecycle.environment(kit, tmp_path / 'asked-for')
+    values = lifecycle.environment(kit, tmp_path / 'asked-for', registry)
 
     assert 'PULUMI_BACKEND_URL' not in values
 
 
-def test_a_missing_bundle_still_yields_the_passphrase(kit: KdbxStore, tmp_path: Path) -> None:
-    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='derivation')
+@needs_age
+def test_a_missing_bundle_still_yields_the_passphrase(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
 
-    values = lifecycle.environment(kit, tmp_path / 'absent')
+    values = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
     # The appliance not existing yet is the normal case during bring-up.
     assert 'PULUMI_CONFIG_PASSPHRASE' in values

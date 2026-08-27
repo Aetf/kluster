@@ -13,9 +13,9 @@ The rule, in full:
     make.
 -   **UserName** is the credential's public identifier -- the half that
     appears in logs and consoles and is not a secret: a B2 key id, an OCI
-    user's OCID, a GitHub App's client id. A credential with no such half
-    (the ZeroTier token) records what it is instead, so the field is never
-    empty and never a secret.
+    user's OCID, a GitHub App's client id, the recovery key's age recipient.
+    A credential with no such half (the ZeroTier token) records what it is
+    instead, so the field is never empty and never a secret.
 -   **Password** is the secret itself, and nothing else is.
 -   **Attachments** carry key material that is a file rather than a string
     (the GitHub App private keys, the OCI API key).
@@ -97,10 +97,10 @@ SEEDS: dict[str, Seed] = {
     seed.member: seed
     for seed in (
         Seed(
-            member='derivation',
-            title='Derivation seed',
-            identifier='derivation-seed',
-            mints='every locally-generated secret, by derivation (§2.2)',
+            member='recovery',
+            title='Recovery key',
+            identifier='the age recipient (its public half)',
+            mints='nothing; it opens the escrow, which holds the generated secrets (§2.2)',
             self_reproducing=False,
         ),
         Seed(

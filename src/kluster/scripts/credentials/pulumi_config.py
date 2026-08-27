@@ -4,7 +4,7 @@ One of the register's storage channels (docs/credentials.md §1 rule 6), and the
 narrower of the two Pulumi ones: `Pulumi.<stack>.yaml` is committed, so its
 ciphertext is public the moment the repository is, and only credentials a
 program needs *before* it can run belong here. What lands is ciphertext under
-the state passphrase, which is itself derived from the kit (§2.2) — so a slot
+the state passphrase, which is itself recovered with the kit (§2.2) — so a slot
 written here opens from the kit and from nothing else.
 
 Driven through the `pulumi` CLI rather than the automation API because that is

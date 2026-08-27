@@ -147,8 +147,8 @@ def test_rotation_writes_a_new_kit_and_leaves_the_retired_one_untouched(
 
     key_id = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
 
-    # §4.2: the retired kit stays exactly as it was, because what was derived
-    # under it has not expired yet.
+    # §4.2: the retired kit stays exactly as it was; the key it holds keeps
+    # working until its successor has been verified.
     assert memory_kit.get(SEED_ENTRY, attribute='UserName') == key_id
     assert kit.get(SEED_ENTRY, attribute='UserName') == previous
 

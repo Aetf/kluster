@@ -1,10 +1,11 @@
 """`credentials` — the executable form of the credential register.
 
-The command tree is the register's two tables (docs/credentials.md), not the
-accounts behind them: `seed` holds one member per §2 row, `derived` one family
-per §3 row. Reading `credentials --help` beside the register should show the
-same shape twice; a command with no row, or a row with no command, is the bug
-that discipline is meant to surface.
+The command tree is the register's tables (docs/credentials.md), not the
+accounts behind them: `seed` holds one member per §2 row, `escrow` one action
+per thing that can be done to §2.2's generated secrets, and `derived` one
+family per §3 row. Reading `credentials --help` beside the register should
+show the same shapes; a command with no row, or a row with no command, is the
+bug that discipline is meant to surface.
 
 Every action is mint -> push to every slot -> verify, and therefore idempotent:
 rotation is a re-run, not a second procedure.
@@ -19,7 +20,9 @@ import shlex
 import sys
 from pathlib import Path
 
-from . import b2, derived, entries, lifecycle, masters, oci_iam, pulumi_config, seeds, workstation
+from . import b2, derived, entries, escrow, lifecycle, masters, oci_iam, pulumi_config, workstation
+from .age import AgeError
+from .escrow import EscrowError
 from .kdbx import PATH_ENV, KdbxError, KdbxStore, default_path
 from .masters import CredentialRejected
 from .pulumi_config import SlotRefused
@@ -40,32 +43,40 @@ _ORDER = """when to run what (docs/credentials.md §4):
          than a failure, which is how a headless run works.
     1. credentials bootstrap
          Fills a kit with every seed in §2, creating the kit if it is absent.
-         Stops at each credential no API can create and prints the console
-         steps. Re-run it to resume: it skips what is already there.
+         The recovery key is one of them, and creating it also writes
+         escrow/RECIPIENTS. Stops at each credential no API can create and
+         prints the console steps. Re-run it to resume.
     2. state-backend provision
-         The Pulumi state backend, which every stack needs before it can act.
-    3. eval "$(credentials derive env)"
-         PULUMI_CONFIG_PASSPHRASE (derived, stored nowhere) and
+         The Pulumi state backend, which every stack needs before it can act,
+         and the first thing to escrow: it generates the CA and the backup
+         identities it is about to install and commits their ciphertexts.
+    3. credentials escrow generate pulumi/passphrase
+         The one escrowed label no other command mints. It writes the
+         workstation slot as well as the ciphertext, so mise.toml finds it.
+    4. eval "$(credentials escrow env)"
+         PULUMI_CONFIG_PASSPHRASE (recovered from escrow) and
          PULUMI_BACKEND_URL (from the bundle step 2 wrote).
-    4. credentials derived cloudflare zones
+    5. credentials derived cloudflare zones
          Mints the zone-scoped Cloudflare token from the seed and writes
          it into the dns stack's config, which is then committed. One
          §3 row per command; re-running one rotates it.
 
   on a workstation that develops without the kit
-    credentials derive passphrase
-         Caches the passphrase in its workstation slot, where mise.toml
-         reads it, so a local `pulumi preview` needs neither the kit nor
-         an eval. Copy the whole .credentials directory from a machine
-         that has one and this is done too, client bundle included.
+    Copy the .credentials directory from a machine that has one: the
+    passphrase slot and the client bundle come with it. On a machine that
+    does hold the kit, `credentials escrow recover pulumi/passphrase`
+    writes that slot, where mise.toml reads it on every pulumi run.
 
   day to day
     Nothing. No runtime credential is in the kit, so no operation outside
     bring-up, rotation and the yearly offline day opens it (§2.1).
+    `credentials escrow check` needs no kit at all.
 
   when one seed is lost
     credentials bootstrap --only <member>
-         Re-creates that row alone; the rest of the kit is untouched.
+         Re-creates that row alone; the rest of the kit is untouched. Not
+         the recovery key: every ciphertext under escrow/ opens with that
+         one and nothing else, so losing it is losing them.
 
   one-time repair
     credentials seed oci domain
@@ -74,19 +85,26 @@ _ORDER = """when to run what (docs/credentials.md §4):
          cannot retire what it supersedes, because the legacy delete call is
          refused. Borrows the account root, once.
 
-  rotation (§4.2)
+  rotating one credential (§4.2)
+    credentials escrow generate <label>
+         A new generation for that label alone, adopted by re-running what
+         consumes it. Nothing else moves.
+
+  rotating the kit (§4.2)
     credentials rotate --into <new kit>
-         Writes a *new* database. Keep the retired one until the last secret
-         derived from it has expired -- backups encrypted under the old
-         derivation seed cannot be re-encrypted retroactively (§2.2).
+         Writes a *new* database, and re-wraps every escrow ciphertext to
+         the successor recovery key. No production secret changes value, so
+         the retired file is destroyable once the run is verified.
 
   looking without changing
+    credentials escrow check      every expected label present, every
+                                  ciphertext an age file, generations dense
     credentials kdbx ls | show <entry>
-    credentials master ls        which account roots this machine holds, and
-                                 which layer of the chain each comes from
-    credentials kdbx remember    stores the kit's master password in the
-                                 desktop secret store, so a long run is not
-                                 guarded by a password typed into it
+    credentials master ls         which account roots this machine holds, and
+                                  which layer of the chain each comes from
+    credentials kdbx remember     stores the kit's master password in the
+                                  desktop secret store, so a long run is not
+                                  guarded by a password typed into it
 """
 
 
@@ -109,6 +127,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=f'the seed kit (default: ${PATH_ENV}, else {workstation.kit_path()})',
     )
+    _ = parser.add_argument(
+        '--escrow',
+        type=Path,
+        default=None,
+        help=f'the escrow registry (default: the {escrow.DIRECTORY}/ directory of this checkout)',
+    )
     families = parser.add_subparsers(dest='family', required=True, metavar='<family>')
 
     # The three things done to a kit (§4). Each walks §2's table in order and
@@ -117,25 +141,34 @@ def build_parser() -> argparse.ArgumentParser:
     boot = families.add_parser('bootstrap', help='fill a kit with every seed (§4.1); creates the kit if absent')
     _ = boot.add_argument('--only', default=None, metavar='<member>', help='create just this seed (repair, seed loss)')
 
-    der = families.add_parser('derive', help='the secrets computed from the derivation seed (§2.2)')
-    der_actions = der.add_subparsers(dest='action', required=True, metavar='<action>')
-    env = der_actions.add_parser('env', help='shell exports for a Pulumi run; use with eval')
+    # The escrow (§2.2): random secrets whose ciphertexts are committed, and
+    # the one recovery key that opens them. `generate` and the ciphertext are
+    # a single act, so no command here hands out a secret the registry does
+    # not carry.
+    esc = families.add_parser('escrow', help='the generated secrets and their committed ciphertexts (§2.2)')
+    esc_actions = esc.add_subparsers(dest='action', required=True, metavar='<action>')
+    _ = esc_actions.add_parser('init', help='create the recovery key: kit row plus escrow/RECIPIENTS')
+    generate = esc_actions.add_parser('generate', help="mint a label's next generation and escrow it")
+    _ = generate.add_argument('label', help=f'one of: {", ".join(sorted(escrow.register()))}')
+    adopt = esc_actions.add_parser('import', help="escrow a value that already exists as the label's next generation")
+    _ = adopt.add_argument('label')
+    _ = adopt.add_argument(
+        '--from-slot',
+        action='store_true',
+        help='read it from its workstation slot instead of standard input',
+    )
+    recover = esc_actions.add_parser('recover', help='open one escrowed secret with the kit')
+    _ = recover.add_argument('label')
+    _ = recover.add_argument('--generation', type=int, default=None, help='default: the newest')
+    _ = recover.add_argument('--stdout', action='store_true', help='print it even though it has a slot')
+    _ = esc_actions.add_parser('rewrap', help='re-encrypt every ciphertext to the recipients now on file')
+    _ = esc_actions.add_parser('check', help='what is missing or malformed; needs no kit')
+    env = esc_actions.add_parser('env', help='shell exports for a Pulumi run; use with eval')
     _ = env.add_argument(
         '--bundle-dir',
         type=Path,
         default=workstation.bundle_dir(),
         help='where `state-backend` wrote the client bundle',
-    )
-    # `env` is for a shell; this is for a file. A workstation that develops
-    # against the backend needs the passphrase on every `pulumi preview`, and
-    # the kit is not on every workstation (§2.1). The command writes the slot
-    # itself rather than being redirected into it, so the file is `0600` from
-    # the moment it exists instead of whatever the shell's umask says.
-    passphrase = der_actions.add_parser('passphrase', help='cache the passphrase in its workstation slot')
-    _ = passphrase.add_argument(
-        '--stdout',
-        action='store_true',
-        help='print it instead, for a pipe into another machine',
     )
 
     rot = families.add_parser('rotate', help='write a new kit in which every seed is replaced (§4.2)')
@@ -166,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         _ = actions.add_parser(
             'create',
             help='generate it (bring-up, once)'
-            if seed.member == 'derivation'
+            if seed.member == 'recovery'
             else 'mint it from the account root (bring-up, or seed loss)',
         )
         if seed.self_reproducing:
@@ -263,6 +296,73 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     return KdbxStore.from_env(args.kdbx)
 
 
+def _check(registry: escrow.Registry) -> int:
+    """`escrow check`, which is the one command that opens nothing.
+
+    Every problem is printed rather than the first one: a registry is checked
+    to learn what is wrong with it, and stopping at the first missing label
+    would turn one look into several.
+    """
+    problems = escrow.check(registry)
+    for problem in problems:
+        log.error('%s', problem)
+    if not problems:
+        log.info('escrow: %d label(s) present, every ciphertext an age file', len(escrow.register()))
+    return 1 if problems else 0
+
+
+def _imported(args: argparse.Namespace) -> str:
+    """The value `escrow import` is to escrow: a slot, or standard input.
+
+    Standard input rather than an argument so the value is never in an argv
+    another process can read; the slot is there because the passphrase is
+    already sitting in one on the workstation that is doing the migration.
+    """
+    if args.from_slot:
+        slot = escrow.SLOTS.get(args.label)
+        if slot is None:
+            raise EscrowError(f'{args.label} has no workstation slot; pipe the value in instead')
+        return slot().read_text().strip()
+    if sys.stdin.isatty():
+        log.info('reading the value for %s from standard input; end it with ctrl-d', args.label)
+    return sys.stdin.read().strip()
+
+
+def _pushed(value: str, *, label: str) -> str:
+    """Put a freshly generated secret in the workstation slot its row names.
+
+    Only the passphrase has one; the rest reach their consumers through a
+    provisioning run or a seal. A label with no slot is not an error — it is
+    the ordinary case.
+    """
+    slot = escrow.SLOTS.get(label)
+    if slot is not None:
+        _ = workstation.write(slot(), value)
+    return value
+
+
+def _recovered(args: argparse.Namespace, vault: escrow.Vault) -> int:
+    """Put one recovered secret where the operator asked for it.
+
+    A label with a workstation slot goes there, so the ordinary path writes a
+    `0600` file the command owns rather than something a shell redirect
+    created with whatever umask was in force. Everything else is printed, and
+    printing is refused when stdout is the terminal: a secret in the
+    scrollback is a secret in the next screen-share.
+    """
+    value = vault.recover(args.label, args.generation)
+    slot = escrow.SLOTS.get(args.label)
+    if slot is not None and not args.stdout:
+        _ = workstation.write(slot(), value)
+        log.info('mise.toml reads it from there on every pulumi run')
+        return 0
+    if sys.stdout.isatty():
+        log.error('this prints a secret; pipe it somewhere')
+        return 1
+    print(value)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     args = build_parser().parse_args(argv)
@@ -270,6 +370,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.family == 'master':
             return _master(args)
+        registry = escrow.Registry.open(args.escrow)
+        # Ordered before the kit deliberately: the point of `check` is that a
+        # clone with no offline database can still say whether the registry is
+        # whole.
+        if (args.family, getattr(args, 'action', None)) == ('escrow', 'check'):
+            return _check(registry)
         store = _kit(args)
 
         # `bootstrap` and `rotate` have no <action> level, so the attribute
@@ -289,38 +395,49 @@ def main(argv: list[str] | None = None) -> int:
                 store.remember(password)
             case ('kdbx', _, 'forget'):
                 store.forget()
-            case ('derive', _, 'env'):
+            case ('escrow', _, 'init'):
+                identity = escrow.init(store, registry)
+                log.info('the recovery key is in the kit; commit %s', registry.recipients_file)
+                log.info('it encrypts to %s', identity.public)
+                for label in escrow.missing(registry):
+                    log.warning('nothing escrowed for %s yet: credentials escrow generate %s', label, label)
+            case ('escrow', _, 'generate'):
+                # generate -> escrow -> push (credentials.md §4): the value
+                # reaches the slot §3 names for it in the same run, and the
+                # push lives here rather than in the registry so that opening
+                # an escrow never writes to a checkout.
+                _ = _pushed(escrow.generate(registry, args.label), label=args.label)
+            case ('escrow', _, 'import'):
+                _ = escrow.adopt(registry, args.label, _imported(args))
+            case ('escrow', _, 'recover'):
+                return _recovered(args, escrow.Vault.open(store, registry))
+            case ('escrow', _, 'rewrap'):
+                _ = escrow.rewrap(registry, identities=[store.get(escrow.RECOVERY_ENTRY)])
+            case ('escrow', _, 'env'):
                 # Written to stdout for `eval`, and refused when stdout is the
                 # terminal: a passphrase in the scrollback is a passphrase in
                 # the next screen-share.
                 if sys.stdout.isatty():
-                    log.error('this prints a passphrase; pipe it: eval "$(credentials derive env)"')
+                    log.error('this prints a passphrase; pipe it: eval "$(credentials escrow env)"')
                     return 1
-                for name, value in lifecycle.environment(store, args.bundle_dir).items():
+                for name, value in lifecycle.environment(store, args.bundle_dir, registry).items():
                     print(f'export {name}={shlex.quote(value)}')
-            case ('derive', _, 'passphrase'):
-                passphrase = seeds.pulumi_passphrase(seeds.load_seed(store))
-                if not args.stdout:
-                    _ = workstation.write(workstation.passphrase_path(), passphrase)
-                    log.info('mise.toml reads it from there on every pulumi run')
-                elif sys.stdout.isatty():
-                    log.error('--stdout prints a passphrase; pipe it, or drop the flag to write the slot')
-                    return 1
-                else:
-                    print(passphrase)
             case ('bootstrap', _, _):
-                created = lifecycle.bootstrap(store, prompt=input, only=args.only)
+                created = lifecycle.bootstrap(store, prompt=input, only=args.only, registry=registry)
                 log.info('created %s', ', '.join(created) if created else 'nothing; the kit was already complete')
             case ('rotate', _, _):
                 successor = KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: '))
-                rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only)
+                rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only, registry=registry)
                 log.info('rotated %s into %s', ', '.join(rotated), args.into)
-                log.warning('keep %s until the last secret derived from it has expired (§2.2)', store.path)
+                if 'recovery' in rotated:
+                    log.warning('commit %s: every ciphertext now opens with the successor key alone', registry.root)
             # One row at a time, through the same dispatch `bootstrap` walks:
             # a single-row repair and a whole-kit fill must not be able to
             # write a row two different ways.
             case ('seed', member, 'create') if member in entries.SEEDS:
-                lifecycle.create_seed(entries.SEEDS[member], kit=store, prompt=input, entry=args.entry)
+                lifecycle.create_seed(
+                    entries.SEEDS[member], kit=store, prompt=input, entry=args.entry, registry=registry
+                )
             case ('seed', 'oci', 'rotate'):
                 _ = oci_iam.rotate_seed(store, seed_entry=args.entry)
             # The one-time repair for a kit written before the OCI row
@@ -332,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
             # §3's rows. The stack's configuration is opened with the same two
-            # variables a `pulumi` run needs, derived from the kit that is
+            # variables a `pulumi` run needs, recovered with the kit that is
             # already open rather than expected in the environment: one command
             # is one credential delivered, not a shell that has to be prepared
             # first.
@@ -347,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.family}')
-    except (KdbxError, CredentialRejected, SlotRefused) as exc:
+    except (KdbxError, CredentialRejected, SlotRefused, EscrowError, AgeError) as exc:
         log.error('%s', exc)
         return 1
     return 0
