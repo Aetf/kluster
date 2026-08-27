@@ -88,6 +88,9 @@ def test_read_reports_a_hand_removed_rewrite_as_gone() -> None:
     result = _provider().read('any', dict(PROPS))
 
     assert result.id is None
+    # The provider host writes its own key into the outs and mutates the
+    # dict, so gone must come back as a fresh empty dict, never None.
+    assert result.outs == {}
 
 
 def test_read_keeps_a_rewrite_that_is_still_there() -> None:
