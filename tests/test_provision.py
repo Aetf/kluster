@@ -1,8 +1,10 @@
 """Properties of the provisioner that are not about talking to OCI.
 
-The one asserted here is a boundary: `provision` is full of `ensure_*`
+Two are asserted here. One is a boundary: `provision` is full of `ensure_*`
 functions that create what they cannot find, and exactly one lookup must not
-do that -- the diagnosis path.
+do that -- the diagnosis path. The other is where the box's own credential
+comes from: a workstation slot a `credentials` command mints into
+(credentials.md §3), the path it superseded, or an error naming the command.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from typing import Any, cast
 
 import pytest
 
-from kluster.scripts.credentials import escrow
+from kluster.scripts.credentials import escrow, oci_iam, oci_slot, workstation
 from kluster.scripts.state_backend import provision
 
 
@@ -65,6 +67,78 @@ def test_a_terminated_address_does_not_count() -> None:
 
     with pytest.raises(RuntimeError):
         _ = provision.reserved_address(client)  # pyright: ignore[reportArgumentType]
+
+
+# -- where the appliance's own credential comes from -------------------------
+
+COMPARTMENT = 'ocid1.compartment.oc1..appliance'
+APPLIANCE_USER = 'ocid1.user.oc1..kluster-state-backend'
+APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..estate'
+
+
+@pytest.fixture
+def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`.credentials/` outside this checkout, with no ambient override in force."""
+    monkeypatch.delenv('OCI_CLI_CONFIG_FILE', raising=False)
+    monkeypatch.setattr(oci_slot, 'LEGACY_CONFIG_FILE', tmp_path / 'legacy' / 'config')
+    directory = tmp_path / '.credentials'
+    monkeypatch.setattr(workstation, 'directory', lambda: directory)
+    return directory
+
+
+def _mint_into(where: str) -> Path:
+    """A slot filled the way `credentials derived oci state-backend` fills it."""
+    private_pem, _ = oci_iam.generate_key()
+    return oci_slot.write(
+        where,
+        tenancy=APPLIANCE_TENANCY,
+        user=APPLIANCE_USER,
+        fingerprint=oci_iam.fingerprint(private_pem),
+        private_key=private_pem,
+        region='us-phoenix-1',
+        compartment_id=COMPARTMENT,
+    )
+
+
+def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
+    _ = _mint_into(oci_slot.STATE_BACKEND)
+
+    client = provision.Oci.load()
+
+    # One file is the whole of what a provisioning run has to be given: the
+    # signing configuration and the compartment it acts in.
+    assert client.compartment_id == COMPARTMENT
+    assert (client.config['user'], client.config['tenancy']) == (APPLIANCE_USER, APPLIANCE_TENANCY)
+
+
+def test_an_explicit_compartment_wins_over_the_recorded_one(slots: Path) -> None:
+    _ = _mint_into(oci_slot.STATE_BACKEND)
+
+    client = provision.Oci.load('ocid1.compartment.oc1..elsewhere')
+
+    assert client.compartment_id == 'ocid1.compartment.oc1..elsewhere'
+
+
+def test_the_superseded_configuration_is_read_once_and_loudly(
+    slots: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A workstation that predates the mint keeps provisioning: what is at the
+    # old path is a complete answer, and the warning names its replacement.
+    superseded = _mint_into('superseded')
+    monkeypatch.setattr(oci_slot, 'LEGACY_CONFIG_FILE', superseded)
+
+    with caplog.at_level(logging.WARNING):
+        client = provision.Oci.load()
+
+    assert client.compartment_id == COMPARTMENT
+    assert 'credentials derived oci state-backend' in caplog.text
+
+
+def test_a_machine_with_no_credential_is_told_what_mints_one(slots: Path) -> None:
+    # The SDK's own answer is a missing file; this one names the command that
+    # creates it, which is the whole difference between a stop and a step.
+    with pytest.raises(ValueError, match='credentials derived oci state-backend'):
+        _ = provision.Oci.load()
 
 
 class _Recorder:
