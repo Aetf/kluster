@@ -15,10 +15,32 @@ import pytest_asyncio
 
 VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
 
+LB_ADDRESS = '203.0.113.10'
+LB_ADDRESS_V6 = '2001:db8::10'
+LB_ADDRESS_PRIVATE = '10.0.0.10'
+
+#: What a dual-stack balancer reads back as: a public address of each family
+#: and the private one it holds in its own subnet. The private entry is listed
+#: first so a property that filtered on nothing but the family would pick it.
+LB_IP_ADDRESSES = [
+    {'ipAddress': LB_ADDRESS_PRIVATE, 'isPublic': False, 'ipVersion': 'IPV4'},
+    {'ipAddress': LB_ADDRESS, 'isPublic': True, 'ipVersion': 'IPV4'},
+    {'ipAddress': LB_ADDRESS_V6, 'isPublic': True, 'ipVersion': 'IPV6'},
+]
+
+
+#: A component name whose balancer reads back with the IPv4 alone, standing in
+#: for a provider that has not handed out the second family.
+SINGLE_STACK = 'lb-v4-only'
+
 
 class Mocks(pulumi.runtime.Mocks):
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        return args.name + '_id', dict(cast('dict[str, Any]', args.inputs))
+        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
+        if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
+            v4_only = args.name.startswith(SINGLE_STACK)
+            outputs['ipAddresses'] = LB_IP_ADDRESSES[:2] if v4_only else LB_IP_ADDRESSES
+        return args.name + '_id', outputs
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
         if args.token == 'oci:Core/getVnicAttachments:getVnicAttachments':
@@ -120,3 +142,32 @@ async def test_management_ports_preserve_the_client_address() -> None:
     # Every node backs every management port.
     nodes = build()
     assert len(nodes.backends) == len(MANAGEMENT_PORTS) * 3
+
+
+@pytest.mark.asyncio
+async def test_the_balancer_publishes_a_public_address_of_each_family() -> None:
+    """Both halves of the cluster anchor, and neither of them the private one.
+
+    The balancer is declared dual-stack, so the `dns` stack's anchor takes an
+    A and an AAAA from here; the address list it reads them out of also holds
+    the balancer's private address, which is not either of them.
+    """
+    from kluster.physical.nodes import NodeLoadBalancer
+
+    balancer = NodeLoadBalancer('lb', compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
+
+    assert await balancer.load_balancer.nlb_ip_version.future() == 'IPV4_AND_IPV6'
+    assert await balancer.address.future() == LB_ADDRESS
+    assert await balancer.address_v6.future() == LB_ADDRESS_V6
+
+
+@pytest.mark.asyncio
+async def test_a_missing_family_is_refused_rather_than_returned_empty() -> None:
+    """An address that never arrived must not become an empty DNS record."""
+    from kluster.physical.nodes import NodeLoadBalancer
+
+    balancer = NodeLoadBalancer(SINGLE_STACK, compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
+
+    assert await balancer.address.future() == LB_ADDRESS
+    with pytest.raises(ValueError, match='no public IPv6 address'):
+        _ = await balancer.address_v6.future()

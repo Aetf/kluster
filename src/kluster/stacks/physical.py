@@ -81,7 +81,12 @@ async def main() -> None:
     # conventions — those they share as code. The rest of the census
     # (kubeconfig, talosconfig, bucket names and endpoints) is exported by the
     # domains below as they come to exist.
+    #
+    # Both families of the balancer are published, because the cluster anchor
+    # in `dns` carries an A and an AAAA; the VIP below is IPv4 only, and that
+    # is a property of the address rather than an omission here.
     pulumi.export('cluster_endpoint', load_balancer.address)
+    pulumi.export('cluster_endpoint_v6', load_balancer.address_v6)
     pulumi.export('vip1', nodes.reserved_ip.ip_address)
     pulumi.export('vip1_private', nodes.secondary_ip.ip_address)
     pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})

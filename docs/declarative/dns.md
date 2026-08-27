@@ -112,9 +112,10 @@ Cloudflare set; jiahui.id takes none.
     `physical` has not published yet becomes an unresolved record input
     rather than an error, and `dns` previews the same records before
     and after `physical` is applied. Applying is the step that needs
-    them real — `physical` must export `cluster_endpoint_v6` (the one
-    of the three outputs it does not export yet) before `dns` can be
-    brought up, which is the same gate as the NLB's dual-stack
+    them real: all three names are exported by `physical`, so what
+    stands between the anchors and a value is `physical`'s own apply.
+    Publishing the AAAA is not the same as it working — that the
+    balancer answers on the address is the NLB's dual-stack
     verification (physical.md §6).
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing

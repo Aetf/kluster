@@ -26,6 +26,7 @@ from kluster.physical import homelab
 from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
+LB_ADDRESS_V6 = '2001:db8::10'
 VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
 ZT_NETWORK_ID = '0123456789abcdef'
 
@@ -65,7 +66,10 @@ class Mocks(pulumi.runtime.Mocks):
         if args.typ == 'oci:Core/vcn:Vcn':
             outputs['ipv6cidrBlocks'] = ['2603:c020:8000:1200::/56']
         if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
-            outputs['ipAddresses'] = [{'ipAddress': LB_ADDRESS, 'isPublic': True}]
+            outputs['ipAddresses'] = [
+                {'ipAddress': LB_ADDRESS, 'isPublic': True, 'ipVersion': 'IPV4'},
+                {'ipAddress': LB_ADDRESS_V6, 'isPublic': True, 'ipVersion': 'IPV6'},
+            ]
         if args.typ == 'talos:machine/secrets:Secrets':
             outputs['machineSecrets'] = {'cluster': {'id': 'test'}}
         if args.typ == 'zerotier:index/identity:Identity':
@@ -118,6 +122,42 @@ async def test_the_stack_declares_and_then_names_its_first_gap() -> None:
     # refusing to pretend the rest of the design exists.
     with pytest.raises(NotImplementedError, match=r'physical §1/§5 storage'):
         await physical.main()
+
+
+@pytest.mark.asyncio
+async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three outputs `dns` builds its anchors from, by the names it uses.
+
+    An output name is not an implementation detail here: `dns` writes it into
+    a record, and a record whose content changed name after an apply is a
+    replacement rather than an update. Asserting against the `dns` module's
+    own constants is what keeps the two halves of the contract from drifting
+    apart silently.
+    """
+    from kluster.stacks import dns
+
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    # The exports are declared above the stack's first unwritten domain, so
+    # the run that reaches them is the same run that stops there.
+    with pytest.raises(NotImplementedError):
+        await physical.main()
+
+    for output in (dns.OUTPUT_CLUSTER_V4, dns.OUTPUT_CLUSTER_V6, dns.OUTPUT_VIP1_V4):
+        assert output in exported, output
+
+    addresses = (
+        cast('pulumi.Output[str]', exported[dns.OUTPUT_CLUSTER_V4]),
+        cast('pulumi.Output[str]', exported[dns.OUTPUT_CLUSTER_V6]),
+    )
+    assert [await address.future() for address in addresses] == [LB_ADDRESS, LB_ADDRESS_V6]
 
 
 @pytest.mark.asyncio
