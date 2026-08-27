@@ -1,10 +1,14 @@
 """What a client bundle has to be for `pulumi login` to work at all.
 
-The bundle is three files and a connection string, and the string is the part
-that used to be wrong: it named `$KLUSTER_PG_CA` and friends, which nothing on
-the path expands -- not libpq, not the driver Pulumi's Postgres backend uses.
-The placeholder reached `open()` verbatim and login failed on a missing file,
-so logging in to the backend was not possible from the bundle at all.
+The bundle is three files and a connection string, and the split between them
+is the property these tests hold. The string says only what is true of the
+backend everywhere -- who connects, to which address, under which TLS mode --
+because the copy recorded beside the bundle outlives the directory it was
+written in: a checkout that is moved, or a bundle that is copied to a second
+workstation, must not be carrying a path that no longer exists. Where the
+three files are is the environment's job (`PGSSL*`), and nothing expands a
+placeholder written into the string itself -- not libpq, not the driver
+Pulumi's Postgres backend uses.
 """
 
 from __future__ import annotations
@@ -27,15 +31,28 @@ def _query(url: str) -> dict[str, str]:
     return {key: value[0] for key, value in parse_qs(urlsplit(url).query).items()}
 
 
-def test_the_url_names_files_that_exist(authority: pki.Authority, tmp_path: Path) -> None:
+def test_the_url_carries_nothing_about_the_machine_it_was_written_on(authority: pki.Authority, tmp_path: Path) -> None:
     bundle = config.client_bundle(authority, name='operator', address='192.0.2.10')
     config.write_client_bundle(bundle, tmp_path)
 
     url = (tmp_path / config.URL_FILE).read_text().strip()
     assert '$' not in url
-    query = _query(url)
-    for parameter in ('sslrootcert', 'sslcert', 'sslkey'):
-        assert Path(query[parameter]).is_file(), parameter
+    assert str(tmp_path) not in url
+    assert set(_query(url)) == {'sslmode'}
+
+
+def test_the_environment_names_the_three_files_and_they_are_there(authority: pki.Authority, tmp_path: Path) -> None:
+    # The other half of the connection: the paths libpq reads from the
+    # environment, which is the channel that survives a placeholder being
+    # expanded by nobody.
+    config.write_client_bundle(config.client_bundle(authority, name='operator', address='192.0.2.10'), tmp_path)
+
+    variables = config.ssl_env(tmp_path)
+
+    assert set(variables) == {'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY'}
+    for name, value in variables.items():
+        assert Path(value).is_absolute(), name
+        assert Path(value).is_file(), name
 
 
 def test_the_url_pins_the_server_by_address(authority: pki.Authority, tmp_path: Path) -> None:

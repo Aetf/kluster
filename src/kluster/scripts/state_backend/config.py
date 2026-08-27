@@ -35,11 +35,19 @@ TEMPLATE = 'butane.yaml.j2'
 DUMP_SCRIPT = 'state-dump.py'
 OPERATOR_KEYS = 'operator-keys.txt'
 
-#: The bundle's file names, shared by the writer and the URL that names them.
+#: The bundle's file names, shared by the writer and the environment that
+#: names them.
 CA_FILE = 'ca.crt'
 CERT_FILE = 'client.crt'
 KEY_FILE = 'client.key'
 URL_FILE = 'backend-url'
+
+#: The libpq variables that carry a bundle's three files. Standard names, read
+#: by libpq itself and by the driver Pulumi's Postgres backend uses, which is
+#: what lets the connection string stay free of paths.
+CA_ENV = 'PGSSLROOTCERT'
+CERT_ENV = 'PGSSLCERT'
+KEY_ENV = 'PGSSLKEY'
 
 
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
@@ -117,23 +125,42 @@ class ClientBundle:
     cert: bytes
     key: bytes
 
-    def url(self, directory: Path) -> str:
-        """The connection string, pointing at this bundle on disk.
+    def url(self) -> str:
+        """The connection string: everything about the backend, nothing about this machine.
 
-        The paths are written out rather than left as `$KLUSTER_PG_CA`-style
-        references: libpq does not expand variables inside a connection
-        string, and neither does the driver Pulumi's Postgres backend uses --
-        a placeholder reaches `open()` verbatim and fails as a missing file.
+        The three certificate files travel beside it as `PGSSLROOTCERT`,
+        `PGSSLCERT` and `PGSSLKEY` (`ssl_env`) rather than inside it. libpq
+        expands no variable inside a connection string, and neither does the
+        driver Pulumi's Postgres backend uses — but both read those variables,
+        so the channel that carries a path is the environment. A string with
+        the paths in it would be a string that only one checkout on one
+        machine can use, and moving that checkout would silently invalidate
+        the copy recorded beside the bundle.
 
         `verify-full` against a literal IP: the state backend's hot path must
         not depend on DNS, which is itself something this backend deploys.
         """
-        directory = directory.resolve()
-        return (
-            f'postgres://{self.name}@{self.address}:{settings.PORT}/{settings.DATABASE}'
-            f'?sslmode=verify-full&sslrootcert={directory / CA_FILE}'
-            f'&sslcert={directory / CERT_FILE}&sslkey={directory / KEY_FILE}'
-        )
+        return f'postgres://{self.name}@{self.address}:{settings.PORT}/{settings.DATABASE}?sslmode=verify-full'
+
+
+def ssl_env(directory: Path) -> dict[str, str]:
+    """The libpq variables naming the bundle in `directory`.
+
+    The other half of `ClientBundle.url`, and the half that varies by machine:
+    a client bundle is reachable from anywhere its files are, so where they
+    are is said once, in the environment, by whoever knows — `mise.toml` for a
+    workstation slot, a workflow step for the `ci` bundle it materializes, and
+    this function for the commands that drive `pg_dump`, `pg_restore` and
+    `pulumi` themselves.
+
+    Absolute, because the tools are run with a working directory of their own.
+    """
+    directory = directory.resolve()
+    return {
+        CA_ENV: str(directory / CA_FILE),
+        CERT_ENV: str(directory / CERT_FILE),
+        KEY_ENV: str(directory / KEY_FILE),
+    }
 
 
 def operator_keys() -> list[str]:
@@ -281,7 +308,7 @@ def drift(intended: dict[str, str], actual: dict[str, str]) -> list[str]:
 
 
 def client_bundle(authority: pki.Authority, *, name: str, address: str) -> ClientBundle:
-    """The `ci` or `operator` credential. The URL comes from where it lands.
+    """The `ci` or `operator` credential, and the string for reaching the box with it.
 
     Every call issues a fresh key: a client certificate is re-issuable from
     the CA and escrowed nowhere, so writing a bundle is minting one rather
@@ -304,6 +331,12 @@ def write_client_bundle(bundle: ClientBundle, directory: Path) -> None:
     libpq refuses a client key that anyone but its owner can read, so that one
     is `0600`; the directory is `0700` for the same reason one level up, which
     is what `workstation.secret_dir` gives every slot.
+
+    The URL lands here too, because a bundle is only usable with the string
+    that names the backend it authenticates against — and because
+    `mise.toml` reads this file to put `PULUMI_BACKEND_URL` in the
+    environment. It says nothing about this directory: what does is the three
+    `PGSSL*` variables the same file derives from where the bundle was found.
     """
     _ = workstation.secret_dir(directory)
     _ = (directory / CA_FILE).write_bytes(bundle.ca_cert)
@@ -311,5 +344,5 @@ def write_client_bundle(bundle: ClientBundle, directory: Path) -> None:
     key_path = directory / KEY_FILE
     _ = key_path.write_bytes(bundle.key)
     key_path.chmod(0o600)
-    _ = (directory / URL_FILE).write_text(bundle.url(directory) + '\n')
+    _ = (directory / URL_FILE).write_text(bundle.url() + '\n')
     log.info('wrote client bundle to %s', directory)

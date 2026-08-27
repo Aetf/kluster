@@ -251,7 +251,7 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
     destination = (output if output is not None else Path(state.dump_name())).resolve()
     if destination.exists():
         raise StateError(f'{destination} already exists; a dump never overwrites one')
-    url = state.backend_url(bundle_dir)
+    target = state.connection(bundle_dir)
 
     log.info('[1/4] opening the escrow with the kit, for the recipients the appliance encrypts its dumps to')
     recipients = config.age_recipients(escrow.Vault.open(store, registry))
@@ -262,7 +262,7 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
     with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
         archive = Path(tmp) / 'state.dump'
         log.info('[2/4] dumping the live state over the client bundle in %s', bundle_dir)
-        state.pg_dump(url, archive)
+        state.pg_dump(target, archive)
         log.info('[3/4] verifying the archive before calling it a dump')
         _ = state.verify_dump(archive)
         log.info('[4/4] encrypting the dump')
@@ -276,7 +276,7 @@ def _dump(store: KdbxStore, *, registry: escrow.Registry, bundle_dir: Path, outp
     return 0
 
 
-def _served(url: str) -> list[str]:
+def _served(target: state.Connection) -> list[str]:
     """The stacks the backend serves, or nothing if it cannot answer at all.
 
     Used before a restore, where a backend that refuses the question is the
@@ -285,7 +285,7 @@ def _served(url: str) -> list[str]:
     positive answer, and the caller's guard only ever fires on one.
     """
     try:
-        return state.stacks(url)
+        return state.stacks(target)
     except StateError as exc:
         log.info('the backend cannot list stacks yet (%s); a box provisioned minutes ago cannot either', exc)
         return []
@@ -307,15 +307,17 @@ def _restore(
     it touches the database, restore in one transaction, and only then
     report — by asking `pulumi` what the backend now serves.
     """
-    url = state.backend_url(bundle_dir)
+    target = state.connection(bundle_dir)
     log.info('[1/5] asking the target backend what it already holds')
-    occupied = _served(url)
+    occupied = _served(target)
     if occupied and not force:
-        log.error('%s already serves %d stack(s): %s', state.endpoint(url), len(occupied), ', '.join(occupied))
+        log.error('%s already serves %d stack(s): %s', state.endpoint(target.url), len(occupied), ', '.join(occupied))
         log.error('restoring over live state is `--force`; a rebuild restores into a box that has none')
         return 1
     if occupied:
-        log.warning('--force: restoring over the %d stack(s) %s already serves', len(occupied), state.endpoint(url))
+        log.warning(
+            '--force: restoring over the %d stack(s) %s already serves', len(occupied), state.endpoint(target.url)
+        )
 
     with tempfile.TemporaryDirectory(prefix=f'{settings.NAME}-') as tmp:
         archive = source
@@ -335,12 +337,12 @@ def _restore(
         log.info('[3/5] verifying the archive before it touches the database')
         _ = state.verify_dump(archive)
         log.info('[4/5] restoring over the client bundle in %s', bundle_dir)
-        state.pg_restore(url, archive)
+        state.pg_restore(target, archive)
 
     log.info('[5/5] verifying: a restore is done when pulumi can log in to what it restored')
-    restored = state.stacks(url)
+    restored = state.stacks(target)
     if not restored:
-        log.error('%s serves no stacks after the restore, so the state did not arrive', state.endpoint(url))
+        log.error('%s serves no stacks after the restore, so the state did not arrive', state.endpoint(target.url))
         return 1
     log.info('the restored backend serves %d stack(s): %s', len(restored), ', '.join(restored))
     return 0

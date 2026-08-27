@@ -153,11 +153,26 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     Environment secret; the `operator` key is a **workstation slot**
     (credentials.md §1 rule 6) — `.credentials/state-backend/` in the
     checkout, written by `state-backend provision` and by `state-backend
-    bundle operator`, alongside the connection string that names it.
-    libpq refuses a client key anything but its owner can read, so the
-    key is `0600` and the directory `0700`; and libpq expands no
-    variables, so the string names its three files by absolute path
-    rather than through a placeholder.
+    bundle operator`, alongside the connection string for the backend it
+    authenticates against. libpq refuses a client key anything but its
+    owner can read, so the key is `0600` and the directory `0700`.
+-   **The connection string names no file; the environment does.**
+    `postgres://<role>@<ip>:5432/pulumi_state?sslmode=verify-full` is
+    true on every machine, and the three files travel beside it as the
+    standard libpq variables `PGSSLROOTCERT`, `PGSSLCERT` and
+    `PGSSLKEY` — the one channel both libpq and the driver behind
+    Pulumi's Postgres backend read, and the reason no placeholder is
+    ever expanded inside the string itself. Paths in the string would
+    make the recorded copy true of one directory on one machine, so
+    moving a checkout would invalidate it silently. `mise.toml` sets
+    all four variables from the same slot, and a CI job materializes
+    the `ci` bundle into `.credentials/state-backend/` of its checkout
+    so that it resolves them the same way rather than through a
+    workflow environment of its own. A slot written before the split
+    still works as it is: a parameter inside a connection string
+    overrides the variable of the same meaning, so such a URL names the
+    bundle it was written beside, and `state-backend bundle operator`
+    rewrites it into the portable form.
 -   **The three leaf keys are random at issuance and escrowed
     nowhere.** They are re-issuable from the CA at any time, so a
     stored copy would be an exposure that buys nothing back: writing a
@@ -342,7 +357,10 @@ Either form of file is accepted — an encrypted dump or a bare archive
 — and the identity that opens an encrypted one comes from the escrow
 via the kit, or from `--identity-file` for a workflow that was handed a
 key and has no kit at all (§7.3). Both connect over the `operator`
-client bundle (§3), which is the same connection string `pulumi` uses.
+client bundle (§3), which is the same connection string `pulumi` uses,
+and both hand `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY` to the tool they
+run — so a `pg_dump` that is really a wrapper around a container has to
+forward those variables and mount the bundle at the paths they name.
 
 Each **verifies rather than reports**, because the moment either is run
 is the moment nobody can afford to find out later:

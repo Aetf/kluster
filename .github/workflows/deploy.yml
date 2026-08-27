@@ -48,11 +48,16 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - uses: ./.github/actions/state-backend
+        with:
+          url: ${{ secrets.PULUMI_BACKEND_URL }}
+          ca: ${{ secrets.PULUMI_BACKEND_CA }}
+          certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
+          key: ${{ secrets.PULUMI_BACKEND_KEY }}
       - name: Plan
         id: plan
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: |
           if mise x -- pulumi preview --stack physical --diff --expect-no-changes; then
             echo 'diff=false' >> "$GITHUB_OUTPUT"
@@ -79,10 +84,15 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - uses: ./.github/actions/state-backend
+        with:
+          url: ${{ secrets.PULUMI_BACKEND_URL }}
+          ca: ${{ secrets.PULUMI_BACKEND_CA }}
+          certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
+          key: ${{ secrets.PULUMI_BACKEND_KEY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi up --stack physical --yes --diff
 
   up-dns:
@@ -108,10 +118,15 @@ jobs:
         with:
           network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
           identity: ${{ secrets.ZEROTIER_IDENTITY }}
+      - uses: ./.github/actions/state-backend
+        with:
+          url: ${{ secrets.PULUMI_BACKEND_URL }}
+          ca: ${{ secrets.PULUMI_BACKEND_CA }}
+          certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
+          key: ${{ secrets.PULUMI_BACKEND_KEY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi up --stack dns --yes --diff
 
   up-k8s-base:
@@ -125,10 +140,15 @@ jobs:
         with:
           experimental: true
       - run: mise x uv -- uv sync --locked
+      - uses: ./.github/actions/state-backend
+        with:
+          url: ${{ secrets.PULUMI_BACKEND_URL }}
+          ca: ${{ secrets.PULUMI_BACKEND_CA }}
+          certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
+          key: ${{ secrets.PULUMI_BACKEND_KEY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi up --stack k8s-base --yes --diff
 
   up-apps:
@@ -142,10 +162,15 @@ jobs:
         with:
           experimental: true
       - run: mise x uv -- uv sync --locked
+      - uses: ./.github/actions/state-backend
+        with:
+          url: ${{ secrets.PULUMI_BACKEND_URL }}
+          ca: ${{ secrets.PULUMI_BACKEND_CA }}
+          certificate: ${{ secrets.PULUMI_BACKEND_CERT }}
+          key: ${{ secrets.PULUMI_BACKEND_KEY }}
       - name: Up
         env:
           PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_CONFIG_PASSPHRASE }}
-          PULUMI_BACKEND_URL: ${{ secrets.PULUMI_BACKEND_URL }}
         run: mise x -- pulumi up --stack apps --yes --diff
 
   notify-failure:
