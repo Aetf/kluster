@@ -240,7 +240,10 @@ there is nothing for it to edit.)
         prove nothing about which key an object carries): any object
         in retention decrypts with the current *or* previous key,
         and 30 days after a rotation the current key alone covers
-        the entire retention window. The **drill key**
+        the entire retention window. Before the first rotation there
+        is no previous key and the window is generation 1 alone —
+        naming a generation 0 would escrow a key for a generation
+        that never existed. The **drill key**
         (operations.md §4, credentials.md) exists so the rebuild
         drill runs unattended; it adds no new *class* of exposure —
         the kluster CI's client cert already reads the live

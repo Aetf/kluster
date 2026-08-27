@@ -288,14 +288,47 @@ def test_missing_lists_what_a_bring_up_still_owes(vault: escrow.Vault) -> None:
     assert escrow.PASSPHRASE not in escrow.missing(vault.registry)
 
 
+def test_a_retired_backup_generation_is_not_a_complaint(vault: escrow.Vault) -> None:
+    # A generation that has fallen out of the window keeps its ciphertext
+    # until the last dump under it ages out (state-backend.md §5), so `check`
+    # must not call it an unregistered label the day the pin moves past it.
+    _ = _filled(vault.registry)
+    retired = vault.registry.path(f'{escrow.BACKUP}/99', escrow.FIRST)
+    retired.parent.mkdir(parents=True)
+    _ = retired.write_text(age.encrypt(age.generate().secret, vault.registry.recipients()))
+
+    assert escrow.check(vault.registry) == []
+
+
+def test_the_first_generation_has_no_predecessor(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The `[N, N-1]` window only starts at the second generation. Naming
+    # `backup/age/0` would have a bring-up mint a key for a generation that
+    # never existed, encrypt every dump to it, and leave `check` demanding
+    # its ciphertext forever.
+    from kluster.scripts.state_backend import settings
+
+    monkeypatch.setattr(settings, 'AGE_GENERATION', escrow.FIRST)
+
+    assert escrow.backup_labels() == (f'{escrow.BACKUP}/1',)
+    assert f'{escrow.BACKUP}/0' not in escrow.register()
+
+
+def test_a_rotated_pin_names_the_generation_before_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    # From the second generation on, both are recipients: any object in
+    # retention opens with the current key or the previous one.
+    from kluster.scripts.state_backend import settings
+
+    monkeypatch.setattr(settings, 'AGE_GENERATION', 3)
+
+    assert escrow.backup_labels() == (f'{escrow.BACKUP}/3', f'{escrow.BACKUP}/2')
+    assert set(escrow.backup_labels()) <= set(escrow.register())
+
+
 def test_the_backup_labels_follow_the_appliance_pin() -> None:
     # The Butane file names exactly these recipients, so the register and the
     # box cannot disagree about which generations exist.
     from kluster.scripts.state_backend import settings
 
-    assert escrow.backup_labels() == (
-        f'{escrow.BACKUP}/{settings.AGE_GENERATION}',
-        f'{escrow.BACKUP}/{settings.AGE_GENERATION - 1}',
-    )
+    assert escrow.backup_labels()[0] == f'{escrow.BACKUP}/{settings.AGE_GENERATION}'
     for label in escrow.backup_labels():
         assert label in escrow.register()
