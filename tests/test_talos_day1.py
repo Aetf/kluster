@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from ipaddress import IPv4Interface
 from typing import Any, cast
 
 import pulumi
@@ -315,6 +316,29 @@ async def test_the_second_address_is_applied_and_never_booted_with(fake: Fake) -
     day1 = build(cluster=cluster)
     assert interfaces(await patches_of(day1, 'cp1'))[0]['addresses'] == [f'{SECONDARY}/32']
     assert not interfaces(await patches_of(cluster, 'cp1'))
+
+
+@pytest.mark.asyncio
+async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake: Fake) -> None:
+    from kluster import conventions
+    from kluster.physical.talos import STATIC_ADDRESSES
+
+    # Day 0, not day 1: the address is a constant this program decides, so it
+    # is on the seed the machine boots from rather than applied to a machine
+    # that came up on a lease. Day 1 could not apply it in any case — it
+    # reaches the worker at that very address.
+    cluster = build_cluster(worker_nodes=(conventions.HOMELAB_NODE,), bgp_peers={})
+    interface = interfaces(await patches_of(cluster, conventions.HOMELAB_NODE))[0]
+    assert interface['addresses'] == [str(STATIC_ADDRESSES[conventions.HOMELAB_NODE].address)]
+    # The very constant the gateway's neighbour statement reads, not merely
+    # some address: the two sides agreeing is the whole point.
+    assert IPv4Interface(interface['addresses'][0]).ip == conventions.HOMELAB_NODE_IPV4
+    assert interface['dhcp'] is False
+    # Only that node. The cloud nodes are addressed by the platform they boot
+    # on, and a worker under some other name is not this one.
+    for node in ('cp1', 'cp2', 'cp3'):
+        assert not interfaces(await patches_of(cluster, node))
+    assert not interfaces(await patches_of(build_cluster(), 'homelab'))
 
 
 @pytest.mark.asyncio

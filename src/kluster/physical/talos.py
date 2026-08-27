@@ -19,6 +19,11 @@ assigns to the finished instance — the augmented node's secondary private IP �
 would wait on the instance that is waiting on it. Day 1 carries those
 addresses instead, over apid, on top of the configuration the machine booted.
 
+The homelab worker's address runs the other way. Nothing assigns it — the LAN
+offers a lease and this program wants a constant, because the gateway's BGP
+neighbour statement names that constant too — so the worker states its own
+address, and states it in the configuration it boots with.
+
 Day-2 is deliberately `talosctl` — upgrades, `upgrade-k8s` and etcd snapshots
 are imperative operations, and wrapping them in fake-declarative command
 resources would buy drift detection that isn't real.
@@ -35,6 +40,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from ipaddress import IPv4Address, IPv4Interface
 from typing import Any, Literal, cast
 
 import pulumi
@@ -71,6 +77,19 @@ BGP_PORT = 179
 #: The whole internet, both families — what a management port on a public
 #: node is exposed to whether or not it is written down.
 ANYWHERE: tuple[str, ...] = ('0.0.0.0/0', '::/0')
+
+#: A default route's destination, as Talos spells a route network. The same
+#: characters as the firewall subnet above and a different thing entirely:
+#: there it is who may come in, here it is where everything goes out.
+DEFAULT_ROUTE_V4 = '0.0.0.0/0'
+
+#: The home LAN's router, and so the worker VM's default route. It is the same
+#: box the worker peers with over BGP — that LAN has one router — but the two
+#: are stated separately because they authorize different things: this is
+#: where the node's traffic goes, and `bgp_peers` is who may talk routing to
+#: it. It is needed at all only because the worker's address is static: the
+#: lease that would have carried a default route is the thing being refused.
+HOME_ROUTER_IPV4 = IPv4Address('192.168.80.1')
 
 
 @dataclass(frozen=True)
@@ -203,6 +222,78 @@ def secondary_address_patch(address: str) -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class StaticAddress:
+    """A node's own addressing on a network that will not hand it out.
+
+    `address` carries its prefix rather than being a bare host, because the
+    prefix is what makes the LAN a connected route; `gateway` is the next hop
+    for everything else.
+    """
+
+    address: IPv4Interface
+    gateway: IPv4Address
+
+
+#: Nodes whose machine configuration has to state their address, because
+#: nothing else will. Only the homelab worker qualifies. A cloud node is
+#: handed its address by the platform it boots on, but the worker is a VM on a
+#: LAN whose only offer is a DHCP lease — and three other places already name
+#: its address as a constant: the gateway's FRR neighbour statement, the
+#: gateway's port forward for the qbittorrent peer port, and day 1's apid
+#: endpoint. A lease would make all three a guess (physical/homelab-host.md
+#: §2).
+#:
+#: This is a table rather than a constructor input on purpose. The address is
+#: not a decision a caller makes: a stack free to pass one could tell the
+#: machine an address the router was never told about, which is the failure
+#: the constant exists to prevent.
+STATIC_ADDRESSES: Mapping[str, StaticAddress] = {
+    conventions.HOMELAB_NODE: StaticAddress(
+        address=IPv4Interface(f'{conventions.HOMELAB_NODE_IPV4}/{conventions.VLAN_SERVER.prefixlen}'),
+        gateway=HOME_ROUTER_IPV4,
+    ),
+}
+
+
+def static_address_patch(static: StaticAddress) -> dict[str, Any]:
+    """Configure the node's interface itself: address, subnet, default route.
+
+    The counterpart of `secondary_address_patch` for a machine no platform
+    configures on its behalf. Two differences from that one, which are the
+    same decision twice: DHCP is off, and the address carries the LAN's prefix
+    instead of /32. With no lease there is no subnet route to conflict with,
+    and with no subnet route the address has to bring one. The default route
+    is then explicit, because carrying it was the lease's other job.
+
+    Whatever else the lease carried goes with it. Resolvers fall back to
+    Talos' own defaults, which is what the cloud nodes effectively use too;
+    IPv6 is untouched, because the GUA this design expects is SLAAC and SLAAC
+    is the kernel's, not DHCP's.
+
+    The interface is selected the way `secondary_address_patch` selects it —
+    `physical: true`, not a name. A name (`eth0`, `ens3`, `enp1s0`) is a
+    property of the PCI topology QEMU happens to build and of the kernel's
+    naming policy, neither of which this program decides; `physical: true`
+    matches an ordinary Ethernet link, which is what a virtio NIC presents as
+    and which the worker has exactly one of.
+    """
+    return {
+        'machine': {
+            'network': {
+                'interfaces': [
+                    {
+                        'deviceSelector': {'physical': True},
+                        'dhcp': False,
+                        'addresses': [str(static.address)],
+                        'routes': [{'network': DEFAULT_ROUTE_V4, 'gateway': str(static.gateway)}],
+                    }
+                ]
+            }
+        }
+    }
+
+
 def ingress_firewall_documents(extra: Sequence[Opening] = ()) -> list[dict[str, Any]]:
     """The node-local firewall: default-deny plus one rule per opening.
 
@@ -221,6 +312,7 @@ def patches(
     role: Role = 'controlplane',
     cert_sans: Sequence[str] = (),
     secretbox_secret: str | None = None,
+    static_address: StaticAddress | None = None,
     secondary_address: str | None = None,
     bgp_peer: str | None = None,
 ) -> list[str]:
@@ -228,10 +320,16 @@ def patches(
 
     `bgp_peer` is a subnet, not a host: it is who may open a BGP session with
     this node, and the answer for the homelab worker is the gateway alone.
+
+    `static_address` is the node's own address where no platform assigns one,
+    and `secondary_address` an extra address on top of whichever it already
+    has; no node has both, and a node with neither is configured by its lease.
     """
     documents: list[Mapping[str, Any]] = [node_patch(), local_path_patch()]
     if role == 'controlplane':
         documents.append(control_plane_patch(cert_sans=cert_sans, secretbox_secret=secretbox_secret))
+    if static_address is not None:
+        documents.append(static_address_patch(static_address))
     if secondary_address is not None:
         documents.append(secondary_address_patch(secondary_address))
     extra = [Opening(BGP_PORT, (bgp_peer,))] if bgp_peer is not None else []
@@ -258,6 +356,10 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
     :param bgp_peers: node name to the subnet allowed to open a BGP session
         with it (the homelab worker's gateway). This is a site fact rather
         than a machine one, so it is part of what the machine boots with.
+
+    A node named in `STATIC_ADDRESSES` also boots with its own address, its
+    LAN's prefix and a default route, rather than with whatever a DHCP server
+    offers it.
     """
 
     def __init__(
@@ -352,6 +454,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
             role=role,
             cert_sans=await _resolved(self._cert_sans),
             secretbox_secret=await self._secretbox_secret() if role == 'controlplane' else None,
+            static_address=STATIC_ADDRESSES.get(node),
             secondary_address=await _resolved_one(secondary_address),
             bgp_peer=await _resolved_one(self._bgp_peers.get(node)),
         )
