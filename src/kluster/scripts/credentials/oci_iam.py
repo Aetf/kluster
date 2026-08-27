@@ -662,7 +662,13 @@ class Iam:
         of the two things the legacy client keeps (§2) — there is no domains
         endpoint to try first and none to fall back to.
         """
-        for existing in _data(self.identity.list_policies(compartment_id=self.tenancy)):
+        # Filtered by name, as the user and group lookups are: an unfiltered
+        # listing pages, and one page is all a single call hands back, so a
+        # policy that had drifted past the first page would look absent and be
+        # created a second time -- which the service answers with a 409 rather
+        # than with a second policy. The name is compared again below because
+        # the filter is the service's promise rather than this code's.
+        for existing in _data(self.identity.list_policies(compartment_id=self.tenancy, name=identity.name)):
             if existing.name != identity.name:
                 continue
             if list(existing.statements) != list(identity.statements):

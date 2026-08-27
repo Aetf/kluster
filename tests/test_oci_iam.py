@@ -33,6 +33,11 @@ ROOT_USER = 'ocid1.user.oc1..root'
 DOMAIN_URL = 'https://idcs-000.identity.oraclecloud.com:443'
 SEED_ENTRY = entries.SEEDS['oci'].entry
 
+#: How many policies one unfiltered `list_policies` answers with. The real
+#: service pages; this is the smallest page that makes a walk and a filtered
+#: lookup behave differently.
+POLICY_PAGE = 1
+
 
 @dataclass
 class Response:
@@ -269,10 +274,28 @@ class FakeIdentity:
         self.memberships.add((details.user_id, details.group_id))
         return Response(None)
 
-    def list_policies(self, compartment_id: str) -> Response:
-        return Response(list(self.policies.values()))
+    def list_policies(self, compartment_id: str, name: str | None = None) -> Response:
+        """The tenancy's policies, and only one page of them when unfiltered.
+
+        The service pages every listing and a single call hands back one page,
+        so a caller that walks instead of filtering sees the beginning of the
+        tenancy rather than the whole of it. One policy per page here, which is
+        the smallest shape that tells the two callers apart.
+        """
+        found = [policy for policy in self.policies.values() if name in (None, policy.name)]
+        return Response(found if name is not None else found[:POLICY_PAGE])
 
     def create_policy(self, details: Any) -> Response:
+        # Policy names are unique within a compartment: a create that means
+        # "make sure this exists" is answered with a 409, not with a second
+        # policy, so a lookup that missed an existing one fails the run.
+        if any(policy.name == details.name for policy in self.policies.values()):
+            raise oci.exceptions.ServiceError(
+                status=409,
+                code='NameAlreadyExists',
+                headers=dict[str, str](),
+                message=f'policy {details.name} already exists',
+            )
         policy = Named(id=f'ocid1.policy.oc1..{details.name}', name=details.name, statements=list(details.statements))
         self.policies[policy.id] = policy
         return Response(policy)
@@ -661,6 +684,27 @@ def test_a_drifted_policy_is_put_back(kit: KdbxStore, tenancy: Tenancy, root: ma
 
     # The statements are the register's, not whatever a console visit left.
     assert policy.statements == list(oci_iam.STATEMENTS)
+
+
+def test_a_policy_the_first_page_does_not_show_is_still_found(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential
+) -> None:
+    # A tenancy holds more policies than one listing returns, and the seed's
+    # need not be among the first of them. Walking the listing rather than
+    # asking for the name reports an existing policy as absent, and creating it
+    # again is a 409 rather than a second policy -- so a re-run that is
+    # supposed to converge fails instead, on a tenancy that had merely grown.
+    _ = tenancy.identity.create_policy(
+        type('Details', (), {'name': 'someone-elses-policy', 'statements': ['Allow group other to read all-resources']})
+    )
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    assert sorted(policy.name for policy in tenancy.identity.policies.values()) == [
+        oci_iam.SEED_NAME,
+        'someone-elses-policy',
+    ]
 
 
 def test_rotation_replaces_the_key_and_retires_the_predecessor(
