@@ -13,11 +13,17 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
+from kluster.dns.zones import zt_label
+from kluster.gateway.zerotier import ROSTER
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VIP1_ADDRESS = '203.0.113.20'
 ACCOUNT_ID = 'cf-account'
+
+#: The overlay half of the physical stack's exports, in shape only: an address
+#: for each member whose address that stack is told rather than decides.
+ZT_ADDRESSES = {entry.name: f'10.144.99.{index}' for index, entry in enumerate(ROSTER) if entry.address is None}
 
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
@@ -36,6 +42,7 @@ class Mocks(pulumi.runtime.Mocks):
                 'cluster_endpoint': LB_ADDRESS,
                 'cluster_endpoint_v6': LB_ADDRESS_V6,
                 'vip1': VIP1_ADDRESS,
+                'zerotier_addresses': dict(ZT_ADDRESSES),
             }
         return args.name + '_id', outputs
 
@@ -145,6 +152,44 @@ def test_the_vip_anchor_is_declared_and_is_v4_only() -> None:
 
     assert anchor['content'] == VIP1_ADDRESS
     assert f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_VIP1}-aaaa' not in records
+
+
+def _zt_record(zone: str, member: str) -> dict[str, Any]:
+    return _records_of(zone)[f'{zone}-{zt_label(member)}.{conventions.ZT_LABEL}-a']
+
+
+def test_the_overlay_block_is_the_roster_and_carries_the_addresses_physical_published() -> None:
+    """The `*.zt` names come from the roster, their addresses from the export.
+
+    This is the second edge where a `physical` output reaches DNS, and the one
+    that decides how many records exist: the roster is code, so the record set
+    is known while previewing, and only the contents wait on the other stack.
+    """
+    member = 'Aetf-Arch-Homelab'
+
+    published = {
+        name.removeprefix(f'{conventions.ZONE_PRIMARY}-').removesuffix(f'.{conventions.ZT_LABEL}-a')
+        for name in _records_of(conventions.ZONE_PRIMARY)
+        if name.endswith(f'.{conventions.ZT_LABEL}-a')
+    }
+
+    assert published == {zt_label(entry.name) for entry in ROSTER}
+    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == ZT_ADDRESSES[member]
+    # The gateway's own address is a convention shared as code, so it crosses
+    # no reference at all — and is published even during the bring-up in which
+    # the member it names does not exist yet.
+    assert _zt_record(conventions.ZONE_PRIMARY, 'udm')['content'] == str(conventions.ZT_UDM)
+
+
+def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
+    # It is part of the mirrored estate: a name fanned across `PUBLIC_ALL`
+    # resolves in all of it, and the family zones carry none of it.
+    for zone in conventions.ALL_ZONES:
+        names = {record['name'] for record in _records_of(zone).values()}
+        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in ROSTER}
+
+        assert (expected <= names) is (zone in conventions.PUBLIC_ALL), zone
+        assert (expected & names == set()) is (zone not in conventions.PUBLIC_ALL), zone
 
 
 def test_structured_records_travel_as_data_not_content() -> None:

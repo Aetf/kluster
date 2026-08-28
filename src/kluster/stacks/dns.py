@@ -12,15 +12,20 @@ so this program is only the wiring: which zones exist, which records go in
 them, which addresses the anchors carry, and which instances the rewrites are
 written to.
 
-Anchors are the one place an IP literal is allowed, and they are the only
-records here that are not literals: `kluster.hosts` and `vip1.hosts` name
-addresses the `physical` stack hands out, so they come across the
-StackReference as machine facts.
+Two blocks are built here rather than written down, and both for the same
+reason — the `physical` stack decides what is in them, so they come across the
+StackReference as machine facts. The anchors, `kluster.hosts` and `vip1.hosts`,
+name addresses that stack hands out; the ZeroTier host block names one record
+per member of the overlay roster it admits, at the address ZeroTier Central
+assigned. Anchors are also the one place an IP literal is allowed, the overlay
+block excepted: private addresses under `*.zt` are an existing deliberate
+practice (dns.md §2).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import cast
 
 import pulumi
 
@@ -30,13 +35,18 @@ from kluster.dns.legacy import LEGACY
 from kluster.dns.model import Record, a, aaaa
 from kluster.dns.routes import ROUTES, rewrites
 from kluster.dns.zone import ManagedZone
-from kluster.dns.zones import ESTATE
+from kluster.dns.zones import ESTATE, zt_records
 
 #: The `physical` outputs the anchors are made of: the load balancer's two
 #: public addresses, and the reserved IPv4 behind the dedicated VIP.
 OUTPUT_CLUSTER_V4 = 'cluster_endpoint'
 OUTPUT_CLUSTER_V6 = 'cluster_endpoint_v6'
 OUTPUT_VIP1_V4 = 'vip1'
+
+#: The `physical` output the ZeroTier host block is filled from: member name →
+#: the overlay address Central assigned it, for the members whose address is a
+#: fact rather than one of this repository's conventions.
+OUTPUT_ZT_ADDRESSES = 'zerotier_addresses'
 
 #: Both families of the cluster anchor say the same thing to a reader of the
 #: Cloudflare dashboard, so they say it in the same words.
@@ -49,6 +59,7 @@ async def main() -> None:
 
     physical = pulumi.StackReference(f'{pulumi.get_organization()}/{pulumi.get_project()}/physical')
     anchors = _anchors(physical)
+    overlay = _zt_block(physical)
 
     zones = {
         zone: ManagedZone(
@@ -58,6 +69,9 @@ async def main() -> None:
             records=[
                 *ESTATE[zone],
                 *LEGACY.get(zone, ()),
+                # The overlay block belongs to the mirrored estate, so it
+                # reaches exactly the zones that carry the rest of it.
+                *(overlay if zone in conventions.PUBLIC_ALL else ()),
                 # Only the primary carries the cluster anchors: every app
                 # record in every zone is a CNAME to the one in the primary,
                 # so a rebuild moves one record, not one per zone.
@@ -123,6 +137,41 @@ def _anchors(physical: pulumi.StackReference) -> Sequence[Record]:
             comment='dedicated VIP, operator convenience; IPv4 only by construction',
         ),
     )
+
+
+def _zt_block(physical: pulumi.StackReference) -> Sequence[Record]:
+    """The ZeroTier host block, from the roster the `physical` stack declares.
+
+    The split across the reference is the point. *Which* records exist is code
+    — the roster is that stack's own census and is shared as a module, like
+    every other convention (framework/pulumi.md §3.1) — and only the contents
+    are machine facts. So this block is declared without awaiting anything, and
+    a member's address arriving late reaches the record unresolved exactly as
+    an anchor's does; `dns` previews the same names before and after
+    `physical` is applied.
+
+    The lookup is written not to raise, for the same reason: before the first
+    apply there is no map to look in, and a preview that failed there would be
+    a preview nobody could review. What it cannot do is quietly publish
+    something wrong afterwards — `physical` exports an entry for every member
+    whose address is configured, and those are precisely the members asked for
+    here (the rest are addresses this repository decides, which `zt_records`
+    reads off the roster entry without asking at all), so a miss can only mean
+    an address that does not exist yet, and the record it would write is one
+    Cloudflare refuses rather than one that resolves somewhere unintended.
+    """
+    published = physical.get_output(OUTPUT_ZT_ADDRESSES)
+
+    def address(member: str) -> pulumi.Output[str]:
+        return published.apply(lambda addresses: _member_address(addresses, member))
+
+    return zt_records(address)
+
+
+def _member_address(published: object, member: str) -> str:
+    """One member's overlay address out of the map `physical` exports."""
+    addresses = cast('Mapping[str, object]', published or {})
+    return str(addresses.get(member))
 
 
 def _address(physical: pulumi.StackReference, output: str) -> pulumi.Output[str]:

@@ -166,6 +166,11 @@ def declare_gateway(config: pulumi.Config) -> None:
     estate's shape, the firewall census, the roster's roles and the rules that
     confine a run — are code, and the configuration is checked against them.
 
+    One of those facts leaves again as a stack output. The `dns` stack
+    publishes a host record for every member of this roster, so it needs the
+    addresses Central assigned; it takes the roster itself as code, the way it
+    takes every other convention.
+
     **`gatewayBootstrapHost` is the first-bring-up knob**, and while it is set
     it means one thing: the gateway is not on the overlay yet. Two consequences
     follow, and they are the whole of what it does. Both providers that reach
@@ -215,18 +220,29 @@ def declare_gateway(config: pulumi.Config) -> None:
         worker_gua=config.require('workerGua'),
         peer_port=config.require_int('qbittorrentPeerPort'),
     )
+    # The gateway is the one member whose identity this program's own work
+    # produces, so it is the one entry the census may lack — and only while the
+    # bootstrap knob says the delivery that mints it has not run.
+    members = gw_zerotier.parse_members(
+        config.require_object('zerotierMembers'),
+        unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
+    )
     gateway.declare_zerotier(
         conventions.CLUSTER_NAME,
         api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
-        # The gateway is the one member whose identity this program's own work
-        # produces, so it is the one entry the census may lack — and only while
-        # the bootstrap knob says the delivery that mints it has not run.
-        members=gw_zerotier.parse_members(
-            config.require_object('zerotierMembers'),
-            unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
-        ),
+        members=members,
         adguard=resolvers,
+    )
+    # Machine facts, for the `dns` stack's `*.zt` host block: the overlay
+    # address ZeroTier Central assigned each member. Only these cross — which
+    # members exist is the roster, which `dns` shares as code, and the
+    # addresses this repository decides are in `conventions` at both ends. The
+    # gateway is absent from the map either way: its address is one of those
+    # conventions, so nothing downstream waits on the identity minted for it.
+    pulumi.export(
+        'zerotier_addresses',
+        {name: str(entry.address) for name, entry in members.items() if entry.address is not None},
     )
 
 

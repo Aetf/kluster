@@ -363,6 +363,38 @@ async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
 
 
 @pytest.mark.asyncio
+async def test_the_overlay_addresses_are_exported_for_the_records_dns_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What crosses to `dns` is the half of the roster this program is told.
+
+    `dns` publishes a `*.zt` host record per member and takes the member names
+    from the roster as code, so the export carries addresses alone — and only
+    those ZeroTier Central assigned. The members whose address this repository
+    decides are absent by construction: they are conventions both stacks read
+    from the same module, and exporting them would be a second copy free to
+    disagree. The gateway is one of them, which is why the block `dns`
+    declares does not wait on the identity this stack's own run mints.
+    """
+    from kluster.stacks import dns
+
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    await physical.main()
+
+    configured = cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers']))
+    assert exported[dns.OUTPUT_ZT_ADDRESSES] == {
+        name: entry['address'] for name, entry in configured.items() if 'address' in entry
+    }
+    assert zerotier.UDM_MEMBER not in cast('dict[str, str]', exported[dns.OUTPUT_ZT_ADDRESSES])
+
+
+@pytest.mark.asyncio
 async def test_the_cluster_credentials_are_exported_and_stay_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
