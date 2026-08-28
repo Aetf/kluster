@@ -23,7 +23,10 @@ treated as a personal device. That is safe only because admission is gated here
 too: an undeclared member is never authorized, so it never reaches the default.
 The two halves are checked together — a name in configuration that the roster
 does not carry is refused, and a roster entry with nothing configured for it is
-refused as well.
+refused as well. The single exception is a device whose identity does not exist
+yet, because a ZeroTier identity is minted by the daemon's first run: a caller
+that is delivering that daemon says so by name (`parse_members`, `unminted`),
+and that member is left out of the desired state until it has been.
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
 endpoint at a time, so an identity live in two jobs at once flaps; there is one
@@ -50,7 +53,7 @@ over v6 that it cannot reach over v4.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 from typing import final
@@ -69,6 +72,7 @@ __all__ = (
     'MULTICAST_LIMIT',
     'ROSTER',
     'SSH_PORT',
+    'UDM_MEMBER',
     'UNIFI_API_PORT',
     'Enrolled',
     'Network',
@@ -128,12 +132,18 @@ CI_MEMBERS = ('ci-physical', 'ci-dns')
 #: assigned before this program existed.
 HOMELAB_MEMBER = 'Aetf-Arch-Homelab'
 
+#: The gateway, as the roster names it. It is the only member whose identity is
+#: minted by work this program does — the daemon runs on the device as a
+#: container of the estate — which is why it is also the only member a caller
+#: ever declares unminted.
+UDM_MEMBER = 'udm'
+
 #: Every member of the network. The order is the order the design lists them in:
 #: the infrastructure the overlay exists to reach, then the identities that
 #: reach it unattended, then the people.
 ROSTER: tuple[Rostered, ...] = (
     Rostered(
-        name='udm',
+        name=UDM_MEMBER,
         role=conventions.ZT_ROLE_INFRA,
         address=conventions.ZT_UDM,
         note='the gateway: nexthop of every managed route',
@@ -202,13 +212,22 @@ class Enrolled:
     address: IPv4Address | None = None
 
 
-def parse_members(raw: object) -> dict[str, Enrolled]:
+def parse_members(raw: object, *, unminted: Collection[str] = ()) -> dict[str, Enrolled]:
     """Read the configured member facts, and refuse anything the roster omits.
 
     Both directions are checked here rather than at the resource, because both
     are the same mistake seen from opposite sides: a member configured but not
     rostered would be authorized without a declared role, and a member rostered
     but not configured would be a hole in the census that nothing else notices.
+
+    `unminted` names entries whose node identifier does not exist yet, and it
+    relaxes the second check for those names only. A ZeroTier identity comes
+    into being when the daemon first runs on a device, so a device this program
+    is *delivering* the daemon to has nothing to configure until the delivery
+    has happened; naming it here is how a caller says so, and saying so is a
+    deliberate act rather than the default. A name given here that turns out to
+    be configured after all is read like any other — the relaxation is
+    permission to be absent, not a refusal to look.
     """
     entries = facts.mapping(raw, 'the ZeroTier member configuration')
 
@@ -220,11 +239,11 @@ def parse_members(raw: object) -> dict[str, Enrolled]:
     if generated:
         raise ValueError(f'{", ".join(generated)} has a generated identity, so it takes no configured node id')
     expected = [entry.name for entry in ROSTER if not entry.generated]
-    missing = [name for name in expected if name not in entries]
+    missing = [name for name in expected if name not in entries and name not in unminted]
     if missing:
         raise ValueError(f'the ZeroTier roster has no configured node id for {", ".join(missing)}')
 
-    return {name: _member(name, rostered[name], entries[name]) for name in expected}
+    return {name: _member(name, rostered[name], entries[name]) for name in expected if name in entries}
 
 
 def _member(name: str, entry: Rostered, raw: object) -> Enrolled:
@@ -365,7 +384,16 @@ class Network(Component):
             if entry.generated
         }
 
-        self.members = {entry.name: self._declare(name, entry, members, child) for entry in ROSTER}
+        # A member the mapping does not carry has no identity to authorize yet
+        # (`parse_members`, `unminted`), so it is left out of the desired state
+        # rather than declared against a placeholder. Whether that absence is
+        # allowed at all was decided before the mapping got here; what is left
+        # here is only what to do about it.
+        self.members = {
+            entry.name: self._declare(name, entry, members, child)
+            for entry in ROSTER
+            if entry.generated or entry.name in members
+        }
 
         self.register_outputs({})
 

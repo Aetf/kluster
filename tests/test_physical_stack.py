@@ -40,6 +40,9 @@ IDENTITY_DOMAIN = 'Default'
 B2_REGION = 'us-west-004'
 BUDGET_RECIPIENTS = ['alerts@example.invalid', 'second@example.invalid']
 ZT_NETWORK_ID = '0123456789abcdef'
+#: A LAN name for the gateway, as the first-bring-up knob carries one. Its shape
+#: is all that matters here: something that is not the overlay address.
+BOOTSTRAP_HOST = 'gateway.invalid'
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
 
@@ -223,9 +226,89 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
     assert setup.inputs[f'{conventions.CLUSTER_NAME}-unifi']['apiUrl'] == f'https://{conventions.ZT_UDM}'
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['host'] == str(conventions.ZT_UDM)
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
+    # The steady state is the knob's absence, which is why it is the only
+    # optional key here and why nothing has to be unset to reach this.
+    assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Mocks) -> None:
+    """First bring-up dials the device over the LAN, on both channels.
+
+    The overlay address answers only once the estate's ZeroTier container is on
+    the device, and the estate is what this run delivers. While the knob is set
+    it therefore replaces the dial address for both providers that reach the
+    gateway — the desired-state push over SSH and the controller's API — because
+    they are the same box behind two ports, and an override that moved one of
+    them would leave the run half able to reach it.
+    """
+    pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_HOST})
+
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['host'] == BOOTSTRAP_HOST
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-unifi']['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
+    # Nothing else about the channels moves — the pin in particular is a bare
+    # key with no host name in front of it, so it matches the device at either
+    # address (`test_gw_provider`).
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['port'] == 22
+
+
+@pytest.mark.asyncio
+async def test_first_bring_up_runs_before_the_gateway_has_an_identity_to_authorize(setup: Mocks) -> None:
+    """The nested egg: the id is minted by the container this run delivers.
+
+    A ZeroTier node id comes into being when the daemon first runs on a device,
+    and the daemon reaches the gateway as part of the estate. So the first apply
+    of all is asked to run with no `zerotierMembers` entry for it, which is a
+    refusal in the steady state and permitted only while the bootstrap knob is
+    set. Nothing else about the overlay changes: the network, the routes and
+    every other member are declared as usual.
+    """
+    members = {
+        name: entry
+        for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
+        if name != zerotier.UDM_MEMBER
+    }
+    pulumi.runtime.set_all_config(
+        dict(STACK_CONFIG)
+        | {
+            f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_HOST,
+            'kluster:zerotierMembers': json.dumps(members),
+        }
+    )
+
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    assert f'{conventions.CLUSTER_NAME}-member-{zerotier.UDM_MEMBER}' not in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-member-haos' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-network' in setup.inputs
+
+
+@pytest.mark.asyncio
+async def test_the_roster_gap_is_refused_once_the_gateway_is_on_the_overlay() -> None:
+    """Unsetting the knob is what makes the census complete again.
+
+    The relaxation belongs to the bring-up and to nothing else: with no knob
+    set, a missing gateway id is the hole in the census it has always been, and
+    it stops the run by naming the entry rather than declaring an overlay the
+    gateway is not on.
+    """
+    members = {
+        name: entry
+        for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
+        if name != zerotier.UDM_MEMBER
+    }
+    pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {'kluster:zerotierMembers': json.dumps(members)})
+
+    with pytest.raises(ValueError, match=f'no configured node id for {zerotier.UDM_MEMBER}'):
+        await physical.main()
 
 
 @pytest.mark.asyncio

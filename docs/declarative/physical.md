@@ -145,11 +145,17 @@ machine_secrets
 -   **Reboot-requiring config changes**: `apply_mode:
     staged_if_needing_reboot`, and CI applies node-serially, so the
     quorum never reboots together.
--   **Where a machine is reached**: each node is administered at its own
-    address rather than through the NLB — an apply names one node and a
-    balancer would pick whichever backend it liked. On the cloud nodes
-    that address is the public one; the worker is reached at its
-    cluster-VLAN address, over the overlay (physical/gateway.md §2).
+-   **Where a machine is reached**: apid routes by the node a call
+    names, not by the connection it arrives on, so the two halves of an
+    apply are separate answers. The cloud nodes are dialled at their own
+    public addresses, because a call with no cluster to route through —
+    the bootstrap is exactly that — has nothing else to use, and a
+    balancer would pick whichever backend it liked. The worker is
+    *named* by its cluster-VLAN address and *dialled* at the cluster
+    endpoint, which the NLB forwards on 50000: whichever control plane
+    answers proxies the call the rest of the way over KubeSpan, so the
+    backend chosen does not matter and nothing outside the site needs a
+    route to the worker.
 -   **Footgun on record**: destroy-time `reset = true` wipes *all* disk
     partitions (provider issue #205) — never enabled on nodes carrying
     data; node replacement is explicit (drain, etcd leave, destroy,

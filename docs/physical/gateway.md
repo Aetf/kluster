@@ -232,29 +232,73 @@ Run against a scratch ZT network with the same rules and a throwaway
     join→SSH-reachable time against the UDM (expectation and why it
     should beat the legacy 1–2 min: §2.6).
 
-### 2.5 Rollout order
+### 2.5 First bring-up
 
-There is no cycle to break: today ZT carries **no route to the home
-LANs at all** (the host is a plain member; the only managed route is
-the legacy `10.42.0.0/24` via the VPS). The LAN→UDM path exists before
-and independently of ZT, so the first deployment is a LAN-side
-operation (migration.md Phase 0):
+Steady state is circular: the gateway is reached over ZT, and the ZT
+daemon on the gateway is a container of the estate that same channel
+delivers. The gateway's ZT identity is circular in the same way — a node
+id is minted by the daemon's first run on a device, so it does not exist
+to be authorized until the delivery has happened.
 
-1.  **UDM container deploys via an operator-local `physical` run** —
-    Phase 0 is local-bootstrap by nature (the CI that would later do
-    this is itself being built); the gw-config push SSHes to the UDM
-    over the LAN, no ZT in the path. The UDM member is pre-authorized
-    in the roster.
-2.  **Managed routes are net-new additions** — the home-LAN and
+What breaks the cycle is the LAN, which reaches the UDM before and
+independently of ZT, and one optional key of the `physical` stack:
+
+**`gatewayBootstrapHost`** — a LAN address for the gateway, e.g. a name
+the home resolvers already answer for. While it is set it means *the
+gateway is not on the overlay yet*, and everything it does follows from
+that one meaning. Both providers that reach the device dial that address
+instead of the roster's `10.144.1.1` — the desired-state push over SSH
+and the controller's API over HTTPS, one box behind two ports — and the
+ZT roster tolerates the gateway having no configured node id, declaring
+no member for it rather than refusing the run. Unset, which is the
+steady state, every client derives the address from the roster, whose
+census is complete again.
+
+The ceremony, four steps and three applies:
+
+1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
+    over the LAN and delivers the estate, the ZT container included.
+    Nothing is declared for the gateway on the overlay.
+2.  **Read the minted node id off the device** — `zerotier-cli info` in
+    that container — and write it into `zerotierMembers.udm.id`.
+3.  **Apply again, knob still set.** The roster now authorizes the
+    member, assigns it `10.144.1.1` and adds the managed routes; the
+    device joins the network it is the router of.
+4.  **Unset the knob and apply once more.** Every client is back on the
+    overlay address, so this run dials over ZT — which is the
+    verification rather than a formality: it rewrites the estate through
+    the path that is now load-bearing, and it converges only if that
+    path carries the whole of it.
+
+Two properties make the ceremony safe to repeat. The pinned host key is
+a bare `ssh-ed25519 <blob>` line with no host name in front of it, so it
+matches the device at either address and nothing is re-pinned when the
+dial moves. And a moved dial address is an ordinary change rather than a
+replacement (`gateway/provider.py`): the file is rewritten at the new
+address, and nothing is deleted at the old one — which, both addresses
+being the same box, would delete what the same apply had just written.
+
+**The ceremony is operator-local by construction.** Its first three
+steps dial the LAN, and CI reaches the site over ZT and has no path to
+the LAN at all — so a first bring-up cannot be a CI run whatever the
+schedule says (migration.md Phase 0), and neither can any later recovery
+that starts from a gateway which is off the overlay (§3).
+
+Two things that are *not* part of the cycle:
+
+-   **Managed routes are net-new additions** — the home-LAN and
     lan-pool routes via the UDM member appear where none existed;
     existing members gain reachability and lose nothing. No flip, no
     transition window.
-3.  **CI's per-run ZT join becomes load-bearing only after §2.4
+-   **CI's per-run ZT join becomes load-bearing only after §2.4
     passes** — until the flow rules and routes are verified,
     `physical` runs stay operator-local.
 
-Each step is its own previewed `physical` change; rollback of any
-step is removing what it added.
+There are no ordering edges between the three gateway domains: the
+graph cannot express "authorize a member, wait for the device to join,
+then dial it", because the middle step happens on the device and not in
+this program. The ceremony is that ordering, performed by the operator
+once.
 
 ### 2.6 CI join mechanics: two identities, serialized domains
 
@@ -295,6 +339,27 @@ Facts that shape it (decided 2026-08-24):
 Per the census discipline (state-backend.md §7): title, trigger, gist —
 executable form ships with the implementation.
 
+**Standing decision: an unreachable gateway fails the whole `physical`
+preview.** Every gw-config resource diffs against the device rather than
+against state, so a preview opens a session per resource; with the UDM
+down, its ZT container down, or the overlay itself down, all of them
+fail, and the run produces no plan. That is intended — a
+preview that reports "no changes" about a device it never looked at is
+worse than one that says it could not look — and the cost is real: while
+the gateway is unreachable, no `physical` pull request can be previewed
+and no `physical` change of any kind can land, gateway-related or not.
+The side-door playbooks below are what shortens that window; a bring-up
+knob is what covers a gateway that is off the overlay for a reason
+(§2.5).
+
+The `dns` stack is deliberately the other way round: an unreachable
+resolver fails only its own rewrite resources and the rest of the zone
+converges (framework/ci.md §2). The two are asymmetric because the
+gateway is `physical`'s own management path, so a plan made without
+reaching it would describe a device the apply cannot touch either,
+while a resolver is a leaf whose absence says nothing about the records
+at the registrar.
+
 -   **ZT container down on the UDM** — trigger: physical-stack CI runs
     fail to reach the UDM; personal devices lose LAN reachability. The
     repair tool (gw-config push) itself rides ZT, hence the side-door:
@@ -311,8 +376,10 @@ executable form ships with the implementation.
     UniFi autobackup (the pull-direction yadm timer), re-run the
     gw-config provider for the estate, re-authorize the *new* UDM
     member identity in the roster (identity lives in `/data`, lost with
-    the box), re-point the managed routes at it — a LAN-side operation
-    like §2.5 (personal members' direct paths still work throughout).
+    the box), re-point the managed routes at it — the §2.5 ceremony
+    over again, bootstrap knob and all, since a replacement box is a
+    device with no identity and no estate (personal members' direct
+    paths still work throughout).
 
 ## 4. Firewall target state
 

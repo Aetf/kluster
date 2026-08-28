@@ -53,6 +53,11 @@ KUBE_API_PORT = 6443
 OCI_NAMESPACE = 'oci'
 OCI_TENANCY_KEY = 'tenancyOcid'
 
+#: The one optional key of this stack: a LAN address for the gateway, set only
+#: while the gateway is not yet on the overlay. Absent — the steady state — every
+#: client of the gateway derives its address from `conventions.ZT_UDM`.
+GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
+
 
 async def main() -> None:
     config = pulumi.Config()
@@ -160,13 +165,33 @@ def declare_gateway(config: pulumi.Config) -> None:
     the resolvers sit, which nodes are on the overlay. The decisions — the
     estate's shape, the firewall census, the roster's roles and the rules that
     confine a run — are code, and the configuration is checked against them.
+
+    **`gatewayBootstrapHost` is the first-bring-up knob**, and while it is set
+    it means one thing: the gateway is not on the overlay yet. Two consequences
+    follow, and they are the whole of what it does. Both providers that reach
+    the device dial that address instead of the overlay one — the estate over
+    SSH and the controller over its API — because the daemon that answers at
+    `conventions.ZT_UDM` is a container of the estate this run is delivering,
+    so until the delivery has happened the overlay address answers nothing. And
+    the roster tolerates the gateway having no configured node id, because a
+    ZeroTier identity is minted by the daemon's first run on the device: it
+    does not exist to be authorized until that same delivery has happened.
+    Absent, which is the steady state, everything derives from `ZT_UDM` and the
+    roster is a complete census again. The ceremony that gets from one to the
+    other is physical/gateway.md §2.5.
+
+    The pinned host key is not affected either way: it is stored as a bare
+    `ssh-ed25519 <blob>` line with no host name in front of it, so it matches
+    the device at whichever address the session dials (`gateway/ssh.py`).
     """
     addresses = gw_estate.parse_addresses(config.require_object('gatewayAddresses'))
     resolvers = [addresses[instance] for instance in sorted(gw_estate.VHOST_ADGUARD)]
+    bootstrap_host = config.get(GATEWAY_BOOTSTRAP_HOST)
+    gateway_host = bootstrap_host or str(conventions.ZT_UDM)
 
     gateway.declare_estate(
         conventions.CLUSTER_NAME,
-        host=str(conventions.ZT_UDM),
+        host=gateway_host,
         host_key=config.require_secret('gatewayHostKey'),
         private_key=config.require_secret('gatewayPrivateKey'),
         bgp_neighbour=conventions.HOMELAB_NODE_IPV4,
@@ -182,8 +207,9 @@ def declare_gateway(config: pulumi.Config) -> None:
         # program assigns in the ZeroTier roster above and therefore already
         # knows (physical/gateway.md §2.3). Recording it beside the API key
         # would be a second copy of a stated constant, free to disagree with
-        # the roster that decides it.
-        api_url=f'https://{conventions.ZT_UDM}',
+        # the roster that decides it — which is also why the bootstrap knob
+        # moves both doors at once rather than one endpoint being overridable.
+        api_url=f'https://{gateway_host}',
         api_key=config.require_secret('unifiApiKey'),
         site=conventions.UNIFI_SITE,
         worker_gua=config.require('workerGua'),
@@ -193,7 +219,13 @@ def declare_gateway(config: pulumi.Config) -> None:
         conventions.CLUSTER_NAME,
         api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
-        members=gw_zerotier.parse_members(config.require_object('zerotierMembers')),
+        # The gateway is the one member whose identity this program's own work
+        # produces, so it is the one entry the census may lack — and only while
+        # the bootstrap knob says the delivery that mints it has not run.
+        members=gw_zerotier.parse_members(
+            config.require_object('zerotierMembers'),
+            unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
+        ),
         adguard=resolvers,
     )
 

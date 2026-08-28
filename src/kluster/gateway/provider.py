@@ -27,7 +27,17 @@ agrees, and that includes the two credentials. An update rewrites bytes the
 device may already have, which is free and idempotent; the alternative -- calling
 a credential rotation "no change" because the file is already right -- leaves the
 superseded key in state, and a `delete` months later would then authenticate with
-a key that no longer opens the door.
+a key that no longer opens the door. The address dialled is declared for the same
+reason and converges the same way: it is the same box behind a new address --
+during a first bring-up the device is reached over the LAN rather than over the
+overlay (physical/gateway.md §2.5) -- so the file is rewritten at the new address
+rather than moved to it, and nothing is deleted at the old one.
+
+**Only the path is a replacement.** The bytes cannot be at two paths at once, so
+a moved file is created before the old one is deleted. Nothing else about a
+resource here identifies it, the address least of all: a replacement triggered by
+an address would delete, at what is the same device, the file its own create had
+just written there.
 
 **Order within an apply is chosen so that a failure is visible.** The payload
 lands, then the hook runs, then the marker is written: a hook that fails leaves
@@ -69,10 +79,10 @@ from pulumi.runtime import rpc
 from kluster.gateway import ssh
 
 __all__ = (
+    'ADDRESS',
     'ARTIFACT_DECLARED',
     'CREDENTIALS',
     'FILE_DECLARED',
-    'IDENTITY',
     'Connection',
     'DigestMismatch',
     'GwArtifact',
@@ -87,23 +97,29 @@ __all__ = (
     'secret_outputs',
 )
 
-#: Properties that name *which* device, rather than what is on it. A change to
-#: any of them moves the file to a different box, which is a replacement: the new
-#: device gets the file and the old one loses it.
-IDENTITY = ('host', 'port', 'username')
+#: Where the device answers and as whom the session authenticates. These are
+#: declared inputs rather than a resource identity: a change to one dials the new
+#: address and writes the same file there, and does *not* delete anything at the
+#: old one. The estate has exactly one device, pinned by its host key rather than
+#: by its address, so an address that moved -- the LAN dial of a first bring-up,
+#: physical/gateway.md §2.5 -- is the same box, and a replacement's delete would
+#: remove the file its own create had just written. A device genuinely swapped
+#: out keeps whatever was on it, which is what happens to a box that has been
+#: taken off the network anyway.
+ADDRESS = ('host', 'port', 'username')
 
 #: The credentials the session is opened with. They say nothing about the file's
 #: contents, but they are declared inputs, so a rotation is a change -- see the
 #: module docstring on why "no change" would be a trap.
 CREDENTIALS = ('private_key', 'host_key')
 
-#: What a `GwFile` declares about the device beyond which device it is.
-FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *CREDENTIALS)
+#: What a `GwFile` declares beyond its own path.
+FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
 
 #: The same for a `GwArtifact`. The digest is the payload's identity and the URL
 #: is only where the bytes were found, but both are declared, so moving a release
 #: to another mirror is a diff a reviewer sees.
-ARTIFACT_DECLARED = ('url', 'sha256', 'mode', 'owner', 'hook', *CREDENTIALS)
+ARTIFACT_DECLARED = ('url', 'sha256', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
 
 #: How long the runner may spend fetching an artifact before giving up.
 FETCH_TIMEOUT = 300
@@ -246,11 +262,17 @@ async def run_hook(transport: ssh.Transport, props: Mapping[str, Any]) -> None:
 def replacements(olds: Mapping[str, Any], news: Mapping[str, Any], location: str) -> list[str]:
     """The properties whose change means a different resource, not a new value.
 
+    Where the file sits on the device, and nothing else: that is the only change
+    the device cannot converge in place, because the bytes have to appear under
+    the new path and go from the old one. Everything else about a `GwFile` --
+    where the device answers included -- is a value the next apply writes.
+
     A property that is still unknown cannot have been shown to differ, so it is
     never a reason to plan a replacement; the unknown diff that follows says so
     honestly instead.
     """
-    return [key for key in (location, *IDENTITY) if not is_unknown(news.get(key)) and olds.get(key) != news.get(key)]
+    moved = not is_unknown(news.get(location)) and olds.get(location) != news.get(location)
+    return [location] if moved else []
 
 
 def declared_change(olds: Mapping[str, Any], news: Mapping[str, Any], keys: tuple[str, ...]) -> bool:

@@ -126,6 +126,35 @@ def test_the_roster_and_the_configuration_check_each_other() -> None:
         zerotier.parse_members({**CONFIGURED, 'ci-dns': {'id': '8888888888'}})
 
 
+def test_the_one_member_whose_identity_this_program_delivers_may_be_absent_when_it_is_named() -> None:
+    """A node id exists only after the daemon has run, and the gateway's has not.
+
+    The estate carries the ZeroTier daemon onto the gateway, so during a first
+    bring-up the roster is asked to admit a device whose identity nothing has
+    minted. Naming it `unminted` is how the caller says the delivery has not
+    happened; the census is otherwise unchanged, and the relaxation is per name
+    rather than a mode — every other member is still required.
+    """
+    without_udm = {name: entry for name, entry in CONFIGURED.items() if name != zerotier.UDM_MEMBER}
+
+    parsed = zerotier.parse_members(without_udm, unminted=(zerotier.UDM_MEMBER,))
+    assert zerotier.UDM_MEMBER not in parsed
+    assert set(parsed) == {entry.name for entry in zerotier.ROSTER if not entry.generated} - {zerotier.UDM_MEMBER}
+
+    # Permission to be absent is not a refusal to look: once the operator has
+    # read the minted id into configuration, the same call authorizes it.
+    assert zerotier.parse_members(CONFIGURED, unminted=(zerotier.UDM_MEMBER,))[zerotier.UDM_MEMBER].node_id
+
+    # And the relaxation reaches exactly the name it was given.
+    with pytest.raises(ValueError, match='no configured node id for haos'):
+        zerotier.parse_members(
+            {name: entry for name, entry in CONFIGURED.items() if name != 'haos'},
+            unminted=(zerotier.UDM_MEMBER,),
+        )
+    with pytest.raises(ValueError, match=f'no configured node id for {zerotier.UDM_MEMBER}'):
+        zerotier.parse_members(without_udm)
+
+
 def test_an_address_is_either_a_convention_or_a_configured_fact_never_both() -> None:
     """The gateway's address is the one the desired-state push dials.
 
