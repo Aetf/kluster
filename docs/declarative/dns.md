@@ -208,6 +208,15 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     rows. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
+-   **The first LAN-side row is what makes the instances' address a
+    required key.** `dns` reads `adguardEndpoints` — the base URL of
+    each instance's administration API — only when the route census
+    yields a rewrite, which is what keeps the stack deployable while
+    nothing is routed and why `Pulumi.dns.yaml` carries the AdGuard
+    login but not yet the endpoints. So the config key ships with the
+    row that first needs it, in the same change; the route helper
+    (`kluster.dns.routes`) carries that contract beside the census
+    itself.
 
 ## 4. LAN DNS: three name planes
 
