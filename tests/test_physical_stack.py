@@ -106,7 +106,14 @@ class Mocks(pulumi.runtime.Mocks):
         if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
             outputs['kubeconfigRaw'] = KUBECONFIG
         if args.typ == 'zerotier:index/identity:Identity':
-            outputs |= {'identityId': f'{args.name}-node', 'publicKey': 'public', 'privateKey': 'private'}
+            # Keyed by the resource name, so a test can tell one member's key
+            # material from another's: which identity an export carries is the
+            # whole of the contract the credential map reads it under.
+            outputs |= {
+                'identityId': f'{args.name}-node',
+                'publicKey': 'public',
+                'privateKey': f'{args.name}-secret',
+            }
         if args.typ == 'zerotier:index/network:Network':
             outputs['networkId'] = ZT_NETWORK_ID
         if args.typ == 'oci:Core/instance:Instance':
@@ -443,6 +450,50 @@ async def test_the_overlay_addresses_are_exported_for_the_records_dns_publishes(
         name: entry['address'] for name, entry in configured.items() if 'address' in entry
     }
     assert conventions.ZT_MEMBER_UDM not in cast('dict[str, str]', exported[dns.OUTPUT_ZT_ADDRESSES])
+
+
+@pytest.mark.asyncio
+async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The identities CI joins the overlay with, by the names `derived sync` reads.
+
+    The slot map's half of that contract is a stack output name
+    (`slots.StateRead`) and this program's half is the export; nothing but the
+    string ties them together, and the map's own tests supply the output by
+    hand, so a rename on either side would surface first as a bring-up that
+    cannot fill `ZEROTIER_IDENTITY`. Which member each export carries is part
+    of the contract rather than cosmetic: an identity live in two jobs at once
+    flaps, which is why there is one per identity domain (gateway.md §2.6). The
+    marking is checked for the same reason it is on the cluster credentials
+    below — a join credential printed into a deployment log is a leaked one.
+    """
+    from kluster.scripts.credentials import slots
+
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
+
+    await physical.main()
+
+    contracted = {
+        row.source.output
+        for row in slots.ROWS.values()
+        if isinstance(row.source, slots.StateRead) and row.source.stack == slots.PHYSICAL_STACK
+    }
+    # Every continuous-integration member the roster carries gets an export:
+    # one added without one would join no job, having no secret to be pushed.
+    assert set(physical.CI_IDENTITY_OUTPUTS) == set(conventions.ZT_CI_MEMBERS)
+    assert contracted >= set(physical.CI_IDENTITY_OUTPUTS.values())
+    assert contracted <= set(exported)
+
+    for member, output in physical.CI_IDENTITY_OUTPUTS.items():
+        identity = cast('pulumi.Output[str]', exported[output])
+        assert await identity.is_secret()
+        assert await identity.future() == f'{conventions.CLUSTER_NAME}-identity-{member}-secret'
 
 
 @pytest.mark.asyncio

@@ -66,6 +66,19 @@ GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 #: (`physical/homelab.py`).
 LIBVIRT_PRIVATE_KEY = 'libvirtPrivateKey'
 
+#: The export each continuous-integration identity's key material leaves under,
+#: by the roster name of the member that carries it. The names are half of a
+#: contract: `credentials derived sync` reads this stack's state by them and
+#: pushes each into the `ZEROTIER_IDENTITY` secret of the Environments whose
+#: jobs join with that identity (credentials.md §3, gateway.md §2.6), which is
+#: one Environment set per identity domain — `physical` and `dns` — because an
+#: identity live in two jobs at once flaps. A roster rename that this mapping
+#: does not follow fails the run rather than quietly renaming the contract.
+CI_IDENTITY_OUTPUTS = {
+    'ci-physical': 'ci_zerotier_identity_physical',
+    'ci-dns': 'ci_zerotier_identity_dns',
+}
+
 
 async def main() -> None:
     config = pulumi.Config()
@@ -296,7 +309,7 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
         peer_port=config.require_int('qbittorrentPeerPort'),
     )
     members = overlay.members
-    gateway.declare_zerotier(
+    network = gateway.declare_zerotier(
         conventions.CLUSTER_NAME,
         api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
@@ -313,6 +326,15 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
         'zerotier_addresses',
         {name: str(entry.address) for name, entry in members.items() if entry.address is not None},
     )
+    # The key material of the two identities generated above, which is how a
+    # continuous-integration job joins the overlay at all: the value is the
+    # member's `identity.secret`, written to that path on the runner before
+    # the daemon starts (`.github/actions/zerotier`). It leaves as a secret,
+    # because an export that lost the marking would print a join credential
+    # into a deployment log, and it is read back out of state — with
+    # `--show-secrets` — by `credentials derived sync`.
+    for member, output in CI_IDENTITY_OUTPUTS.items():
+        pulumi.export(output, pulumi.Output.secret(network.identities[member].private_key))
 
 
 @dataclass(frozen=True)
