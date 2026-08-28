@@ -24,10 +24,16 @@ ci.md §3 is built on, where no stack holds more than its own layer.
 The trade is cheap in the direction that matters: the forge changes a
 few times a year, so a manual `pulumi up -s github` costs almost
 nothing, while the credential would otherwise sit in CI permanently.
-CI may **preview** this stack — drift detection is a read — and may
-not apply it. The same reasoning the `physical` gate rests on
-(ci.md §3), taken one step further: `physical` can root the gateway,
-`github` can remove the gate that guards `physical`.
+The same reasoning the `physical` gate rests on (ci.md §3), taken one
+step further: `physical` can root the gateway, `github` can remove the
+gate that guards `physical`.
+
+So **no workflow touches this stack at all**, drift detection
+included: the weekly `drift` matrix carries the four stacks CI
+deploys and not this one (ci.md §3). Drift in the forge is read the
+way an apply is prepared — `pulumi preview --refresh -s github` on the
+machine that already holds the token — which is why leaving the stack
+out of CI costs no freshness check, only the schedule of one.
 
 The credential itself is an account-root-scoped token from the
 personal estate (credentials.md §2), used on the operator machine and
