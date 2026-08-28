@@ -19,6 +19,7 @@ import asyncssh
 import pulumi
 import pytest
 import pytest_asyncio
+import zstandard
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -66,7 +67,15 @@ HOOK = "vtysh -c 'configure terminal'"
 ROOTFS_URL = 'https://example.invalid/rootfs/adguard-1.2.3.tar'
 ROOTFS = b'a root filesystem, in miniature'
 ROOTFS_SHA256 = hashlib.sha256(ROOTFS).hexdigest()
-ROOTFS_TARGET = '/data/estate/adguard.tar'
+ROOTFS_TARGET = '/data/estate/images/adguard.tar'
+ROOTFS_TREE = '/data/estate/roots/adguard'
+
+#: The same payload as it is actually published: a zstd-compressed archive. The
+#: pin is the digest of *these* bytes, which is the whole point of the test that
+#: follows the pin through decompression.
+ROOTFS_ZST = zstandard.ZstdCompressor().compress(ROOTFS)
+ROOTFS_ZST_SHA256 = hashlib.sha256(ROOTFS_ZST).hexdigest()
+ROOTFS_ZST_URL = 'https://example.invalid/rootfs/adguard-1.2.3.tar.zst'
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -98,6 +107,10 @@ class Device:
     sessions: int = 0
     devices: list[ssh.Device] = field(default_factory=list[ssh.Device])
     hook_status: int = 0
+    #: Commands whose text contains one of these exit non-zero. A sequence's
+    #: guarantees are about which step failed, so a test has to be able to
+    #: refuse one of them and let the rest through.
+    refuse: tuple[str, ...] = ()
 
     @property
     def commands(self) -> list[str]:
@@ -144,7 +157,9 @@ class Transport:
 
     async def run(self, command: str) -> ssh.CommandResult:
         self.device.log.append(f'run {command}')
-        return ssh.CommandResult(exit_status=self.device.hook_status, stdout=b'', stderr='refused')
+        refused = any(fragment in command for fragment in self.device.refuse)
+        status = 1 if refused else self.device.hook_status
+        return ssh.CommandResult(exit_status=status, stdout=b'', stderr='refused')
 
 
 @pytest.fixture
@@ -158,7 +173,7 @@ def device(monkeypatch: pytest.MonkeyPatch) -> Device:
 @pytest.fixture
 def downloads(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
     """What the runner gets when it fetches a URL."""
-    served = {ROOTFS_URL: ROOTFS}
+    served = {ROOTFS_URL: ROOTFS, ROOTFS_ZST_URL: ROOTFS_ZST}
 
     def fetch(url: str) -> bytes:
         return served[url]
@@ -192,10 +207,16 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
         'url': ROOTFS_URL,
         'sha256': ROOTFS_SHA256,
         'target': ROOTFS_TARGET,
+        'extract': None,
         'mode': '0600',
         'owner': 'root:root',
         'hook': 'systemctl restart adguard',
     } | overrides
+
+
+def unpacking_props(**overrides: Any) -> dict[str, Any]:
+    """An artifact as the estate declares one: a published archive and a tree."""
+    return artifact_props(url=ROOTFS_ZST_URL, sha256=ROOTFS_ZST_SHA256, extract=ROOTFS_TREE) | overrides
 
 
 def converged(device: Device, props: Mapping[str, Any]) -> None:
@@ -209,12 +230,22 @@ def converged(device: Device, props: Mapping[str, Any]) -> None:
     )
 
 
-def landed(device: Device, props: Mapping[str, Any], payload: bytes = ROOTFS) -> None:
-    """Put the device in the state an artifact bag declares, marker and all."""
+def landed(device: Device, props: Mapping[str, Any], payload: bytes = ROOTFS, digest: str | None = None) -> None:
+    """Put the device in the state an artifact bag declares, markers and all.
+
+    `digest` is what the markers claim, which is the digest of the *published*
+    artifact and therefore not the digest of the payload lying on the device
+    once that artifact was decompressed on the way there.
+    """
     user, _, group = str(props['owner']).partition(':')
     target = str(props['target'])
+    claimed = digest if digest is not None else hashlib.sha256(payload).hexdigest()
     device.files[target] = Entry(data=payload, mode=str(props['mode']), owner=user, group=group)
-    device.files[provider.marker_path(target)] = Entry(data=f'{hashlib.sha256(payload).hexdigest()}\n'.encode())
+    device.files[provider.marker_path(target)] = Entry(data=f'{claimed}\n'.encode())
+    tree = props.get('extract')
+    if tree:
+        device.files[str(tree)] = Entry(data=b'a directory, as far as `stat` is concerned')
+        device.files[provider.marker_path(str(tree))] = Entry(data=f'{claimed}\n'.encode())
 
 
 ##
@@ -570,6 +601,191 @@ def test_a_digest_that_is_not_a_sha256_is_refused() -> None:
     assert [failure.property for failure in result.failures] == ['sha256']
 
 
+def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
+    result = provider.GwArtifactProvider().check({}, unpacking_props(extract='estate/roots/adguard'))
+
+    assert [failure.property for failure in result.failures] == ['extract']
+
+
+##
+## Unpacking an artifact into a tree
+##
+
+
+def test_the_pin_is_checked_against_what_was_published_and_the_device_gets_the_archive(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """The published artifact is compressed and the device receives it plain.
+
+    The chain that makes this safe: the digest verifies the bytes as downloaded,
+    decompression is a function of bytes already verified, and the marker the
+    device keeps names that same digest. So the marker is deliberately *not* the
+    checksum of the file beside it — it is a claim about provenance, and a
+    reviewer reading `sha256sum` on the device should expect them to differ.
+    """
+    assert downloads[ROOTFS_ZST_URL] != ROOTFS, 'the published artifact is the compressed one'
+
+    _ = provider.GwArtifactProvider().create(unpacking_props())
+
+    assert device.files[ROOTFS_TARGET].data == ROOTFS
+    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
+
+
+def test_compressed_bytes_that_do_not_match_their_pin_are_never_decompressed(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """Verification comes first, so nothing hands unverified bytes to a decoder."""
+    downloads[ROOTFS_ZST_URL] = zstandard.ZstdCompressor().compress(b'a substituted release')
+
+    with pytest.raises(provider.DigestMismatch):
+        _ = provider.GwArtifactProvider().create(unpacking_props())
+
+    assert device.sessions == 0
+
+
+def test_an_uncompressed_payload_is_pushed_as_it_arrived(device: Device, downloads: dict[str, bytes]) -> None:
+    """A publisher that stops compressing does not turn a working pin into a
+    corrupt one: what the device must receive is a plain archive either way."""
+    assert downloads
+    _ = provider.GwArtifactProvider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
+
+    assert device.files[ROOTFS_TARGET].data == ROOTFS
+
+
+def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """A container's root is either the previous tree or the new one.
+
+    The archive is unpacked into a sibling staging directory and moved into
+    place, and what it displaced is left beside it: at this point the container
+    is still running on those files, because the hook that restarts it has not
+    run yet. Clearing them is the next push's first act.
+    """
+    assert downloads
+    _ = provider.GwArtifactProvider().create(unpacking_props())
+
+    unpack = next(command for command in device.commands if 'tar -xf' in command)
+    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
+    superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
+
+    assert unpack.startswith(f'rm -rf {staging} {superseded}')
+    assert f'tar -xf {ROOTFS_TARGET} -C {staging}' in unpack
+    assert f'mv {ROOTFS_TREE} {superseded}' in unpack
+    assert unpack.endswith(f'mv {staging} {ROOTFS_TREE}')
+    assert f'rm -rf {ROOTFS_TREE} ' not in unpack, 'the live tree is renamed, never deleted in place'
+
+
+def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """The hook is what notices a new root filesystem, so it has to see it.
+
+    The gateway's hook restarts a container when a file it reads has changed,
+    and the marker beside the tree is that file. The marker beside the archive
+    stays last, because it is the claim that the whole sequence succeeded.
+    """
+    assert downloads
+    _ = provider.GwArtifactProvider().create(unpacking_props())
+
+    assert device.log == [
+        f'write {ROOTFS_TARGET}',
+        f'run {provider.unpack_script(ROOTFS_TARGET, ROOTFS_TREE)}',
+        f'write {provider.marker_path(ROOTFS_TREE)}',
+        'run systemctl restart adguard',
+        f'write {provider.marker_path(ROOTFS_TARGET)}',
+    ]
+
+
+def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """The hook never runs and neither marker is written, so the next preview
+    still has work to do — and the tree the container boots is untouched."""
+    assert downloads
+    device.refuse = ('tar -xf',)
+
+    with pytest.raises(provider.ExtractFailed):
+        _ = provider.GwArtifactProvider().create(unpacking_props())
+
+    assert provider.marker_path(ROOTFS_TREE) not in device.files
+    assert provider.marker_path(ROOTFS_TARGET) not in device.files
+    assert 'systemctl restart adguard' not in device.commands
+
+
+def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(device: Device) -> None:
+    """What the estate runs is the tree; the archive is only how it got there."""
+    props = unpacking_props()
+    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    del device.files[ROOTFS_TREE]
+
+    assert provider.GwArtifactProvider().diff('id', props, props).changes is True
+
+
+def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
+    props = unpacking_props()
+    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
+
+    assert provider.GwArtifactProvider().diff('id', props, props).changes is True
+
+
+def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device) -> None:
+    props = unpacking_props()
+    landed(device, props, digest=ROOTFS_ZST_SHA256)
+
+    assert provider.GwArtifactProvider().diff('id', props, props).changes is False
+
+
+def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
+    """A refresh reports what the device can actually run, which is the tree."""
+    props = unpacking_props()
+    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    del device.files[ROOTFS_TREE]
+
+    assert provider.GwArtifactProvider().read('id', props).id is None
+
+
+def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
+    """Derived state the push created is state the push removes, leftovers of an
+    interrupted extraction included."""
+    props = unpacking_props()
+    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    device.log.clear()
+
+    provider.GwArtifactProvider().delete('id', props)
+
+    assert device.log == [
+        f'remove {provider.marker_path(ROOTFS_TARGET)}',
+        f'remove {ROOTFS_TARGET}',
+        f'remove {provider.marker_path(ROOTFS_TREE)}',
+        f'run {provider.purge_script(ROOTFS_TREE)}',
+        'run systemctl restart adguard',
+    ]
+    assert ROOTFS_TREE in provider.purge_script(ROOTFS_TREE)
+    assert f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}' in provider.purge_script(ROOTFS_TREE)
+
+
+def test_a_path_a_shell_would_mangle_is_quoted_in_the_extraction_too() -> None:
+    """The archive and the directory both reach a shell, so both are quoted."""
+    script = provider.unpack_script('/data/a file.tar', '/data/roots/a tree')
+
+    assert "'/data/a file.tar'" in script
+    assert "'/data/roots/a tree'" in script
+
+
+def test_an_archive_that_is_not_compressed_survives_the_decompression_step() -> None:
+    assert provider.plain_archive(ROOTFS) == ROOTFS
+    assert provider.plain_archive(ROOTFS_ZST) == ROOTFS
+    assert ROOTFS_ZST.startswith(provider.ZSTD_MAGIC)
+
+
 ##
 ## What the engine is handed
 ##
@@ -623,9 +839,10 @@ async def stack() -> None:
     _ = provider.GwArtifact(
         'adguard-rootfs',
         connection=connection,
-        url=ROOTFS_URL,
-        sha256=ROOTFS_SHA256,
+        url=ROOTFS_ZST_URL,
+        sha256=ROOTFS_ZST_SHA256,
         target=ROOTFS_TARGET,
+        extract=ROOTFS_TREE,
     )
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
     _ = await asyncio.gather(*pending)
@@ -655,9 +872,10 @@ def test_a_declared_artifact_carries_its_pin_and_never_its_bytes() -> None:
     typ, inputs = registered('adguard-rootfs')
 
     assert typ == 'pulumi-python:dynamic/gateway:Artifact'
-    assert inputs['url'] == ROOTFS_URL
-    assert inputs['sha256'] == ROOTFS_SHA256
+    assert inputs['url'] == ROOTFS_ZST_URL
+    assert inputs['sha256'] == ROOTFS_ZST_SHA256
     assert inputs['target'] == ROOTFS_TARGET
+    assert inputs['extract'] == ROOTFS_TREE
     assert 'content' not in inputs
 
 

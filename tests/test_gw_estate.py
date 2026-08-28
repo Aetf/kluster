@@ -39,7 +39,7 @@ ADDRESSES = {
     'adguard-bob': IPv4Address('10.0.5.12'),
 }
 ROOTFS = {
-    name: estate.Rootfs(url=f'https://example.invalid/{name}.raw', sha256=DIGEST) for name in conventions.GW_ESTATE
+    name: estate.Rootfs(url=f'https://example.invalid/{name}.tar.zst', sha256=DIGEST) for name in conventions.GW_ESTATE
 }
 
 #: Every resource the declaration fixture registered: type, name, inputs.
@@ -188,7 +188,23 @@ def test_a_bridged_container_is_placed_and_the_overlay_member_is_not() -> None:
     # A bind is not access: the unit's own device policy has to admit it too.
     assert f'DeviceAllow={estate.TUN_DEVICE} rw' in overlay
     assert f'--bind={estate.state_path("zerotier")}:{estate.ZEROTIER_STATE}' in overlay
-    assert f'--image={estate.image_path("zerotier")}' in overlay
+    assert f'--directory={estate.root_path("zerotier")}' in overlay
+
+
+def test_a_unit_boots_the_unpacked_tree_and_not_the_tarball_that_carried_it() -> None:
+    """The pins are root filesystem archives, and `--image=` cannot boot one.
+
+    So the artifact lands as a tarball and the push unpacks it into a tree the
+    unit names with `--directory=`. The two paths are distinct on purpose: the
+    tarball is what the digest pins, the tree is derived state the push
+    replaces, and a unit pointed at the archive would not start at all.
+    """
+    unit = estate.unit_file(census()[0])
+
+    assert f'--directory={estate.root_path("caddy")}' in unit
+    assert '--image=' not in unit
+    assert estate.image_path('caddy').endswith('.tar')
+    assert estate.root_path('caddy') != estate.image_path('caddy')
 
 
 def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() -> None:
@@ -251,31 +267,48 @@ def test_a_container_is_restarted_only_when_something_it_reads_changed() -> None
     """Otherwise every deployment would restart the overlay member.
 
     The script stamps each unit with a checksum over the files that define it —
-    the unit, the image's digest marker, and every file bound into the
-    container — and compares before acting. The image is represented by its
-    marker rather than by itself: reading a root filesystem to learn it has not
-    changed would cost more than the restart it avoids.
+    the unit, the digest marker beside its root filesystem tree, and every file
+    bound into the container — and compares before acting. The tree is
+    represented by its marker rather than by itself: walking a root filesystem
+    to learn it has not changed would cost more than the restart it avoids.
     """
     script = estate.on_boot_script(census())
 
-    assert f'{estate.image_path("caddy")}.digest' in script
+    assert f'{estate.root_path("caddy")}.digest' in script
     assert f'{estate.UNIT_DIR}/{estate.unit_name("caddy")}' in script
     assert estate.dropin_path('caddy', census()[0].files[1]) in script
     assert 'systemctl is-active --quiet' in script
     assert 'cksum' in script
 
 
+def test_a_new_root_filesystem_is_noticed_through_the_marker_beside_the_tree() -> None:
+    """The tarball's own marker is written after this script has already run.
+
+    The artifact resource writes it last, as the claim that the whole push
+    succeeded, so a stamp built from it would compare equal on the very run
+    that installed the new tree and the member would keep running the old one
+    until some unrelated file changed. The marker beside the tree is written
+    before the hook, which is why it is the one the stamp reads.
+    """
+    script = estate.on_boot_script(census())
+
+    assert f'{estate.image_path("caddy")}.digest' not in script
+    assert f'{estate.root_path("caddy")}.digest' in script
+
+
 def test_the_script_converges_a_device_that_has_nothing_on_it() -> None:
     """This is the firmware-update case, and the first-deployment case.
 
     The script is written before the files it describes, so a member whose unit
-    or image has not landed yet is skipped rather than fatal — and a unit the
-    estate no longer declares is stopped and removed, which is what keeps the
-    device from accumulating every estate it ever had.
+    or root filesystem tree has not landed yet is skipped rather than fatal —
+    and a unit the estate no longer declares is stopped and removed, which is
+    what keeps the device from accumulating every estate it ever had.
     """
     script = estate.on_boot_script(census())
 
     assert '[ -e "$UNITS/$unit" ] || continue' in script
+    # A tree, not a file: a member is ready when there is something to boot.
+    assert f'[ -d "{estate.ROOT_DIR}/${{machine%.service}}" ] || continue' in script
     assert f'"$SYSTEMD/{estate.UNIT_PREFIX}"*.service' in script
     assert 'systemctl disable --now' in script
     # The routing daemon reads outside /data, so the script puts it back there
@@ -300,6 +333,34 @@ def test_a_resolvers_own_configuration_is_seeded_and_then_left_alone() -> None:
     script = estate.on_boot_script(census())
     assert f'{estate.STATE_DIR}/adguard-alice/AdGuardHome.yaml' in script
     assert 'if [ -e "$destination" ]; then\n        return 0' in script
+
+
+def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with() -> None:
+    """The image decides this, not the estate: the census follows the layout.
+
+    The resolver runs from an installation the root filesystem carries and
+    keeps its configuration, query log and statistics in a working directory
+    outside it. Binding the member's state anywhere else would give the
+    instance an empty directory to fill and leave the seed sitting where
+    nothing reads it — the failure would be a resolver that came up with
+    default settings rather than an error anyone sees.
+    """
+    by_name = {container.name: container for container in census()}
+    alice = by_name['adguard-alice']
+    seed = alice.seed
+    assert seed is not None
+
+    assert alice.state == estate.ADGUARD_STATE
+    assert estate.ADGUARD_STATE != estate.ADGUARD_INSTALL
+    # The live configuration is the working directory's, and the seed is
+    # delivered read-only beside the installation so that placing one can never
+    # overwrite the other.
+    dropin = next(entry for entry in alice.files if entry.name == estate.ADGUARD_SEED)
+    assert dropin.target == f'{estate.ADGUARD_INSTALL}/{estate.ADGUARD_SEED}'
+    assert not dropin.target.startswith(f'{estate.ADGUARD_STATE}/')
+
+    unit = estate.unit_file(alice)
+    assert f'--bind={estate.state_path("adguard-alice")}:{estate.ADGUARD_STATE}' in unit
 
 
 ##
@@ -344,8 +405,15 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes() -> None:
     assert sorted(name for name, _ in images) == sorted(f'{NAME}-image-{member}' for member in conventions.GW_ESTATE)
     for name, inputs in images:
         assert inputs['sha256'] == DIGEST, name
-        assert inputs['url'].endswith('.raw'), name
+        assert inputs['url'].endswith('.tar.zst'), name
         assert 'content' not in inputs, name
+
+    # Every member's artifact owns the tree its unit boots, so a pin that moves
+    # replaces the root filesystem rather than leaving a tarball nobody unpacks.
+    for member in conventions.GW_ESTATE:
+        inputs = registered(f'{NAME}-image-{member}')
+        assert inputs['target'] == estate.image_path(member)
+        assert inputs['extract'] == estate.root_path(member)
 
 
 @pytest.mark.asyncio
@@ -372,13 +440,14 @@ def test_the_pins_and_the_addresses_are_read_from_configuration() -> None:
     named configuration error rather than a push that reaches the device and is
     refused there.
     """
-    pins = estate.parse_rootfs({'caddy': {'url': 'https://example.invalid/caddy.raw', 'sha256': DIGEST.upper()}})
-    assert pins['caddy'] == estate.Rootfs(url='https://example.invalid/caddy.raw', sha256=DIGEST)
+    url = 'https://example.invalid/caddy.tar.zst'
+    pins = estate.parse_rootfs({'caddy': {'url': url, 'sha256': DIGEST.upper()}})
+    assert pins['caddy'] == estate.Rootfs(url=url, sha256=DIGEST)
 
     assert estate.parse_addresses({'caddy': '10.0.5.10'}) == {'caddy': IPv4Address('10.0.5.10')}
 
     with pytest.raises(ValueError, match='is not a hex sha256 digest'):
-        estate.parse_rootfs({'caddy': {'url': 'https://example.invalid/caddy.raw', 'sha256': 'abc'}})
+        estate.parse_rootfs({'caddy': {'url': url, 'sha256': 'abc'}})
     with pytest.raises(ValueError, match='carries no url'):
         estate.parse_rootfs({'caddy': {'sha256': DIGEST}})
     with pytest.raises(TypeError, match='must be a mapping'):
