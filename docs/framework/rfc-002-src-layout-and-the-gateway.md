@@ -13,9 +13,11 @@
 *   **Out of scope, each settled elsewhere:** the `dns` and `github` stacks'
     internal reorganization — they move into the new tree here and are
     otherwise untouched, and get a document of their own; the scripts' internal
-    shape; the shared test machinery; and whether the chunk bucket exists at
-    all — this document treats `ChunkStore` as *moved or deleted by that
-    decision* and depends on neither outcome.
+    shape; and the shared test machinery.
+*   **One section is conditional:** §7.5, on per-node capabilities, depends on a
+    pending decision about whether the object-storage chunk bucket exists at
+    all. Everything else here holds either way; §7.5 is written to the expected
+    outcome and is not final until that decision lands.
 
 --------------------------------------------------------------------------------
 
@@ -153,6 +155,8 @@ documentation, where the style reviewer reads it.
 | `on_boot_script`, `20-kluster-estate.sh` | `recovery_script`, `20-kluster-services.sh` | Named for what it does rather than for the directory it sits in. |
 | `parse_rootfs`, `parse_addresses`, `parse_members` | `lib.config` readers, or deleted | §7.2 and §8. |
 | `facts.py` | *(deleted)* | §7.4. |
+| `AUGMENTED_NODE`, "the augmented node" | `DEDICATED_VIP_NODE`, `NODE_VOLUMES` | One name for two unrelated capabilities that happen to sit on one machine today (§7.5). |
+| `CacheVolume` | `NodeVolume` | It is a block volume attached to a node; what the volume is *for* belongs to whatever claims it. |
 
 ### 3.2 Which network a name means
 
@@ -467,7 +471,7 @@ without its siblings does not parse.
 | `overlay.py` | The overlay subnet, the roles, the managed routes, `ROSTER`. |
 | `gateway.py` | The device's paths, account and pinned host key, the service census, the vhosts, the resolver API port. |
 | `homelab.py` | The worker node's name, address and sizing, the host bridge, the host's pinned key, the adopted domain's UUID. |
-| `cloud.py` | The node fleet, node sizing, the VCN plan. |
+| `cloud.py` | The node fleet, node sizing, the VCN plan, the per-node capabilities of §7.5. |
 | `cluster.py` | Pod and service ranges, BGP, the load-balancer pools, the Gateway API names, storage classes. |
 | `backup.py` | Retention classes, bucket names, repository layouts. |
 | `dns.py` | Zones, mirrors, anchors. |
@@ -606,6 +610,69 @@ this repository reads configuration, so it becomes `lib/config.py` and is used
 by every stack that reads an object. The validation stays at the boundary and
 still reports which entry is wrong by name; only the home changes, and the
 gateway stops owning a general mechanism.
+
+### 7.5 Per-node capabilities
+
+**Status: conditional.** This subsection depends on a decision, pending as this
+is written, about whether the object-storage chunk bucket and the JuiceFS mount
+in front of it exist at all. The expected outcome is that they do not: the one
+dataset behind them moves to a plain block volume on a cloud node, the
+`ChunkStore` component is deleted rather than moved, and the credential it mints
+goes with it. Nothing else in this document depends on that; this subsection
+does, and is not final until the decision lands.
+
+The design today calls one of the three cloud nodes **augmented**, and that one
+word carries two capabilities that have nothing to do with each other:
+
+1.  a **dedicated VIP** — a secondary private address and the reserved public
+    address that is mapped onto it, which exactly one node has;
+2.  an **attached block volume** — of which any node may have one, for a dataset
+    that must outlive a container.
+
+They were one name because one node happened to have both. A second volume
+consumer makes the bundle wrong rather than merely coarse, so it splits into two
+structures in `conventions`, each declared once and read three times:
+
+```python
+@dataclass(frozen=True)
+class NodeVolume:
+    # A block volume attached to one node, and where that node mounts it.
+    node: str
+    size_gb: int
+    mount: str
+
+NODE_VOLUMES: Mapping[str, NodeVolume] = {...}
+DEDICATED_VIP_NODE = ...
+```
+
+The three readers are the three layers the volume passes through, and naming it
+once is what keeps them consistent:
+
+*   **the physical stack** attaches each volume to its node, one `NodeVolume`
+    component per entry — the generalization of today's single `CacheVolume`;
+*   **the day-0 machine configuration** renders each node's mounts from the same
+    table, and a node label per volume, so placement is a fact about the node
+    rather than a string a workload repeats;
+*   **the cluster side** declares a `local` persistent volume per volume, with
+    node affinity on that label. That declaration is not this document's — it is
+    named here because it is the reason the label exists.
+
+That path is what keeps the vendor in the physical layer: the cloud provider
+appears where the volume is created and attached, and everything above it sees a
+directory on a node.
+
+**One volume per node, spread.** The dataset that needs the VIP keeps its volume
+on the VIP node; a second volume goes on a different node. Three reasons, in
+order of weight: disk selection in the machine configuration stays "the disk
+that is not the boot disk" rather than a discrimination by size or serial;
+losing one node stops taking two preserved datasets with it; and the load
+spreads. The cost is identical either way, which is what makes the placement
+free to choose on these grounds.
+
+The word "augmented" retires with the bundle. The `augmented` parameter of the
+cloud-nodes component becomes the two capabilities, passed separately, and the
+node that holds each is read from `conventions` rather than handed down as one
+name.
 
 --------------------------------------------------------------------------------
 
@@ -777,7 +844,10 @@ reads, then the text, then the structure that consumes both.
     plus the `lib/workstation.py` split and the import contract of §2.3 in CI.
     The `dns` and `github` packages move with it and are otherwise untouched.
 2.  **`conventions` restructured** (§7.1, §7.3): the package, the structures,
-    the provider account facts. Readers follow; no vocabulary changes yet.
+    the provider account facts. Readers follow; no vocabulary changes yet. The
+    per-node capabilities of §7.5 land here too, once the decision they wait on
+    has been made — they are a structure like the others, and splitting them
+    into a slice of their own would restructure the same file twice.
 3.  **The roster carries identities** (§7.2): `zerotierMembers`, the
     `zerotier_addresses` export and the `dns` StackReference retire together,
     because each is the other's only remaining reason to exist.
