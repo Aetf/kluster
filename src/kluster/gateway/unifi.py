@@ -41,7 +41,12 @@ the controller that is not declared here is drift.
     the zone stays open, the untrusted subpopulation is carved out.
 5.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
     port, to the worker VM's global address — now landing in the cluster zone
-    rather than the internal one, because that is where the worker moved.
+    rather than the internal one, because that is where the worker moved. The
+    one rule of the census that is conditional: the address is a SLAAC address
+    the worker forms from what the VLAN declared here advertises, so it does
+    not exist until the worker has booted on that VLAN. With no address to
+    name, the rule is not declared and v6 is outbound-only — the same degraded
+    stage a stale rule leaves behind, and an accepted one.
 6.  **The IPv4 peer-port forward** — the only port forward on the device.
     Nothing else is published inbound: cluster and node management arrive
     over the cloud load balancer, home-side management over ZeroTier.
@@ -138,7 +143,12 @@ STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
 
 
 class Firewall(Component):
-    """The cluster's network and zone, two address groups, ten rules, one forward."""
+    """The cluster's network and zone, two address groups, ten rules, one forward.
+
+    Nine rules while `worker_gua` is absent: the pinhole is one of the ten and
+    the only conditional one, naming an address nothing here declares, so it is
+    declared only once there is one.
+    """
 
     def __init__(
         self,
@@ -147,7 +157,7 @@ class Firewall(Component):
         api_url: str,
         api_key: pulumi.Input[str],
         site: str,
-        worker_gua: pulumi.Input[str],
+        worker_gua: pulumi.Input[str] | None,
         peer_port: int,
         static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None,
         opts: pulumi.ResourceOptions | None = None,
@@ -439,31 +449,40 @@ class Firewall(Component):
         # this rule is re-declared when it does. A stale rule degrades to
         # outbound-only IPv6 — the accepted first stage — rather than to
         # anything unsafe.
-        self.peer_v6 = unifi.FirewallZonePolicy(
-            f'{name}-peer-v6',
-            name=f'{name} inbound peer port (v6)',
-            description='Inbound peer traffic to the worker VM on the bulk-transfer port.',
-            action='ALLOW',
-            ip_version='IPV6',
-            protocol='tcp_udp',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=external),
-            destination=unifi.FirewallZonePolicyDestinationArgs(
-                zone_id=self.zone.id,
-                ips=[worker_gua],
-                port=peer_port,
-            ),
-            auto_allow_return_traffic=True,
-            enabled=True,
-            opts=child,
-        )
-        self.peer_order = unifi.FirewallZonePolicyOrder(
-            f'{name}-peer-order',
-            source_zone_id=external,
-            destination_zone_id=self.zone.id,
-            before_predefined_ids=[self.peer_v6.id],
-            site=site,
-            opts=child,
-        )
+        #
+        # No address is the same stage reached from the other side: the worker
+        # forms this address by SLAAC off the network declared above, so it
+        # cannot be known before that network has been applied and the worker
+        # has booted on it. Rather than admit a guessed address, the pair is
+        # left undeclared until there is one to name.
+        self.peer_v6: unifi.FirewallZonePolicy | None = None
+        self.peer_order: unifi.FirewallZonePolicyOrder | None = None
+        if worker_gua is not None:
+            self.peer_v6 = unifi.FirewallZonePolicy(
+                f'{name}-peer-v6',
+                name=f'{name} inbound peer port (v6)',
+                description='Inbound peer traffic to the worker VM on the bulk-transfer port.',
+                action='ALLOW',
+                ip_version='IPV6',
+                protocol='tcp_udp',
+                source=unifi.FirewallZonePolicySourceArgs(zone_id=external),
+                destination=unifi.FirewallZonePolicyDestinationArgs(
+                    zone_id=self.zone.id,
+                    ips=[worker_gua],
+                    port=peer_port,
+                ),
+                auto_allow_return_traffic=True,
+                enabled=True,
+                opts=child,
+            )
+            self.peer_order = unifi.FirewallZonePolicyOrder(
+                f'{name}-peer-order',
+                source_zone_id=external,
+                destination_zone_id=self.zone.id,
+                before_predefined_ids=[self.peer_v6.id],
+                site=site,
+                opts=child,
+            )
 
         # The IPv4 half of the same flow, and the only port forward on the
         # device. It lands on the worker VM's node address — read from
@@ -471,7 +490,9 @@ class Firewall(Component):
         # it — because that is the address the application's outbound peer
         # traffic already wears: the cluster masquerades it to the node, so
         # inbound has to arrive there for a peer to see one endpoint rather
-        # than two.
+        # than two. Unconditional where the v6 half is not, for that same
+        # reason: this address is stated by the address plan rather than
+        # observed off a booted machine.
         self.peer_v4 = unifi.PortForward(
             f'{name}-peer-v4',
             name=f'{name} inbound peer port (v4)',

@@ -55,9 +55,11 @@ KUBE_API_PORT = 6443
 OCI_NAMESPACE = 'oci'
 OCI_TENANCY_KEY = 'tenancyOcid'
 
-#: The one optional key of this stack: a LAN address for the gateway, set only
-#: while the gateway is not yet on the overlay. Absent — the steady state — every
-#: client of the gateway derives its address from `conventions.ZT_UDM`.
+#: The first-bring-up knob: a LAN address for the gateway, set only while the
+#: gateway is not yet on the overlay. Absent — the steady state — every client
+#: of the gateway derives its address from `conventions.ZT_UDM`. One of two
+#: optional keys, and the other is its mirror image: this one is set only
+#: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 
 #: The client half of the libvirt session, and the only part of that session
@@ -305,7 +307,15 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
         api_url=f'https://{gateway_host}',
         api_key=config.require_secret('unifiApiKey'),
         site=conventions.UNIFI_SITE,
-        worker_gua=config.require('workerGua'),
+        # Optional, and absent on the first apply of all: the worker's global
+        # address is a SLAAC address formed from the router advertisement of
+        # the VLAN this same call declares, so it comes into being one boot
+        # after this run rather than before it. Absent, the pinhole is not
+        # declared and the worker's IPv6 is outbound-only — the degraded stage
+        # the design already accepts (physical/gateway.md §4.2) — and the
+        # bring-up ceremony sets the key once the address can be read off the
+        # advertisement (physical/gateway.md §2.5).
+        worker_gua=config.get('workerGua'),
         peer_port=config.require_int('qbittorrentPeerPort'),
     )
     members = overlay.members
