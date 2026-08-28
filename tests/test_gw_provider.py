@@ -302,6 +302,30 @@ def test_moving_a_file_replaces_it_and_the_new_path_exists_before_the_old_one_go
     assert device.sessions == 0
 
 
+def test_a_moved_dial_address_rewrites_the_file_and_deletes_nothing(device: Device) -> None:
+    """The address is where the device answers, not which device it is.
+
+    A first bring-up dials the gateway over the LAN and every later run dials it
+    over the overlay (physical/gateway.md §2.5), and both reach the same box. A
+    replacement would therefore write the file at the new address and then delete
+    it at the old one — the same file, on the same device — leaving the estate
+    gone at the end of a run that reported success. It is an ordinary declared
+    change instead: the same bytes are written again, through the new address.
+    """
+    olds = file_props()
+    news = file_props(host='gateway.invalid')
+
+    result = provider.GwFileProvider().diff('id', olds, news)
+
+    assert result.replaces == []
+    assert result.changes is True
+    assert device.sessions == 0
+
+    artifact = provider.GwArtifactProvider().diff('id', artifact_props(), artifact_props(host='gateway.invalid'))
+    assert artifact.replaces == []
+    assert artifact.changes is True
+
+
 def test_a_rotated_credential_is_a_change_so_state_stops_naming_the_retired_key(device: Device) -> None:
     """Otherwise the eventual `delete` authenticates with a key that is gone."""
     olds = file_props()
@@ -684,6 +708,27 @@ def test_the_pin_is_a_parsed_key_because_a_string_would_name_a_file_to_read() ->
     trusted, _, _, _, _, _, _ = match_known_hosts(ssh.pinned_host_keys(HOST_KEY), HOST, HOST, 22)
 
     assert [key.export_public_key('openssh').decode().strip() for key in trusted] == [HOST_KEY]
+
+
+def test_the_pin_matches_the_device_at_whatever_address_the_session_dials() -> None:
+    """One key, no host name in front of it — so the address may change.
+
+    The pin is a bare `ssh-ed25519 <blob>` line rather than a `known_hosts`
+    entry, and a matcher given a parsed key applies it to whatever host it is
+    asked about. That is what lets the same configured value serve a session
+    dialled at the device's overlay address and one dialled at a LAN name during
+    first bring-up (`stacks/physical.py`, `gatewayBootstrapHost`): the device
+    presents the same key either way, and nothing in the pin disagrees.
+    """
+    lan = 'gateway.invalid'
+
+    over_overlay, _, _, _, _, _, _ = match_known_hosts(ssh.pinned_host_keys(HOST_KEY), HOST, HOST, 22)
+    over_lan, _, _, _, _, _, _ = match_known_hosts(ssh.pinned_host_keys(HOST_KEY), lan, lan, 22)
+
+    exported = [
+        [key.export_public_key('openssh').decode().strip() for key in keys] for keys in (over_overlay, over_lan)
+    ]
+    assert exported == [[HOST_KEY], [HOST_KEY]]
 
 
 def test_nothing_may_vouch_for_a_substitute_key() -> None:
