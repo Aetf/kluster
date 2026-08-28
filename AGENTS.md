@@ -115,6 +115,15 @@ card moves to *In review*; the merge moves it to *Done* through the
 built-in workflow. A card in *In review* with no open pull request is a
 dispatch that died and should be re-driven or returned to *Ready*.
 
+**Cadence**: reviews are phased, not saved up. Every pull request gets
+the two-angle review above; every milestone carries a *review
+checkpoint* issue — a read-only doc-vs-implementation audit of the
+milestone's areas plus an operator review at design level — so each
+operator pass covers one milestone's worth of change and problems
+surface while they are cheap. Major structural changes run the
+sequence in reverse: an RFC states the desired end state and is
+approved before implementation starts (rfc-001 is the shape).
+
 ### How progress is reported
 
 The ops repository's issues are the work ledger, and GitHub's own
