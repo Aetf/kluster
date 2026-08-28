@@ -30,3 +30,10 @@ config:
   kluster-py:gatewayAddresses: '{"caddy":"10.0.5.180","adguard-alice":"10.0.5.3","adguard-bob":"10.0.5.4"}'
   kluster-py:gatewayBgpPassword:
     secure: v1:wBdxusHiDpECsu68:foOGUk8WIHDIwueFbHlYXIFkpStxgkHQiqZHOppNjDfgUlt1L9PGhmwX7UKuk5Un
+  kluster-py:gatewayRootfs: |-
+    {
+      "caddy": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/caddy-arm64.tar.zst", "sha256": "e154a141364c60ccd0ac0dd1a7711b2f975ad6fc0fa469201002ea22540f5511"},
+      "adguard-alice": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/adguard-arm64.tar.zst", "sha256": "051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910"},
+      "adguard-bob": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/adguard-arm64.tar.zst", "sha256": "051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910"},
+      "zerotier": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/zerotier-arm64.tar.zst", "sha256": "ba74ae49ae729e79c2bcf7b2c770fdb03b19862b188350ab88166e1a3faaadf1"}
+    }
