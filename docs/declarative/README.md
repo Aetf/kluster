@@ -11,11 +11,9 @@ mechanically crosses a stack boundary is
 ## 1. The stacks
 
 > **Status**: decided 2026-08-22 (interactive review; `dns` added the
-> same day). The earlier proposal — infra-homelab, infra-cloud,
-> k8s-base, applications — is superseded: splitting the physical layer
-> by site bought nothing, since both sites change at the same rate and
-> reference each other, while the base/apps split earned its keep on
-> the frequency argument below.
+> same day). The physical layer is one stack across both sites, not one
+> per site: the two sites change at the same rate and reference each
+> other, so a split by site would buy nothing and cost a boundary.
 
 Five stacks in one project, one environment: the four CI deploys, plus
 `github`, which declares the forge those four are deployed by and is
@@ -59,14 +57,13 @@ publishes the `*.zt` host block from the same roster, so the table is
 stated once rather than imported across a package boundary.
 
 A `StackReference` therefore carries only machine facts — values no
-program can know until an apply produces them. That is `physical`'s
-kubeconfig and talosconfig, its node addresses, load-balancer and
-dedicated-VIP addresses, bucket names and endpoints, and the overlay
-address ZeroTier Central assigned each member (`zerotier_addresses`);
-and `dns`'s zone IDs, which `apps` consumes for the records it declares
-beside each application ([dns.md](dns.md) §1). A resource that deliberately keeps
-autonaming publishes its generated name the same way, because a
-generated name is a machine fact too.
+program can know until an apply produces them. Nearly all of them are
+the `physical` stack's outputs, enumerated in
+[physical.md](physical.md) §0; the exception is `dns`'s zone IDs, which
+`apps` consumes for the records it declares beside each application
+([dns.md](dns.md) §1). A resource that deliberately keeps autonaming
+publishes its generated name the same way, because a generated name is
+a machine fact too.
 
 ## 3. The documents
 
@@ -98,7 +95,9 @@ Created as each area reaches detailed design:
 
 The `github` stack has no document here: what it declares is designed
 alongside the forge it configures, in
-[framework/github.md](../framework/github.md) §3.
+[framework/github.md](../framework/github.md) §3 — and what it
+deliberately leaves as console state, audited rather than declared, in
+that document's §4.
 
 ## 4. Deliberately not pre-decided
 

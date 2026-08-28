@@ -161,13 +161,13 @@ self.app = Deployment(
 The program entrypoint itself is async (`__main__.py` registers
 `kluster.main.main` via `pulumi.run`, Pulumi >= 3.254). Async work that does
 *not* consume resource outputs — external APIs, files, stack references —
-belongs there, and a returned mapping becomes stack outputs:
+belongs there, and stack outputs are published with `pulumi.export`:
 
 ```python
-async def main() -> pulumi.Inputs | None:
+async def main() -> None:
     ami = await fetch_talos_ami()      # plain asyncio, no outputs involved
     cluster = Cluster('kluster', ami=ami)
-    return {'endpoint': cluster.endpoint}
+    pulumi.export('endpoint', cluster.endpoint)
 ```
 
 `resolve` deliberately refuses to run there (`RuntimeError`): feeding resource
