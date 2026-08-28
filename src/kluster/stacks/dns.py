@@ -13,11 +13,12 @@ them, which addresses the anchors carry, and which instances the rewrites are
 written to.
 
 Two blocks are built here rather than written down, and both for the same
-reason — the `physical` stack decides what is in them, so they come across the
-StackReference as machine facts. The anchors, `kluster.hosts` and `vip1.hosts`,
-name addresses that stack hands out; the ZeroTier host block names one record
-per member of the overlay roster it admits, at the address ZeroTier Central
-assigned. Anchors are also the one place an IP literal is allowed, the overlay
+reason — the addresses in them are machine facts the `physical` stack hands
+out, so they come across the StackReference. The anchors, `kluster.hosts` and
+`vip1.hosts`, are those addresses; the ZeroTier host block is one record per
+member of the overlay roster, which is a convention rather than an output
+(`conventions.ZT_ROSTER`), at the address ZeroTier Central assigned, which is
+one. Anchors are also the one place an IP literal is allowed, the overlay
 block excepted: private addresses under `*.zt` are an existing deliberate
 practice (dns.md §2).
 """
@@ -140,15 +141,15 @@ def _anchors(physical: pulumi.StackReference) -> Sequence[Record]:
 
 
 def _zt_block(physical: pulumi.StackReference) -> Sequence[Record]:
-    """The ZeroTier host block, from the roster the `physical` stack declares.
+    """The ZeroTier host block, from the roster and the addresses `physical` has.
 
     The split across the reference is the point. *Which* records exist is code
-    — the roster is that stack's own census and is shared as a module, like
-    every other convention (framework/pulumi.md §3.1) — and only the contents
-    are machine facts. So this block is declared without awaiting anything, and
-    a member's address arriving late reaches the record unresolved exactly as
-    an anchor's does; `dns` previews the same names before and after
-    `physical` is applied.
+    — the roster is a convention both stacks read (`conventions.ZT_ROSTER`),
+    shared as a module like every other one (framework/pulumi.md §3.1) — and
+    only the contents are machine facts. So this block is declared without
+    awaiting anything, and a member's address arriving late reaches the record
+    unresolved exactly as an anchor's does; `dns` previews the same names
+    before and after `physical` is applied.
 
     The lookup is written not to raise, for the same reason: before the first
     apply there is no map to look in, and a preview that failed there would be

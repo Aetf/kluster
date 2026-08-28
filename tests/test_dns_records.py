@@ -4,6 +4,8 @@ These assertions are about the declaration, not about Pulumi, so they need no
 runtime — which is the point of keeping records as plain data.
 """
 
+import subprocess
+import sys
 from collections import Counter
 
 import pytest
@@ -22,13 +24,12 @@ from kluster.dns.zones import (
     zt_label,
     zt_records,
 )
-from kluster.gateway.zerotier import ROSTER
 
 #: What the `physical` stack publishes, in shape only: an address for each
 #: member whose address it does not decide itself. The real census lives in
 #: that stack's configuration and in ZeroTier Central, never here.
 ZT_CONFIGURED: dict[str, str] = {
-    entry.name: f'10.144.99.{index}' for index, entry in enumerate(ROSTER) if entry.address is None
+    entry.name: f'10.144.99.{index}' for index, entry in enumerate(conventions.ZT_ROSTER) if entry.address is None
 }
 
 
@@ -83,8 +84,8 @@ def test_every_member_of_the_overlay_roster_is_published() -> None:
     """
     published = {record.label for record in _zt()}
 
-    assert published == {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}' for entry in ROSTER}
-    assert len(_zt()) == len(ROSTER)
+    assert published == {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}' for entry in conventions.ZT_ROSTER}
+    assert len(_zt()) == len(conventions.ZT_ROSTER)
 
 
 def test_the_retired_members_are_published_by_nobody() -> None:
@@ -94,7 +95,7 @@ def test_the_retired_members_are_published_by_nobody() -> None:
     the estate was reconciled against Central, all for the same reason: the
     overlay no longer knows them.
     """
-    members = {entry.name for entry in ROSTER}
+    members = {entry.name for entry in conventions.ZT_ROSTER}
 
     assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro', 'Aetf-Laptop'}
 
@@ -126,12 +127,41 @@ def test_a_members_own_address_is_the_one_the_overlay_assigned_it() -> None:
     assert record.ttl == conventions.ANCHOR_TTL
 
 
+#: What comes with the module that declares the ZeroTier resources: the two
+#: bridged provider SDKs the gateway is built from, and the SSH client it is
+#: configured over. Named here so the cost of reading the roster from that
+#: module instead of from `conventions` is stated rather than implied.
+GATEWAY_IMPORTS = ('asyncssh', 'pulumi_unifi', 'pulumi_zerotier')
+
+
+def test_the_records_import_without_the_gateway_behind_them() -> None:
+    """The overlay roster is a convention, so declaring records loads no provider.
+
+    `dns.zones` reads the roster out of `conventions`, which is plain data.
+    Reading it out of the module that admits members by it would put every
+    package above into the import graph of a program that only declares DNS
+    records — a package dependency on the gateway, bought for a table of names
+    and roles.
+
+    A subprocess is the only honest place to ask: by the time this runs, the
+    rest of the suite has imported all three anyway.
+    """
+    probe = (
+        'import sys, kluster.dns.zones; '
+        f'print(" ".join(sorted(name for name in {GATEWAY_IMPORTS!r} if name in sys.modules)))'
+    )
+
+    loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, check=True, text=True)
+
+    assert loaded.stdout.split() == []
+
+
 def test_zerotier_labels_are_dns_labels() -> None:
     # Central's names are display names: they carry case and spaces, and two
     # members on the roster today carry both.
     assert zt_label('S26 Ultra') == 's26-ultra'
     assert zt_label('Pixel 7 Pro') == 'pixel-7-pro'
-    for entry in ROSTER:
+    for entry in conventions.ZT_ROSTER:
         label = zt_label(entry.name)
         assert label == label.lower()
         assert ' ' not in label

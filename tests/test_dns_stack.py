@@ -14,7 +14,6 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 from kluster.dns.zones import zt_label
-from kluster.gateway.zerotier import ROSTER
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -23,7 +22,9 @@ ACCOUNT_ID = 'cf-account'
 
 #: The overlay half of the physical stack's exports, in shape only: an address
 #: for each member whose address that stack is told rather than decides.
-ZT_ADDRESSES = {entry.name: f'10.144.99.{index}' for index, entry in enumerate(ROSTER) if entry.address is None}
+ZT_ADDRESSES = {
+    entry.name: f'10.144.99.{index}' for index, entry in enumerate(conventions.ZT_ROSTER) if entry.address is None
+}
 
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
@@ -173,7 +174,7 @@ def test_the_overlay_block_is_the_roster_and_carries_the_addresses_physical_publ
         if name.endswith(f'.{conventions.ZT_LABEL}-a')
     }
 
-    assert published == {zt_label(entry.name) for entry in ROSTER}
+    assert published == {zt_label(entry.name) for entry in conventions.ZT_ROSTER}
     assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == ZT_ADDRESSES[member]
     # The gateway's own address is a convention shared as code, so it crosses
     # no reference at all — and is published even during the bring-up in which
@@ -186,7 +187,7 @@ def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
     # resolves in all of it, and the family zones carry none of it.
     for zone in conventions.ALL_ZONES:
         names = {record['name'] for record in _records_of(zone).values()}
-        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in ROSTER}
+        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.ZT_ROSTER}
 
         assert (expected <= names) is (zone in conventions.PUBLIC_ALL), zone
         assert (expected & names == set()) is (zone not in conventions.PUBLIC_ALL), zone

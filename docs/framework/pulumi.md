@@ -220,13 +220,19 @@ Boundary rules:
     inside an app deploy, and app previews don't load the operator
     machinery.
 -   **Conventions are code, not stack outputs.** Gateway names, pool
-    labels, storage-class names live in a shared `conventions.py` —
-    made possible by giving cross-stack-referenced singletons explicit
-    names (autonaming disabled; see cluster-infra.md §0). Resources
-    that deliberately keep autonaming expose their generated names as
-    stack outputs — dynamic names are machine facts. StackReferences
-    otherwise carry only machine facts: physical's kubeconfig, node
-    IPs, NLB IP, bucket names — and `dns`'s zone IDs, consumed by
+    labels, storage-class names and the ZeroTier roster live in a
+    shared `conventions.py` — made possible by giving
+    cross-stack-referenced singletons explicit names (autonaming
+    disabled; see cluster-infra.md §0). A table two stacks decide from
+    belongs there even when only one of them declares resources for it:
+    `physical` admits overlay members by the roster and `dns` publishes
+    the `*.zt` host block from it, so it is stated once rather than
+    imported across a package boundary. Resources that deliberately
+    keep autonaming expose their generated names as stack outputs —
+    dynamic names are machine facts. StackReferences otherwise carry
+    only machine facts: physical's kubeconfig, node IPs, NLB IP, bucket
+    names and `zerotier_addresses` (the overlay address ZeroTier
+    Central assigned each member) — and `dns`'s zone IDs, consumed by
     `apps` for its co-located records (declarative/dns.md §1).
 -   **Namespaces belong to apps**: each app component creates its own
     namespace (legacy habit preserved); `k8s-base` owns only shared,

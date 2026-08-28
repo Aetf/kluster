@@ -15,9 +15,10 @@ The two blocks whose contents another stack decides are not literals here.
 The cluster anchors -- `kluster.hosts` and `vip1.hosts` -- carry addresses the
 `physical` stack hands out, so they are built from that stack's outputs in
 `stacks/dns.py`, and only in the primary zone. The ZeroTier host block is
-built there too, from the member roster the same stack declares: `zt_records`
-below is its shape, and the addresses it does not already know are read across
-the same reference. `archvps.hosts` is a literal precisely because it is the
+built there too, from the overlay roster in `conventions` -- the same table
+`physical` admits members by: `zt_records` below is its shape, and the
+addresses the roster does not itself carry are read across the same
+reference. `archvps.hosts` is a literal precisely because it is the
 one anchor no stack output backs -- it names the legacy VPS, and it retires
 with it (migration.md Wave F).
 """
@@ -30,7 +31,6 @@ import pulumi
 
 from kluster import conventions
 from kluster.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
-from kluster.gateway.zerotier import ROSTER
 
 __all__ = (
     'ALIAS_ZONES',
@@ -64,11 +64,10 @@ def zt_label(member: str) -> str:
 def zt_records(address: Callable[[str], pulumi.Input[str]]) -> tuple[Record, ...]:
     """The ZeroTier host block (dns.md §2): one A record per rostered member.
 
-    The census is the roster the `physical` stack admits members by
-    (`gateway.zerotier.ROSTER`), shared as code the way every other convention
-    is. Publishing is therefore not a second list that can fall behind the
-    first: a device joins the overlay and gets its name under `*.zt` by the
-    same declaration, and a device that leaves loses both.
+    The census is `conventions.ZT_ROSTER`, the same table the `physical` stack
+    admits members by. Publishing is therefore not a second list that can fall
+    behind the first: a device joins the overlay and gets its name under `*.zt`
+    by the same declaration, and a device that leaves loses both.
 
     `address` is asked only for the members whose overlay address ZeroTier
     Central assigned -- a fact about a device that existed before this program,
@@ -85,7 +84,7 @@ def zt_records(address: Callable[[str], pulumi.Input[str]]) -> tuple[Record, ...
             ttl=conventions.ANCHOR_TTL,
             comment='ZeroTier member',
         )
-        for entry in ROSTER
+        for entry in conventions.ZT_ROSTER
     )
 
 

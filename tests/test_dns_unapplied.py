@@ -16,7 +16,6 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 from kluster.dns.zones import zt_label
-from kluster.gateway.zerotier import ROSTER
 
 ACCOUNT_ID = 'cf-account'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
@@ -83,7 +82,7 @@ def test_the_overlay_block_is_the_whole_roster_before_any_address_is_known() -> 
     """
     names = _record_names()
 
-    for entry in ROSTER:
+    for entry in conventions.ZT_ROSTER:
         assert f'{conventions.ZONE_PRIMARY}-{zt_label(entry.name)}.{conventions.ZT_LABEL}-a' in names, entry.name
 
 

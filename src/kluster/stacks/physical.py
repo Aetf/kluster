@@ -198,12 +198,12 @@ class Overlay:
         The homelab host is a member the overlay had before this program did,
         so its address is a configured fact rather than one of this
         repository's conventions — the roster says so by carrying no address
-        for it (`gateway/zerotier.py`), and the flow rule that opens port 22
+        for it (`conventions.ZT_ROSTER`), and the flow rule that opens port 22
         to a run is written from this same census. Restating it as a constant
         would be a second copy of a value the census already holds, free to
         disagree with the rule that lets the session through.
         """
-        address = self.members[gw_zerotier.HOMELAB_MEMBER].address
+        address = self.members[conventions.ZT_MEMBER_HOMELAB].address
         assert address is not None, "the homelab host's overlay address is configured, not conventional"
         return address
 
@@ -219,7 +219,7 @@ def read_overlay(config: pulumi.Config) -> Overlay:
     return Overlay(
         members=gw_zerotier.parse_members(
             config.require_object('zerotierMembers'),
-            unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
+            unminted=(conventions.ZT_MEMBER_UDM,) if bootstrap_host else (),
         ),
         bootstrap_host=bootstrap_host,
     )
@@ -305,8 +305,8 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
     )
     # Machine facts, for the `dns` stack's `*.zt` host block: the overlay
     # address ZeroTier Central assigned each member. Only these cross — which
-    # members exist is the roster, which `dns` shares as code, and the
-    # addresses this repository decides are in `conventions` at both ends. The
+    # members exist is the roster, and the addresses this repository decides
+    # are beside it, both in `conventions` and read there by both stacks. The
     # gateway is absent from the map either way: its address is one of those
     # conventions, so nothing downstream waits on the identity minted for it.
     pulumi.export(

@@ -115,7 +115,7 @@ def test_the_roster_and_the_configuration_check_each_other() -> None:
     be a name the program believes in and the network has never heard of.
     """
     parsed = zerotier.parse_members(CONFIGURED)
-    assert set(parsed) == {entry.name for entry in zerotier.ROSTER if not entry.generated}
+    assert set(parsed) == {entry.name for entry in conventions.ZT_ROSTER if not entry.generated}
 
     with pytest.raises(ValueError, match='intruder is not on the ZeroTier roster'):
         zerotier.parse_members({**CONFIGURED, 'intruder': {'id': '9999999999', 'address': '10.144.9.9'}})
@@ -134,23 +134,25 @@ def test_the_one_member_whose_identity_this_program_delivers_may_be_absent_when_
     happened; the census is otherwise unchanged, and the relaxation is per name
     rather than a mode — every other member is still required.
     """
-    without_udm = {name: entry for name, entry in CONFIGURED.items() if name != zerotier.UDM_MEMBER}
+    without_udm = {name: entry for name, entry in CONFIGURED.items() if name != conventions.ZT_MEMBER_UDM}
 
-    parsed = zerotier.parse_members(without_udm, unminted=(zerotier.UDM_MEMBER,))
-    assert zerotier.UDM_MEMBER not in parsed
-    assert set(parsed) == {entry.name for entry in zerotier.ROSTER if not entry.generated} - {zerotier.UDM_MEMBER}
+    parsed = zerotier.parse_members(without_udm, unminted=(conventions.ZT_MEMBER_UDM,))
+    assert conventions.ZT_MEMBER_UDM not in parsed
+    assert set(parsed) == {entry.name for entry in conventions.ZT_ROSTER if not entry.generated} - {
+        conventions.ZT_MEMBER_UDM
+    }
 
     # Permission to be absent is not a refusal to look: once the operator has
     # read the minted id into configuration, the same call authorizes it.
-    assert zerotier.parse_members(CONFIGURED, unminted=(zerotier.UDM_MEMBER,))[zerotier.UDM_MEMBER].node_id
+    assert zerotier.parse_members(CONFIGURED, unminted=(conventions.ZT_MEMBER_UDM,))[conventions.ZT_MEMBER_UDM].node_id
 
     # And the relaxation reaches exactly the name it was given.
     with pytest.raises(ValueError, match='no configured node id for haos'):
         zerotier.parse_members(
             {name: entry for name, entry in CONFIGURED.items() if name != 'haos'},
-            unminted=(zerotier.UDM_MEMBER,),
+            unminted=(conventions.ZT_MEMBER_UDM,),
         )
-    with pytest.raises(ValueError, match=f'no configured node id for {zerotier.UDM_MEMBER}'):
+    with pytest.raises(ValueError, match=f'no configured node id for {conventions.ZT_MEMBER_UDM}'):
         zerotier.parse_members(without_udm)
 
 
@@ -176,13 +178,13 @@ def test_the_two_continuous_integration_identities_are_generated_and_confined() 
     one endpoint at a time; sharing a tag with anything else would hand that
     thing the same four destinations.
     """
-    generated = [entry for entry in zerotier.ROSTER if entry.generated]
+    generated = [entry for entry in conventions.ZT_ROSTER if entry.generated]
 
-    assert [entry.name for entry in generated] == list(zerotier.CI_MEMBERS)
+    assert [entry.name for entry in generated] == list(conventions.ZT_CI_MEMBERS)
     assert {entry.address for entry in generated} == {conventions.ZT_CI_PHYSICAL, conventions.ZT_CI_DNS}
     assert all(entry.role == conventions.ZT_ROLE_CI for entry in generated)
-    assert [entry.name for entry in zerotier.ROSTER if entry.role == conventions.ZT_ROLE_CI] == list(
-        zerotier.CI_MEMBERS
+    assert [entry.name for entry in conventions.ZT_ROSTER if entry.role == conventions.ZT_ROLE_CI] == list(
+        conventions.ZT_CI_MEMBERS
     )
 
 
@@ -192,7 +194,7 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
     The limit is a declared field rather than a default, so the constraint is
     on the record; this is the half that notices when the roster grows past it.
     """
-    assert len(zerotier.ROSTER) <= zerotier.MULTICAST_LIMIT
+    assert len(conventions.ZT_ROSTER) <= zerotier.MULTICAST_LIMIT
 
 
 ##
@@ -333,7 +335,7 @@ def test_the_gateway_member_is_placed_at_the_constant_every_client_dials() -> No
 
     assert member['ipAssignments'] == [str(conventions.ZT_UDM)]
     assert member['noAutoAssignIps'] is True
-    entry = next(entry for entry in zerotier.ROSTER if entry.name == 'udm')
+    entry = next(entry for entry in conventions.ZT_ROSTER if entry.name == 'udm')
     assert entry.address == conventions.ZT_UDM
     # Configuration cannot supply it either, which is what keeps the two from
     # being two statements at all.
@@ -352,7 +354,7 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
     assert network['assignIpv6s'] == [{'rfc4193': False, 'sixplane': False, 'zerotier': False}]
 
     members = [inputs for typ, _, inputs in declared if typ == 'zerotier:index/member:Member']
-    assert len(members) == len(zerotier.ROSTER)
+    assert len(members) == len(conventions.ZT_ROSTER)
     for member in members:
         assert member['noAutoAssignIps'] is True
         assert member['authorized'] is True
@@ -365,7 +367,7 @@ def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_i
     A member declared without one would inherit the permissive default, which
     is exactly the hole the roster exists to close.
     """
-    for entry in zerotier.ROSTER:
+    for entry in conventions.ZT_ROSTER:
         member = registered(f'{NAME}-member-{entry.name}')
         assert member['tags'] == [[conventions.ZT_TAG_ROLE_ID, entry.role]], entry.name
         assert member['name'] == entry.name
