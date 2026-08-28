@@ -13,8 +13,10 @@ leave a stack that comes up looking whole.
 """
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import pulumi
 import pulumi.runtime.settings
@@ -24,8 +26,9 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 from kluster.gateway import zerotier
-from kluster.physical import nodes
+from kluster.physical import homelab, nodes
 from kluster.physical.guardrails import Guardrails
+from kluster.scripts.credentials import workstation
 from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
@@ -45,6 +48,10 @@ ZT_NETWORK_ID = '0123456789abcdef'
 BOOTSTRAP_HOST = 'gateway.invalid'
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
+#: The libvirt client identity, as it arrives from configuration. Nothing
+#: parses it here — the run writes it to a file and hands the provider that
+#: path — so its shape only has to be something no test could mistake for real.
+LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 
 #: What the gateway's three channels read out of stack configuration: the site
 #: facts the program cannot derive. Every value here is invented; what the test
@@ -170,9 +177,10 @@ STACK_CONFIG = {
     'kluster:ociIdentityDomainName': IDENTITY_DOMAIN,
     'kluster:b2Region': B2_REGION,
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
-    # The §3 domain: where the host is reached, where the worker's image and
-    # seed are written, and which domain is adopted rather than built.
-    'kluster:libvirtUri': 'qemu+ssh://host.invalid/system',
+    # The §3 domain: the credential the host is reached with, where the
+    # worker's image and seed are written, and which domain is adopted rather
+    # than built. There is no endpoint among them — it is derived.
+    'kluster:libvirtPrivateKey': LIBVIRT_KEY,
     'kluster:libvirtStorageDir': '/var/lib/libvirt/kluster',
     'kluster:haosDomainUuid': '00000000-0000-0000-0000-000000000000',
     **GATEWAY_CONFIG,
@@ -180,8 +188,13 @@ STACK_CONFIG = {
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup(monkeypatch: pytest.MonkeyPatch) -> Mocks:
+async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
     monkeypatch.setitem(conventions.OCI_COMPARTMENTS, conventions.PHYSICAL, COMPARTMENT)
+    # The run materializes the libvirt session's credential into the checkout's
+    # `.credentials/`, so every test here is pointed at a directory of its own:
+    # a test suite that wrote into the tree it runs from would leave a key
+    # behind and, worse, overwrite the operator's.
+    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / workstation.DIRECTORY)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
     mocks = Mocks()
     pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
@@ -233,6 +246,45 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     # The steady state is the knob's absence, which is why it is the only
     # optional key here and why nothing has to be unset to reach this.
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
+    setup: Mocks,
+    tmp_path: Path,
+) -> None:
+    """The libvirt endpoint is derived from the census and the checkout.
+
+    Nothing about this URI can be recorded in committed configuration. The
+    address belongs to the overlay census the same run authorizes, and the two
+    paths in it exist only on the machine running the program — a workstation
+    on one run and a continuous-integration runner on the next — so a URI typed
+    into the stack would be wrong for one of them and stale for both.
+    """
+    configured = cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers']))
+    address = cast('str', configured[zerotier.HOMELAB_MEMBER]['address'])
+
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    uri = cast('str', setup.inputs[f'{conventions.CLUSTER_NAME}-libvirt']['uri'])
+    parts = urlsplit(uri)
+    assert parts.scheme == 'qemu+ssh'
+    assert parts.netloc == f'{homelab.LIBVIRT_USER}@{address}'
+    assert parts.path == '/system'
+
+    # The files the provider opens, in the slot this checkout keeps local
+    # secrets in — and the identity in them is the configured one.
+    slot = tmp_path / workstation.DIRECTORY / homelab.SLOT
+    query = parse_qs(parts.query)
+    assert query['keyfile'] == [str(slot / homelab.KEYFILE)]
+    assert query['knownhosts'] == [str(slot / homelab.KNOWN_HOSTS)]
+    assert (slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
+    # The pin is written against the address the URI dials: a `known_hosts`
+    # entry keyed on anything else matches nothing the session sees.
+    assert (slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {homelab.HOST_KEY}\n'
+    # And no key holds any of it: what is configured is the credential alone.
+    assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
 
 
 @pytest.mark.asyncio
@@ -633,7 +685,7 @@ SITE_FACTS = [
     'kluster:ociIdentityDomainName',
     'kluster:b2Region',
     'kluster:budgetAlertRecipients',
-    'kluster:libvirtUri',
+    'kluster:libvirtPrivateKey',
     'kluster:libvirtStorageDir',
     'kluster:haosDomainUuid',
 ]
@@ -657,7 +709,8 @@ async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need()
     which of them is a secret — so a missing one is reported against the
     gateway rather than against a run of everything.
     """
-    physical.declare_gateway(pulumi.Config())
+    config = pulumi.Config()
+    physical.declare_gateway(config, physical.read_overlay(config))
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 

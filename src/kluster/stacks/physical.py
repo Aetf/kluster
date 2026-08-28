@@ -21,7 +21,9 @@ today, and a run therefore goes all the way through.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 from typing import cast
 
 import pulumi
@@ -57,6 +59,12 @@ OCI_TENANCY_KEY = 'tenancyOcid'
 #: while the gateway is not yet on the overlay. Absent — the steady state — every
 #: client of the gateway derives its address from `conventions.ZT_UDM`.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
+
+#: The client half of the libvirt session, and the only part of that session
+#: this stack is configured with. Where it lands on the machine running the
+#: program, and the URI that names it there, are derived
+#: (`physical/homelab.py`).
+LIBVIRT_PRIVATE_KEY = 'libvirtPrivateKey'
 
 
 async def main() -> None:
@@ -138,11 +146,22 @@ async def main() -> None:
     _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
 
     # The two domains that are not the cloud: the host under libvirt, and the
-    # gateway through the three doors it is configured by.
+    # gateway through the three doors it is configured by. Both are reached
+    # over the overlay, so both read the same census of it.
+    overlay = read_overlay(config)
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,
-        connection_uri=config.require('libvirtUri'),
+        # Derived, not recorded: the address comes from the overlay census and
+        # the rest of the URI is a property of the machine running this
+        # program, which is the one thing committed configuration cannot know
+        # (`homelab.connection_uri`). The key is read in the clear rather than
+        # as a secret Output because it is written to a file before any
+        # resource exists — it reaches no resource input, and so no state.
+        connection_uri=homelab.connection_uri(
+            host=str(overlay.homelab),
+            private_key=config.require(LIBVIRT_PRIVATE_KEY),
+        ),
         storage_dir=config.require('libvirtStorageDir'),
         bridge=conventions.HOMELAB_BRIDGE,
         vcpus=conventions.HOMELAB_VCPUS,
@@ -150,10 +169,63 @@ async def main() -> None:
         image_path=worker_image.path,
         haos_domain_uuid=config.require('haosDomainUuid'),
     )
-    declare_gateway(config)
+    declare_gateway(config, overlay)
 
 
-def declare_gateway(config: pulumi.Config) -> None:
+@dataclass(frozen=True)
+class Overlay:
+    """The overlay as configuration describes it, read once and shared.
+
+    Two arms of this stack need it and they must not read it separately: the
+    census decides where the libvirt session dials, and the bootstrap knob
+    decides whether that census is allowed to be one member short. A second
+    read taking a different view of the knob would refuse a bring-up that the
+    first one accepted.
+    """
+
+    members: Mapping[str, gw_zerotier.Enrolled]
+    bootstrap_host: str | None
+
+    @property
+    def gateway(self) -> str:
+        """Where the gateway answers: its LAN address while it is being brought up, its overlay address after."""
+        return self.bootstrap_host or str(conventions.ZT_UDM)
+
+    @property
+    def homelab(self) -> IPv4Address:
+        """Where the libvirt session dials.
+
+        The homelab host is a member the overlay had before this program did,
+        so its address is a configured fact rather than one of this
+        repository's conventions — the roster says so by carrying no address
+        for it (`gateway/zerotier.py`), and the flow rule that opens port 22
+        to a run is written from this same census. Restating it as a constant
+        would be a second copy of a value the census already holds, free to
+        disagree with the rule that lets the session through.
+        """
+        address = self.members[gw_zerotier.HOMELAB_MEMBER].address
+        assert address is not None, "the homelab host's overlay address is configured, not conventional"
+        return address
+
+
+def read_overlay(config: pulumi.Config) -> Overlay:
+    """The member census, and the knob that says the gateway is not on it yet.
+
+    The gateway is the one member whose identity this program's own work
+    produces, so it is the one entry the census may lack — and only while the
+    bootstrap knob says the delivery that mints it has not run.
+    """
+    bootstrap_host = config.get(GATEWAY_BOOTSTRAP_HOST)
+    return Overlay(
+        members=gw_zerotier.parse_members(
+            config.require_object('zerotierMembers'),
+            unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
+        ),
+        bootstrap_host=bootstrap_host,
+    )
+
+
+def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
     """§4: the gateway, through the three doors it is configured by.
 
     The device's own desired state over SSH, the controller's firewall over its
@@ -165,6 +237,10 @@ def declare_gateway(config: pulumi.Config) -> None:
     the resolvers sit, which nodes are on the overlay. The decisions — the
     estate's shape, the firewall census, the roster's roles and the rules that
     confine a run — are code, and the configuration is checked against them.
+
+    The overlay's own census arrives as `overlay` rather than being read here,
+    because the libvirt session needs it too and the two must agree on it
+    (`read_overlay`).
 
     One of those facts leaves again as a stack output. The `dns` stack
     publishes a host record for every member of this roster, so it needs the
@@ -180,10 +256,10 @@ def declare_gateway(config: pulumi.Config) -> None:
     so until the delivery has happened the overlay address answers nothing. And
     the roster tolerates the gateway having no configured node id, because a
     ZeroTier identity is minted by the daemon's first run on the device: it
-    does not exist to be authorized until that same delivery has happened.
-    Absent, which is the steady state, everything derives from `ZT_UDM` and the
-    roster is a complete census again. The ceremony that gets from one to the
-    other is physical/gateway.md §2.5.
+    does not exist to be authorized until that same delivery has happened
+    (`Overlay`). Absent, which is the steady state, everything derives from
+    `ZT_UDM` and the roster is a complete census again. The ceremony that gets
+    from one to the other is physical/gateway.md §2.5.
 
     The pinned host key is not affected either way: it is stored as a bare
     `ssh-ed25519 <blob>` line with no host name in front of it, so it matches
@@ -191,8 +267,7 @@ def declare_gateway(config: pulumi.Config) -> None:
     """
     addresses = gw_estate.parse_addresses(config.require_object('gatewayAddresses'))
     resolvers = [addresses[instance] for instance in sorted(gw_estate.VHOST_ADGUARD)]
-    bootstrap_host = config.get(GATEWAY_BOOTSTRAP_HOST)
-    gateway_host = bootstrap_host or str(conventions.ZT_UDM)
+    gateway_host = overlay.gateway
 
     gateway.declare_estate(
         conventions.CLUSTER_NAME,
@@ -220,13 +295,7 @@ def declare_gateway(config: pulumi.Config) -> None:
         worker_gua=config.require('workerGua'),
         peer_port=config.require_int('qbittorrentPeerPort'),
     )
-    # The gateway is the one member whose identity this program's own work
-    # produces, so it is the one entry the census may lack — and only while the
-    # bootstrap knob says the delivery that mints it has not run.
-    members = gw_zerotier.parse_members(
-        config.require_object('zerotierMembers'),
-        unminted=(gw_zerotier.UDM_MEMBER,) if bootstrap_host else (),
-    )
+    members = overlay.members
     gateway.declare_zerotier(
         conventions.CLUSTER_NAME,
         api_token=config.require_secret('zerotierApiToken'),
