@@ -42,6 +42,16 @@ sever the session is handled last, so everything else has converged before the
 risk is taken; an apply that dies there fails its resource and the retry finds
 the work already done.
 
+**The images are Alpine with s6-overlay, not systemd.** They ship that init at
+`/sbin/init` so that `systemd-nspawn --boot` finds it, and a unit here therefore
+declares nothing that only a systemd guest would honour. Two consequences run
+through this module. A member takes its addressing from its own startup, reading
+what the unit injects into PID 1's environment, because a drop-in written for a
+network manager the image does not run is a file nobody opens. And stopping a
+member means `SIGKILL`: s6 treats a gentler signal as advisory and leaves its
+supervisors running, and they hold the unit's control group open until the next
+start fails on it.
+
 **The name plane the containers serve is not declared here.** The AdGuard pair's
 rewrites are the `dns` stack's, written through the running instances' API
 (dns.md §3), and AdGuard rewrites its own configuration file as it accepts them.
@@ -68,18 +78,26 @@ from putils import Component
 __all__ = (
     'ADGUARD_API_PORT',
     'ADGUARD_UPSTREAMS',
+    'CADDY_CONFIG',
+    'CADDY_CONFIG_HOME',
+    'CADDY_STATE',
     'CONFIG_DIR',
     'CONFIG_MODE',
     'CONTAINER_BRIDGE',
+    'ENV_IPV4_CIDR',
+    'ENV_IPV4_GATEWAY',
+    'ENV_IPV6_TOKEN',
     'ESTATE_ROOT',
     'FRR_APPLY',
     'FRR_CONFIG',
     'FRR_LIVE_CONFIG',
     'FRR_MODE',
     'IMAGE_DIR',
+    'KILL_SIGNAL',
     'MAX_PREFIXES',
     'ON_BOOT_SCRIPT',
     'ROOT_DIR',
+    'S6_KILL_GRACETIME',
     'SECRET_DIR',
     'STATE_DIR',
     'UNIT_DIR',
@@ -91,6 +109,7 @@ __all__ = (
     'census',
     'frr_config',
     'image_path',
+    'net_setup_environment',
     'on_boot_script',
     'parse_addresses',
     'parse_rootfs',
@@ -188,6 +207,21 @@ ADGUARD_STATE = '/data/adguard'
 ADGUARD_INSTALL = '/opt/AdGuardHome'
 ADGUARD_SEED = 'AdGuardHome.seed.yaml'
 
+#: Where caddy looks for its configuration and where it keeps what it must not
+#: lose. Both are directories the image names through the environment rather than
+#: paths this program picks: the server is started with
+#: `--config $XDG_CONFIG_HOME/caddy/Caddyfile`, and it places the certificates
+#: and account keys it buys under `XDG_DATA_HOME`. Naming those two is therefore
+#: how the estate decides which file is read and which directory outlives a
+#: rootfs bump — the data half is bind-mounted from the device, so the software
+#: is replaceable and the credential it earned is not. `/etc` is the config home
+#: because the image's `$XDG_CONFIG_HOME/caddy/Caddyfile` then resolves to
+#: `/etc/caddy/Caddyfile`, which is where a reader looks for it and where the
+#: token it reads is delivered too.
+CADDY_CONFIG_HOME = '/etc'
+CADDY_STATE = '/var/lib/caddy'
+CADDY_CONFIG = f'{CADDY_CONFIG_HOME}/caddy/Caddyfile'
+
 #: Where caddy reads the zone-scoped token it answers DNS-01 challenges with.
 #: A device secret of its own, read by nothing else on the box.
 CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'
@@ -208,8 +242,23 @@ ZEROTIER_STATE = '/var/lib/zerotier-one'
 #: container VLAN's bridge — the estate is what that VLAN exists for.
 CONTAINER_BRIDGE = 'br5'
 
-#: Where a bridged container reads its own interface configuration, inside it.
-HOST0_CONFIG = '/etc/systemd/network/80-container-host0.network'
+#: How a member is stopped, and the same instruction restated on the inside. s6
+#: treats a shutdown signal as advisory: it returns from the signal with its
+#: supervisors still running, they keep the unit's control group populated, and
+#: the next start fails against a group that never emptied. `SIGKILL` from the
+#: outside ends that, and a zero grace time keeps the supervision tree from
+#: waiting on anything on its way down.
+KILL_SIGNAL = 'SIGKILL'
+S6_KILL_GRACETIME = 0
+
+#: What an image's own network setup reads out of PID 1's environment: the
+#: address with its prefix, the router, and the token that fixes the interface
+#: half of the v6 address so that a delegated prefix changing underneath does
+#: not move the resolver every lease on the LAN points at. The names belong to
+#: the images (the AdGuard `net-setup` service), not to this program.
+ENV_IPV4_CIDR = 'IPV4_CIDR'
+ENV_IPV4_GATEWAY = 'IPV4_GATEWAY'
+ENV_IPV6_TOKEN = 'IPV6_TOKEN'
 
 
 @final
@@ -267,6 +316,13 @@ class Container:
     means the member runs in the host's network namespace instead — the
     ZeroTier member does, because a routed interface is no use inside a
     namespace the router cannot see.
+
+    `environment` is what the unit puts into the container's PID 1, and it is
+    the channel through which an image is told anything at all: the images run
+    s6, which reads that environment in its own startup scripts, so a member
+    that configures its interface or finds its configuration does it from here.
+    Which variables a member reads is a fact about its image, which is why the
+    census sets them per member rather than this module inventing a set.
     """
 
     name: str
@@ -276,6 +332,7 @@ class Container:
     state: str | None = None
     files: tuple[Dropin, ...] = field(default_factory=tuple[Dropin, ...])
     seed: Seed | None = None
+    environment: Mapping[str, str] = field(default_factory=dict[str, str])
 
     @property
     def host_network(self) -> bool:
@@ -397,15 +454,40 @@ def unit_file(container: Container) -> str:
     one into the other on the device would mean building a filesystem and
     loop-mounting it there; unpacking it is the same information with none of
     the machinery.
+
+    The rest of the command line is what running an s6 image asks for, and each
+    flag answers something the image does or does not do for itself.
     """
     command = [
         '/usr/bin/systemd-nspawn',
         '--quiet',
         '--keep-unit',
         '--boot',
+        # `--boot` looks for an init and finds the one the image places at
+        # `/sbin/init`, which is s6's. That init never sends a readiness
+        # message, so nspawn answers for it: the unit is ready once the
+        # container's PID 1 exists. `Type=notify` below is about nspawn's own
+        # message, not the guest's — asked to wait for the guest instead, every
+        # member would hang until its start timed out and it was killed.
+        '--notify-ready=no',
+        # A member's `/etc/resolv.conf` is the image's answer to a question it
+        # was built with, and overwriting it would undo that answer: the member
+        # carrying the overlay resolves through public servers on purpose,
+        # because it has to come up while the LAN's resolvers — two other
+        # members of this estate — are down.
+        '--resolv-conf=off',
+        # Every image configures its own interface from inside, and that takes
+        # the one capability nspawn's default set does not keep.
+        '--capability=CAP_NET_ADMIN',
+        f'--kill-signal={KILL_SIGNAL}',
         f'--machine={container.name}',
         f'--directory={root_path(container.name)}',
+        f'--setenv=S6_KILL_GRACETIME={S6_KILL_GRACETIME}',
     ]
+    # What the member itself is told. The unit's own `Environment=` would not do:
+    # that is the environment of the `systemd-nspawn` process on the device, and
+    # what has to be set is the environment of PID 1 inside the container.
+    command.extend(f'--setenv={name}={value}' for name, value in container.environment.items())
     if not container.host_network:
         command.append(f'--network-bridge={CONTAINER_BRIDGE}')
     if container.state:
@@ -423,38 +505,44 @@ def unit_file(container: Container) -> str:
         '',
         '[Service]',
         'Type=notify',
-        'NotifyAccess=all',
         f'ExecStart={" ".join(command)}',
         'Restart=always',
         'RestartSec=5',
         'KillMode=mixed',
     ]
-    # A bind alone does not grant access to a device node; the unit's own cgroup
-    # policy has to admit it as well, or the container sees the file and cannot
-    # open it.
-    lines.extend(f'DeviceAllow={device} rw' for device in container.devices)
+    if container.devices:
+        # A bind alone does not grant access to a device node; the unit's own
+        # control-group policy has to admit it as well, or the container sees
+        # the file and cannot open it. Naming any device at all is what turns
+        # that policy from open into a list, so the list also has to carry what
+        # a container needs anyway: its console is a pseudo-terminal, and
+        # pseudo-terminals are not in the small set every service gets.
+        lines.extend(f'DeviceAllow={device} rw' for device in container.devices)
+        lines.append('DeviceAllow=char-pts rw')
     lines.extend(('', '[Install]', 'WantedBy=multi-user.target', ''))
     return '\n'.join(lines)
 
 
-def host0_network(address: IPv4Address) -> str:
-    """The network configuration a bridged container applies to its own interface.
+def net_setup_environment(address: IPv4Address) -> dict[str, str]:
+    """The addressing an image's own network setup reads from PID 1's environment.
 
-    The address is static because the two resolvers are what hands out leases'
-    name servers: a resolver that waited for a lease to learn its own address
-    would be waiting on itself.
+    The address is configured rather than learned because the two resolvers are
+    what hands out the leases' name servers: a resolver that waited for a lease
+    to learn its own address would be waiting on itself. The gateway cannot
+    reserve one for it either — its controller does not manage clients on the
+    device's own bridge — so what would arrive is a lease, not this address.
+
+    The v6 half is a token rather than an address: the interface identifier is
+    fixed here and the prefix keeps arriving in router advertisements, so the
+    resolver stays at the same v6 address across a delegated prefix changing
+    underneath it. Deriving the token from the v4 address is what makes the two
+    legible as one host.
     """
-    return '\n'.join(
-        (
-            '[Match]',
-            'Name=host0',
-            '',
-            '[Network]',
-            f'Address={address}/{conventions.VLAN_CONTAINER.prefixlen}',
-            f'Gateway={_container_gateway()}',
-            '',
-        )
-    )
+    return {
+        ENV_IPV4_CIDR: f'{address}/{conventions.VLAN_CONTAINER.prefixlen}',
+        ENV_IPV4_GATEWAY: str(_container_gateway()),
+        ENV_IPV6_TOKEN: f'::{address}',
+    }
 
 
 def caddyfile(*, adguard: Mapping[str, IPv4Address]) -> str:
@@ -777,10 +865,24 @@ def census(
             name='caddy',
             rootfs=rootfs['caddy'],
             address=addresses['caddy'],
-            state='/var/lib/caddy',
+            state=CADDY_STATE,
+            # Where the server looks, rather than where a reader might assume it
+            # does. Its address is *not* here: this image asks for a lease
+            # (`/etc/network/interfaces`), and the lease is also where its
+            # resolver comes from, so an address injected the way the resolvers
+            # take theirs would be read by nothing and a static one imposed over
+            # that file would take the name service with it. The address the
+            # census holds for caddy is therefore the address the design intends
+            # — the one a rewrite has to name — and delivering it is work in the
+            # image, which needs the `net-setup` the AdGuard pair already has
+            # plus a resolver that does not depend on this estate.
+            environment={
+                'XDG_CONFIG_HOME': CADDY_CONFIG_HOME,
+                'XDG_DATA_HOME': CADDY_STATE,
+                'HOME': CADDY_STATE,
+            },
             files=(
-                Dropin(name='host0.network', target=HOST0_CONFIG, content=host0_network(addresses['caddy'])),
-                Dropin(name='Caddyfile', target='/etc/caddy/Caddyfile', content=caddyfile(adguard=adguard)),
+                Dropin(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile(adguard=adguard)),
                 Dropin(name='cloudflare.token', target=CADDY_TOKEN_PATH, content=acme_token, secret=True),
             ),
         )
@@ -791,8 +893,12 @@ def census(
             rootfs=rootfs[instance],
             address=addresses[instance],
             state=ADGUARD_STATE,
+            # The address, delivered where the image reads it: its `net-setup`
+            # service configures the interface out of PID 1's environment before
+            # the resolver it guards is allowed to start, so a resolver never
+            # comes up on an address the LAN was not told about.
+            environment=net_setup_environment(addresses[instance]),
             files=(
-                Dropin(name='host0.network', target=HOST0_CONFIG, content=host0_network(addresses[instance])),
                 # Read-only beside the installation rather than in the working
                 # directory: the working directory is where the live
                 # configuration goes, and a seed delivered into it would be a
@@ -814,6 +920,12 @@ def census(
         for instance in sorted(VHOST_ADGUARD)
     )
     containers.append(
+        # Nothing is injected into this one: the daemon is started with its
+        # state directory as its only argument, it takes the network it joins
+        # from what that directory holds, and it reaches its roots by literal
+        # address. What it needs of the unit is the tunnel device, the state
+        # bind that is its identity on the overlay, and the host's own network
+        # namespace — which it gets by having no address of its own here.
         Container(
             name=HOST_NETWORK_MEMBER,
             rootfs=rootfs[HOST_NETWORK_MEMBER],
