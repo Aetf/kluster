@@ -234,8 +234,8 @@ class StaticAddress:
 #: the cluster VLAN, which runs no DHCP server — and three other places
 #: already name its address as a constant: the gateway's FRR neighbour
 #: statement, the gateway's port forward for the qbittorrent peer port, and
-#: day 1's apid endpoint. A lease would make all three a guess
-#: (physical/homelab-host.md §2).
+#: the node day 1 names in the apid calls that configure it. A lease would
+#: make all three a guess (physical/homelab-host.md §2).
 #:
 #: This is a table rather than a constructor input on purpose. The address is
 #: not a decision a caller makes: a stack free to pass one could tell the
@@ -490,10 +490,26 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
     addresses those machines answer on, and those exist only once the
     instances and the worker VM do.
 
+    A call over apid carries two addresses that are not the same thing: the
+    *endpoint* it opens a connection to, and the *node* it names in the
+    request. apid routes by node — a member that is not the named one proxies
+    the call across the cluster — so an endpoint only has to be a way in.
+    Where a node is not directly reachable, that is what reaches it: it is
+    named as the node and dialled at an endpoint that is.
+
+    Not every call has that to lean on. Bootstrap is the cluster's first
+    contact, before there is a cluster to route through, so it dials the node
+    it names; so does the kubeconfig read that follows it. Those are
+    control-plane operations on the first control plane, which is directly
+    reachable, and they stay that way.
+
     :param cluster: the PKI and the day-0 configuration these machines booted.
-    :param addresses: node name to the address talosctl reaches it at. Every
+    :param addresses: node name to the address the node is *named* by. Every
         node of the cluster needs one — a cluster is not healthy because the
         nodes somebody listed are.
+    :param endpoints: node name to the address a call to it is *dialled* at,
+        for the nodes where that differs from the address above. A node with
+        no entry is dialled at its own address.
     :param secondary_addresses: node name to an extra address to put on its
         interface (the augmented node's dedicated VIP).
     """
@@ -504,6 +520,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         *,
         cluster: TalosCluster,
         addresses: Mapping[str, pulumi.Input[str]],
+        endpoints: Mapping[str, pulumi.Input[str]] | None = None,
         secondary_addresses: Mapping[str, pulumi.Input[str]] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -513,6 +530,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         self._secondary_addresses = dict(secondary_addresses or {})
         for label, keyed in (
             ('addresses', self._addresses),
+            ('endpoints', dict(endpoints or {})),
             ('secondary addresses', self._secondary_addresses),
         ):
             unknown = sorted(set(keyed) - set(cluster.roles))
@@ -521,6 +539,9 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         missing = sorted(set(cluster.roles) - set(self._addresses))
         if missing:
             raise ValueError(f'day 1 needs an address for every node, and {missing} have none')
+        #: Where each node is dialled, which is its own address unless the
+        #: caller named a way in to reach it with.
+        self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
 
         # What is applied is the booted configuration plus whatever only exists
         # now: the augmented node's secondary private IP.
@@ -539,7 +560,10 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
             applied = machine.ConfigurationApply(
                 f'{name}-{node}-config',
                 node=self._addresses[node],
-                endpoint=self._addresses[node],
+                # Not the same address for every node: an apply is routed by
+                # the node it names, so a node behind the mesh is dialled
+                # wherever the cluster answers.
+                endpoint=self._endpoints[node],
                 client_configuration=client_configuration,
                 machine_configuration_input=self.configurations[node].machine_configuration,
                 # A change needing a reboot is staged rather than applied, so
@@ -558,7 +582,10 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
 
         first = cluster.control_plane_nodes[0]
         # Bootstrap is a once-per-cluster operation on one node: running it on
-        # a second control plane would try to start a second etcd cluster.
+        # a second control plane would try to start a second etcd cluster. It
+        # is also the call with nothing to route through — there is no cluster
+        # yet — so it dials the node it names, and so does the kubeconfig read
+        # that waits on it.
         self.bootstrap = machine.Bootstrap(
             f'{name}-bootstrap',
             node=self._addresses[first],
@@ -575,6 +602,9 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
             opts=self.child_opts(depends_on=[self.bootstrap]),
         )
 
+        # Every node is nameable, and the control planes are what an operator
+        # dials to reach any of them — the same split as the applies above, in
+        # the file a human then holds.
         self._client_configuration = client.get_configuration_output(
             cluster_name=cluster.cluster_name,
             client_configuration=client_configuration,
@@ -586,6 +616,9 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         # The gate. This data source does not return until the cluster reports
         # healthy, so anything that resolves it is ordered behind a working
         # cluster rather than behind a resource that merely finished.
+        #
+        # It reaches the workers the same way: they are named as nodes, and the
+        # client talks to control-plane endpoints only.
         self.health = get_health_output(
             client_configuration=client_configuration,
             control_plane_nodes=async_output(partial(self._addresses_of, cluster.control_plane_nodes)),
