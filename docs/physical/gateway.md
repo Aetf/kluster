@@ -463,20 +463,44 @@ calls for, all declared in the `physical` stack via the bridged
 filipowm/unifi provider (auth discipline: dedicated local admin + API
 key, throttled retries — declarative/physical.md §4).
 
-**The cluster VLAN and its zone.** VLAN 7 / `192.168.70.0/24` (§1) is
-a network object, and it is placed in a **zone of its own** instead of
-joining the three networks in the LAN zone. That placement is what the
-VLAN is *for*: a node inside the LAN zone is a machine no policy can
-be written about, because LAN→LAN is a predefined unconditional ACCEPT
-(§4.1); a node in its own zone has an editable policy on every
-direction it talks in, and every later tightening is then a previewed
-diff rather than a re-architecture. Phase 1 (§4.3) declares those
-directions **open**, so moving the worker off the server LAN changes
-no reachability on the day it happens — what changes is that the
-openness is now a declaration the design owns rather than a default it
-inherits.
+**Two address populations, two control planes.** The distinction runs
+through every rule below, and the two are policed by different
+machinery:
 
-Then the rules:
+-   **The node subnet — VLAN 7 / `192.168.70.0/24` (§1) — *is* the
+    cluster zone.** It is a network object, and it is placed in a
+    **zone of its own** instead of joining the three networks in the
+    LAN zone. That placement is what the VLAN is *for*: a node inside
+    the LAN zone is a machine no policy can be written about, because
+    LAN→LAN is a predefined unconditional ACCEPT (§4.1); a node in its
+    own zone has an editable policy on every direction it talks in,
+    and every later tightening is then a previewed diff rather than a
+    re-architecture. What lives on it: Talos apid, the kubelet, the
+    BGP session on 179, the worker's GUA. Routine paths deliberately
+    do not cross the UDM into it — `talosctl` rides the NLB, home-side
+    management rides ZT, host↔worker NFS rides the on-box `kvmbr1`
+    leg, the peer-port forward is WAN-side — so the zone matrix
+    governs the exceptional traffic, not the working traffic.
+-   **The service VIP pool — `192.168.71.0/24` + ULA — is never a
+    zone**, because it is deliberately never a network object (§4.1).
+    Pool-bound traffic falls through the LAN→WAN chain, and the only
+    thing that can police it is a destination address-group rule,
+    which is exactly what rule 1 below is.
+
+**"Open only what is served" is the pool's design already — but per
+source population, not globally.** The IoT VLAN gets enumeration; the
+trusted VLANs keep open access, because the pool VIPs are precisely
+what the home is meant to reach — jellyfin *and* the admin UIs, from
+personal machines. A global per-VIP enumeration would sever the
+operator's own access and buys nothing rule 1 does not already buy
+against the least-trusted population. Per-VIP enumeration for other
+source VLANs stays available later as an adoption-triggered diff, the
+same treatment as §4.3 phase 2.
+
+Then the rules. Every zone pair that carries a policy also carries a
+**`FirewallZonePolicyOrder`**: a policy whose position is whatever
+creation happened to produce is a policy the design does not own, and
+on a pair holding both a drop and an allow the position *is* the rule.
 
 1.  **IoT → `lan` pool: default drop with one enumerated allow**
     (audit M2, amended 2026-08-24; ships with the cluster). The
@@ -497,7 +521,34 @@ Then the rules:
     cluster→IoT" was wrong — TV/streamer → jellyfin is an
     IoT-originated dependency the census missed; a blanket drop
     would have severed it at jellyfin's migration wave.
-2.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the
+    Ordered allow-then-drop, and both ahead of the pair's predefined
+    ACCEPT, or the drop is never reached.
+2.  **cluster zone → External: allow**, both families, every
+    protocol. A zone the controller has just been told about is
+    denied against every other zone in both directions, so this is
+    not a tightening but the policy that makes the zone usable: a
+    node whose control plane is in a cloud region has to be able to
+    leave the site.
+3.  **cluster zone → Internal: allow**, both families, every
+    protocol, return traffic admitted. This is the direction the
+    recorded cross-VLAN dependencies run in — the home-automation API
+    on the IoT VLAN and everything else a workload initiates toward
+    the home. What a workload may call is decided where the workload
+    is declared; narrowing it here would move that decision behind a
+    gateway credential.
+4.  **Internal → cluster zone: allow, with the IoT VLAN dropped ahead
+    of it.** The allow preserves what the trusted VLANs had while the
+    nodes shared the untagged LAN — debugging straight at a node, a
+    ping, a host path that hairpins. The drop is a v4-CIDR/ULA pair
+    naming the IoT VLAN as the source, ordered **before** the allow
+    because here the allow is the broad rule: declared after it, the
+    drop would match nothing while reading as if it were in force.
+    Talos apid, the kubelet and BGP go off the table for the LAN's
+    least-trusted population on day one, and nothing recorded is
+    severed — the single IoT-originated dependency targets the pool,
+    not the node subnet. Structurally it is rule 1 one zone over: the
+    zone stays open, the untrusted subpopulation is carved out.
+5.  **qbittorrent inbound-v6 pinhole**: to the worker VM's GUA on the
     cluster VLAN, plus the service port. Constraint on record: the
     zone-policy API matches
     literal IPs only (no prefix-relative objects), so the rule
@@ -505,7 +556,7 @@ Then the rules:
     home prefix rotates**; a stale rule degrades to the accepted
     outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
     urgent.
-3.  **qbittorrent v4 peer-port forward** — target the worker at
+6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, and **the only port forward on the device**. No
     management inbound exists: cluster and Talos management ride the
     NLB, home-side management rides ZT.
@@ -515,34 +566,54 @@ Nothing else. A controller rule not on this census is drift.
 ### 4.3 Zone-matrix target state — two phases
 
 **Phase 1 (ships with the cluster rollout)**: exactly the census
-above. LAN→LAN stays open and so are the cluster zone's own
-directions; the zero-isolation fact remains a dependency-in-force,
-now with the cluster VLAN sitting outside it as a zone whose policy
-can be tightened on its own schedule.
+above. The cluster zone is **open to Internal and External, and open
+from Internal with the IoT source carved out**. LAN→LAN stays open;
+the zero-isolation fact remains a dependency-in-force, now with the
+cluster VLAN sitting outside it as a zone whose policy can be
+tightened on its own schedule.
+
+The carve-out is the only reachability the cutover removes, and it
+has **zero known dependents**: the sole recorded IoT-originated flow
+is a television reaching jellyfin, which is a pool address and not a
+node-subnet one. Anything discovered afterward is an enumerated-allow
+diff on the pair, not a rollback.
 
 **Phase 2 (deferred, adoption-triggered — the Longhorn treatment)**:
-tighten **IoT→LAN to default drop + enumerated allows**.
+**IoT → {Internal, cluster zone, `lan` pool} as one default-drop with
+enumerated allows.** Two of the three legs already exist — the
+cluster-zone leg is census rule 4's drop, the pool leg is census rule
+1 — so what adoption actually flips is **IoT→Internal**.
 
 -   **Trigger**: migration complete and stable (Wave F done, legacy
     retired) *and* the IoT dependency census verified over an
     observation window — both, not either.
 -   **Adoption-day facts to gather**: enumerate IoT-VLAN-originated
-    flows into br0/br5/pool from a UDM traffic-flow observation
-    window plus the recorded dependency list (media-consumption
-    flows are already carved out structurally via `media-gw` —
-    §4.2 — and carry over unchanged). Special attention to
-    **HAOS — the IoT VLAN's most capable resident**: every
+    flows into br0/br5 from a UDM traffic-flow observation window
+    plus the recorded dependency list (media-consumption flows are
+    already carved out structurally via `media-gw` — §4.2 — and
+    carry over unchanged). Two dependents are known in advance and
+    are what make this leg the hard one: **mDNS discovery from the
+    televisions and media devices**, and **Internal personal devices
+    → AirPlay-class sessions on those televisions** — a bidirectional
+    pattern where discovery crosses the VLAN boundary both ways
+    before the session runs Internal→IoT. Making that path reliable
+    and then enumerating it is its own post-bring-up project,
+    `kluster-ops#85`, deliberately not bring-up work; phase 2 cannot
+    flip ahead of it without bricking casting. Special attention also
+    to **HAOS — the IoT VLAN's most capable resident**: every
     integration's outbound target (LAN services, UDM APIs, cluster
     VIPs) becomes an allow-list candidate the moment the default
     flips.
--   **Shape when adopted**: an IoT→LAN default-drop zone policy plus
-    enumerated address-group/port allows — previewed Pulumi changes
-    over the already-existing declaration channel; adoption is a
-    diff, not a project.
+-   **Shape when adopted**: an IoT→Internal default-drop zone policy
+    plus enumerated address-group/port allows, joining the two legs
+    already declared — previewed Pulumi changes over the
+    already-existing declaration channel; adoption is a diff, not a
+    project.
 -   **Why deferred**: the dependency census is unverified, and a
     wrong drop bricks home automation mid-migration; nothing in the
     rollout depends on it — phase 1 already covers M2's actual
-    exposure (IoT reaching the cluster's admin UIs).
+    exposure (IoT reaching the cluster's admin UIs and now its node
+    ports too).
 -   **Untouched by design**: the LAN→IoT direction stays open (home
-    automation reaches its devices); phase 2 constrains only what
-    IoT may initiate.
+    automation reaches its devices, and so do the AirPlay sessions);
+    phase 2 constrains only what IoT may initiate.

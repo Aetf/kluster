@@ -25,6 +25,7 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
+from kluster.gateway import unifi as gw_unifi
 from kluster.physical import homelab, nodes
 from kluster.physical.guardrails import Guardrails
 from kluster.scripts.credentials import workstation
@@ -252,6 +253,52 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     # The steady state is the knob's absence, which is why it is the only
     # optional key here and why nothing has to be unset to reach this.
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Mocks) -> None:
+    """The zone matrix as the whole run declares it, not as one component does.
+
+    A zone the controller has just been told about is denied against every
+    other zone in both directions, so each direction the design wants open is
+    a policy the stack has to declare — and the one direction it does not want
+    open, the IoT VLAN into the node subnet, is a drop that has to be ordered
+    *ahead* of the zone-wide allow beside it. Both properties are wiring: they
+    hold only if the stack reaches this arm of the gateway at all, which is
+    what running the program rather than the component proves.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    name = conventions.CLUSTER_NAME
+    zone = f'{name}-zone_id'
+    internal = 'zone-Internal'
+
+    outward = setup.inputs[f'{name}-cluster-internal']
+    assert outward['action'] == 'ALLOW'
+    assert outward['source']['zoneId'] == zone
+    assert outward['destination']['zoneId'] == internal
+
+    inward = setup.inputs[f'{name}-internal-cluster']
+    assert inward['action'] == 'ALLOW'
+    assert inward['source']['zoneId'] == internal
+    assert inward['destination']['zoneId'] == zone
+
+    # Two drops, one per family, because the source is a literal subnet.
+    for suffix, source in (('v4', str(conventions.VLAN_IOT)), ('v6', str(gw_unifi.VLAN_IOT_V6))):
+        drop = setup.inputs[f'{name}-iot-cluster-{suffix}']
+        assert drop['action'] == 'BLOCK'
+        assert drop['source']['ips'] == [source]
+        assert drop['destination']['zoneId'] == zone
+
+    # The drops first: the allow behind them is the broad one here, so an
+    # allow declared ahead of them would answer for the IoT VLAN as well.
+    assert setup.inputs[f'{name}-internal-cluster-order']['beforePredefinedIds'] == [
+        f'{name}-iot-cluster-v4_id',
+        f'{name}-iot-cluster-v6_id',
+        f'{name}-internal-cluster_id',
+    ]
+    assert setup.inputs[f'{name}-cluster-internal-order']['beforePredefinedIds'] == [f'{name}-cluster-internal_id']
 
 
 @pytest.mark.asyncio

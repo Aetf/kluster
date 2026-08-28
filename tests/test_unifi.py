@@ -10,7 +10,9 @@ visible in a rendered resource. So the suite asserts them directly:
     the same thing arriving the other way;
 -   the drop is preceded by its allow, and both precede the predefined
     policies of the pair, which is the difference between a tightened VLAN
-    and a severed television;
+    and a severed television — and on the way *into* the cluster zone the
+    order is the other way round, the IoT drop ahead of the zone-wide allow
+    that would otherwise answer for it;
 -   the pool is named through address groups and never as a literal, and the
     only literal in the whole census is the media VIP the design says is one;
 -   the IoT rules are sourced from the IoT VLAN alone, not from the internal
@@ -124,11 +126,25 @@ async def test_the_census_is_exactly_the_designed_set(mocks: Mocks) -> None:
     ]
     assert sorted(by_type['unifi:index/firewallZonePolicy:FirewallZonePolicy']) == [
         f'{NAME}-cluster-egress',
+        f'{NAME}-cluster-internal',
+        f'{NAME}-internal-cluster',
+        f'{NAME}-iot-cluster-v4',
+        f'{NAME}-iot-cluster-v6',
         f'{NAME}-iot-media-v4',
         f'{NAME}-iot-media-v6',
         f'{NAME}-iot-pool-v4',
         f'{NAME}-iot-pool-v6',
         f'{NAME}-peer-v6',
+    ]
+    # One order resource per zone pair that carries a policy, and no pair
+    # left without one: a policy whose position is whatever creation produced
+    # is a policy the design does not actually own.
+    assert sorted(by_type['unifi:index/firewallZonePolicyOrder:FirewallZonePolicyOrder']) == [
+        f'{NAME}-cluster-egress-order',
+        f'{NAME}-cluster-internal-order',
+        f'{NAME}-internal-cluster-order',
+        f'{NAME}-iot-pool-order',
+        f'{NAME}-peer-order',
     ]
     # One network and one zone, both the cluster's: the pool is deliberately
     # neither, and no other network on the site is this program's to declare.
@@ -221,6 +237,79 @@ async def test_the_new_zone_is_given_the_egress_its_nodes_cannot_work_without() 
     assert await firewall.cluster_egress.ip_version.future() == 'BOTH'
     assert await firewall.cluster_egress.protocol.future() == 'all'
     assert await firewall.cluster_egress.auto_allow_return_traffic.future() is True
+
+
+@pytest.mark.asyncio
+async def test_the_cluster_zone_talks_to_the_home_in_both_directions() -> None:
+    """The two directions between the new zone and the stock internal one.
+
+    Outward carries the recorded workload dependencies — the home-automation
+    API among them — and inward is the reachability the nodes already had
+    while they shared the untagged LAN. Both are whole-zone, both families,
+    every protocol: what a node's workloads may call is decided where those
+    workloads are declared, and narrowing it here would put that decision
+    behind a gateway credential.
+    """
+    firewall = build()
+
+    outward = firewall.cluster_internal
+    assert await outward.action.future() == 'ALLOW'
+    source = await outward.source.future()
+    destination = await outward.destination.future()
+    assert source is not None and destination is not None
+    assert source.zone_id == f'{NAME}-zone_id'
+    assert destination.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+    assert source.ips is None and destination.ips is None
+
+    inward = firewall.internal_cluster
+    assert await inward.action.future() == 'ALLOW'
+    source = await inward.source.future()
+    destination = await inward.destination.future()
+    assert source is not None and destination is not None
+    assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+    assert destination.zone_id == f'{NAME}-zone_id'
+    # No source literal: the carve-out is a separate drop ahead of it, not a
+    # narrowing of this one, so that what it excludes is a rule of its own.
+    assert source.ips is None
+
+    for policy in (outward, inward):
+        assert await policy.ip_version.future() == 'BOTH'
+        assert await policy.protocol.future() == 'all'
+        # An allow whose return leg is classified on the reverse pair and not
+        # admitted there is an allow that admits a request and drops the reply.
+        assert await policy.auto_allow_return_traffic.future() is True
+
+
+@pytest.mark.asyncio
+async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
+    """The node subnet is what the LAN's least-trusted population loses.
+
+    apid, the kubelet and the BGP session live on it, and the one recorded
+    IoT-originated dependency — a television reaching the media VIP — targets
+    the pool instead, so this drop severs nothing known. Sourced from the
+    VLAN and not from the internal zone at large, or it would take the
+    operator's own machines with it.
+    """
+    firewall = build()
+
+    families = (
+        (firewall.iot_cluster_v4, 'IPV4', str(conventions.VLAN_IOT)),
+        (firewall.iot_cluster_v6, 'IPV6', str(unifi.VLAN_IOT_V6)),
+    )
+    for policy, version, expected in families:
+        assert await policy.action.future() == 'BLOCK'
+        assert await policy.ip_version.future() == version
+        assert await policy.protocol.future() == 'all'
+        source = await policy.source.future()
+        destination = await policy.destination.future()
+        assert source is not None and destination is not None
+        assert source.zone_id == f'zone-{unifi.ZONE_INTERNAL}'
+        assert source.ips == [expected]
+        # The whole zone on the far side: the node subnet *is* a network
+        # object, so unlike the pool it needs no group to be named.
+        assert destination.zone_id == f'{NAME}-zone_id'
+        assert destination.ips is None
+        assert destination.ip_group_id is None
 
 
 @pytest.mark.asyncio
@@ -373,6 +462,34 @@ async def test_both_allows_precede_both_drops_and_all_of_them_precede_the_predef
     assert await firewall.cluster_egress_order.before_predefined_ids.future() == [f'{NAME}-cluster-egress_id']
     assert await firewall.cluster_egress_order.source_zone_id.future() == f'{NAME}-zone_id'
     assert await firewall.cluster_egress_order.destination_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
+
+    # Outward to the home is likewise one policy on its own pair.
+    assert await firewall.cluster_internal_order.before_predefined_ids.future() == [f'{NAME}-cluster-internal_id']
+    assert await firewall.cluster_internal_order.source_zone_id.future() == f'{NAME}-zone_id'
+    assert await firewall.cluster_internal_order.destination_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+
+
+@pytest.mark.asyncio
+async def test_the_iot_drop_precedes_the_allow_that_would_otherwise_answer_for_it() -> None:
+    """Inward, the order is the reverse of the pool pair's, and it has to be.
+
+    On the pool pair the enumerated allow comes first because the drop behind
+    it is the broad one. Here the broad rule is the *allow* — the whole
+    internal zone into the cluster — so a drop declared after it never
+    matches, and the carve-out reads as if it were in force while the IoT
+    VLAN keeps reaching apid.
+    """
+    firewall = build()
+
+    order = firewall.internal_cluster_order
+    assert await order.before_predefined_ids.future() == [
+        f'{NAME}-iot-cluster-v4_id',
+        f'{NAME}-iot-cluster-v6_id',
+        f'{NAME}-internal-cluster_id',
+    ]
+    assert await order.after_predefined_ids.future() is None
+    assert await order.source_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+    assert await order.destination_zone_id.future() == f'{NAME}-zone_id'
 
 
 @pytest.mark.asyncio
