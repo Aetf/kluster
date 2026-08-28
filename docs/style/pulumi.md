@@ -63,11 +63,14 @@ which keys it happens to look up.
 
 ## Resources and their contents
 
-**Runtime ordering belongs to the runtime.** Dependencies and start
-order between systemd units are declared in the units
-(`After=`/`Requires=`/`BindsTo=`), not reconstructed in Pulumi
-declaration order or boot scripts. Pulumi's dependency graph orders
-*declaration*, not *boot*.
+**Runtime behavior belongs to the runtime.** Pulumi declares the
+desired state; what happens after the apply is the target system's job,
+expressed in that system's own mechanism — not reconstructed in Pulumi
+declaration order, resource `depends_on`, or glue scripts. Pulumi's
+dependency graph orders *declaration*, nothing else. The canonical
+case: dependencies and start order between systemd units are declared
+in the units (`After=`/`Requires=`/`BindsTo=`), never in the order
+resources happen to be created or in boot scripts.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
