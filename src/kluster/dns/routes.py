@@ -10,6 +10,17 @@ rewrite, because it never writes one.
 The census is empty while `apps` is unwritten. It grows one row per app as
 the migration proceeds, and each row's rewrite appears in a `dns` preview
 the same day the app's route does.
+
+**The first LAN-side row makes `adguardEndpoints` required.** The `dns` stack
+reads that key only when there is a rewrite to write (`stacks/dns.py`), which
+is what keeps the stack deployable while nothing is routed -- and it means a
+missing key is invisible until the first row lands, rather than failing on the
+apply that introduced it. So the row that first sets `exposure` to anything but
+`Exposure.PUBLIC` ships together with `kluster-py:adguardEndpoints` in
+`Pulumi.dns.yaml`: one base URL per AdGuard instance, addressing the
+administration API each answers on -- the address and port the overlay's flow
+rules admit a `dns` run to, and nothing else (dns.md §3). The two credentials
+beside it (`adguardUsername` / `adguardPassword`) are already in that file.
 """
 
 from __future__ import annotations
