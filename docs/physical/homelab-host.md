@@ -60,9 +60,12 @@ So the host network config (aconfmgr-managed systemd-networkd) gains
 three things, in the same change-set that installs the libvirt
 resources (§4):
 
--   an **`enp7s0.7` tagged VLAN interface** on the physical NIC, which
-    presumes the host's switch port carries VLAN 7 tagged — a
-    port-profile fact on the UDM side, not a host one;
+-   an **`enp7s0.7` tagged VLAN interface** on the physical NIC. The
+    path carries it: the host reaches the UDM's port 8 through an
+    unmanaged rack switch, the port's profile allows all tagged VLANs
+    with the server LAN as its native network, and the HAOS domain's
+    own tagged VLAN over `kvmbr0` already proves 802.1Q frames cross
+    the unmanaged switch intact;
 -   **`kvmbr1`, a bridge over `enp7s0.7`**, which the worker's tap
     joins. `enp7s0` itself is untouched and keeps carrying the host's
     untagged 192.168.80.x address, so nothing moves and there is no
