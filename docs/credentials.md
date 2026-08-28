@@ -434,7 +434,7 @@ by hand.
 | kubeconfig | `physical` output | cluster-admin | CI env | `k8s-base`, `apps` |
 | UDM SSH key, libvirt SSH identity | installed by the estate's other automation: gw-config puts the UDM key on the gateway, aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | gw-config push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret + CI env | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret + CI env | `physical` |
-| AdGuard API credentials | AdGuard admin (no scoped API — audit L11) | alice/bob rewrite API | Pulumi config secret + CI env | `dns` rewrites |
+| AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret + CI env | `dns` rewrites |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret + CI env (`zerotierApiToken`, beside the plain `zerotierNetworkId`) | `physical` |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret · HTTPRoute spec (Pulumi config secret at render) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret · ops-repo secret · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
@@ -495,7 +495,7 @@ config. Rotating either is that other procedure followed by that paste.
 key and the AdGuard admin login belong to the appliances themselves: the
 controller mints a key for a dedicated local admin and shows it once,
 and AdGuard Home has no scoped API at all, so its admin account *is* the
-API credential — the residual the security audit records as L11. Both
+API credential — the residual the security audit records as M6. Both
 instances answer to the same login, because a rewrite is written to
 alice and bob directly rather than synchronized (declarative/dns.md §3),
 and that account is part of the static configuration the gw-config
@@ -507,9 +507,11 @@ minted here, so `credentials derived <row> record` (§4) is the delivery
 alone: the console steps, the value, the stack config that reads it. The
 consumer decides which stack — `physical` drives the UDM's Network API
 and the overlay's Central account, `dns` writes the AdGuard rewrites —
-and the address travels with the credential where the program needs one,
-as the plain `unifiApiUrl` beside the key and the plain
-`zerotierNetworkId` beside the token.
+and the one address the program needs beside a value is the plain
+`zerotierNetworkId` beside the token — the controller's own address is
+not recorded at all, because it is the overlay address the roster
+assigns, stated once in `conventions` and derived everywhere it is
+dialed.
 
 Each of the three rotates by being made again in the same console and
 re-recorded, which is why none of them is a seed: they mint nothing, so
