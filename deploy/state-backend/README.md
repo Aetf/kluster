@@ -60,23 +60,34 @@ The backend speaks TLS with **mandatory client certificates**, and clients pin
 the server by literal IP (`sslmode=verify-full`) so the hot path never depends
 on DNS — which is itself something this backend deploys.
 
-```sh
-eval "$(mise x uv -- uv run credentials escrow env)"
-```
-
-That recovers `PULUMI_CONFIG_PASSPHRASE` from its escrow ciphertext, using the
-recovery key in the kit, and exports it without writing it anywhere; it reads
-`PULUMI_BACKEND_URL` out of the client bundle written above. The URL names the
-bundle's files by absolute path, because nothing on the path expands a
-variable inside a connection string:
+Nothing has to be exported by hand. `mise.toml` reads the checkout's
+`.credentials/` and sets all five variables a `pulumi` run needs, so a command
+run through `mise` is already connected:
 
 ```sh
-postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full&sslrootcert=/home/you/kluster/.credentials/state-backend/ca.crt&sslcert=.../client.crt&sslkey=.../client.key
+mise x -- pulumi stack ls
 ```
 
-Moving the bundle therefore invalidates the URL beside it; re-run
-`state-backend bundle operator --address <ip> --directory <where>` to get one
-that points at the new location.
+`PULUMI_BACKEND_URL` is the string in the bundle, and it names the appliance
+and none of the files:
+
+```sh
+postgres://operator@<ip>:5432/pulumi_state?sslmode=verify-full
+```
+
+The three files travel beside it as `PGSSLROOTCERT`, `PGSSLCERT` and
+`PGSSLKEY`, resolved from the same slot the URL came from. That is the one
+channel both libpq and the driver behind Pulumi's Postgres backend read, and
+it is why no path is expanded inside a connection string: paths in the string
+would make the recorded copy true of one directory on one machine. A bundle is
+usable wherever its files are, so moving a checkout invalidates nothing;
+`state-backend bundle operator --address <ip> --directory <where>` writes one
+somewhere else when that is wanted.
+
+`PULUMI_CONFIG_PASSPHRASE` comes from `.credentials/pulumi.passphrase`, which
+`credentials derived pulumi-passphrase recover` writes from the escrow using
+the kit's recovery key. A checkout that has the bundle but not the passphrase
+needs that one command and nothing else.
 
 The certificate's Common Name *is* the Postgres role: `operator` locally,
 `ci` in the pipeline.

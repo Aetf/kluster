@@ -966,7 +966,7 @@ never a hunt for per-machine environment wiring:
 | `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials kit bootstrap` |
 | `pulumi.passphrase` | The state passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
 | `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials root <name> remember` |
-| `state-backend/` | The `operator` client bundle: CA, certificate, key, and the URL naming them. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
+| `state-backend/` | The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
 | `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
 
 **The directory is `0700`, and that is the boundary that matters**: it
@@ -996,14 +996,22 @@ entries (§1 rule 6).
 **Moving to another workstation** is copying the directory (`rsync -a`),
 minus `kit.kdbx` unless that machine is meant to hold the kit — one
 copy in place of the mixture of an `rsync` under `~/.config`, a piped
-passphrase and a handwritten token file that it replaces. The one
-thing the copy assumes is that both checkouts sit at the same path:
-neither libpq nor the OCI SDK expands anything, so the bundle's URL names
-its three certificate files absolutely and the OCI configuration names its
-key the same way. A checkout somewhere else corrects those paths in
-`state-backend/backend-url` — three edits in a plain string, or a re-run of
-`state-backend bundle operator` — and re-runs the OCI mint on a machine
-that holds the kit.
+passphrase and a handwritten token file that it replaces. **The client
+bundle travels as it is, wherever the second checkout sits**: its
+connection string names the appliance and no file at all
+(`postgres://<role>@<ip>:5432/…?sslmode=verify-full`), and the three
+certificates are found through `PGSSLROOTCERT`, `PGSSLCERT` and
+`PGSSLKEY`, which `mise.toml` resolves from this directory's own
+location on every run. The environment is the channel a path can be
+carried on because it is the one libpq and the driver behind Pulumi's
+Postgres backend both read; a connection string expands nothing, which
+is why the paths are not in it (physical/state-backend.md §3).
+
+The OCI configuration is the one entry that does not travel: the SDK
+expands nothing either, so its `key_file` names the PEM beside it by
+absolute path into this checkout. A checkout at a different path
+re-runs `credentials derived oci-state-backend mint` on a machine that
+holds the kit.
 
 Three of these slots had other homes before, and every old location is
 still read — the bundle and the appliance's OCI configuration by

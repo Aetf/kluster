@@ -95,33 +95,47 @@ design: roster, addressing, routes, flow rules, and cutover.
 
 ### 2.1 Member roster & addressing
 
-Every member is declared as a `zerotier_member` resource with an
-explicit static `ip_assignments` entry and a `role` tag — the Pulumi
-roster *is* the census; a member without a declared tag cannot exist
-in the desired state (relevant because the tag default is permissive,
-§2.3).
+The roster is **`conventions.ZT_ROSTER`**: one entry per member,
+carrying the name Central shows, the `role` tag, and — where the
+address is a decision this repository owns rather than an assignment
+that predates it — a static overlay address. It lives in
+`conventions.py` rather than in one stack's data because two stacks
+decide from it and neither owns it: `physical` admits members by it
+(`gateway.zerotier.parse_members`) and `dns` publishes the `*.zt` host
+block from it, one A record per entry (declarative/dns.md §2). A member
+is therefore admitted and named by the same declaration, and a device
+that leaves the overlay leaves both together.
+
+**Admission is checked in both directions**, which is what makes that
+tuple a census rather than a list: a name in the stack's configuration
+the roster does not carry is refused, and a rostered entry with nothing
+configured for it is refused as well. That is what keeps the tag's
+permissive default (§2.3) out of reach — an undeclared member never
+joins to receive it. There is one exception, and it is narrow: a
+ZeroTier identity comes into being when the daemon first runs on a
+device, so a member this stack is *delivering* the daemon to is named
+`unminted` by the caller and left out of the desired state until it
+has one. The gateway is the only such member — its daemon is a
+container of the estate.
+
+**Every member is placed; none draws from the pool.** A pool address
+would move, and the flow rules and DNS records naming it would not move
+with it. The three addresses this repository decides are in
+`conventions.py`; the rest are the assignments Central already made,
+which reach the stack as configuration and are re-declared as static
+from there. A member whose display name contains a space keeps it:
+the record helper lowercases and hyphenates the DNS label, rather than
+the device being renamed in Central.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
-| Personal devices (phones, laptops) | `personal` | Full access — parity with sitting on the LAN. |
-| UDM | `infra` | Static managed IP (`conventions.py`); nexthop of every managed route. |
-| Homelab host | `infra` | Today's only home member — a plain member, never a router (ZT carries no home-LAN routes today); kept as the recovery side-door (§3). |
-| Legacy VPS | `infra` | Retires in Wave F together with its `10.42.0.0/24` route. |
-| CI member `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in-state (`zerotier_identity`), private key in the CI Environments' secrets; the `zt-physical` job concurrency group keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
-| CI member `ci-dns` | `ci` | The `dns` identity domain: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
-
-Import census (2026-08-24, against ZT Central): 11 members live. Three
-`*.zt` records name members that no longer exist (Abacus, Aetf-Arch-Mac,
-Aetf-MacbookPro) and are dropped; five live members have no record
-(PC-Homelab, S26 Ultra, Pixel 7 Pro, Aetf-Handheld, Aetf-Win-XPS) and
-gain one; OnePlus6T's record holds a stale address. Member names
-containing spaces are normalized to DNS labels by the record helper, not
-renamed in Central. The managed addresses the roster assigns (the UDM and
-the two CI identities, `conventions.py`) are outside every address in
-use. DNS linkage: the `*.zt.<zone>` block in the `dns`
-stack (dns.md §2) mirrors this roster — a `udm.zt` record is added,
-`abacus.zt` dropped, and the VPS's record retires with it in Wave F.
-Roster and records change in the same review since both live in Pulumi.
+| `udm` | `infra` | The gateway: a static managed address, and the next hop of every managed route. |
+| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (ZT carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules look up rather than take from a constant. |
+| `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
+| `haos` | `infra` | Home automation, reachable while the cluster is not. |
+| `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
+| `ci-dns` | `ci` | The `dns` identity domain: `up-dns`, a pull request's `preview (dns)` and `prove (dns)`, and the drift matrix's `dns` entry — the LAN-touching work is the AdGuard rewrites (declarative/dns.md §3). Same generation and confinement, serialized by `zt-dns` (§2.6). IPv4-only (§2.3). |
+| Personal devices | `personal` | Phones and laptops, each named in the roster. Full access — parity with sitting on the LAN. |
 
 ### 2.2 Managed routes
 
