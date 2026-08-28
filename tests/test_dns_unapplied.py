@@ -1,9 +1,9 @@
 """The dns program against a `physical` stack that has never been applied.
 
-The anchors are the one place this stack reaches across a StackReference, and
-`physical` is a placeholder until the cloud site is built: its stack exists
-and publishes nothing. Declaring the anchors must not depend on that — a
-`dns` preview has to show the same records either way, or the two stacks
+The anchors and the ZeroTier host block are where this stack reaches across a
+StackReference, and `physical` is a placeholder until the cloud site is built:
+its stack exists and publishes nothing. Declaring them must not depend on that
+— a `dns` preview has to show the same records either way, or the two stacks
 could never be brought up in the order the migration prescribes.
 """
 
@@ -15,6 +15,8 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
+from kluster.dns.zones import zt_label
+from kluster.gateway.zerotier import ROSTER
 
 ACCOUNT_ID = 'cf-account'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
@@ -68,6 +70,21 @@ def test_the_anchors_are_declared_without_the_addresses_being_known() -> None:
     for suffix in ('a', 'aaaa'):
         assert f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-{suffix}' in names
     assert f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_VIP1}-a' in names
+
+
+def test_the_overlay_block_is_the_whole_roster_before_any_address_is_known() -> None:
+    """How many `*.zt` records exist is decided by code, not by the export.
+
+    The roster crosses as a module and only the addresses cross as outputs, so
+    an unapplied `physical` costs the block its contents and not its shape. A
+    program that read the member names out of the stack reference instead
+    could declare nothing at all here — and the first `up` of the pair would
+    have no preview to review.
+    """
+    names = _record_names()
+
+    for entry in ROSTER:
+        assert f'{conventions.ZONE_PRIMARY}-{zt_label(entry.name)}.{conventions.ZT_LABEL}-a' in names, entry.name
 
 
 def test_the_rest_of_the_estate_is_declared_too() -> None:

@@ -3,28 +3,34 @@
 Ported from the DNSControl program this stack replaces
 (github.com/Aetf/dns), one row per record, with the drops the import census
 called for (dns.md §2, gateway.md §2.1) already applied. What is here is
-what has nothing to co-locate with: mail, the ZeroTier host block, site
-verifications, certificate authority authorization, the family zones, and
-the apex/`www` pair that a web server rather than an app serves.
+what has nothing to co-locate with: mail, site verifications, certificate
+authority authorization, the family zones, and the apex/`www` pair that a web
+server rather than an app serves.
 
 App records are not here. The ones that have not yet moved to a component
 live in `legacy.py` and leave one at a time; the ones that have moved live
 beside their app in the `apps` stack (dns.md §1).
 
-The cluster anchors are not here either: `kluster.hosts` and `vip1.hosts`
-carry addresses the `physical` stack hands out, so they are built from that
-stack's outputs in `stacks/dns.py`, and only in the primary zone.
-`archvps.hosts` is a literal precisely because it is the one anchor no stack
-output backs -- it names the legacy VPS, and it retires with it
-(migration.md Wave F).
+The two blocks whose contents another stack decides are not literals here.
+The cluster anchors -- `kluster.hosts` and `vip1.hosts` -- carry addresses the
+`physical` stack hands out, so they are built from that stack's outputs in
+`stacks/dns.py`, and only in the primary zone. The ZeroTier host block is
+built there too, from the member roster the same stack declares: `zt_records`
+below is its shape, and the addresses it does not already know are read across
+the same reference. `archvps.hosts` is a literal precisely because it is the
+one anchor no stack output backs -- it names the legacy VPS, and it retires
+with it (migration.md Wave F).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+
+import pulumi
 
 from kluster import conventions
 from kluster.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
+from kluster.gateway.zerotier import ROSTER
 
 __all__ = (
     'ALIAS_ZONES',
@@ -33,7 +39,6 @@ __all__ = (
     'ESTATE',
     'MIRRORED_ESTATE',
     'ZONE_ISSUERS',
-    'ZT_ROSTER',
     'zt_label',
     'zt_records',
 )
@@ -44,21 +49,6 @@ ANCHOR_ARCHVPS = f'archvps.{conventions.ANCHOR_LABEL}.{conventions.ZONE_PRIMARY}
 
 #: Where jiahui.id's Google Site is served from.
 IP_JIAHUI_SITE = '173.194.206.121'
-
-#: The ZeroTier host block (dns.md §2). Addresses are ZeroTier Central's
-#: managed assignments; the roster in `physical` becomes their source of
-#: truth once it declares the members, and this table collapses into it.
-#: Three records were dropped at import because Central no longer knows the
-#: member (Abacus, Aetf-Arch-Mac, Aetf-MacbookPro).
-ZT_ROSTER: tuple[tuple[str, str], ...] = (
-    ('udm', str(conventions.ZT_UDM)),
-    ('Aetf-Arch-XPS', '10.144.175.24'),
-    ('Aetf-Arch-Homelab', '10.144.180.10'),
-    ('Aetf-Arch-VPS', '10.144.160.212'),
-    ('Aetf-Laptop', '10.144.127.147'),
-    ('OnePlus6T', '10.144.160.97'),
-    ('haos', '10.144.84.129'),
-)
 
 
 def zt_label(member: str) -> str:
@@ -71,15 +61,31 @@ def zt_label(member: str) -> str:
     return '-'.join(member.lower().split())
 
 
-def zt_records() -> tuple[Record, ...]:
+def zt_records(address: Callable[[str], pulumi.Input[str]]) -> tuple[Record, ...]:
+    """The ZeroTier host block (dns.md §2): one A record per rostered member.
+
+    The census is the roster the `physical` stack admits members by
+    (`gateway.zerotier.ROSTER`), shared as code the way every other convention
+    is. Publishing is therefore not a second list that can fall behind the
+    first: a device joins the overlay and gets its name under `*.zt` by the
+    same declaration, and a device that leaves loses both.
+
+    `address` is asked only for the members whose overlay address ZeroTier
+    Central assigned -- a fact about a device that existed before this program,
+    which reaches this stack as a `physical` output. The addresses this
+    repository decides (the gateway's, and the two continuous-integration
+    identities') are read off the roster entry instead, which is why the
+    gateway's own `udm.zt` is a literal here and does not wait on the identity
+    that is minted the first time its daemon runs.
+    """
     return tuple(
         a(
-            f'{zt_label(member)}.{conventions.ZT_LABEL}',
-            address,
+            f'{zt_label(entry.name)}.{conventions.ZT_LABEL}',
+            str(entry.address) if entry.address is not None else address(entry.name),
             ttl=conventions.ANCHOR_TTL,
             comment='ZeroTier member',
         )
-        for member, address in ZT_ROSTER
+        for entry in ROSTER
     )
 
 
@@ -204,8 +210,10 @@ def _web_origin() -> tuple[Record, ...]:
     )
 
 
-#: What every full-mirror public zone carries identically -- the legacy VPS
-#: anchor, the ZeroTier host block, and the web origin.
+#: What every full-mirror public zone carries identically as literals -- the
+#: legacy VPS anchor and the web origin. The ZeroTier host block is mirrored
+#: too, but it is derived rather than written down, so `stacks/dns.py` adds it
+#: to the same set of zones (`zt_records`).
 #:
 #: This block, not a zone-against-zone comparison, is the definition of the
 #: mirror: `conventions.PUBLIC_ALL` is exactly the set of zones that carry it,
@@ -226,7 +234,6 @@ MIRRORED_ESTATE: tuple[Record, ...] = (
         ttl=conventions.ANCHOR_TTL,
         comment='legacy VPS anchor; retires with the VPS',
     ),
-    *zt_records(),
     *_web_origin(),
 )
 

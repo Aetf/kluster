@@ -19,13 +19,29 @@ from kluster.dns.zones import (
     ESTATE,
     MIRRORED_ESTATE,
     ZONE_ISSUERS,
-    ZT_ROSTER,
     zt_label,
+    zt_records,
 )
+from kluster.gateway.zerotier import ROSTER
+
+#: What the `physical` stack publishes, in shape only: an address for each
+#: member whose address it does not decide itself. The real census lives in
+#: that stack's configuration and in ZeroTier Central, never here.
+ZT_CONFIGURED: dict[str, str] = {
+    entry.name: f'10.144.99.{index}' for index, entry in enumerate(ROSTER) if entry.address is None
+}
+
+
+def _zt() -> tuple[Record, ...]:
+    return zt_records(ZT_CONFIGURED.__getitem__)
 
 
 def _records(zone: str) -> tuple[Record, ...]:
-    return (*ESTATE[zone], *LEGACY.get(zone, ()))
+    # The overlay block is not in `ESTATE` — it is derived from the roster and
+    # added by the stack program — but it is part of what a mirror carries, so
+    # the census assertions below have to see it.
+    overlay = _zt() if zone in conventions.PUBLIC_ALL else ()
+    return (*ESTATE[zone], *LEGACY.get(zone, ()), *overlay)
 
 
 def _labels(zone: str) -> set[str]:
@@ -57,18 +73,66 @@ def test_the_import_census_dropped_its_dead_weight(label: str) -> None:
         assert label not in _labels(zone), zone
 
 
-def test_the_dead_zerotier_members_are_gone_and_the_udm_arrived() -> None:
-    members = {member for member, _ in ZT_ROSTER}
+def test_every_member_of_the_overlay_roster_is_published() -> None:
+    """The roster is the census, so a member without a record cannot exist.
 
-    assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro'}
-    assert ('udm', str(conventions.ZT_UDM)) in ZT_ROSTER
+    The block used to be a hand-maintained table beside the roster, and it had
+    drifted from it in both directions — members with no record, and a record
+    whose address the overlay had reassigned. Deriving is what makes that a
+    state the program cannot be in rather than one somebody has to notice.
+    """
+    published = {record.label for record in _zt()}
+
+    assert published == {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}' for entry in ROSTER}
+    assert len(_zt()) == len(ROSTER)
+
+
+def test_the_retired_members_are_published_by_nobody() -> None:
+    """Leaving the roster is what retires a record; nothing else does.
+
+    Three members were dropped when the census was imported and one more when
+    the estate was reconciled against Central, all for the same reason: the
+    overlay no longer knows them.
+    """
+    members = {entry.name for entry in ROSTER}
+
+    assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro', 'Aetf-Laptop'}
+
+
+def test_the_gateways_record_is_a_convention_and_waits_for_no_identity() -> None:
+    """`udm.zt` is the address this repository assigns, not one it is told.
+
+    The gateway's ZeroTier identity is minted by the daemon the `physical`
+    stack delivers to it, so during first bring-up there is no member for it in
+    Central at all — and this record still has to resolve, because it is the
+    address the overlay routes through. Nothing looks it up: `ZT_CONFIGURED`
+    has no entry for it, so a lookup would raise rather than be tolerated.
+    """
+    udm = next(record for record in _zt() if record.label == f'udm.{conventions.ZT_LABEL}')
+
+    assert udm.content == str(conventions.ZT_UDM)
+    assert 'udm' not in ZT_CONFIGURED
+
+
+def test_a_members_own_address_is_the_one_the_overlay_assigned_it() -> None:
+    # The half of the roster this repository does not decide: it arrives from
+    # ZeroTier Central by way of the `physical` stack, and the record carries
+    # it verbatim.
+    member = 'Aetf-Arch-Homelab'
+
+    record = next(record for record in _zt() if record.label == f'{zt_label(member)}.{conventions.ZT_LABEL}')
+
+    assert record.content == ZT_CONFIGURED[member]
+    assert record.ttl == conventions.ANCHOR_TTL
 
 
 def test_zerotier_labels_are_dns_labels() -> None:
-    # Central's names are display names: they carry case and spaces.
+    # Central's names are display names: they carry case and spaces, and two
+    # members on the roster today carry both.
     assert zt_label('S26 Ultra') == 's26-ultra'
-    for member, _ in ZT_ROSTER:
-        label = zt_label(member)
+    assert zt_label('Pixel 7 Pro') == 'pixel-7-pro'
+    for entry in ROSTER:
+        label = zt_label(entry.name)
         assert label == label.lower()
         assert ' ' not in label
 
