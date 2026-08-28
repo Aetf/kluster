@@ -151,15 +151,17 @@ def _zt_block(physical: pulumi.StackReference) -> Sequence[Record]:
     unresolved exactly as an anchor's does; `dns` previews the same names
     before and after `physical` is applied.
 
-    The lookup is written not to raise, for the same reason: before the first
-    apply there is no map to look in, and a preview that failed there would be
-    a preview nobody could review. What it cannot do is quietly publish
-    something wrong afterwards — `physical` exports an entry for every member
-    whose address is configured, and those are precisely the members asked for
-    here (the rest are addresses this repository decides, which `zt_records`
-    reads off the roster entry without asking at all), so a miss can only mean
-    an address that does not exist yet, and the record it would write is one
-    Cloudflare refuses rather than one that resolves somewhere unintended.
+    The lookup is written not to raise on an unapplied `physical`, for the same
+    reason: before the first apply there is no map to look in, and a preview
+    that failed there would be a preview nobody could review. What it does
+    refuse is a map that is there and short a member, because that one is not a
+    stack waiting its turn — `physical` exports an entry for every member whose
+    address is configured, and those are precisely the members asked for here
+    (the rest are addresses this repository decides, which `zt_records` reads
+    off the roster entry without asking at all). So a member missing from a map
+    that exists is a roster entry configured without an address, and
+    `_member_address` says which one rather than letting `str(None)` travel to
+    Cloudflare and come back named after a record.
     """
     published = physical.get_output(OUTPUT_ZT_ADDRESSES)
 
@@ -170,9 +172,25 @@ def _zt_block(physical: pulumi.StackReference) -> Sequence[Record]:
 
 
 def _member_address(published: object, member: str) -> str:
-    """One member's overlay address out of the map `physical` exports."""
+    """One member's overlay address out of the map `physical` exports.
+
+    Two absences, and only one of them is a mistake. No map at all is a
+    `physical` that has not been applied, and the block is still declared
+    against it (`_zt_block`). A member missing from a map that exists is a
+    roster entry whose address was never configured, and it is named here: the
+    alternative is `str(None)`, which is a perfectly good record content as far
+    as this program is concerned, so the mistake would reach Cloudflare and come
+    back as a rejected record rather than as the entry that is short a value.
+    """
     addresses = cast('Mapping[str, object]', published or {})
-    return str(addresses.get(member))
+    address = addresses.get(member)
+    if address is None and addresses:
+        raise ValueError(
+            f'the physical stack exports no overlay address for {member!r}: its '
+            f'{OUTPUT_ZT_ADDRESSES} carries {", ".join(sorted(addresses))}. '
+            "That member's `zerotierMembers` entry is configured without an address."
+        )
+    return str(address)
 
 
 def _address(physical: pulumi.StackReference, output: str) -> pulumi.Output[str]:
