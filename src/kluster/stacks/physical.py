@@ -128,7 +128,7 @@ async def main() -> None:
     pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
-    _declare_talos_day1(cluster=cluster, nodes=nodes)
+    _declare_talos_day1(cluster=cluster, nodes=nodes, cluster_endpoint=load_balancer.address)
     _declare_storage(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, nodes=nodes)
     _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
 
@@ -327,7 +327,7 @@ def _budget_recipients(config: pulumi.Config) -> tuple[str, ...]:
     return tuple(cast('list[str]', entries))
 
 
-def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> TalosDay1:
+def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes, cluster_endpoint: pulumi.Input[str]) -> TalosDay1:
     """§2: the tail of the Talos chain, and the two credentials it produces.
 
     The cloud nodes read their configuration from instance metadata at first
@@ -336,11 +336,22 @@ def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> TalosDay
     a time, the first control plane bootstraps etcd, and the kubeconfig is
     released only once the cluster reports healthy.
 
-    Each machine is reached at the address it is administered on rather than
-    through the balancer: an apply names one node, and a balancer would pick
-    whichever backend it liked. The cloud nodes answer apid on their public
-    addresses; the worker answers on its LAN address, which a run reaches over
-    the overlay (physical/gateway.md §2).
+    Which address reaches which machine is two answers, because apid routes by
+    the node a call names rather than by the connection it arrives on:
+
+    -   The cloud nodes are dialled at their own public addresses. A call with
+        no cluster to route through has nothing else to use — bootstrap is the
+        first contact of all — and a balancer would pick whichever backend it
+        liked.
+    -   The worker is named by its cluster-VLAN address and dialled at the
+        cluster endpoint, which the balancer forwards on 50000. Whichever
+        control plane answers proxies the call to the worker over KubeSpan, so
+        the backend the balancer chose does not matter and nothing outside the
+        site needs a route to the worker's LAN address.
+
+    The worker's *first* configuration is not applied at all — it rides the
+    seed image the VM boots from — so the proxy path is needed only once the
+    node is in the mesh, which is where a change to a running worker finds it.
     """
     day1 = TalosDay1(
         conventions.CLUSTER_NAME,
@@ -349,6 +360,7 @@ def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes) -> TalosDay
             **{node: instance.public_ip for node, instance in nodes.instances.items()},
             conventions.HOMELAB_NODE: str(conventions.HOMELAB_NODE_IPV4),
         },
+        endpoints={conventions.HOMELAB_NODE: cluster_endpoint},
         # The dedicated VIP, which the augmented node does not otherwise answer
         # for: OCI assigns the address to the VNIC and leaves the guest alone.
         secondary_addresses={conventions.AUGMENTED_NODE: nodes.secondary_ip.ip_address},

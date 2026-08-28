@@ -24,6 +24,7 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 from kluster.gateway import zerotier
+from kluster.physical import nodes
 from kluster.physical.guardrails import Guardrails
 from kluster.stacks import physical
 
@@ -304,6 +305,29 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
     assert await talosconfig.is_secret()
     assert await kubeconfig.future() == KUBECONFIG
     assert await talosconfig.future() == TALOSCONFIG
+
+
+@pytest.mark.asyncio
+async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Mocks) -> None:
+    """The worker's apid is reached without a route to its LAN address.
+
+    apid routes by the node a call names, so the worker's configuration apply
+    names the cluster-VLAN address the machine answers on and dials the
+    balancer, which forwards the machine API port to whichever control plane it
+    likes; that control plane proxies the call the rest of the way over the
+    mesh. Nothing outside the site therefore needs a path to the worker, which
+    is why a continuous-integration run confined to the overlay's four targets
+    can still carry a worker configuration change.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    worker = setup.inputs[f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config']
+    assert worker['node'] == str(conventions.HOMELAB_NODE_IPV4)
+    assert worker['endpoint'] == LB_ADDRESS
+    # And the balancer forwards that port, or the endpoint above is a closed
+    # door: the machine API is one of the two management ports it listens on.
+    assert 50000 in nodes.MANAGEMENT_PORTS
 
 
 def declare_storage() -> physical.Storage:

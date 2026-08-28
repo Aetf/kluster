@@ -49,7 +49,11 @@ def _patched_register_resource(self: Any, request: Any) -> Any:
 
 pulumi.runtime.mocks.MockMonitor.RegisterResource = _patched_register_resource
 
-ENDPOINT = 'https://203.0.113.10:6443'
+#: The balancer in front of the control planes, in the two spellings the two
+#: ports are named with: a URL for the Kubernetes endpoint, a bare address for
+#: the machine API, which carries its own port.
+BALANCER = '203.0.113.10'
+ENDPOINT = f'https://{BALANCER}:6443'
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
@@ -126,7 +130,7 @@ def build_cluster(**kwargs: Any) -> Any:
         'kluster',
         cluster_name='kluster',
         endpoint=ENDPOINT,
-        cert_sans=['203.0.113.10'],
+        cert_sans=[BALANCER],
         talos_version='v1.11.0',
         **kwargs,
     )
@@ -192,6 +196,43 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
 
 
 @pytest.mark.asyncio
+async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Fake) -> None:
+    # The ordinary case, and the one the cloud nodes are in: the address that
+    # names the node is also the address that reaches it.
+    day1 = build()
+    for node, applied in day1.applies.items():
+        assert await applied.endpoint.future() == ADDRESSES[node]
+
+
+@pytest.mark.asyncio
+async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialled_elsewhere(fake: Fake) -> None:
+    # apid routes by the node a call names, so a node that nothing outside the
+    # site can open a connection to is still administered: it is named by its
+    # own address and dialled at one that answers, and whichever member that
+    # is proxies the call the rest of the way.
+    day1 = build(endpoints={'homelab': BALANCER})
+    worker = day1.applies['homelab']
+    assert await worker.node.future() == ADDRESSES['homelab']
+    assert await worker.endpoint.future() == BALANCER
+    # And only that node: the others are untouched by the override.
+    for node in ('cp1', 'cp2', 'cp3'):
+        assert await day1.applies[node].endpoint.future() == ADDRESSES[node]
+
+
+@pytest.mark.asyncio
+async def test_the_bootstrap_dials_the_node_it_names_whatever_it_was_given(fake: Fake) -> None:
+    # Bootstrap and the kubeconfig read behind it are the calls with nothing to
+    # route through — there is no cluster yet — so they never take a proxy,
+    # even for a node the caller handed an endpoint for.
+    day1 = build(endpoints={'cp1': BALANCER})
+    assert await day1.bootstrap.endpoint.future() == ADDRESSES['cp1']
+    assert await day1.kubeconfig_source.endpoint.future() == ADDRESSES['cp1']
+    # The apply on that same node did take it, so this is a decision rather
+    # than an input that goes nowhere.
+    assert await day1.applies['cp1'].endpoint.future() == BALANCER
+
+
+@pytest.mark.asyncio
 async def test_destroying_an_apply_never_wipes_the_disk(fake: Fake) -> None:
     # `reset` wipes STATE and EPHEMERAL — every partition (provider issue
     # #205). Node replacement is an explicit procedure, never a side effect.
@@ -237,7 +278,8 @@ async def test_the_health_check_knows_which_node_is_which(fake: Fake) -> None:
     health = fake.calls['talos:cluster/getHealth:getHealth']
     assert health['controlPlaneNodes'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
     assert health['workerNodes'] == [ADDRESSES['homelab']]
-    # The health client talks to a control plane, not to the worker.
+    # The health client talks to a control plane, never to the worker: the
+    # worker is named as a node and the call is routed to it from there.
     assert health['endpoints'] == [ADDRESSES[node] for node in ('cp1', 'cp2', 'cp3')]
 
 
@@ -376,3 +418,5 @@ async def test_a_stranger_cannot_be_named_by_either_component(fake: Fake) -> Non
         build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'})
     with pytest.raises(ValueError, match='secondary addresses name nodes that are not in the cluster'):
         build(secondary_addresses={'nowhere': SECONDARY})
+    with pytest.raises(ValueError, match='endpoints name nodes that are not in the cluster'):
+        build(endpoints={'nowhere': BALANCER})
