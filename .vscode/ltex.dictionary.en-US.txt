@@ -85,6 +85,7 @@ DNAT
 DNATs
 dns
 DNSControl
+Docstrings
 dport
 dst
 eBPF
@@ -242,6 +243,7 @@ NSG-allowlist
 nspawn
 NXDOMAIN
 oci
+OCID
 OCIR
 OCPU
 OCPU-h
@@ -343,6 +345,7 @@ stdiscosrv
 StorageClass
 StorageClasses
 subcommand
+subpackage
 subvolume
 syncthing
 syncthing-class

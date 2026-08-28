@@ -98,7 +98,7 @@ Two angles, one reviewer each (they may run in parallel):
     every new behavior have a test that fails without it, does the
     diff break an invariant a test elsewhere pins, is anything
     provider-facing left unproven without saying so.
-2.  **Architecture & style**, against `docs/framework/style.md`: config
+2.  **Architecture & style**, against `docs/style/`: config
     read at the right layer, resources on the right component,
     providers inherited not re-plumbed, names and comments that survive
     the canon's tests, censuses where they belong.
