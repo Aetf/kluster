@@ -12,3 +12,6 @@ config:
   kluster-py:zerotierApiToken:
     secure: v1:mPQdF7Bt/dIs+Zk2:kUnNwex6+nJqdcxCP4+Epj9hStliiNwgbyJO0xDTdy09nZEqDhSlloUB/hB2lQ7x
   kluster-py:zerotierNetworkId: 83048a0632b6ba9b
+  kluster-py:haosDomainUuid: 5e10948c-8934-4239-849c-b6b9104bfe3f
+  kluster-py:libvirtStorageDir: /var/lib/libvirt/kluster
+  kluster-py:qbittorrentPeerPort: "53363"
