@@ -777,8 +777,9 @@ ROWS: dict[str, Row] = {
         source=Derived(escrow.ALERTMANAGER),
         targets=(EscrowCopy(escrow.ALERTMANAGER),),
         pending=(
-            'neither the issue-sync poller nor the HTTPRoute that matches its header exists, so generating '
-            'it now would park a secret (§1 rule 2)'
+            'the escrow copy is the only slot this row has today: the ops-repository secret and the config '
+            'secret the HTTPRoute is rendered from wait on the issue-sync poller and on that route, neither '
+            'of which is built'
         ),
     ),
     'haos-webhook': Row(
