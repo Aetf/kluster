@@ -55,3 +55,10 @@ the assert. Rules that keep it that way:
     which line the test is about, the case is doing too much.
 -   **The name is the sentence.** `test_<the claim being proven>`, and
     the body proves exactly that claim — one behavior per case.
+-   **Not too DRY.** Tests have no tests, so their correctness must be
+    self-evident: no fixture where none is needed, literal values over
+    helper functions where a literal is readable. This complements
+    "irrelevant setup out of sight" rather than competing with it —
+    abstract the setup that is *not* the point into clean modules with
+    clean interfaces, and keep the values that *are* the point literal
+    and in view.
