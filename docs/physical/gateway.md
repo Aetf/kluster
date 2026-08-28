@@ -45,6 +45,26 @@ declarative/physical.md §4.
     than on the device is deliberate: the box's userland is the
     cut-down one a router ships, where `tar` can be relied on and a
     zstd binary cannot.
+
+    **The images are Alpine with s6-overlay, not systemd**, which
+    decides what a unit may say. It boots what the image ships at
+    `/sbin/init`; readiness is nspawn's own message rather than one
+    the guest never sends; a member is stopped with `SIGKILL`,
+    because s6 returns from anything gentler with supervisors still
+    holding the control group against the next start; and whatever a
+    member has to be told arrives as **environment variables in its
+    PID 1**, which is the only channel its startup scripts read. The
+    AdGuard pair take their address that way (address, router and the
+    SLAAC token, read by the image's own network setup before the
+    resolver it guards may start). Caddy does not: its image asks for
+    a DHCP lease, and the lease is where its resolver comes from too,
+    so the address the estate holds for it is the address the design
+    intends and not one the unit delivers — closing that gap is work
+    in the image, which needs the AdGuard pair's network setup plus a
+    resolver that does not depend on this estate. The ZeroTier member
+    is told nothing at all: it is host-networked, and what it needs of
+    its unit is the tunnel device and the state directory that is its
+    identity on the overlay.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.

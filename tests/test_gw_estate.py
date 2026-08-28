@@ -187,8 +187,82 @@ def test_a_bridged_container_is_placed_and_the_overlay_member_is_not() -> None:
     assert f'--bind={estate.TUN_DEVICE}' in overlay
     # A bind is not access: the unit's own device policy has to admit it too.
     assert f'DeviceAllow={estate.TUN_DEVICE} rw' in overlay
+    # And naming a device is what narrows that policy to a list, so the console
+    # the container needs anyway has to be on it — a pseudo-terminal, which the
+    # set every service gets does not include.
+    assert 'DeviceAllow=char-pts rw' in overlay
+    assert 'DeviceAllow' not in bridged, 'a member that names no device keeps the open policy'
     assert f'--bind={estate.state_path("zerotier")}:{estate.ZEROTIER_STATE}' in overlay
     assert f'--directory={estate.root_path("zerotier")}' in overlay
+
+
+def test_a_member_is_addressed_through_the_environment_its_image_reads() -> None:
+    """The images run s6, and a resolver configures its interface itself.
+
+    It reads the addressing out of PID 1's environment, which the unit fills
+    with `--setenv` — not out of a drop-in for a network manager the image does
+    not carry. A file delivered to such a path is one nobody opens, so the
+    resolvers would come up with no address at all and the LAN would lose the
+    name service that every lease points at.
+    """
+    by_name = {container.name: container for container in census()}
+    unit = estate.unit_file(by_name['adguard-alice'])
+
+    for name, value in estate.net_setup_environment(ADDRESSES['adguard-alice']).items():
+        assert f'--setenv={name}={value}' in unit
+    # The unit's own `Environment=` is the environment of the process on the
+    # device, which is not the one the image reads.
+    assert 'Environment=' not in unit
+
+    targets = [dropin.target for container in census() for dropin in container.files]
+    assert not [target for target in targets if target.startswith('/etc/systemd/')], (
+        'nothing in these images reads a systemd configuration path'
+    )
+
+
+def test_every_unit_runs_an_s6_image_on_the_terms_that_image_sets() -> None:
+    """Four statements, each of which an s6 guest would otherwise fail.
+
+    It never reports readiness, so nspawn answers for it and the unit is ready
+    once the container's PID 1 exists. It treats a gentler signal as advisory
+    and leaves supervisors holding the control group, so it is killed. It
+    configures its own interface, which needs a capability nspawn does not keep
+    by default. And it ships an `/etc/resolv.conf` that is an answer to a
+    question — the overlay member resolves through public servers because it
+    has to come up while this estate's own resolvers are down — so nothing
+    overwrites it.
+    """
+    for container in census():
+        unit = estate.unit_file(container)
+
+        assert '--notify-ready=no' in unit
+        assert 'Type=notify' in unit
+        assert f'--kill-signal={estate.KILL_SIGNAL}' in unit
+        assert f'--setenv=S6_KILL_GRACETIME={estate.S6_KILL_GRACETIME}' in unit
+        assert '--capability=CAP_NET_ADMIN' in unit
+        assert '--resolv-conf=off' in unit
+
+
+def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it_buys() -> None:
+    """Both are environment variables, so the estate names them or it guesses.
+
+    The server is started with `--config $XDG_CONFIG_HOME/caddy/Caddyfile`, so
+    a file delivered anywhere else is not the file it reads; and it places the
+    certificates it earns under `XDG_DATA_HOME`, which has to be the directory
+    bind-mounted from the device or a rootfs bump would throw them away.
+    """
+    caddy = next(container for container in census() if container.name == 'caddy')
+    unit = estate.unit_file(caddy)
+    configuration = next(dropin for dropin in caddy.files if dropin.name == 'Caddyfile')
+
+    assert f'--setenv=XDG_CONFIG_HOME={estate.CADDY_CONFIG_HOME}' in unit
+    assert configuration.target == f'{estate.CADDY_CONFIG_HOME}/caddy/Caddyfile'
+    assert f'--setenv=XDG_DATA_HOME={estate.CADDY_STATE}' in unit
+    assert caddy.state == estate.CADDY_STATE
+    assert f'--bind={estate.state_path("caddy")}:{estate.CADDY_STATE}' in unit
+    # Its address is the one thing the unit cannot deliver: the image asks for
+    # a lease, and the lease is where its resolver comes from too.
+    assert estate.ENV_IPV4_CIDR not in unit
 
 
 def test_a_unit_boots_the_unpacked_tree_and_not_the_tarball_that_carried_it() -> None:
@@ -214,9 +288,14 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     configured rather than learned; and its own upstreams are two providers,
     because the LAN's name service must not stop with any one of them.
     """
-    network = estate.host0_network(ADDRESSES['adguard-alice'])
-    assert f'Address={ADDRESSES["adguard-alice"]}/{conventions.VLAN_CONTAINER.prefixlen}' in network
-    assert f'Gateway={next(conventions.VLAN_CONTAINER.hosts())}' in network
+    address = ADDRESSES['adguard-alice']
+    environment = estate.net_setup_environment(address)
+
+    assert environment[estate.ENV_IPV4_CIDR] == f'{address}/{conventions.VLAN_CONTAINER.prefixlen}'
+    assert environment[estate.ENV_IPV4_GATEWAY] == str(next(conventions.VLAN_CONTAINER.hosts()))
+    # The v6 half is an interface identifier, not an address: the prefix keeps
+    # arriving in advertisements, so the resolver survives it changing.
+    assert environment[estate.ENV_IPV6_TOKEN] == f'::{address}'
 
     seed = estate.adguard_seed(ADDRESSES['adguard-alice'])
     assert f'{ADDRESSES["adguard-alice"]}:{estate.ADGUARD_API_PORT}' in seed
