@@ -212,7 +212,16 @@ ALL_NODES = (*CLOUD_NODES, HOMELAB_NODE)
 #: Bootstrap sizing, deliberately below the 12–16 vCPU / 20 GiB / 100+ GB end
 #: state: the legacy cluster still holds that RAM and that disk, and the VM
 #: grows one wave at a time as legacy workloads stop (migration.md §0.4).
-#: Growing it is an edit here and a previewed apply.
+#: Growing *these two* is an edit here and a previewed apply: `vcpu` and
+#: `memory` replace the domain, which is a stop, an undefine, a define and a
+#: start with the disk — a separate resource — surviving, so the cost is a
+#: drained window rather than a rebuild.
+#:
+#: The disk is not among them and has no constant here. A libvirt volume has
+#: no update path — every field replaces it, `size` included — so the
+#: declaration states no size at all and ignores the one it reads back; the
+#: disk grows on the host instead, `truncate` plus `virsh blockresize`
+#: (physical/homelab-host.md §1).
 HOMELAB_VCPUS = 12
 HOMELAB_MEMORY_GIB = 10
 

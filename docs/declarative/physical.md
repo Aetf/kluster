@@ -9,13 +9,16 @@ the *how* for the `physical` stack of
 
 > **Status**: designed 2026-08-22; provider choices verified against
 > current releases (pulumiverse-talos 0.8.1 wrapping the official
-> siderolabs terraform-provider 0.11). **Implemented in part, applied
-> nowhere.** `src/kluster/stacks/physical.py` and `src/kluster/physical/`
-> declare the OCI network, the Talos image, the load balancer, the day-1
-> chain and the cloud nodes (§1, §2); the libvirt worker and adopted HAOS
-> domain (§3), the UDM resources (§4) and the B2 buckets (§5) are not
-> written yet. Nothing described here has been provisioned: the stack has
-> never been applied, so §6's bootstrap gate is entirely ahead of it.
+> siderolabs terraform-provider 0.11). **Declared in full, applied
+> nowhere.** `src/kluster/stacks/physical.py` calls every domain this
+> document describes, and each one is written: the OCI network, image,
+> load balancer and nodes (§1) and the Talos day-1 chain (§2) under
+> `src/kluster/physical/`, the libvirt worker and adopted HAOS domain
+> (§3) in `physical/homelab.py`, the UDM's estate, firewall and overlay
+> configuration (§4) in `src/kluster/gateway/`, and the B2 bucket (§5)
+> in `physical/backup.py` — so a run stops at no named gap. Nothing
+> described here has been provisioned: the stack has never been applied,
+> so §6's bootstrap gate is entirely ahead of it.
 
 ## 0. Scope and outputs
 
@@ -192,6 +195,21 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     carries the machine secrets: root-only permissions, and it lives
     outside every host snapshot/backup scope (the same subvolume
     discipline as the disk image).
+-   **Volume**: created *from* the decompressed `nocloud` image, which
+    the provider uploads into the pool over the same connection it
+    defines the domains through — so the first boot follows from an
+    apply rather than from an operator writing an image by hand. The
+    declaration states no disk size: the provider refuses `size` beside
+    `source` and takes the volume's capacity from the image, which
+    makes every size the disk ever has — the bootstrap one included —
+    the host-side `truncate` + `virsh blockresize` of
+    homelab-host.md §1. Both `size` and `source` are then ignored on
+    that resource, because a libvirt volume has no update path at all
+    and any field that diverged — a file the host has grown, an image a
+    Talos self-upgrade has replaced — would otherwise propose
+    destroying the worker's disk. The **pool** pointing at the
+    nodatacow subvolume is declared here too; the subvolume itself is
+    host preparation (homelab-host.md §4).
 -   **GPU hostdev**: not present at bootstrap (the two-phase plan,
     homelab-host.md §3); when the Wave C cutover adds it,
     pulumi-libvirt's hostdev support is thin — the provider's XSLT
