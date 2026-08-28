@@ -66,7 +66,7 @@ A brief carries, and an agent is finished only when it has all of them:
    means in one sentence.
 2. **Owned paths**, exhaustively. Everything else is out of scope.
 3. **The gate**: `ruff check`, `ruff format --check`, `basedpyright`
-   (strict, clean) and `pytest` all pass; new behaviour has a test that
+   (strict, clean) and `pytest` all pass; new behavior has a test that
    fails without it; `ltex-cli-plus` passes on every markdown file
    touched, one file at a time. A change to provider-facing code also
    ships with a live-drill transcript (`docs/framework/testing.md` §5)
@@ -83,6 +83,37 @@ A brief carries, and an agent is finished only when it has all of them:
 
 An agent that finishes early does not pick up more work; it reports.
 Scope creep is the failure mode this structure exists to prevent.
+
+### Review stage
+
+A pull request is merged only after an **independent review** — an
+agent that did not write the change, briefed with the diff and nothing
+of the builder's reasoning, so it reads the code the way a stranger
+will. The dispatcher runs it when the builder reports, and merges only
+when it comes back clean or its findings are fixed.
+
+Two angles, one reviewer each (they may run in parallel):
+
+1.  **Correctness**: does the change do what the issue says, does
+    every new behavior have a test that fails without it, does the
+    diff break an invariant a test elsewhere pins, is anything
+    provider-facing left unproven without saying so.
+2.  **Architecture & style**, against `docs/framework/style.md`: config
+    read at the right layer, resources on the right component,
+    providers inherited not re-plumbed, names and comments that survive
+    the canon's tests, censuses where they belong.
+
+Findings go to the builder as one fix cycle (mid-flight message or a
+follow-up brief); a finding the operator must rule on becomes a
+`decision` issue. A clean review is stated in one line on the pull
+request thread before merge. Small diffs get small reviews — a
+docs-only change may take a single combined pass — but no pull request
+merges reviewed by nobody but its author.
+
+**On the board**: when the builder opens the pull request, its issue
+card moves to *In review*; the merge moves it to *Done* through the
+built-in workflow. A card in *In review* with no open pull request is a
+dispatch that died and should be re-driven or returned to *Ready*.
 
 ### How progress is reported
 
