@@ -273,6 +273,46 @@ def test_the_network_is_adopted_and_carries_every_managed_route() -> None:
     assert network['multicastLimit'] == zerotier.MULTICAST_LIMIT
 
 
+def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
+    """Both halves of the cluster's home addressing are reachable off-site.
+
+    They are two subnets and two reasons: the VLAN is where a run reaches the
+    worker's machine API, and the pool is where a person off-site reaches a
+    service the cluster publishes on the LAN. Spelled out rather than derived,
+    so renumbering either one is a visible edit here as well as in
+    `conventions`.
+    """
+    targets = [str(net) for net in conventions.ZT_MANAGED_ROUTES]
+
+    assert '192.168.70.0/24' in targets, 'the cluster VLAN'
+    assert '192.168.71.0/24' in targets, 'the `lan` pool'
+    # The pool is not a subnet anything is attached to: it is carried because
+    # the gateway learns host routes into it over BGP.
+    assert conventions.LAN_POOL_V4 in conventions.ZT_MANAGED_ROUTES
+    assert conventions.CLUSTER_VLAN_V4 in conventions.ZT_MANAGED_ROUTES
+
+
+def test_the_gateway_member_is_placed_at_the_constant_every_client_dials() -> None:
+    """The roster assigns the address, and everything else reads it from there.
+
+    The overlay address of the gateway is not a recorded site fact: this
+    program hands it out. Three consumers dial it -- the estate's SSH, the
+    controller's API and every managed route's next hop -- so the roster entry
+    and `conventions.ZT_UDM` drifting apart would point all three somewhere
+    the member is not.
+    """
+    member = registered(f'{NAME}-member-udm')
+
+    assert member['ipAssignments'] == [str(conventions.ZT_UDM)]
+    assert member['noAutoAssignIps'] is True
+    entry = next(entry for entry in zerotier.ROSTER if entry.name == 'udm')
+    assert entry.address == conventions.ZT_UDM
+    # Configuration cannot supply it either, which is what keeps the two from
+    # being two statements at all.
+    with pytest.raises(ValueError, match='is a convention of this program'):
+        _ = zerotier.parse_members(CONFIGURED | {'udm': {'id': 'a0a0a0a0a0', 'address': '10.144.9.9'}})
+
+
 def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
     """A pool assignment would move a member the rules and records name.
 

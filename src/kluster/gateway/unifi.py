@@ -1,8 +1,21 @@
-"""The controller-side firewall census (physical/gateway.md §4.2).
+"""The cluster's network on the gateway, and the firewall census around it
+(physical/gateway.md §4.2).
 
-Every rule the UniFi controller holds on this site's behalf, and nothing
-else: a rule on the controller that is not declared here is drift. The set is
-small on purpose — three rule families —
+Two kinds of thing are declared here, and the first is why the second can be
+written at all.
+
+**The cluster VLAN, as a network object and a zone of its own.** Cluster nodes
+do not share the untagged server LAN: they sit on `conventions.CLUSTER_VLAN_V4`
+behind VLAN id `conventions.CLUSTER_VLAN_ID`, which the controller serves with
+no DHCP server — every node states its own address in machine configuration
+(`physical/talos.py`), so a lease would be a second opinion about an address
+three other places already treat as constant. Being a network object is what
+makes the population nameable in a policy; being alone in a firewall zone is
+what makes it *separately* nameable from everything else the internal zone
+holds.
+
+**The rule census**, which is exactly the design's and nothing more: a rule on
+the controller that is not declared here is drift.
 
 1.  **IoT → the `lan` pool: one enumerated allow, then a drop.** The allow is
     the media Gateway's VIP on 443, which is what smart televisions and
@@ -10,9 +23,14 @@ small on purpose — three rule families —
     administrative interfaces live. The firewall names only the media VIP, so
     deciding which applications the IoT VLAN may reach is a Gateway-layer
     edit and never a firewall edit.
-2.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
-    port, to the worker VM's global address.
-3.  **The IPv4 peer-port forward** — the only port forward on the device.
+2.  **The cluster zone's egress.** A zone the controller has just been told
+    about starts denied in both directions, and a node that cannot leave the
+    site cannot reach the control plane it is a member of, so the one policy
+    that must exist beside the zone is its way out.
+3.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
+    port, to the worker VM's global address — now landing in the cluster zone
+    rather than the internal one, because that is where the worker moved.
+4.  **The IPv4 peer-port forward** — the only port forward on the device.
     Nothing else is published inbound: cluster and node management arrive
     over the cloud load balancer, home-side management over ZeroTier.
 
@@ -20,13 +38,15 @@ Two facts about the device shape the whole module (physical/gateway.md §4.1,
 measured):
 
 -   **The zone firewall classifies forwarded traffic by destination ipset.**
-    All three home VLANs sit in the internal zone, so IoT → server-LAN is an
+    The home VLANs sit in the internal zone, so IoT → server-LAN is an
     intra-zone pair; but the `lan` pool is deliberately not a network object
     (it would fight the host routes the cluster advertises), so it lands in
     no zone ipset at all and pool-bound traffic falls through to the
     internal → external pair. That is why rules about the pool are declared
     on that pair and why they name the pool through **address groups** — the
-    one way to name a subnet the controller has no object for.
+    one way to name a subnet the controller has no object for. The cluster
+    VLAN is the deliberate opposite: it *is* an object, and so it is named
+    directly.
 -   **Address groups are single-family.** One group cannot hold both the
     pool's IPv4 CIDR and its unique-local IPv6 prefix, so every rule about
     the pool comes as a pair, and the two groups are two resources.
@@ -60,18 +80,28 @@ __all__ = ('STATIC_HOSTS', 'Firewall')
 ZONE_INTERNAL = 'Internal'
 ZONE_EXTERNAL = 'External'
 
-#: The IoT VLAN's unique-local prefix. The site numbers each VLAN's /64 after
-#: the third octet of its IPv4 subnet (`conventions.LAN_POOL_V6` is the same
-#: scheme applied to `192.168.70.0/24`), so the IoT VLAN's ULA follows from
-#: `conventions.VLAN_IOT`. It is the ULA rather than a global prefix on
-#: purpose: the site's delegated prefix rotates, while a rule has to keep
-#: matching, and a client reaching a ULA destination sources from its own
-#: ULA.
+#: The IoT VLAN's unique-local prefix, out of `conventions.SITE_ULA` and
+#: numbered after the third octet of `conventions.VLAN_IOT` like every other
+#: /64 at the site. It is the ULA rather than a global prefix on purpose: the
+#: site's delegated prefix rotates, while a rule has to keep matching, and a
+#: client reaching a ULA destination sources from its own ULA.
 VLAN_IOT_V6 = IPv6Network('fd1a:665f:8bcb:90::/64')
 
 #: The port the media Gateway serves. The one thing the IoT VLAN may reach in
 #: the pool, and it is HTTPS because everything behind that Gateway is.
 MEDIA_PORT = 443
+
+#: What the controller calls a routed LAN whose gateway holds an address on
+#: it. `vlan-only` is the other candidate and the wrong one: it describes a
+#: VLAN the gateway does not terminate, which would leave the nodes without
+#: the default route, the BGP peer and the firewall zone that are the entire
+#: reason for putting them on a VLAN.
+NETWORK_PURPOSE = 'corporate'
+
+#: The controller spells a network's addressing as its *own* interface
+#: address plus the prefix — `10.0.0.1/24`, not `10.0.0.0/24` — so the subnet
+#: and the gateway are one field.
+CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN_GATEWAY_V4}/{conventions.CLUSTER_VLAN_V4.prefixlen}'
 
 #: How many times the provider may re-attempt a request the controller failed
 #: transiently. Deliberately small: the controller's login rate limit is
@@ -91,7 +121,7 @@ STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
 
 
 class Firewall(Component):
-    """The controller-side census: two address groups, five rules, one forward."""
+    """The cluster's network and zone, two address groups, six rules, one forward."""
 
     def __init__(
         self,
@@ -126,6 +156,42 @@ class Firewall(Component):
 
         internal = unifi.get_firewall_zone_output(name=ZONE_INTERNAL, site=site, opts=invoke).id
         external = unifi.get_firewall_zone_output(name=ZONE_EXTERNAL, site=site, opts=invoke).id
+
+        # A zone of its own, and a zone this program creates rather than one
+        # it looks up: the two above are stock, this one exists because the
+        # cluster is a population the gateway should be able to police
+        # separately from everything else on the internal side. Its membership
+        # is stated from the network below rather than here — the controller
+        # accepts the association from either end and two ends managing it
+        # fight over it.
+        self.zone = unifi.FirewallZone(
+            f'{name}-zone',
+            name=conventions.UNIFI_ZONE_CLUSTER,
+            site=site,
+            opts=child,
+        )
+
+        # The cluster VLAN itself. Static-only: `dhcp_enabled` is off because
+        # every node states its own address in machine configuration, and a
+        # server offering leases beside that is a second opinion nothing
+        # needs. IPv6 is a delegated prefix with router advertisements on,
+        # because the design's worker GUA is a SLAAC address formed from what
+        # this network advertises.
+        self.network = unifi.Network(
+            f'{name}-network',
+            name=conventions.UNIFI_NETWORK_CLUSTER,
+            purpose=NETWORK_PURPOSE,
+            subnet=CLUSTER_SUBNET,
+            vlan_id=conventions.CLUSTER_VLAN_ID,
+            dhcp_enabled=False,
+            dhcp_v6_enabled=False,
+            ipv6_interface_type='pd',
+            ipv6_pd_interface='wan',
+            ipv6_ra_enable=True,
+            firewall_zone_id=self.zone.id,
+            site=site,
+            opts=child,
+        )
 
         # The pool, as the only kind of object that can name it. Two groups
         # for one subnet because a group holds one address family.
@@ -229,11 +295,41 @@ class Firewall(Component):
             opts=child,
         )
 
-        # The pinhole. A literal address rather than anything prefix-relative:
-        # the zone-policy API matches literal addresses only, and the site's
-        # delegated prefix rotates, so this rule is re-declared when it does.
-        # A stale rule degrades to outbound-only IPv6 — the accepted first
-        # stage — rather than to anything unsafe.
+        # The cluster zone's way out. A zone the controller has only just been
+        # told about is denied against every other zone in both directions, so
+        # this is not a tightening but the thing that makes the zone usable at
+        # all: a node whose control plane is in a cloud region has to be able
+        # to leave the site. Both families in one policy, because the zone is
+        # dual-stack and nothing here distinguishes them.
+        self.cluster_egress = unifi.FirewallZonePolicy(
+            f'{name}-cluster-egress',
+            name=f'{name} cluster nodes outbound',
+            description='Cluster nodes may reach the internet; their control plane is off-site.',
+            action='ALLOW',
+            ip_version='BOTH',
+            protocol='all',
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=self.zone.id),
+            destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external),
+            auto_allow_return_traffic=True,
+            enabled=True,
+            opts=child,
+        )
+        self.cluster_egress_order = unifi.FirewallZonePolicyOrder(
+            f'{name}-cluster-egress-order',
+            source_zone_id=self.zone.id,
+            destination_zone_id=external,
+            before_predefined_ids=[self.cluster_egress.id],
+            site=site,
+            opts=child,
+        )
+
+        # The pinhole, into the cluster zone: the worker is the destination
+        # and the worker is no longer on the internal side. A literal address
+        # rather than anything prefix-relative — the zone-policy API matches
+        # literal addresses only, and the site's delegated prefix rotates, so
+        # this rule is re-declared when it does. A stale rule degrades to
+        # outbound-only IPv6 — the accepted first stage — rather than to
+        # anything unsafe.
         self.peer_v6 = unifi.FirewallZonePolicy(
             f'{name}-peer-v6',
             name=f'{name} inbound peer port (v6)',
@@ -243,7 +339,7 @@ class Firewall(Component):
             protocol='tcp_udp',
             source=unifi.FirewallZonePolicySourceArgs(zone_id=external),
             destination=unifi.FirewallZonePolicyDestinationArgs(
-                zone_id=internal,
+                zone_id=self.zone.id,
                 ips=[worker_gua],
                 port=peer_port,
             ),
@@ -254,17 +350,19 @@ class Firewall(Component):
         self.peer_order = unifi.FirewallZonePolicyOrder(
             f'{name}-peer-order',
             source_zone_id=external,
-            destination_zone_id=internal,
+            destination_zone_id=self.zone.id,
             before_predefined_ids=[self.peer_v6.id],
             site=site,
             opts=child,
         )
 
         # The IPv4 half of the same flow, and the only port forward on the
-        # device. It lands on the worker VM's LAN address because that is the
-        # address the application's outbound peer traffic already wears: the
-        # cluster masquerades it to the node, so inbound has to arrive there
-        # for a peer to see one endpoint rather than two.
+        # device. It lands on the worker VM's node address — read from
+        # `conventions`, so it follows the VLAN wherever the address plan puts
+        # it — because that is the address the application's outbound peer
+        # traffic already wears: the cluster masquerades it to the node, so
+        # inbound has to arrive there for a peer to see one endpoint rather
+        # than two.
         self.peer_v4 = unifi.PortForward(
             f'{name}-peer-v4',
             name=f'{name} inbound peer port (v4)',

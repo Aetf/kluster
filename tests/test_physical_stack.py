@@ -56,10 +56,9 @@ GATEWAY_CONFIG = {
     'kluster:gatewayAddresses': json.dumps(
         {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
     ),
-    'kluster:gatewayBgpPeer': '192.168.80.1/32',
     'kluster:unifiApiUrl': 'https://gateway.invalid',
     'kluster:unifiApiKey': 'a-controller-key',
-    'kluster:workerGua': '2001:db8:1:80::238',
+    'kluster:workerGua': '2001:db8:1:70::10',
     'kluster:qbittorrentPeerPort': '51413',
     'kluster:zerotierApiToken': 'a-central-token',
     'kluster:zerotierNetworkId': ZT_NETWORK_ID,

@@ -129,23 +129,27 @@ def test_a_node_nothing_addresses_is_left_to_its_lease() -> None:
 def test_the_worker_states_its_own_address_instead_of_leasing_one() -> None:
     # The gateway's FRR neighbour statement, the qbittorrent port forward and
     # day 1's apid endpoint all name this address as a constant; a lease would
-    # make each of them a guess (physical/homelab-host.md §2).
+    # make each of them a guess — and the cluster VLAN runs no DHCP server to
+    # offer one in any case (physical/homelab-host.md §2).
     static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
     interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
-    assert interface['addresses'] == [f'{conventions.HOMELAB_NODE_IPV4}/{conventions.VLAN_SERVER.prefixlen}']
+    assert interface['addresses'] == [f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN_V4.prefixlen}']
     assert interface['dhcp'] is False
 
 
 def test_the_static_address_brings_the_routes_the_lease_used_to() -> None:
     static = talos.STATIC_ADDRESSES[conventions.HOMELAB_NODE]
     interface = merged('machine', role='worker', static_address=static)['network']['interfaces'][0]
-    # The subnet route comes from the address carrying the LAN's prefix rather
-    # than /32 — with DHCP off there is no leased subnet route to conflict
-    # with, and without one the node cannot reach its own LAN.
-    assert IPv4Interface(interface['addresses'][0]).network == conventions.VLAN_SERVER
-    # Everything else was the lease's other job, and now has to be said.
-    assert interface['routes'] == [{'network': talos.DEFAULT_ROUTE_V4, 'gateway': str(talos.HOME_ROUTER_IPV4)}]
-    assert talos.HOME_ROUTER_IPV4 in conventions.VLAN_SERVER
+    # The subnet route comes from the address carrying the VLAN's prefix
+    # rather than /32 — with DHCP off there is no leased subnet route to
+    # conflict with, and without one the node cannot reach its own subnet.
+    assert IPv4Interface(interface['addresses'][0]).network == conventions.CLUSTER_VLAN_V4
+    # Everything else was the lease's other job, and now has to be said. The
+    # next hop is the gateway's own leg on the same VLAN, which is what makes
+    # it reachable without a route to reach it by.
+    gateway = conventions.CLUSTER_VLAN_GATEWAY_V4
+    assert interface['routes'] == [{'network': talos.DEFAULT_ROUTE_V4, 'gateway': str(gateway)}]
+    assert gateway in conventions.CLUSTER_VLAN_V4
 
 
 def test_the_interface_is_selected_rather_than_named() -> None:

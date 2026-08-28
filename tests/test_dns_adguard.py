@@ -13,7 +13,7 @@ PROPS: dict[str, Any] = {
     'username': 'admin',
     'password': 'secret',
     'domain': 'photos.ucw.phd',
-    'answer': '192.168.70.1',
+    'answer': '192.168.71.1',
 }
 
 
@@ -64,10 +64,10 @@ def _provider() -> adguard.AdGuardRewriteProvider:
 def test_create_adds_the_pair_and_ids_it_by_instance() -> None:
     result = _provider().create(dict(PROPS))
 
-    assert FakeSession.entries == [{'domain': 'photos.ucw.phd', 'answer': '192.168.70.1'}]
+    assert FakeSession.entries == [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
     # The id names the instance: the same rewrite on alice and on bob are two
     # resources, because they are two writes.
-    assert result.id == f'{ENDPOINT}|photos.ucw.phd|192.168.70.1'
+    assert result.id == f'{ENDPOINT}|photos.ucw.phd|192.168.71.1'
 
 
 def test_create_adopts_an_identical_entry_rather_than_duplicating_it() -> None:
@@ -75,7 +75,7 @@ def test_create_adopts_an_identical_entry_rather_than_duplicating_it() -> None:
 
     Which is what a retried `up` after a partial failure would produce.
     """
-    FakeSession.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.70.1'}]
+    FakeSession.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
 
     _ = _provider().create(dict(PROPS))
 
@@ -94,7 +94,7 @@ def test_read_reports_a_hand_removed_rewrite_as_gone() -> None:
 
 
 def test_read_keeps_a_rewrite_that_is_still_there() -> None:
-    FakeSession.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.70.1'}]
+    FakeSession.entries = [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
 
     assert _provider().read('an-id', dict(PROPS)).id == 'an-id'
 
@@ -105,7 +105,7 @@ def test_a_changed_answer_replaces_without_a_gap() -> None:
     Two rewrites for one name coexist harmlessly for the instant between the
     create and the delete; no answer at all does not.
     """
-    changed = dict(PROPS) | {'answer': '192.168.70.2'}
+    changed = dict(PROPS) | {'answer': '192.168.71.2'}
 
     result = _provider().diff('an-id', dict(PROPS), changed)
 
@@ -124,13 +124,13 @@ def test_a_rotated_credential_is_a_change_but_not_a_replace() -> None:
 
 def test_delete_removes_exactly_the_declared_pair() -> None:
     FakeSession.entries = [
-        {'domain': 'photos.ucw.phd', 'answer': '192.168.70.1'},
-        {'domain': 'tube.ucw.phd', 'answer': '192.168.70.1'},
+        {'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'},
+        {'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'},
     ]
 
     _provider().delete('an-id', dict(PROPS))
 
-    assert FakeSession.entries == [{'domain': 'tube.ucw.phd', 'answer': '192.168.70.1'}]
+    assert FakeSession.entries == [{'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'}]
     assert FakeSession.posts[0][0] == 'delete'
 
 
