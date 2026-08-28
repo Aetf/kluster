@@ -83,7 +83,7 @@ Central flow rules** (managed with the rest of the ZT config,
 architecture.md §5.3) to exactly the four targets in the table
 (UDM SSH, UDM UniFi API, AdGuard APIs, homelab libvirt SSH) — a
 leaked join credential does not buy general LAN access. Residual on
-record (audit L11): the AdGuard credential is full-admin (AdGuard has
+record (audit M6): the AdGuard credential is full-admin (AdGuard has
 no scoped API), so LAN-DNS control rides the `dns` tier — the tier
 that already holds the Cloudflare token, and therefore the whole of
 the estate's naming rather than only its LAN half. `apps`, the tier
