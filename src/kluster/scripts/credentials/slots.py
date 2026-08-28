@@ -19,9 +19,12 @@ those into their GitHub slots; the fourth is born into its slot and is no
 business of that command:
 
 -   **derived** -- obtainable again from the kit alone, with no provider
-    involved. Today every such row is an escrow label (§2.2): the value is
+    involved. Most such rows are an escrow label (§2.2): the value is
     recovered with the recovery key and pushed, so a first fill and a re-fill
-    are the same command and neither rotates anything.
+    are the same command and neither rotates anything. The state-backend
+    client bundle is the one that is *issued* rather than recovered -- the CA
+    is escrowed, the leaf under it is generated at issuance and kept nowhere
+    -- so a re-fill there hands CI a certificate it did not have before.
 -   **minted** -- created by the run that delivers it: a provider mint by the
     row's own `credentials derived <row> mint`, or a secret a program generates
     for its own resource. The value is disclosed once, to the code that made
@@ -50,10 +53,15 @@ sync --only <row>` refuses by name. That is the discipline the seed layer alread
 uses: a register row with no implementation is a command that refuses, not a
 command that is missing.
 
-Pushing is mint-free by construction: resolve, push, verify, every run. The
-verification is what the channel allows -- a GitHub secret is never readable
-again once written, so what is checked is that the name is in the listing and
-its timestamp moved (`github_secrets.py`).
+Pushing is resolve, push, verify, every run, and it retires nothing. One row
+issues rather than copies -- the client bundle, whose leaf key exists only in
+the run that made it -- and that is still not the *minted* class above: this
+PKI revokes nothing, the appliance authenticates the CA rather than a
+particular leaf, and so the certificate CI was holding keeps working until it
+expires. Nothing is disclosed once and nothing is revoked, and the run after
+this one issues another. The verification is what the channel allows -- a
+GitHub secret is never readable again once written, so what is checked is that
+the name is in the listing and its timestamp moved (`github_secrets.py`).
 """
 
 from __future__ import annotations
@@ -65,9 +73,12 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Protocol
+from urllib.parse import urlsplit
 
 from ... import conventions
-from . import derived, devices, escrow, pulumi_config
+from ..state_backend import config as appliance
+from ..state_backend import settings as appliance_settings
+from . import derived, devices, escrow, pki, pulumi_config
 from .github_secrets import Forge, Slot
 from .pulumi_config import SlotRefused
 
@@ -93,6 +104,18 @@ DRILL_ENVIRONMENT = 'drill'
 #: LAN-touching work is the AdGuard rewrites, which `dns` applies.
 ZEROTIER_PHYSICAL = ('physical-plan', 'physical')
 ZEROTIER_DNS = ('dns',)
+
+#: The four secrets that carry one state-backend client bundle: the connection
+#: string, and the three files it authenticates with. They are **file contents
+#: rather than variables a job reads** -- `.github/actions/state-backend` writes
+#: each of them into the checkout's `.credentials/state-backend/` slot, and
+#: `mise.toml` then resolves `PULUMI_BACKEND_URL` and the three `PGSSL*`
+#: variables out of those files exactly as it does on a workstation. So the
+#: names below are carriers, and no job has an environment of its own.
+BACKEND_URL = 'PULUMI_BACKEND_URL'
+BACKEND_CA = 'PULUMI_BACKEND_CA'
+BACKEND_CERT = 'PULUMI_BACKEND_CERT'
+BACKEND_KEY = 'PULUMI_BACKEND_KEY'
 
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
@@ -231,10 +254,21 @@ class Context:
             self._vault = self.open_vault()
         return self._vault
 
-    def stack(self, name: str) -> pulumi_config.Stack:
+    @property
+    def environment(self) -> Mapping[str, str]:
+        """What a `pulumi` run needs here, opened at most once.
+
+        Two rows read it for two things. A state read runs `pulumi` with it. The
+        client bundle takes the appliance's address out of `PULUMI_BACKEND_URL`,
+        because the one place a workstation records which box it talks to is the
+        URL beside its own certificates.
+        """
         if self._environment is None:
             self._environment = self.open_environment()
-        return pulumi_config.Stack(name=name, directory=self.project, env=self._environment, run=self.runner)
+        return self._environment
+
+    def stack(self, name: str) -> pulumi_config.Stack:
+        return pulumi_config.Stack(name=name, directory=self.project, env=self.environment, run=self.runner)
 
 
 class Source(Protocol):
@@ -270,6 +304,89 @@ class Derived:
 
     def value(self, context: Context) -> str:
         return context.vault.recover(self.label)
+
+
+def _appliance_address(context: Context) -> str:
+    """Which state-backend box a certificate is being issued for.
+
+    Read off this workstation's own bundle rather than asked for. The address
+    is a fact of the appliance, the URL beside the operator certificates is
+    where a workstation already records it, and a typed-in one is a way to hand
+    CI a certificate for a box that is not the one anybody is using.
+    """
+    url = context.environment.get('PULUMI_BACKEND_URL')
+    if not url:
+        raise SlotRefused(
+            'this workstation has no client bundle, so which appliance to issue for is unknown; '
+            '`state-backend bundle operator --address <ip>` writes one'
+        )
+    address = urlsplit(url).hostname
+    if address is None:
+        raise SlotRefused(f"the connection string beside this workstation's bundle names no host: {url!r}")
+    return address
+
+
+@dataclass(frozen=True)
+class Issued:
+    """A client bundle issued under the escrowed CA: one credential, four secrets.
+
+    Derived, because the CA is: `state-backend/ca` opens with the kit's
+    recovery key and nothing else, and everything below follows from it without
+    a provider being asked anything. What is *not* derived is the leaf -- its
+    key is random at issuance and escrowed nowhere (`pki.py`) -- so this cannot
+    re-push the certificate CI is holding. It issues another one.
+
+    **That costs nothing, which is why it is allowed to happen on every run.**
+    This PKI has no revocation and the appliance authenticates the CA rather
+    than a particular leaf, so the predecessor keeps working until it expires
+    and no live consumer is broken by a run that replaces it. What the run does
+    buy is convergence: after it, the bundle CI holds names the box this
+    workstation talks to, whatever the box's address was when it was last
+    filled.
+
+    **The four secrets are one credential, which is why they are one row.** A
+    certificate and the key that opens it come from a single issuance
+    (`pki.py`), so splitting them across rows would let two runs deliver halves
+    of two different bundles. Each sink takes the part its own name asks for.
+    """
+
+    kind: ClassVar[str] = 'derived'
+
+    #: The Postgres role the certificate authenticates as, which is also the
+    #: bundle's name. The appliance's roles are its own (`state_backend`).
+    role: str
+
+    def describe(self) -> str:
+        return (
+            f'issued with the kit from escrow label `{escrow.CA}`; the server and `operator` halves come from '
+            f'`state-backend provision`, and a push here issues a fresh `{self.role}` key, so re-running it '
+            f'replaces the bundle CI holds'
+        )
+
+    def parts(self, context: Context) -> Mapping[str, str]:
+        """The bundle, keyed by the secret name each part is pushed under.
+
+        Each PEM goes in without its trailing newline. A secret is stored
+        exactly as it is piped in (`github_secrets.py`) and the composite
+        action writes it out with a `printf` that appends one, so stripping
+        here is what makes the file in a runner's slot byte-identical to the
+        one `state-backend bundle` writes on a workstation.
+        """
+        address = _appliance_address(context)
+        log.info(
+            'issuing a fresh `%s` certificate for %s; what CI holds now is replaced, and stays valid until it expires',
+            self.role,
+            address,
+        )
+        bundle = appliance.client_bundle(
+            pki.Authority.from_pem(context.vault.recover(escrow.CA)), name=self.role, address=address
+        )
+        return {
+            BACKEND_URL: bundle.url(),
+            BACKEND_CA: bundle.ca_cert.decode().strip(),
+            BACKEND_CERT: bundle.cert.decode().strip(),
+            BACKEND_KEY: bundle.key.decode().strip(),
+        }
 
 
 @dataclass(frozen=True)
@@ -403,7 +520,10 @@ class Row:
     #: row may name the same cell -- one credential can be several secrets, as
     #: the ZeroTier identities are one per identity domain.
     register: str
-    source: Source
+    #: `Issued` is spelled out beside the protocol because it is the one source
+    #: that does not resolve to a single value: its row is a bundle, and each
+    #: sink takes a different part of it (`resolve`).
+    source: Source | Issued
     targets: tuple[Channel, ...] = ()
     #: A channel §3 names for this row that has no address yet, and why. Empty
     #: when every slot the register promises is written down above.
@@ -413,6 +533,20 @@ class Row:
     def sinks(self) -> tuple[Slot, ...]:
         """The targets this module can fill: the GitHub secrets, and only those."""
         return tuple(target for target in self.targets if isinstance(target, Slot))
+
+    def resolve(self, context: Context) -> dict[Slot, str]:
+        """What the push writes into each of this row's sinks.
+
+        Almost every row is one credential fanned out into every slot that needs
+        a copy of it, so one resolution answers for all of them. The client
+        bundle is the exception, and resolving it once is what keeps its parts a
+        set: a certificate and the key that opens it come from a single
+        issuance, so asking twice would deliver halves of two bundles.
+        """
+        if isinstance(self.source, Issued):
+            parts = self.source.parts(context)
+            return {slot: parts[slot.name] for slot in self.sinks}
+        return dict.fromkeys(self.sinks, self.source.value(context))
 
 
 def _github(name: str, environments: tuple[str, ...], repository: str = REPOSITORY) -> tuple[Slot, ...]:
@@ -563,11 +697,17 @@ ROWS: dict[str, Row] = {
     ),
     'state-backend-certificates': Row(
         register='State-backend certificates (server, `ci`, `operator`)',
-        source=Minted('state-backend bundle'),
-        targets=(OnBox("the appliance's server certificate"), WorkstationSlot('state-backend/')),
-        pending=(
-            'the `ci` bundle has no sink: the workflows name `PULUMI_BACKEND_URL` alone, and a backend URL is '
-            'unusable without the three certificate files it points at, which no workflow step materializes'
+        source=Issued(appliance_settings.CI_ROLE),
+        # Every Environment, for the same reason the passphrase reaches every
+        # Environment: each one runs a `pulumi` command, and a `pulumi` command
+        # that cannot log in to the state backend cannot start.
+        targets=(
+            OnBox("the appliance's server certificate"),
+            WorkstationSlot('state-backend/'),
+            *_github(BACKEND_URL, ENVIRONMENTS),
+            *_github(BACKEND_CA, ENVIRONMENTS),
+            *_github(BACKEND_CERT, ENVIRONMENTS),
+            *_github(BACKEND_KEY, ENVIRONMENTS),
         ),
     ),
     'backup-age-identity': Row(
@@ -708,7 +848,10 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     to, and a *manual* row is typed in because its slot is the only place it is
     stored. A *derived* row is a third: the plaintext is in the escrow, and this
     copies the generation the registry currently holds. All three can be
-    obtained again, so all three can be re-filled here.
+    obtained again, so all three can be re-filled here. The one *issued* row is
+    the exception that proves the rule -- what it copies is the CA's authority
+    rather than a value, so each run hands CI a certificate it did not have
+    before, and the one it replaces keeps working until it expires.
 
     **A minted row is born into its slot and is out of scope.** Such a
     credential is disclosed once, to the call that creates it, so its own
@@ -764,7 +907,7 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
 
         log.info('%s: %s', name, row.source.describe())
         try:
-            value = row.source.value(context)
+            values = row.resolve(context)
         except SlotRefused as exc:
             if only is not None:
                 raise
@@ -773,7 +916,7 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
             continue
         for slot in row.sinks:
             log.info('%s: pushing to %s (gh encrypts it on the way out)', name, slot)
-            context.forge.put(slot, value)
+            context.forge.put(slot, values[slot])
             _verify(context.forge, slot, before[slot])
             pushed.append(str(slot))
 
@@ -785,6 +928,10 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
 
 
 __all__ = (
+    'BACKEND_CA',
+    'BACKEND_CERT',
+    'BACKEND_KEY',
+    'BACKEND_URL',
     'DRILL_ENVIRONMENT',
     'ENVIRONMENTS',
     'OPS_REPOSITORY',
@@ -793,6 +940,7 @@ __all__ = (
     'ConfigRead',
     'Context',
     'Derived',
+    'Issued',
     'Manual',
     'Minted',
     'Row',
