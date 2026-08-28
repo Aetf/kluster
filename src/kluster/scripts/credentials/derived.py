@@ -5,10 +5,10 @@ single run, and therefore idempotent: rotating a row is re-running it. Nothing
 here ever writes to the kit — a derived credential in the offline store would
 be the staging area §1 rule 2 forbids.
 
-A row appears here when its consumer exists. The remaining Cloudflare rows —
-the DNS-01 token for cert-manager and the gateway's ACME token — have nowhere
-to be delivered yet, and a mint with no slot would be exactly the parked secret
-the register rules out.
+A row appears here when its consumer exists. The one Cloudflare row that is
+still absent — the DNS-01 token for cert-manager — has nowhere to be delivered
+yet, and a mint with no slot would be exactly the parked secret the register
+rules out.
 
 Which slot a row is pushed into follows from what consumes it. A stack's
 credential goes into that stack's committed configuration, where the program
@@ -38,6 +38,27 @@ ZONES_TOKEN_NAME = 'kluster-zones'
 #: zones token is delivered into.
 ZONES_STACK = 'dns'
 
+#: The name the gateway's ACME token is minted under, on the same rule as the
+#: zones token: it is what retirement matches on, so one live token of this
+#: name is the invariant a re-run restores.
+GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
+
+#: The zones the gateway may answer a DNS-01 challenge in, and the whole of its
+#: token's scope.
+#:
+#: Every vhost its caddy serves — the controller console and both resolver
+#: interfaces — is a name under the primary zone, so a challenge for any of
+#: them is answered there and the token needs no other zone. That is the
+#: minimal set the estate's own certificates require, and it is deliberately
+#: narrower than the zones token's: the gateway issues for itself, and a
+#: credential on a device the cluster cannot re-seal carries no reach it does
+#: not use.
+#:
+#: Stated here rather than imported from `kluster.gateway`, which would drag
+#: the Pulumi SDKs into `credentials --help`; a test holds the two equal
+#: instead, so a vhost moved to another zone fails there.
+GATEWAY_ACME_ZONES = conventions.PRIMARY_ONLY
+
 #: Where the Cloudflare provider reads its credential, and where the program
 #: reads the account that owns the zones. The provider's key is a secret; the
 #: account id is an identifier the committed file may carry in plain text.
@@ -51,14 +72,24 @@ ZONES_STACK = 'dns'
 API_TOKEN_KEY = 'cloudflare:apiToken'
 ACCOUNT_KEY = 'cloudflareAccountId'
 
-#: The stack that runs on the cloud account and the backup account, and
-#: therefore the slot the OCI and B2 credentials below are delivered into.
+#: Where the `physical` stack reads the gateway's ACME token before writing it
+#: onto the device beside the nspawn units it belongs to (`gateway/estate.py`).
+#: Bare, and therefore in this project's namespace, for the reason the account
+#: id above is: nothing but this repository's own programs read it, and the
+#: prefix `pulumi config set` applies is the one `pulumi.Config()` resolves
+#: against.
+GATEWAY_ACME_KEY = 'gatewayAcmeToken'
+
+#: The stack that runs on the cloud account and the backup account and that
+#: declares the gateway's estate, and therefore the slot the OCI, B2 and
+#: gateway-ACME credentials are delivered into.
 #:
-#: Not an argument, unlike the zones token's stack. What each of those two
-#: rows mints is named after the row -- one IAM user, one B2 key name -- and
-#: the mint retires every other credential of that name, so a delivery aimed
-#: somewhere else would revoke this stack's live credential on its way to
-#: filling another stack's slot. Identity is fixed, so delivery is too.
+#: Not an argument, unlike the zones token's stack. What each of those rows
+#: mints is named after the row -- one IAM user, one B2 key name, one
+#: Cloudflare token -- and the mint retires every other credential of that
+#: name, so a delivery aimed somewhere else would revoke this stack's live
+#: credential on its way to filling another stack's slot. Identity is fixed,
+#: so delivery is too.
 PHYSICAL_STACK = conventions.PHYSICAL
 
 #: Where the OCI provider reads its credential, namespaced to the provider as
@@ -82,6 +113,7 @@ B2_KEY_KEY = 'b2:applicationKey'
 #: function below it with `-` where the identifier has `_`, which is the whole
 #: of the convention.
 ZONES_ROW = 'cloudflare-zones'
+GATEWAY_ACME_ROW = 'cloudflare-gateway-acme'
 OCI_PHYSICAL_ROW = 'oci-physical'
 OCI_STATE_BACKEND_ROW = f'oci-{conventions.STATE_BACKEND}'
 B2_MANAGEMENT_ROW = 'b2-management'
@@ -109,6 +141,40 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
         holds=f'a token scoped to {", ".join(zones)}',
     )
     return minted.account_id
+
+
+def cloudflare_gateway_acme(
+    kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY
+) -> str:
+    """Mint the gateway's ACME token from the seed into a stack's config. Returns its id.
+
+    The gateway buys the certificates for its own vhosts over a DNS-01
+    challenge, with a credential separate from cert-manager's on purpose: two
+    issuers that have to survive each other's outage do not share one, and the
+    device holding this half is the one machine the cluster cannot re-seal. So
+    this is a second token from the same seed, scoped to `GATEWAY_ACME_ZONES`
+    and to nothing else.
+
+    Only the token is delivered. The account id the mint discovers on the way
+    is the zones row's business — the consumer here is caddy, which signs with
+    the token and never names an account.
+
+    Which stack takes it is not a choice, for the reason `PHYSICAL_STACK`
+    states: the token is named after this row and the mint retires every other
+    token of that name, so a delivery aimed elsewhere would revoke the
+    gateway's live credential on its way to filling a different stack's slot.
+    """
+    zones = GATEWAY_ACME_ZONES
+    log.info('opening the Cloudflare seed from the kit')
+    session = cloudflare.Session.from_entry(kit, seed_entry)
+    minted = cloudflare.mint_zone_token(session, name=GATEWAY_ACME_TOKEN_NAME, zones=zones)
+
+    stack.fill(
+        secret={GATEWAY_ACME_KEY: minted.value},
+        plain={},
+        holds=f'{GATEWAY_ACME_TOKEN_NAME} ({minted.token_id}), scoped to {", ".join(zones)}',
+    )
+    return minted.token_id
 
 
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:

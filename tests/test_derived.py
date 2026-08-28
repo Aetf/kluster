@@ -30,6 +30,7 @@ from memory_kit import MemoryKit
 from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
 from kluster import conventions
+from kluster.gateway import estate as gw_estate
 from kluster.scripts.credentials import (
     b2,
     cloudflare,
@@ -190,6 +191,116 @@ def test_a_push_that_fails_is_healed_by_running_it_again(
     runner.corrupts = False
     _ = derived.cloudflare_zones(kit, stack=slot)
     assert _live(api) == [api.values[runner.config[derived.API_TOKEN_KEY]]]
+
+
+# -- the gateway's own ACME token: the second token from the same seed --
+
+
+def _gateway_live(api: FakeApi) -> list[str]:
+    return [str(token['id']) for token in api.tokens.values() if token['name'] == derived.GATEWAY_ACME_TOKEN_NAME]
+
+
+def _vhost_zone(name: str) -> str:
+    """The zone a vhost name is served under, as `conventions` spells the estate's."""
+    matches = [zone for zone in conventions.ALL_ZONES if name == zone or name.endswith(f'.{zone}')]
+    assert len(matches) == 1, f'{name} is served under {len(matches)} zones this estate declares'
+    return matches[0]
+
+
+def test_the_token_scope_is_the_zone_set_the_gateway_vhosts_need() -> None:
+    # The mint's scope is stated in `derived.py` rather than imported from the
+    # gateway module, which would drag the Pulumi SDKs into
+    # `credentials --help`. This is what holds the two equal: a vhost moved to
+    # another zone fails here rather than at a renewal on the device months
+    # later, and a zone left in the set after its last vhost leaves fails too.
+    served = {_vhost_zone(name) for name in (gw_estate.VHOST_CONTROLLER, *gw_estate.VHOST_ADGUARD.values())}
+
+    assert served == set(derived.GATEWAY_ACME_ZONES)
+
+
+def test_the_gateway_token_lands_in_the_stack_config_and_sees_only_its_own_zone(
+    api: FakeApi, kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    token_id = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    # The credential the device answers a DNS-01 challenge with, and nothing
+    # beside it: caddy signs with the token and never names an account.
+    assert _gateway_live(api) == [token_id]
+    assert api.values[runner.config[derived.GATEWAY_ACME_KEY]] == token_id
+    assert derived.ACCOUNT_KEY not in runner.config
+    delivered = cloudflare.Session.authorize(runner.config[derived.GATEWAY_ACME_KEY])
+    scoped = {str(zone['name']) for zone in delivered.zones()}
+    assert scoped == set(derived.GATEWAY_ACME_ZONES)
+    # Narrower than the provider token's on purpose: the device holding this
+    # one is the machine the cluster cannot re-seal.
+    assert scoped < set(conventions.ALL_ZONES)
+
+
+def test_the_two_cloudflare_rows_are_separate_credentials(
+    api: FakeApi,
+    kit: KdbxStore,
+    stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+) -> None:
+    zones_slot, zones_runner = stack
+    gateway_slot, gateway_runner = physical_stack
+    _ = derived.cloudflare_zones(kit, stack=zones_slot)
+
+    _ = derived.cloudflare_gateway_acme(kit, stack=gateway_slot)
+
+    # Two issuers that have to survive each other's outage do not share a
+    # credential, so minting one must not disturb the other: retirement matches
+    # on the token name, and the two rows carry different ones.
+    assert zones_runner.config[derived.API_TOKEN_KEY] != gateway_runner.config[derived.GATEWAY_ACME_KEY]
+    assert len(_live(api)) == 1
+    assert len(_gateway_live(api)) == 1
+
+
+def test_a_re_run_rotates_the_gateway_token_and_leaves_one_live(
+    api: FakeApi, kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    first = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    second = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    # Rotation is a re-run: the predecessor is retired once its successor is
+    # verified, and the slot names the survivor.
+    assert second != first
+    assert _gateway_live(api) == [second]
+    assert api.values[runner.config[derived.GATEWAY_ACME_KEY]] == second
+
+
+def test_the_minted_gateway_token_never_touches_the_kit(
+    kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    # Rule 2 again: the kit holds the seed it held before, and the minted value
+    # exists only in the slot.
+    assert kit.entries() == [derived.CLOUDFLARE_SEED_ENTRY]
+    assert runner.config[derived.GATEWAY_ACME_KEY] != kit.get(derived.CLOUDFLARE_SEED_ENTRY)
+
+
+def test_a_gateway_push_that_fails_is_healed_by_running_it_again(
+    api: FakeApi, kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    # The interrupted run left a live token nobody holds; the re-run mints its
+    # successor, retires it, and fills the slot, which is why a failed stage is
+    # re-run rather than repaired by hand.
+    runner.corrupts = False
+    _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+    assert _gateway_live(api) == [api.values[runner.config[derived.GATEWAY_ACME_KEY]]]
 
 
 # -- the OCI rows: a user, a group, a policy and the key that signs as them --

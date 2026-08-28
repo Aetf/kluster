@@ -201,7 +201,12 @@ class WorkstationSlot:
 
 @dataclass(frozen=True)
 class GwConfigSecret:
-    """A secret pushed to the gateway beside its nspawn units (physical/gateway.md §1)."""
+    """A secret pushed to the gateway beside its nspawn units (physical/gateway.md §1).
+
+    Part of §1 rule 6's closed set, and addressed by no row: the gateway's own
+    secrets travel in the `physical` stack's configuration, and the provider
+    that owns the device writes them onto it.
+    """
 
     what: str
 
@@ -623,13 +628,14 @@ ROWS: dict[str, Row] = {
         targets=(SealedSecret("cert-manager's DNS-01 solver token"),),
         pending=_CLUSTER_UNBUILT,
     ),
-    'cloudflare-gateway-acme': Row(
+    derived.GATEWAY_ACME_ROW: Row(
         register='Cloudflare token (gateway ACME)',
-        source=Minted(
-            'credentials derived cloudflare-gateway-acme mint', unbuilt='the gateway push is another tracker'
-        ),
-        targets=(GwConfigSecret("the UDM caddy's ACME token"),),
-        pending="the gw-config push is the estate's other automation, so this side has no command",
+        source=Minted(f'credentials derived {derived.GATEWAY_ACME_ROW} mint'),
+        # One key, and no CI Environment secret beside it: this is not a
+        # credential a job authenticates with but a value the `physical`
+        # program writes onto the device, and the program reads it out of the
+        # committed configuration wherever it runs.
+        targets=(PulumiConfig(PHYSICAL_STACK, derived.GATEWAY_ACME_KEY),),
     ),
     derived.B2_MANAGEMENT_ROW: Row(
         register='B2 management key',

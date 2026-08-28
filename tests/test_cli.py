@@ -203,6 +203,7 @@ class Dispatch:
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
             (cli.derived, 'cloudflare_zones', 'account-id'),
+            (cli.derived, 'cloudflare_gateway_acme', 'token-id'),
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', Path('placeholder')),
             (cli.derived, 'b2_management', 'key-id'),
@@ -325,14 +326,15 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
 
 
 def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own() -> None:
-    # What these two mint is named after the row -- one IAM user, one B2 key
-    # name -- and the mint retires every other credential of that name, so a
-    # `--stack` would revoke the real stack's live credential on its way to
-    # filling a different stack's slot. The flag is absent rather than
-    # documented as dangerous.
+    # What these three mint is named after the row -- one IAM user, one B2 key
+    # name, one Cloudflare token -- and the mint retires every other credential
+    # of that name, so a `--stack` would revoke the real stack's live
+    # credential on its way to filling a different stack's slot. The flag is
+    # absent rather than documented as dangerous.
     for argv in (
         ['derived', 'oci-physical', 'mint', '--compartment', 'ocid1.compartment.test', '--stack', 'elsewhere'],
         ['derived', 'b2-management', 'mint', '--stack', 'elsewhere'],
+        ['derived', 'cloudflare-gateway-acme', 'mint', '--stack', 'elsewhere'],
     ):
         with pytest.raises(SystemExit):
             _ = cli.build_parser().parse_args(argv)
@@ -341,9 +343,10 @@ def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own() -> None:
 def test_the_fixed_rows_are_pushed_into_the_stack_they_are_named_after(dispatch: Dispatch) -> None:
     assert cli.main(['derived', 'oci-physical', 'mint', '--compartment', 'ocid1.compartment.test']) == 0
     assert cli.main(['derived', 'b2-management', 'mint']) == 0
+    assert cli.main(['derived', 'cloudflare-gateway-acme', 'mint']) == 0
 
     pushed = [kwargs['stack'].name for name, _, kwargs in dispatch.calls if name.startswith('derived.')]
-    assert pushed == [cli.derived.PHYSICAL_STACK, cli.derived.PHYSICAL_STACK]
+    assert pushed == [cli.derived.PHYSICAL_STACK] * 3
 
 
 def test_the_compartment_reaches_the_row_that_confines_the_key_with_it(dispatch: Dispatch) -> None:
