@@ -17,9 +17,11 @@ nothing else: the compartment the appliance acts in is a boundary this program
 decides rather than a property of the key, so it lives in `conventions` and
 the provisioner reads it there — a copy here could only go stale against it.
 
-The key file is named by absolute path, as the client bundle's certificates
-are: the SDK expands nothing, so a checkout copied to another path re-runs the
-mint rather than editing the file (§4.4).
+The `key_file` entry is an absolute path because the SDK resolves it against
+nothing: it opens the value as given, relative to whatever directory the reader
+was started from rather than to the configuration file beside it. The path is
+therefore a property of where this checkout sits, and a checkout copied
+somewhere else re-runs the mint rather than having its slot edited (§4.4).
 
 There is one such slot, and it is written here and read in
 `state_backend.provision` — including the fallback to the path this one
