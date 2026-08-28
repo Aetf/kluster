@@ -43,7 +43,6 @@ CONFIGURED: dict[str, object] = {
     'haos': {'id': 'd3d3d3d3d3', 'address': '10.144.84.129'},
     'Aetf-Arch-XPS': {'id': 'e4e4e4e4e4', 'address': '10.144.175.24'},
     'Aetf-Win-XPS': {'id': 'f5f5f5f5f5', 'address': '10.144.175.25'},
-    'Aetf-Laptop': {'id': '0606060606', 'address': '10.144.127.147'},
     'Aetf-Handheld': {'id': '1717171717', 'address': '10.144.127.148'},
     'PC-Homelab': {'id': '2828282828', 'address': '10.144.180.11'},
     'OnePlus6T': {'id': '3939393939', 'address': '10.144.160.97'},

@@ -141,6 +141,12 @@ UDM_MEMBER = 'udm'
 #: Every member of the network. The order is the order the design lists them in:
 #: the infrastructure the overlay exists to reach, then the identities that
 #: reach it unattended, then the people.
+#:
+#: It is also the census the `dns` stack publishes the `*.zt` host block from
+#: (`dns/zones.py`): a member is admitted here and named in DNS by the same
+#: declaration, so a member with no record is not a state either stack can be
+#: in. A device that leaves the overlay leaves this tuple, and its record goes
+#: with it.
 ROSTER: tuple[Rostered, ...] = (
     Rostered(
         name=UDM_MEMBER,
@@ -179,7 +185,6 @@ ROSTER: tuple[Rostered, ...] = (
     ),
     Rostered(name='Aetf-Arch-XPS', role=conventions.ZT_ROLE_PERSONAL),
     Rostered(name='Aetf-Win-XPS', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='Aetf-Laptop', role=conventions.ZT_ROLE_PERSONAL),
     Rostered(name='Aetf-Handheld', role=conventions.ZT_ROLE_PERSONAL),
     Rostered(name='PC-Homelab', role=conventions.ZT_ROLE_PERSONAL),
     Rostered(name='OnePlus6T', role=conventions.ZT_ROLE_PERSONAL),
