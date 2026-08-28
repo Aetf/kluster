@@ -37,3 +37,5 @@ config:
       "adguard-bob": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/adguard-arm64.tar.zst", "sha256": "051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910"},
       "zerotier": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/zerotier-arm64.tar.zst", "sha256": "ba74ae49ae729e79c2bcf7b2c770fdb03b19862b188350ab88166e1a3faaadf1"}
     }
+  kluster-py:gatewayAcmeToken:
+    secure: v1:KlvldEZM7HYUinCo:IQIPROFu/59AEb2CFy7dYsJlQW5haxYJF0Dau5INfxDj0Qkm/3LDkX2pK/i5iAh8hTka4lw4abIKnn7inrpkre2haUJH
