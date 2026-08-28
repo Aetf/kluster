@@ -200,9 +200,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     and the alert is a sixth (`notify-failure`) that fires when any of
     them failed. Its payload is the legacy one — title, message naming
     the commit, link to the run. It reads a **repository** secret
-    `HAOS_DEPLOY_WEBHOOK_URL`, empty for now (below): an empty URL logs
-    a warning and the job passes, so a missing credential loses the
-    alert instead of manufacturing a red run. A repository secret,
+    `HAOS_DEPLOY_WEBHOOK_URL`: an empty URL logs a warning and the job
+    passes, so a missing credential loses the alert instead of
+    manufacturing a red run. A repository secret,
     rather than an Environment one, because the job belongs to no
     stack; every workflow here can read it, same-repo previews
     included, which is acceptable for a URL whose only power is to
@@ -294,18 +294,55 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     credentials (drill-compartment OCI user, dump-read B2 key, drill
     age key) with **no reviewer gate — the scope is the gate**
     (credentials.md §4).
--   **Every secret this section names is an empty slot today.** The
-    register's executable form is the `credentials` console script
-    (`src/kluster/scripts/credentials/`), and the only slot kind it
-    implements is a stack's Pulumi config: there is no
-    GitHub-Environment sink, so nothing populates
-    `ZEROTIER_IDENTITY`, `PULUMI_BACKEND_URL` or the rest, and the
-    lone repository-level slot (`HAOS_DEPLOY_WEBHOOK_URL`) is
-    unpopulated too. The partitioning above is therefore a design the
-    workflows already obey while the forge does not yet enforce it, and
-    no job in this repository has run against a real credential: a
-    deploy on `main` today fails in its first ZeroTier join, on an
-    empty identity.
+-   **What fills these Environments is a workstation, not a stack and
+    not a job.** The register's executable form is the `credentials`
+    console script (`src/kluster/scripts/credentials/`), whose slot map
+    is the machine-readable half of credentials.md §3: one row per
+    credential, naming where its value comes from and every slot it
+    lands in. A GitHub Actions secret — in an Environment of this
+    repository, in the ops repository, or repository-wide — is one of
+    that map's channels, pushed through `gh secret set` as the GitHub
+    account root. Neither of the other two candidates can hold the job:
+    the `github` stack declares the *structure* the secrets sit in and
+    runs a few times a year, while some of these values are generated
+    in Pulumi state after it last ran; and a workflow that could write
+    its own Environment's secrets could rewrite the partition
+    confining it, which is the one property the partition exists to
+    have. The partition above is therefore also the map's shape —
+    `PULUMI_CONFIG_PASSPHRASE` and the state-backend bundle in every
+    Environment because every job runs a `pulumi` command,
+    `ZEROTIER_IDENTITY` only in the Environments of the identity
+    domain it belongs to (physical/gateway.md §2.6).
+-   **Two ways a row fills, and which one applies is a property of the
+    credential.** *Synced* rows are copies of a value whose truth lives
+    elsewhere, and `credentials derived sync` re-reads and re-pushes
+    them: the state passphrase out of the escrow, `ZEROTIER_IDENTITY`
+    out of the `physical` stack's state, `ZEROTIER_NETWORK_ID` out of
+    its committed configuration, `HAOS_DEPLOY_WEBHOOK_URL` from
+    whoever types it. Re-running such a push is a refill, never a
+    rotation. The four `PULUMI_BACKEND_*` carriers are the exception:
+    the leaf key of a client certificate is stored nowhere, so a push
+    *issues* a fresh `ci` bundle under the escrowed CA rather than
+    copying the one CI already holds — which costs nothing, because
+    the appliance authenticates the CA and this PKI revokes nothing,
+    so the predecessor keeps working until it expires. A *minted*
+    credential is pushed from nowhere at all: it is disclosed once, to
+    the run that creates it, so its own `credentials derived <row>
+    mint` fills every slot it has in the same run, and naming such a
+    row to `sync` is refused rather than quietly doing nothing. No
+    provider credential is a GitHub secret today for that reason —
+    each reaches its job through the stack's committed configuration,
+    which the program reads for itself.
+-   **A push is verified as far as the channel allows.** The API never
+    discloses a secret again — not to a later run, not to the token
+    that wrote it — so what a push checks is that the name is in the
+    Environment's listing and its timestamp moved. That distinguishes a
+    delivered secret from a refused one and nothing more: no channel
+    here can tell a correct value from a corrupted one. A row whose
+    source is not yet reachable — a stack that has not run, a
+    credential nobody has typed in — is reported by name and the walk
+    continues, so the exit status of a full `sync` is the answer to
+    "is the map filled".
 -   **Everything on a clock lives in the ops repo; this repo is
     event-driven only** (2026-08-24, amending the 2026-08-23 "one
     scheduled workflow here" decision): once public, this repo's
