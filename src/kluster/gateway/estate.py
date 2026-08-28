@@ -76,7 +76,6 @@ from kluster.gateway.provider import Connection, GwArtifact, GwFile
 from putils import Component
 
 __all__ = (
-    'ADGUARD_API_PORT',
     'ADGUARD_UPSTREAMS',
     'CADDY_CONFIG',
     'CADDY_CONFIG_HOME',
@@ -176,11 +175,6 @@ IMAGE_MODE = '0600'
 #: peer may announce to the pool; this bounds how many /32s out of it arrive, so
 #: a peer that floods the table is dropped rather than believed.
 MAX_PREFIXES = 64
-
-#: AdGuard Home's administration and API port, which is the port the `dns`
-#: stack's rewrite resources speak to and the port the ZeroTier flow rules admit
-#: from a continuous-integration member.
-ADGUARD_API_PORT = 3000
 
 #: The resolvers both AdGuard instances forward to. Two providers on purpose:
 #: the LAN's name service must not fail with any single one of them.
@@ -581,7 +575,7 @@ def caddyfile(*, adguard: Mapping[str, IPv4Address]) -> str:
                 '\ttls {',
                 f'\t\tdns cloudflare {{file.{CADDY_TOKEN_PATH}}}',
                 '\t}',
-                f'\treverse_proxy http://{address}:{ADGUARD_API_PORT}',
+                f'\treverse_proxy http://{address}:{conventions.ADGUARD_API_PORT}',
                 '}',
             )
         )
@@ -610,7 +604,7 @@ def adguard_seed(address: IPv4Address) -> str:
             "# Installed only where the instance has none: rewrites are the dns stack's,",
             '# written through the API, and live in this same file once accepted.',
             'http:',
-            f'  address: {address}:{ADGUARD_API_PORT}',
+            f'  address: {address}:{conventions.ADGUARD_API_PORT}',
             'dns:',
             f'  bind_hosts:\n    - {address}',
             '  port: 53',

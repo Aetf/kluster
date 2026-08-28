@@ -67,7 +67,6 @@ from kluster.gateway import facts
 from putils import Component
 
 __all__ = (
-    'ADGUARD_API_PORT',
     'MULTICAST_LIMIT',
     'SSH_PORT',
     'UNIFI_API_PORT',
@@ -83,11 +82,6 @@ __all__ = (
 #: resources call. Both terminate on the gateway itself.
 SSH_PORT = 22
 UNIFI_API_PORT = 443
-
-#: The resolvers' administration port. The rewrites the `dns` stack writes go
-#: here, which is why a continuous-integration member may reach it — and the
-#: reason the estate and the rules have to agree on one number.
-ADGUARD_API_PORT = 3000
 
 #: The largest number of recipients a multicast or broadcast reaches. It has to
 #: be at least the size of the roster or local discovery quietly stops finding
@@ -182,7 +176,10 @@ def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4
     targets: list[tuple[str, int, str]] = [
         (f'{udm}/32', SSH_PORT, 'the gateway, for the desired-state push'),
         (f'{udm}/32', UNIFI_API_PORT, 'the controller API on the gateway, for the firewall resources'),
-        *((f'{address}/32', ADGUARD_API_PORT, 'a resolver, for the split-horizon rewrites') for address in adguard),
+        *(
+            (f'{address}/32', conventions.ADGUARD_API_PORT, 'a resolver, for the split-horizon rewrites')
+            for address in adguard
+        ),
         (f'{homelab}/32', SSH_PORT, 'the homelab host, for the libvirt session'),
     ]
     confinement: list[str] = []
