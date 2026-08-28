@@ -8,7 +8,12 @@ itself must provide. Sizing and the host inventory live in
 [declarative/physical.md](../declarative/physical.md) §3.
 
 > **Status**: designed 2026-08-23 (as declarative/physical.md §3),
-> extracted to this topic 2026-08-24. Not implemented.
+> extracted to this topic 2026-08-24. The declaration side is written:
+> `src/kluster/physical/homelab.py` declares the storage pool, the
+> worker's volume, seed and domain, and adopts the Home Assistant
+> domain. What this document describes of the *host* is not in place —
+> §4's change-set is a precondition of the first `pulumi up`, and §3's
+> passthrough is a Wave C step by design.
 
 ## 1. VM disk: raw sparse file on the root btrfs, nodatacow, virtio-blk
 
@@ -24,10 +29,15 @@ a file it is — the shape makes that rational:
     the host fs. The subvolume boundary also keeps the image out of
     any host snapshot/send scope.
 -   **Raw, not qcow2**: with CoW disabled, qcow2's allocation layer
-    buys nothing but indirection. Growth (60 → 100+ GB interleaved
-    with reclamation, migration.md §0.4) is `truncate` on the file +
-    `virsh blockresize`; Talos grows its EPHEMERAL partition into the
-    new space on its own.
+    buys nothing but indirection. The file is created at the Talos
+    image's own capacity — the volume is created *from* that image
+    (declarative/physical.md §3) — so every size the disk has after
+    that is `truncate` on the file + `virsh blockresize`, the ~60 GB
+    bootstrap size as much as the 100+ GB end state reached
+    interleaved with reclamation (migration.md §0.4). Talos grows its
+    EPHEMERAL partition into the new space on its own, and the
+    declaration stops matching the file from the first `truncate`
+    onwards, which is why it ignores the size rather than stating one.
 -   **virtio-blk with `discard=unmap`, `cache=none`**: in-guest TRIM
     punches holes back out of the sparse file, so NVMe space actually
     returns to the host when the guest deletes data — load-bearing
@@ -116,8 +126,12 @@ contents, so nothing is discovered mid-bootstrap:
 -   the `kluster` VLAN interface, the `kvmbr1` bridge over it, and the
     host's own 192.168.70.2 leg on that bridge (§2) — `enp7s0` and its
     untagged address are left alone;
--   the nodatacow subvolume (§1) + a libvirt storage pool pointing at
-    it;
+-   the nodatacow subvolume (§1) and its `chattr +C`, and nothing
+    beyond the directory: the libvirt storage pool that points at it is
+    the program's, declared against that path
+    (declarative/physical.md §3), and a pool defined here as well is a
+    pool the first apply finds already defined, which fails the run
+    rather than converging on it;
 -   a **dedicated service user** and its SSH identity for the libvirt
     provider (`qemu+ssh://` over the CI ZeroTier join), declared like
     every other system account in the change-set — a `systemd-sysusers`
