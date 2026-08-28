@@ -1,14 +1,17 @@
-"""The ZeroTier network the gateway routes for: roster, routes, flow rules.
+"""The ZeroTier network the gateway routes for: membership, routes, flow rules.
 
 The overlay is how the home site is reached from anywhere that is not the home
 site — by a person on a phone, and by a continuous-integration job that has to
 configure the gateway itself. Three things are declared here, and each answers a
 different question (gateway.md §2):
 
--   **The roster** — who may be on the network, under what name, at what
-    address, and in which of three roles. Membership is the authentication
-    boundary for traffic the gateway's own firewall never classifies, so the
-    roster is not bookkeeping: it is the admission decision.
+-   **Membership** — who is authorized, at what address, carrying which role
+    tag. Membership is the authentication boundary for traffic the gateway's
+    own firewall never classifies, so it is not bookkeeping: it is the
+    admission decision. *Who* may be on the network is not decided here — the
+    roster is `conventions.ZT_ROSTER`, because the `dns` stack publishes the
+    `*.zt` host block from the same table — and this module is what turns that
+    decision into authorized members.
 -   **The managed routes** — which of the home's subnets the overlay carries,
     all of them through the gateway's own member, which is the one machine that
     was already routing them.
@@ -17,16 +20,14 @@ different question (gateway.md §2):
     to exactly the four destinations its work needs, so that a leaked join
     credential does not buy general access to the LAN.
 
-**The roster is a census, by construction.** The role tag's default value is the
-permissive one, so a member that arrived without a declared role would be
-treated as a personal device. That is safe only because admission is gated here
-too: an undeclared member is never authorized, so it never reaches the default.
-The two halves are checked together — a name in configuration that the roster
-does not carry is refused, and a roster entry with nothing configured for it is
-refused as well. The single exception is a device whose identity does not exist
-yet, because a ZeroTier identity is minted by the daemon's first run: a caller
-that is delivering that daemon says so by name (`parse_members`, `unminted`),
-and that member is left out of the desired state until it has been.
+**Admission is checked in both directions.** A name in configuration that the
+roster does not carry is refused, and a roster entry with nothing configured for
+it is refused as well: both are the same mistake seen from opposite sides, and
+the first of them is what keeps the role tag's permissive default out of reach
+of anything undeclared. The single exception is a device whose identity does not
+exist yet, because a ZeroTier identity is minted by the daemon's first run: a
+caller that is delivering that daemon says so by name (`parse_members`,
+`unminted`), and that member is left out of the desired state until it has been.
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
 endpoint at a time, so an identity live in two jobs at once flaps; there is one
@@ -67,16 +68,11 @@ from putils import Component
 
 __all__ = (
     'ADGUARD_API_PORT',
-    'CI_MEMBERS',
-    'HOMELAB_MEMBER',
     'MULTICAST_LIMIT',
-    'ROSTER',
     'SSH_PORT',
-    'UDM_MEMBER',
     'UNIFI_API_PORT',
     'Enrolled',
     'Network',
-    'Rostered',
     'flow_rules',
     'parse_members',
     'roles',
@@ -98,99 +94,6 @@ ADGUARD_API_PORT = 3000
 #: the last members to answer; the check below is why roster growth cannot
 #: break it silently.
 MULTICAST_LIMIT = 32
-
-
-@final
-@dataclass(frozen=True)
-class Rostered:
-    """A member the network admits, and what it may do once admitted.
-
-    `address` is set where the address is a convention this program owns — the
-    gateway's, and the two continuous-integration identities' — and left unset
-    where it is a fact about a device that existed first, in which case the
-    address arrives beside the node identifier as configuration.
-
-    `generated` marks the members whose key material this program creates. They
-    have no configured identifier for the same reason they have no configured
-    address: both are outputs of the resource that makes them.
-    """
-
-    name: str
-    role: int
-    address: IPv4Address | None = None
-    generated: bool = False
-    note: str = ''
-
-
-#: The two identities that exist only for continuous integration, one per stack
-#: that joins the overlay during a run (gateway.md §2.6).
-CI_MEMBERS = ('ci-physical', 'ci-dns')
-
-#: The homelab host, as the roster names it. It is the one member the flow
-#: rules have to look up rather than take from a constant: the libvirt session
-#: a run opens reaches it member to member, at whatever overlay address it was
-#: assigned before this program existed.
-HOMELAB_MEMBER = 'Aetf-Arch-Homelab'
-
-#: The gateway, as the roster names it. It is the only member whose identity is
-#: minted by work this program does — the daemon runs on the device as a
-#: container of the estate — which is why it is also the only member a caller
-#: ever declares unminted.
-UDM_MEMBER = 'udm'
-
-#: Every member of the network. The order is the order the design lists them in:
-#: the infrastructure the overlay exists to reach, then the identities that
-#: reach it unattended, then the people.
-#:
-#: It is also the census the `dns` stack publishes the `*.zt` host block from
-#: (`dns/zones.py`): a member is admitted here and named in DNS by the same
-#: declaration, so a member with no record is not a state either stack can be
-#: in. A device that leaves the overlay leaves this tuple, and its record goes
-#: with it.
-ROSTER: tuple[Rostered, ...] = (
-    Rostered(
-        name=UDM_MEMBER,
-        role=conventions.ZT_ROLE_INFRA,
-        address=conventions.ZT_UDM,
-        note='the gateway: nexthop of every managed route',
-    ),
-    Rostered(
-        name=HOMELAB_MEMBER,
-        role=conventions.ZT_ROLE_INFRA,
-        note='the homelab host: a plain member and the recovery side-door, never a router',
-    ),
-    Rostered(
-        name='Aetf-Arch-VPS',
-        role=conventions.ZT_ROLE_INFRA,
-        note='the legacy deployment, retiring with its own route',
-    ),
-    Rostered(
-        name='haos',
-        role=conventions.ZT_ROLE_INFRA,
-        note='home automation, reachable while the cluster is not',
-    ),
-    Rostered(
-        name='ci-physical',
-        role=conventions.ZT_ROLE_CI,
-        address=conventions.ZT_CI_PHYSICAL,
-        generated=True,
-        note='the physical stack: plan, apply, and its drift check',
-    ),
-    Rostered(
-        name='ci-dns',
-        role=conventions.ZT_ROLE_CI,
-        address=conventions.ZT_CI_DNS,
-        generated=True,
-        note="the dns stack: previews, proofs, and the resolvers' rewrites",
-    ),
-    Rostered(name='Aetf-Arch-XPS', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='Aetf-Win-XPS', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='Aetf-Handheld', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='PC-Homelab', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='OnePlus6T', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='Pixel 7 Pro', role=conventions.ZT_ROLE_PERSONAL),
-    Rostered(name='S26 Ultra', role=conventions.ZT_ROLE_PERSONAL),
-)
 
 
 def roles() -> Mapping[str, int]:
@@ -236,14 +139,14 @@ def parse_members(raw: object, *, unminted: Collection[str] = ()) -> dict[str, E
     """
     entries = facts.mapping(raw, 'the ZeroTier member configuration')
 
-    rostered = {entry.name: entry for entry in ROSTER}
+    rostered = {entry.name: entry for entry in conventions.ZT_ROSTER}
     unknown = sorted(set(entries) - set(rostered))
     if unknown:
         raise ValueError(f'{", ".join(unknown)} is not on the ZeroTier roster, so it cannot be authorized')
     generated = sorted(name for name in entries if rostered[name].generated)
     if generated:
         raise ValueError(f'{", ".join(generated)} has a generated identity, so it takes no configured node id')
-    expected = [entry.name for entry in ROSTER if not entry.generated]
+    expected = [entry.name for entry in conventions.ZT_ROSTER if not entry.generated]
     missing = [name for name in expected if name not in entries and name not in unminted]
     if missing:
         raise ValueError(f'the ZeroTier roster has no configured node id for {", ".join(missing)}')
@@ -251,7 +154,7 @@ def parse_members(raw: object, *, unminted: Collection[str] = ()) -> dict[str, E
     return {name: _member(name, rostered[name], entries[name]) for name in expected if name in entries}
 
 
-def _member(name: str, entry: Rostered, raw: object) -> Enrolled:
+def _member(name: str, entry: conventions.ZtMember, raw: object) -> Enrolled:
     what = f'the ZeroTier facts for {name}'
     configured = facts.mapping(raw, what)
     node_id = facts.text(configured, 'id', what)
@@ -337,12 +240,12 @@ class Network(Component):
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
-        if len(ROSTER) > MULTICAST_LIMIT:
+        if len(conventions.ZT_ROSTER) > MULTICAST_LIMIT:
             raise ValueError(
-                f'the roster has {len(ROSTER)} members but multicast reaches {MULTICAST_LIMIT}; '
+                f'the roster has {len(conventions.ZT_ROSTER)} members but multicast reaches {MULTICAST_LIMIT}; '
                 'local discovery would stop finding the difference'
             )
-        homelab = members[HOMELAB_MEMBER].address
+        homelab = members[conventions.ZT_MEMBER_HOMELAB].address
         assert homelab is not None, "the homelab host's overlay address is configured, not conventional"
 
         # A provider of its own: this token administers the whole ZeroTier
@@ -385,7 +288,7 @@ class Network(Component):
         # node it authorizes has an identifier.
         self.identities = {
             entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
-            for entry in ROSTER
+            for entry in conventions.ZT_ROSTER
             if entry.generated
         }
 
@@ -396,7 +299,7 @@ class Network(Component):
         # here is only what to do about it.
         self.members = {
             entry.name: self._declare(name, entry, members, child)
-            for entry in ROSTER
+            for entry in conventions.ZT_ROSTER
             if entry.generated or entry.name in members
         }
 
@@ -405,7 +308,7 @@ class Network(Component):
     def _declare(
         self,
         name: str,
-        entry: Rostered,
+        entry: conventions.ZtMember,
         members: Mapping[str, Enrolled],
         opts: pulumi.ResourceOptions,
     ) -> zerotier.Member:

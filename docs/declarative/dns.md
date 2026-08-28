@@ -119,10 +119,17 @@ Cloudflare set; jiahui.id takes none.
     verification (physical.md §6).
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing
-    practice); its contents mirror the ZT member roster
-    (physical/gateway.md §2.1): `udm.zt` added, three members dropped at
-    import because ZeroTier Central no longer knows them (Abacus,
-    Aetf-Arch-Mac, Aetf-MacbookPro), the VPS record retires in Wave F.
+    practice). It is not a table: it is one A record per entry of the
+    overlay roster, `conventions.ZT_ROSTER`, which is the same table the
+    `physical` stack admits members by (physical/gateway.md §2.1). A
+    device joins the overlay and gets its name here by one declaration,
+    and a device that leaves loses both — so the legacy VPS's record
+    goes when its roster entry does, in Wave F. Only the addresses cross
+    the StackReference, and only for the members whose address ZeroTier
+    Central assigned; the ones this repository decides — the gateway's
+    and the two continuous-integration identities' — are read straight
+    off the roster entry, which is why `udm.zt` resolves before the
+    gateway's own identity has been minted.
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
@@ -133,20 +140,21 @@ Cloudflare set; jiahui.id takes none.
     zones=PUBLIC_ALL)` once and the helper fans records out across the
     set.
 -   **`PUBLIC_ALL` membership means full mirror**: every zone in the
-    set carries one shared estate block — the legacy VPS anchor, the
-    ZeroTier host records and the web origin
-    (`dns/zones.py`, `MIRRORED_ESTATE`) — so a name fanned across the
-    set resolves in all of it. The cluster anchors those names CNAME to
-    are not in the block: they are in the primary alone, per the bullet
-    above. A zone joins the set by carrying the block, not by being
-    listed; the two facts are held together by a test. What a mirror
-    may add on top of the block is its own mail and site verifications,
-    which are per-domain by nature. Membership is also a promise about
-    app names that only the migration makes true: unlimitedcodeworks.xyz
-    is in the set and carries none of the app names the other mirrors
-    do (`dns/legacy.py` — the VPS never served them there), so the
-    fan-out first reaches it when an app moves into `apps` and takes
-    the default zone set.
+    set carries one shared estate block — the legacy VPS anchor and the
+    web origin (`dns/zones.py`, `MIRRORED_ESTATE`) — plus the ZeroTier
+    host records, which reach the same set from the stack program
+    because they are derived rather than literal. So a name fanned
+    across the set resolves in all of it. The cluster anchors those
+    names CNAME to are not in the block: they are in the primary alone,
+    per the bullet above. A zone joins the set by carrying the block,
+    not by being listed; the two facts are held together by a test.
+    What a mirror may add on top of the block is its own mail and site
+    verifications, which are per-domain by nature. Membership is also a
+    promise about app names that only the migration makes true:
+    unlimitedcodeworks.xyz is in the set and carries none of the app
+    names the other mirrors do (`dns/legacy.py` — the VPS never served
+    them there), so the fan-out first reaches it when an app moves into
+    `apps` and takes the default zone set.
 -   **Cloudflare proxy is a helper parameter** (default on): the
     existing per-record reasons — large uploads (photos), non-HTTP
     ports (syncthing, matrix, minecraft) — become explicit

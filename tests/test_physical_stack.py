@@ -25,7 +25,6 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.gateway import zerotier
 from kluster.physical import homelab, nodes
 from kluster.physical.guardrails import Guardrails
 from kluster.scripts.credentials import workstation
@@ -75,7 +74,7 @@ GATEWAY_CONFIG = {
     'kluster:zerotierMembers': json.dumps(
         {
             entry.name: {'id': f'{index:010x}'} | ({} if entry.address else {'address': f'10.144.200.{index}'})
-            for index, entry in enumerate(zerotier.ROSTER)
+            for index, entry in enumerate(conventions.ZT_ROSTER)
             if not entry.generated
         }
     ),
@@ -262,7 +261,7 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     into the stack would be wrong for one of them and stale for both.
     """
     configured = cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers']))
-    address = cast('str', configured[zerotier.HOMELAB_MEMBER]['address'])
+    address = cast('str', configured[conventions.ZT_MEMBER_HOMELAB]['address'])
 
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
@@ -325,7 +324,7 @@ async def test_first_bring_up_runs_before_the_gateway_has_an_identity_to_authori
     members = {
         name: entry
         for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
-        if name != zerotier.UDM_MEMBER
+        if name != conventions.ZT_MEMBER_UDM
     }
     pulumi.runtime.set_all_config(
         dict(STACK_CONFIG)
@@ -338,7 +337,7 @@ async def test_first_bring_up_runs_before_the_gateway_has_an_identity_to_authori
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    assert f'{conventions.CLUSTER_NAME}-member-{zerotier.UDM_MEMBER}' not in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-member-{conventions.ZT_MEMBER_UDM}' not in setup.inputs
     assert f'{conventions.CLUSTER_NAME}-member-haos' in setup.inputs
     assert f'{conventions.CLUSTER_NAME}-network' in setup.inputs
 
@@ -355,11 +354,11 @@ async def test_the_roster_gap_is_refused_once_the_gateway_is_on_the_overlay() ->
     members = {
         name: entry
         for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
-        if name != zerotier.UDM_MEMBER
+        if name != conventions.ZT_MEMBER_UDM
     }
     pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {'kluster:zerotierMembers': json.dumps(members)})
 
-    with pytest.raises(ValueError, match=f'no configured node id for {zerotier.UDM_MEMBER}'):
+    with pytest.raises(ValueError, match=f'no configured node id for {conventions.ZT_MEMBER_UDM}'):
         await physical.main()
 
 
@@ -443,7 +442,7 @@ async def test_the_overlay_addresses_are_exported_for_the_records_dns_publishes(
     assert exported[dns.OUTPUT_ZT_ADDRESSES] == {
         name: entry['address'] for name, entry in configured.items() if 'address' in entry
     }
-    assert zerotier.UDM_MEMBER not in cast('dict[str, str]', exported[dns.OUTPUT_ZT_ADDRESSES])
+    assert conventions.ZT_MEMBER_UDM not in cast('dict[str, str]', exported[dns.OUTPUT_ZT_ADDRESSES])
 
 
 @pytest.mark.asyncio
