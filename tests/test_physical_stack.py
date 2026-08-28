@@ -46,6 +46,10 @@ ZT_NETWORK_ID = '0123456789abcdef'
 #: A LAN name for the gateway, as the first-bring-up knob carries one. Its shape
 #: is all that matters here: something that is not the overlay address.
 BOOTSTRAP_HOST = 'gateway.invalid'
+#: The worker VM's global address, as the operator reads it off the cluster
+#: VLAN's router advertisement. Nothing derives it — that is the point of the
+#: key — so the value only has to be inside a documentation prefix.
+WORKER_GUA = '2001:db8:1:70::10'
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
 #: The libvirt client identity, as it arrives from configuration. Nothing
@@ -68,7 +72,7 @@ GATEWAY_CONFIG = {
         {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
     ),
     'kluster:unifiApiKey': 'a-controller-key',
-    'kluster:workerGua': '2001:db8:1:70::10',
+    'kluster:workerGua': WORKER_GUA,
     'kluster:qbittorrentPeerPort': '51413',
     'kluster:zerotierApiToken': 'a-central-token',
     'kluster:zerotierNetworkId': ZT_NETWORK_ID,
@@ -250,8 +254,8 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
-    # The steady state is the knob's absence, which is why it is the only
-    # optional key here and why nothing has to be unset to reach this.
+    # The steady state is the knob's absence, so nothing has to be unset to
+    # reach this.
     assert f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}' not in STACK_CONFIG
 
 
@@ -414,6 +418,49 @@ async def test_the_roster_gap_is_refused_once_the_gateway_is_on_the_overlay() ->
 
     with pytest.raises(ValueError, match=f'no configured node id for {conventions.ZT_MEMBER_UDM}'):
         await physical.main()
+
+
+@pytest.mark.asyncio
+async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Mocks) -> None:
+    """The second nested egg: the address is SLAAC off a network this run makes.
+
+    The worker's global address is formed from the router advertisement of the
+    cluster VLAN, and that VLAN is declared by this same program — so the first
+    apply of all is asked for a value only its own outcome produces. `workerGua`
+    is therefore optional, and absent it the one rule that names a literal
+    address is not declared: the worker's IPv6 is outbound-only, which is the
+    stage the design already accepts when the home prefix rotates under a rule
+    that has not been re-applied yet.
+    """
+    pulumi.runtime.set_all_config({key: value for key, value in STACK_CONFIG.items() if key != 'kluster:workerGua'})
+
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    assert f'{conventions.CLUSTER_NAME}-peer-v6' not in setup.inputs
+    # Nothing else waits with it. The v4 half names the node address the
+    # address plan states rather than one a booted machine reports, and the
+    # rest of the census never named the worker at all.
+    assert f'{conventions.CLUSTER_NAME}-peer-v4' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-cluster-egress' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-network' in setup.inputs
+
+
+@pytest.mark.asyncio
+async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Mocks) -> None:
+    """And with the address configured, the rule is back and carries it.
+
+    Step three of the bring-up ceremony is writing the key, so what follows it
+    has to be the pinhole itself — the configured address on the configured
+    port, into the zone the worker moved to.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    destination = setup.inputs[f'{conventions.CLUSTER_NAME}-peer-v6']['destination']
+    assert destination['ips'] == [WORKER_GUA]
+    # A number over the wire arrives as one, whatever configuration spelled it.
+    assert int(destination['port']) == int(GATEWAY_CONFIG['kluster:qbittorrentPeerPort'])
 
 
 @pytest.mark.asyncio

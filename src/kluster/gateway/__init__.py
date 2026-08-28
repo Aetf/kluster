@@ -108,7 +108,7 @@ def declare_firewall(
     api_url: str,
     api_key: pulumi.Input[str],
     site: str,
-    worker_gua: pulumi.Input[str],
+    worker_gua: pulumi.Input[str] | None,
     peer_port: int,
     opts: pulumi.ResourceOptions | None = None,
 ) -> Firewall:
@@ -116,7 +116,10 @@ def declare_firewall(
 
     `worker_gua` is the worker VM's global IPv6 address: the one rule that
     cannot be written against a stable object, because the zone-policy API
-    matches literal addresses and the site's delegated prefix rotates.
+    matches literal addresses and the site's delegated prefix rotates. `None`
+    is the state before the worker has one — the address is formed by SLAAC
+    off the very network this census declares — and it means the pinhole is
+    not declared at all, leaving the worker's IPv6 outbound-only.
     `peer_port` is the bulk-transfer application's inbound peer port, which
     the pinhole and the one port forward both name — a number inherited from
     the deployment this cluster replaces rather than chosen here, so it is

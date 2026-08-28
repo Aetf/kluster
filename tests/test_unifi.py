@@ -322,6 +322,8 @@ async def test_the_pinhole_lands_in_the_cluster_zone_rather_than_the_internal_on
     """
     firewall = build()
 
+    # Built with an address, so the conditional half of the census is here.
+    assert firewall.peer_v6 is not None
     destination = await firewall.peer_v6.destination.future()
     assert destination is not None
     assert destination.zone_id == f'{NAME}-zone_id'
@@ -453,6 +455,7 @@ async def test_both_allows_precede_both_drops_and_all_of_them_precede_the_predef
     assert await firewall.pool_order.source_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
     assert await firewall.pool_order.destination_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
 
+    assert firewall.peer_order is not None
     assert await firewall.peer_order.before_predefined_ids.future() == [f'{NAME}-peer-v6_id']
     assert await firewall.peer_order.source_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
     assert await firewall.peer_order.destination_zone_id.future() == f'{NAME}-zone_id'
@@ -520,6 +523,7 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     """
     firewall = build()
 
+    assert firewall.peer_v6 is not None
     destination = await firewall.peer_v6.destination.future()
     assert destination is not None
     assert destination.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
@@ -608,6 +612,7 @@ async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
         peer_port=6881,
     )
 
+    assert firewall.peer_v6 is not None
     destination = await firewall.peer_v6.destination.future()
     assert destination is not None
     assert destination.port == 6881

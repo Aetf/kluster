@@ -270,16 +270,18 @@ Internal→cluster with the IoT VLAN dropped ahead of it as a
 single-family pair), a **`FirewallZonePolicyOrder` on every zone pair
 that carries a policy** — position is not a property of a policy, and
 on the inbound pair a drop declared after the allow matches nothing —
-the qbittorrent v6 pinhole and its v4 peer-port forward to
-`192.168.70.10` (**the only port forward**; no management inbound
-exists), and any static LAN host entries (dns.md §4). The **`lan` pool
-is not in this census as an object at all**: it is deliberately no
-network object and therefore in no zone, so the rules naming it are
-address-group rules on the internal→external pair, not zone policies
-about a pool zone. Auth: a dedicated local admin with an **API key** —
-never the SSH credential — and failure retries are throttled: the
-UniFi global login rate-limit is not per-IP and has locked out real
-users before (the HA-integration incident).
+the qbittorrent v6 pinhole — declared only once `workerGua` carries
+the worker's SLAAC address, which no apply before the worker's first
+boot can supply (physical/gateway.md §4.2) — and its v4 peer-port
+forward to `192.168.70.10` (**the only port forward**; no management
+inbound exists), and any static LAN host entries (dns.md §4). The
+**`lan` pool is not in this census as an object at all**: it is
+deliberately no network object and therefore in no zone, so the rules
+naming it are address-group rules on the internal→external pair, not
+zone policies about a pool zone. Auth: a dedicated local admin with an
+**API key** — never the SSH credential — and failure retries are
+throttled: the UniFi global login rate-limit is not per-IP and has
+locked out real users before (the HA-integration incident).
 
 ## 5. B2 (bridged provider)
 

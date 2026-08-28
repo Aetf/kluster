@@ -295,7 +295,7 @@ id is minted by the daemon's first run on a device, so it does not exist
 to be authorized until the delivery has happened.
 
 What breaks the cycle is the LAN, which reaches the UDM before and
-independently of ZT, and one optional key of the `physical` stack:
+independently of ZT, and an optional key of the `physical` stack:
 
 **`gatewayBootstrapHost`** — a LAN address for the gateway, e.g. a name
 the home resolvers already answer for. While it is set it means *the
@@ -312,16 +312,25 @@ The ceremony, four steps and three applies:
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
     over the LAN and delivers the estate, the ZT container included.
-    Nothing is declared for the gateway on the overlay.
+    Nothing is declared for the gateway on the overlay. `workerGua`
+    is unset here and optional for that reason: the address it
+    carries is formed by the worker off this apply's own router
+    advertisement, so the pinhole waits for step 3 (§4.2).
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
     that container — and write it into `zerotierMembers.udm.id`.
-3.  **Apply again, knob still set.** The roster now authorizes the
-    member and assigns it `10.144.1.1`; the device joins the network it
-    is the router of. The managed routes are not added here: they are
-    declared on the network resource, so step 1 already wrote them, each
-    `via` `10.144.1.1`. What this step adds is a member at that address
+3.  **Read the worker's GUA off the VLAN-7 advertisement** — the
+    address it formed by SLAAC once step 1 declared the network and
+    booted it — into `workerGua`, and **apply again, knob still
+    set.** The roster now authorizes the member and assigns it
+    `10.144.1.1`; the device joins the network it is the router of,
+    and the inbound-v6 pinhole (§4.2) is declared for the first time.
+    The managed routes are not added here: they are declared on the
+    network resource, so step 1 already wrote them, each `via`
+    `10.144.1.1`. What this step adds is a member at that address
     — until now the routes named a nexthop nobody answered for, which is
-    all a route to an absent router ever is.
+    all a route to an absent router ever is. Both halves of this step
+    read a value the previous apply brought into being, which is why
+    they are one step and not two.
 4.  **Unset the knob and apply once more.** Every client is back on the
     overlay address, so this run dials over ZT — which is the
     verification rather than a formality: it rewrites the estate through
@@ -569,6 +578,18 @@ on a pair holding both a drop and an allow the position *is* the rule.
     home prefix rotates**; a stale rule degrades to the accepted
     outbound-only-v6 stage (inbound v4 unaffected) — annoying, not
     urgent.
+
+    **The address is configuration, and `workerGua` is optional** —
+    the one conditional rule of the census. The GUA is a SLAAC
+    address the worker forms from what the VLAN declared here
+    advertises, so it comes into being one boot *after* the apply
+    that declares the VLAN, and no first apply can be given it. With
+    the key unset this rule is not declared at all, which is the same
+    outbound-only-v6 stage a stale rule leaves behind, reached from
+    the other side and with nothing wrong pointed at. Step 3 of the
+    bring-up ceremony (§2.5) is where it gets set. The v4 peer-port
+    forward below is unconditional either way: it names an address the
+    address plan states rather than one a booted machine reports.
 6.  **qbittorrent v4 peer-port forward** — target the worker at
     `192.168.70.10`, and **the only port forward on the device**. No
     management inbound exists: cluster and Talos management ride the
