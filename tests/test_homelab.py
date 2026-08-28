@@ -18,7 +18,9 @@ from __future__ import annotations
 import inspect
 import json
 import re
+from pathlib import Path
 from typing import Any, cast
+from urllib.parse import parse_qs, urlsplit
 
 import pulumi
 import pulumi.runtime.mocks
@@ -349,6 +351,131 @@ async def test_both_domains_are_reached_through_one_connection() -> None:
 async def test_a_second_worker_is_a_design_change_not_a_default() -> None:
     with pytest.raises(ValueError, match='exactly one worker VM'):
         build(cluster=build_cluster(worker_nodes=(WORKER, 'worker2')))
+
+
+# -- the session the provider dials through ---------------------------------
+#
+# The parameter spellings asserted below are the bridged Terraform provider's
+# own (`libvirt/uri/ssh.go`), not libvirt's remote driver's: the provider parses
+# the URI itself and opens the connection with Go's SSH client. Getting one of
+# them wrong is silent — an unread parameter leaves the run on the machine's
+# ambient defaults — so each is pinned by a test rather than by memory.
+
+HOST = '10.144.200.1'
+IDENTITY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
+
+
+def _dial(tmp_path: Any, host: str = HOST) -> tuple[Any, dict[str, list[str]]]:
+    """The parsed URI and its parameters, for a session materialized in `tmp_path`."""
+    from kluster.physical.homelab import connection_uri
+
+    uri = connection_uri(host=host, private_key=IDENTITY, directory=tmp_path)
+    parts = urlsplit(uri)
+    return parts, parse_qs(parts.query)
+
+
+def test_the_endpoint_names_the_service_user_and_the_privileged_daemon(tmp_path: Path) -> None:
+    parts, _ = _dial(tmp_path)
+
+    # `/system` is the daemon that owns the storage pool and the adopted
+    # domain; a session instance would see neither.
+    assert (parts.scheme, parts.netloc, parts.path) == ('qemu+ssh', f'virt@{HOST}', '/system')
+
+
+def test_the_identity_is_materialised_where_only_this_machine_can_read_it(tmp_path: Path) -> None:
+    """The credential is configuration; the file it becomes is not.
+
+    A path is a property of the machine running the program, and this program
+    runs on a workstation and on a continuous-integration runner alike. So the
+    file is written on every run, from the configured key, into the checkout's
+    own directory — and the URI is what points the provider at it.
+    """
+    _, query = _dial(tmp_path)
+
+    keyfile = Path(query['keyfile'][0])
+    assert keyfile.read_text() == IDENTITY
+    # The mode matters as much as the content: a private key readable by
+    # anything else on the machine is a leaked private key.
+    assert keyfile.stat().st_mode & 0o777 == 0o600
+    assert keyfile.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_the_pin_is_written_against_the_address_the_session_dials(tmp_path: Path) -> None:
+    """A `known_hosts` entry is keyed by host, so the key it is keyed by matters.
+
+    The estate stores the pin as a bare `ssh-ed25519 <blob>` with no host name
+    in front of it, which is what lets one pinned key match a device at either
+    of its addresses. A `known_hosts` file has no such form: the address the
+    URI dials is written in front of the blob here, at the moment the endpoint
+    that decides it is derived.
+    """
+    from kluster.physical.homelab import HOST_KEY
+
+    _, query = _dial(tmp_path)
+
+    assert Path(query['knownhosts'][0]).read_text() == f'{HOST} {HOST_KEY}\n'
+    assert HOST_KEY.startswith('ssh-ed25519 ')
+
+
+def test_host_key_verification_is_not_switched_off(tmp_path: Path) -> None:
+    """Two ways to lose it, and the test exists for the second one.
+
+    `no_verify` disables verification by its mere presence — even
+    `no_verify=0` — so it is never emitted. And the parameter that names the
+    file is `knownhosts`, one word: spelled `known_hosts` it is simply not
+    read, the run falls back on `$HOME/.ssh/known_hosts`, and the session
+    trusts whatever that machine happens to have collected.
+    """
+    parts, query = _dial(tmp_path)
+
+    assert 'no_verify' not in parts.query
+    assert 'known_hosts' not in query
+    assert query['knownhosts']
+
+
+def test_the_session_offers_the_identity_it_was_given_and_no_other(tmp_path: Path) -> None:
+    """The provider's default is `agent,privkey`, and an agent is ambient.
+
+    A forwarded agent would offer its keys before this one, so what a
+    continuous-integration runner does and what a workstation does would differ
+    by whatever the operator happened to have loaded.
+    """
+    _, query = _dial(tmp_path)
+
+    assert query['sshauth'] == ['privkey']
+
+
+def test_a_session_with_no_identity_is_refused(tmp_path: Path) -> None:
+    from kluster.physical.homelab import connection_uri
+
+    with pytest.raises(ValueError, match='identity is empty'):
+        _ = connection_uri(host=HOST, private_key='   \n', directory=tmp_path)
+
+
+def test_a_checkout_the_provider_would_rewrite_the_path_of_is_refused(tmp_path: Path) -> None:
+    """`$` in a path is expanded by the provider before the file is opened.
+
+    The failure that would otherwise follow arrives inside an SSH handshake,
+    as an authentication that got no key, which names nothing about why.
+    """
+    from kluster.physical.homelab import connection_uri
+
+    with pytest.raises(ValueError, match=r'expands'):
+        _ = connection_uri(host=HOST, private_key=IDENTITY, directory=tmp_path / 'build$one')
+
+
+def test_the_slot_is_the_checkouts_own_local_directory() -> None:
+    """Not an absolute path on one machine: a directory inside the checkout.
+
+    It is the same directory every other local half of a credential lives in
+    (`credentials.md` §1 rule 6), which is what makes "what on this machine is
+    secret" have one answer.
+    """
+    from kluster.physical.homelab import SLOT, slot
+    from kluster.scripts.credentials import workstation
+
+    assert slot() == workstation.directory() / SLOT
+    assert slot().is_relative_to(workstation.repo_root())
 
 
 # -- the disk tuning the provider cannot express ----------------------------

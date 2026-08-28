@@ -12,6 +12,13 @@ rather than through a metadata service: there is no cloud platform here to
 serve one. That seed carries cluster secrets, so it lives beside the disk
 image on the same root-only, snapshot-excluded subvolume.
 
+**The connection is derived, and its credential is materialized** rather than
+recorded: an SSH transport is authenticated by files on the machine running
+the program, and their paths are a property of that machine rather than of the
+site. `connection_uri` writes both into the checkout and returns the URI that
+names them, so a workstation and a continuous-integration runner reach the
+host the same way from the same configuration.
+
 **The disk is created from the Talos image, not created empty.** The volume's
 `source` is the decompressed `nocloud` artefact on the machine running the
 program (`physical/image.py`), and the provider uploads it into the pool over
@@ -60,15 +67,18 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import pulumi
 import pulumi_libvirt as libvirt
 
 from kluster.physical.talos import TalosCluster
+from kluster.scripts.credentials import workstation
 from putils import Component
 
-__all__ = ('HomelabHost', 'declare')
+__all__ = ('HOST_KEY', 'LIBVIRT_USER', 'HomelabHost', 'connection_uri', 'declare', 'slot')
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
@@ -128,6 +138,100 @@ HOST_OWNED: tuple[str, ...] = (
     'video',
     'xml',
 )
+
+#: The account the session authenticates as: a dedicated service user on the
+#: host, in the `libvirt` group and no other, provisioned together with its key
+#: by the host's own configuration management (homelab-host.md §4).
+LIBVIRT_USER = 'virt'
+
+#: The host's SSH host key, pinned. It is code rather than configuration for
+#: two reasons: a public key is not a secret, and a pin typed in beside the
+#: client credential could be replaced by whoever could already replace the
+#: credential. Stored in the estate's `authorized_keys` form — the bare
+#: `ssh-ed25519 AAAA…` blob, no host name in front of it (`gateway/ssh.py`) —
+#: so the address it is written against is decided where the session is dialled
+#: rather than carried around with the key.
+HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIHV/ogdnUUf2j2DIffv86Ra43SS672UCZt3kXSvs6FF'
+
+#: The workstation slot the run materializes its transport into
+#: (credentials.md §1 rule 6): the checkout's git-ignored `.credentials/`, one
+#: directory deeper so this pair sits beside another consumer's rather than in
+#: the root of it.
+SLOT = 'libvirt'
+KEYFILE = 'identity'
+KNOWN_HOSTS = 'known_hosts'
+
+#: The libvirt driver and the object the URI names on the far side. `/system`
+#: is the privileged daemon — the one that owns the storage pool and the
+#: adopted domain — as opposed to a per-user session instance.
+LIBVIRT_ENDPOINT = 'qemu+ssh'
+LIBVIRT_OBJECT = '/system'
+
+
+def slot() -> Path:
+    """`.credentials/libvirt/` in this checkout."""
+    return workstation.directory() / SLOT
+
+
+def connection_uri(*, host: str, private_key: str, directory: Path | None = None) -> str:
+    """Materialize the SSH transport and return the URI that names it.
+
+    The endpoint is **derived, never recorded**. A URI in stack configuration
+    would carry file paths that only exist on the machine that wrote it, and
+    this program runs on a workstation and on a continuous-integration runner
+    alike; what is configuration is the credential (`libvirtPrivateKey`), and
+    where it lands is decided here, relative to the checkout.
+
+    Two files are written before the provider is constructed, because the
+    provider dials as soon as the engine configures it and reads both by path:
+
+    -   the client identity, `0600` in a `0700` directory (`workstation`);
+    -   a `known_hosts` file holding one line — `host` followed by the pinned
+        `HOST_KEY`. The pin is written against the address the URI dials,
+        which is what the verifier matches on.
+
+    What the provider honours here is not libvirt's own remote driver: the
+    bridged Terraform provider parses the URI itself and dials over Go's SSH
+    client (`libvirt/uri/ssh.go`). Three query parameters follow from that, and
+    the spellings are the provider's rather than OpenSSH's:
+
+    -   `keyfile` — the identity, read first and before anything an
+        `~/.ssh/config` names.
+    -   `knownhosts` — *one word*. `known_hosts` is not a parameter the
+        provider reads: it would be ignored, the run would fall back on
+        `$HOME/.ssh/known_hosts`, and the session would verify against
+        whatever the machine happened to trust.
+    -   `sshauth=privkey` — the default is `agent,privkey`, which would offer
+        every key in a forwarded agent before this one. Naming the method is
+        the same rule as the gateway's session: what a runner does and what a
+        workstation does may not differ.
+
+    `no_verify` is *never* emitted. The provider treats it as set by its mere
+    presence — even `no_verify=0` disables host-key verification — and an
+    unverified first contact over the overlay would hand an interposer a
+    root-equivalent libvirt connection.
+
+    `directory` overrides the slot, for tests. It may not contain `$`: the
+    provider expands environment variables in both paths before opening them,
+    so a checkout at such a path would fail deep inside an SSH handshake
+    instead of here.
+    """
+    if not private_key.strip():
+        raise ValueError('the libvirt SSH identity is empty, and an unauthenticated session reaches nothing')
+    target = slot() if directory is None else directory
+    if '$' in str(target):
+        raise ValueError(f'{target} contains a "$", which the libvirt provider expands before opening the file')
+
+    keyfile = workstation.write(target / KEYFILE, private_key)
+    known_hosts = workstation.write(target / KNOWN_HOSTS, f'{host} {HOST_KEY}')
+    query = urlencode(
+        {
+            'keyfile': str(keyfile),
+            'knownhosts': str(known_hosts),
+            'sshauth': 'privkey',
+        }
+    )
+    return f'{LIBVIRT_ENDPOINT}://{LIBVIRT_USER}@{host}{LIBVIRT_OBJECT}?{query}'
 
 
 def disk_tuning_xslt(disk_format: str = DISK_FORMAT) -> str:
