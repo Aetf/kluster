@@ -126,7 +126,11 @@ OCI_COMPARTMENTS: dict[str, Compartment] = {
             name=CLUSTER_NAME,
             ocid='ocid1.compartment.oc1..aaaaaaaaapllt64sf7e4gwnbka7l6d2hrblj6wvca7avtu6mrt6jaouallaq',
         ),
-        Compartment(consumer=PHYSICAL, name=f'{CLUSTER_NAME}-{PHYSICAL}'),
+        Compartment(
+            consumer=PHYSICAL,
+            name=f'{CLUSTER_NAME}-{PHYSICAL}',
+            ocid='ocid1.compartment.oc1..aaaaaaaajoaiz6cho6dnufutp6nrqyzhp6dswoi4hssa4o4sks276areztna',
+        ),
     )
 }
 

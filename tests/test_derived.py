@@ -27,7 +27,7 @@ import pytest
 from cloudflare_api import ACCOUNT_ID, FakeApi, console_seed
 from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
-from test_oci_iam import ROOT_USER, TENANCY, Tenancy
+from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
 from kluster import conventions
 from kluster.scripts.credentials import (
@@ -265,20 +265,49 @@ def test_the_key_is_a_secret_and_the_region_is_not(
 
 
 def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
-    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     slot, _ = physical_stack
+    # The pre-record state: `conventions` names the compartment but holds no
+    # OCID yet, which is every consumer's shape before its first mint.
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.PHYSICAL,
+        conventions.Compartment(consumer=intended.consumer, name=intended.name),
+    )
 
     _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
 
     # The ordinary bring-up names no compartment: `conventions` does, and the
     # mint creates the one this consumer has no compartment for yet.
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
     created = next(iter(tenancy.identity.compartments.values()))
     name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
     assert created.name == intended.name
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {created.id}']
+    ]
+
+
+def test_the_recorded_compartment_is_adopted_not_recreated(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, _ = physical_stack
+    # The post-record state `conventions` carries today: the OCID is written,
+    # so the mint must find that compartment and act in it, creating nothing.
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    assert intended.ocid is not None
+    tenancy.identity.compartments[intended.ocid] = Named(id=intended.ocid, name=intended.name)
+
+    _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
+
+    name = f'{conventions.CLUSTER_NAME}-{derived.PHYSICAL_STACK}'
+    assert list(tenancy.identity.compartments) == [intended.ocid]
+    assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
+        [f'Allow group {name} to manage all-resources in compartment id {intended.ocid}']
     ]
 
 
