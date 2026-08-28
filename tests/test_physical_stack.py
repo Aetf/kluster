@@ -56,7 +56,6 @@ GATEWAY_CONFIG = {
     'kluster:gatewayAddresses': json.dumps(
         {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
     ),
-    'kluster:unifiApiUrl': 'https://gateway.invalid',
     'kluster:unifiApiKey': 'a-controller-key',
     'kluster:workerGua': '2001:db8:1:70::10',
     'kluster:qbittorrentPeerPort': '51413',
@@ -77,10 +76,14 @@ class Mocks(pulumi.runtime.Mocks):
         #: Every resource type the run registered, so a test can ask which
         #: providers the program actually reached.
         self.registered: set[str] = set()
+        #: What each resource was declared with, by name, so a test can ask
+        #: what the stack handed a provider rather than only that it made one.
+        self.inputs: dict[str, dict[str, Any]] = {}
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         self.registered.add(args.typ)
         outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
+        self.inputs[args.name] = dict(cast('dict[str, Any]', args.inputs))
         if args.typ == 'oci:Core/vcn:Vcn':
             outputs['ipv6cidrBlocks'] = ['2603:c020:8000:1200::/56']
         if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
@@ -203,6 +206,25 @@ async def test_the_stack_declares_every_domain_of_the_design(setup: Mocks) -> No
     # leave a stack that runs clean and comes up one provider short.
     families = {typ.partition(':')[0] for typ in setup.registered}
     assert set(DOMAIN_PROVIDERS) <= families
+
+
+@pytest.mark.asyncio
+async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Mocks) -> None:
+    """The controller's address is derived, not recorded beside its key.
+
+    The gateway's overlay address is handed out by this program's own ZeroTier
+    roster, so every client of the gateway reads it from the same constant:
+    the estate's SSH host, the controller's API endpoint, and the next hop of
+    every managed route. A value typed in beside the API key would be a second
+    copy of that, free to disagree with the roster that decides it.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-unifi']['apiUrl'] == f'https://{conventions.ZT_UDM}'
+    # And nothing supplies it: the stack has no key to read it from, so a
+    # `record` command that pushed one would be filling a slot nobody reads.
+    assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
 
 
 @pytest.mark.asyncio
