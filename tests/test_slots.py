@@ -11,21 +11,31 @@ itself is `test_github_secrets.py`.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
 
-from kluster.scripts.credentials import devices, escrow, pulumi_config, slots
+from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
 REPOSITORY = slots.REPOSITORY
 PASSPHRASE = 'a-recovered-passphrase'
+
+#: The appliance this workstation's own bundle points at, which is where the
+#: `ci` certificate's address comes from. A documentation range, so nothing
+#: here can be mistaken for the real box.
+APPLIANCE = '198.51.100.7'
+OPERATOR_URL = f'postgres://operator@{APPLIANCE}:5432/pulumi_state?sslmode=verify-full'
 
 #: §3 rows the map deliberately does not carry. Empty, and meant to stay that
 #: way: a credential the register names is a credential something has to
@@ -95,6 +105,36 @@ def test_the_passphrase_reaches_every_environment() -> None:
     assert {slot.name for slot in passphrase.sinks} == {'PULUMI_CONFIG_PASSPHRASE'}
 
 
+def workflow_backend_secrets() -> set[str]:
+    """Every `PULUMI_BACKEND_*` secret the workflows in this repository read.
+
+    Read out of the workflows for the reason §3 is read out of the document: the
+    map exists to fill what CI names, and a name only one of the two knows is a
+    job that starts with an empty file where a certificate should be.
+    """
+    workflows = pulumi_config.project_dir() / '.github' / 'workflows'
+    text = '\n'.join(path.read_text() for path in sorted(workflows.glob('*.yml')))
+    return set(re.findall(r'secrets\.(PULUMI_BACKEND_[A-Z]+)', text))
+
+
+def test_the_client_bundle_fills_every_carrier_the_workflows_read() -> None:
+    bundle = slots.ROWS['state-backend-certificates']
+
+    # The connection string and the three files it authenticates with. Spelled
+    # out so that a regex which stopped matching cannot make the comparison
+    # below pass by leaving both sides empty.
+    carriers = workflow_backend_secrets()
+    assert len(carriers) == 4
+    # They are file contents rather than a job's environment: the composite
+    # action writes each into the checkout's slot, from which `mise.toml`
+    # resolves the URL and the three `PGSSL*` variables.
+    assert {slot.name for slot in bundle.sinks} == carriers
+    # Every Environment, for the same reason the passphrase reaches every
+    # Environment: each one runs a `pulumi` command against the backend.
+    assert {slot.environment for slot in bundle.sinks} == set(slots.ENVIRONMENTS)
+    assert not bundle.pending
+
+
 def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
     for member, device in devices.DEVICES.items():
         row = slots.ROWS[member]
@@ -149,12 +189,20 @@ def unopened() -> escrow.Vault:
     raise AssertionError('this push opened the kit, which the row it pushed does not need')
 
 
+@functools.cache
+def ca_pem() -> str:
+    """One certificate authority for the whole file; generating a key is the slow part."""
+    return pki.generate_ca_key()
+
+
 class Vault(escrow.Vault):
     """An escrow that recovers without a key, standing in for the kit's own."""
 
     def recover(self, label: str, generation: int | None = None) -> str:
         assert label in escrow.register() or label.startswith(escrow.BACKUP), label
-        return PASSPHRASE
+        # The CA has to be a real key: the row that recovers it issues a
+        # certificate under it rather than pushing it anywhere.
+        return ca_pem() if label == escrow.CA else PASSPHRASE
 
 
 def opened() -> escrow.Vault:
@@ -172,11 +220,14 @@ def context(
     open_vault: Callable[[], escrow.Vault] = unopened,
     runner: pulumi_config.Runner | None = None,
     ask: Callable[[str], str] | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> slots.Context:
     """A push that reaches nothing real: no kit, no backend, no forge, no terminal."""
+    resolved = dict(environment or {})
     return slots.Context(
         forge=Forge(token='the-account-root', run=gh),
         open_vault=open_vault,
+        open_environment=lambda: resolved,
         runner=runner if runner is not None else RecordedPulumi(),
         ask=ask if ask is not None else typing_in('typed-in'),
     )
@@ -192,6 +243,109 @@ def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
     assert len(pushed) == len(slots.ENVIRONMENTS)
     for environment in slots.ENVIRONMENTS:
         assert gh.values[(REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE')] == PASSPHRASE
+
+
+def pushed_bundle(gh: RecordedGh, environment: str = 'dns') -> dict[str, str]:
+    """The four carriers as they landed in one Environment."""
+    return {name: gh.values[(REPOSITORY, environment, name)] for name in workflow_backend_secrets()}
+
+
+def test_the_client_bundle_is_issued_once_and_split_across_its_carriers() -> None:
+    gh = RecordedGh()
+
+    pushed = slots.sync(
+        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        only='state-backend-certificates',
+    )
+
+    assert len(pushed) == 4 * len(slots.ENVIRONMENTS)
+    carriers = pushed_bundle(gh)
+    # The certificate and the key that opens it come out of a single issuance,
+    # so the two halves have to be a pair. Resolving the row twice would put
+    # halves of two bundles into one Environment, and the box would refuse the
+    # handshake with nothing to say about why.
+    certificate = x509.load_pem_x509_certificate(carriers[slots.BACKEND_CERT].encode())
+    key = serialization.load_pem_private_key(carriers[slots.BACKEND_KEY].encode(), password=None)
+    assert certificate.public_key() == key.public_key()
+    # The Common Name is the Postgres role the box maps the certificate to.
+    assert certificate.subject.rfc4514_string() == 'CN=ci'
+    # No trailing newline on any of them: a secret is stored exactly as it is
+    # piped in, and the action writes it out with a `printf` that appends one.
+    # A carrier that ends in a newline reaches the runner's slot as a file with
+    # two, which is not what a workstation's own bundle looks like.
+    assert not [name for name, carried in carriers.items() if carried != carried.strip()]
+
+
+def test_the_carried_connection_string_names_the_box_and_no_path() -> None:
+    gh = RecordedGh()
+
+    _ = slots.sync(
+        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        only='state-backend-certificates',
+    )
+
+    url = pushed_bundle(gh)[slots.BACKEND_URL]
+    # The `ci` role, the address this workstation's own bundle names, and no
+    # file path: the three certificates are named by the `PGSSL*` variables
+    # `mise.toml` derives from where the runner wrote them, which is what lets
+    # one string serve every machine.
+    assert url.startswith(f'postgres://ci@{APPLIANCE}:')
+    assert 'sslcert=' not in url and 'sslrootcert=' not in url and 'sslkey=' not in url
+
+
+def test_every_environment_receives_the_same_bundle() -> None:
+    gh = RecordedGh()
+
+    _ = slots.sync(
+        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        only='state-backend-certificates',
+    )
+
+    # One issuance fanned out, not one per Environment: five certificates would
+    # be five things to reason about the day a handshake is refused.
+    for environment in slots.ENVIRONMENTS:
+        assert pushed_bundle(gh, environment) == pushed_bundle(gh)
+
+
+def test_pushing_the_bundle_again_issues_a_certificate_rather_than_re_reading_one() -> None:
+    gh = RecordedGh()
+    pushing = context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL})
+
+    _ = slots.sync(pushing, only='state-backend-certificates')
+    first = pushed_bundle(gh)
+    _ = slots.sync(pushing, only='state-backend-certificates')
+    second = pushed_bundle(gh)
+
+    # The leaf key is random at issuance and escrowed nowhere, so a re-push is
+    # a new credential rather than a copy of the one CI holds. Nothing is
+    # retired by it: the CA does not revoke, and it authenticates the CA rather
+    # than a particular leaf, so the predecessor works until it expires.
+    assert second[slots.BACKEND_CERT] != first[slots.BACKEND_CERT]
+    assert second[slots.BACKEND_KEY] != first[slots.BACKEND_KEY]
+    # The CA certificate is re-signed with the same escrowed key, so the chain
+    # a running job already trusts still verifies.
+    authorities = [x509.load_pem_x509_certificate(run[slots.BACKEND_CA].encode()) for run in (first, second)]
+    assert authorities[0].public_key() == authorities[1].public_key()
+
+
+def test_the_bundle_cannot_be_issued_on_a_workstation_that_has_none_itself() -> None:
+    gh = RecordedGh()
+
+    # Which box to issue for is read off this workstation's own bundle, so a
+    # machine with no bundle is told to write one rather than asked to type an
+    # address that could name the wrong appliance.
+    with pytest.raises(SlotRefused, match='no client bundle'):
+        _ = slots.sync(context(gh, open_vault=opened), only='state-backend-certificates')
+
+    assert not gh.values
+
+
+def test_a_backend_url_that_names_no_host_is_refused() -> None:
+    gh = RecordedGh()
+    broken = context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': 'postgres:///pulumi_state'})
+
+    with pytest.raises(SlotRefused, match='names no host'):
+        _ = slots.sync(broken, only='state-backend-certificates')
 
 
 def test_a_push_verifies_through_the_listing_because_the_value_never_comes_back() -> None:
@@ -313,7 +467,7 @@ def test_a_minted_row_refuses_by_naming_the_command_that_delivers_it() -> None:
     row = slots.ROWS['oci-physical']
 
     with pytest.raises(SlotRefused, match='credentials derived oci-physical mint'):
-        _ = row.source.value(context(RecordedGh()))
+        _ = row.resolve(context(RecordedGh()))
 
 
 def test_a_minted_row_is_not_this_command_s_business(caplog: pytest.LogCaptureFixture) -> None:
