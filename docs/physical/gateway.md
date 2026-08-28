@@ -141,10 +141,19 @@ the device being renamed in Central.
 
 All LAN reachability via the UDM member's ZT address, one route per
 subnet: 192.168.70.0/24 (the cluster VLAN), 192.168.80.0/24,
-192.168.90.0/24, 10.0.5.0/24, and the `lan` pool 192.168.71.0/24
-(+ its ULA /64) — the pool is reached through the UDM's own
-BGP-learned route, one hop. The legacy `10.42.0.0/24`-via-VPS
-route is deleted in Wave F. The homelab host advertises nothing.
+192.168.90.0/24, 10.0.5.0/24, and the `lan` pool 192.168.71.0/24 —
+the pool is reached through the UDM's own BGP-learned route, one hop.
+The legacy `10.42.0.0/24`-via-VPS route is deleted in Wave F. The
+homelab host advertises nothing.
+
+**Every managed route is IPv4, and the pool's ULA /64 is deliberately
+not among them.** The overlay assigns no v6 address to any member
+either (`assign_ipv6s` has all three schemes off), and the two facts
+are one decision: the CI confinement rules in §2.3 end in a `drop`
+pair, and a member holding a v6 assignment would have that pair eat
+its own ICMPv6 neighbor discovery. Nothing on the overlay is reachable
+over v6 that is not reachable over v4, so the single-family overlay
+costs nothing and is what makes the confinement complete.
 
 ### 2.3 Flow rules — confining the CI member
 
@@ -307,8 +316,12 @@ The ceremony, four steps and three applies:
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
     that container — and write it into `zerotierMembers.udm.id`.
 3.  **Apply again, knob still set.** The roster now authorizes the
-    member, assigns it `10.144.1.1` and adds the managed routes; the
-    device joins the network it is the router of.
+    member and assigns it `10.144.1.1`; the device joins the network it
+    is the router of. The managed routes are not added here: they are
+    declared on the network resource, so step 1 already wrote them, each
+    `via` `10.144.1.1`. What this step adds is a member at that address
+    — until now the routes named a nexthop nobody answered for, which is
+    all a route to an absent router ever is.
 4.  **Unset the knob and apply once more.** Every client is back on the
     overlay address, so this run dials over ZT — which is the
     verification rather than a formality: it rewrites the estate through

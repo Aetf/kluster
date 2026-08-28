@@ -237,8 +237,12 @@ Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
 hooks; the UDM's **SSH host key is pinned** in provider config — the
 session crosses ZeroTier, and an accept-new first contact would hand
-a MITM root on the gateway) manages the device's entire desired state — FRR/BGP (neighbor =
-the worker VM's IP from the libvirt resource), the nspawn estate
+a MITM root on the gateway) manages the device's entire desired state — FRR/BGP
+(neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
+output of the libvirt resource: the worker's address is written statically into
+its machine config, and everything that names it — the routing session, the
+peer-port forward, day 1's apid dial — reads that same constant, so no session
+depends on a lease), the nspawn estate
 (units + digest-pinned rootfs from homelab-containers CI via
 `GwArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
