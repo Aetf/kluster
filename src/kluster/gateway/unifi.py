@@ -27,12 +27,29 @@ the controller that is not declared here is drift.
     about starts denied in both directions, and a node that cannot leave the
     site cannot reach the control plane it is a member of, so the one policy
     that must exist beside the zone is its way out.
-3.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
+3.  **The cluster zone into the internal one.** Workloads on the nodes
+    initiate toward home services — the home-automation API on the IoT VLAN
+    among them — and that direction is where the recorded dependencies run.
+4.  **The internal zone into the cluster one, minus the IoT VLAN.** The
+    trusted home VLANs keep reaching the nodes directly, because that is the
+    reachability they had before the nodes moved off the untagged LAN. The
+    IoT VLAN does not: the one recorded IoT-originated dependency is a
+    television reaching the media VIP, which is in the pool and not on the
+    node subnet, so a drop ahead of that allow takes the node ports — apid,
+    kubelet, BGP — away from the LAN's least-trusted population without
+    severing anything known. It is the same shape as rule 1 one zone over:
+    the zone stays open, the untrusted subpopulation is carved out.
+5.  **The inbound IPv6 pinhole** for the bulk-transfer application's peer
     port, to the worker VM's global address — now landing in the cluster zone
     rather than the internal one, because that is where the worker moved.
-4.  **The IPv4 peer-port forward** — the only port forward on the device.
+6.  **The IPv4 peer-port forward** — the only port forward on the device.
     Nothing else is published inbound: cluster and node management arrive
     over the cloud load balancer, home-side management over ZeroTier.
+
+Every zone pair that carries a policy also carries a
+`FirewallZonePolicyOrder`: a policy declared without one takes whatever
+position creation happened to produce, and on a pair with both a drop and an
+allow that is the difference between the design and its opposite.
 
 Two facts about the device shape the whole module (physical/gateway.md §4.1,
 measured):
@@ -121,7 +138,7 @@ STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
 
 
 class Firewall(Component):
-    """The cluster's network and zone, two address groups, six rules, one forward."""
+    """The cluster's network and zone, two address groups, ten rules, one forward."""
 
     def __init__(
         self,
@@ -319,6 +336,98 @@ class Firewall(Component):
             source_zone_id=self.zone.id,
             destination_zone_id=external,
             before_predefined_ids=[self.cluster_egress.id],
+            site=site,
+            opts=child,
+        )
+
+        # The cluster zone into the home's. Workload-initiated traffic runs
+        # this way — the home-automation API on the IoT VLAN is the recorded
+        # example — and what a node's own workloads may call is decided where
+        # those workloads are declared, not here. Both families and every
+        # protocol, for the same reason the egress is.
+        self.cluster_internal = unifi.FirewallZonePolicy(
+            f'{name}-cluster-internal',
+            name=f'{name} cluster nodes to internal',
+            description='Cluster workloads may reach home services; the recorded dependencies run this way.',
+            action='ALLOW',
+            ip_version='BOTH',
+            protocol='all',
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=self.zone.id),
+            destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=internal),
+            auto_allow_return_traffic=True,
+            enabled=True,
+            opts=child,
+        )
+        self.cluster_internal_order = unifi.FirewallZonePolicyOrder(
+            f'{name}-cluster-internal-order',
+            source_zone_id=self.zone.id,
+            destination_zone_id=internal,
+            before_predefined_ids=[self.cluster_internal.id],
+            site=site,
+            opts=child,
+        )
+
+        # The way back in, and the one carve-out in it. The IoT VLAN is
+        # dropped ahead of the allow because the node subnet is where apid,
+        # the kubelet and the BGP session live, and the only recorded
+        # IoT-originated dependency — a television reaching the media VIP —
+        # targets the pool instead. Family by family, because the source is a
+        # literal subnet and a literal belongs to one family.
+        self.iot_cluster_v4 = unifi.FirewallZonePolicy(
+            f'{name}-iot-cluster-v4',
+            name=f'{name} IoT to cluster nodes (v4)',
+            description='IoT VLAN may not reach the cluster node subnet.',
+            action='BLOCK',
+            ip_version='IPV4',
+            protocol='all',
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.VLAN_IOT)]),
+            destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
+            enabled=True,
+            opts=child,
+        )
+        self.iot_cluster_v6 = unifi.FirewallZonePolicy(
+            f'{name}-iot-cluster-v6',
+            name=f'{name} IoT to cluster nodes (v6)',
+            description='IoT VLAN may not reach the cluster node subnet.',
+            action='BLOCK',
+            ip_version='IPV6',
+            protocol='all',
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(VLAN_IOT_V6)]),
+            destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
+            enabled=True,
+            opts=child,
+        )
+
+        # Everything else on the internal side keeps the reachability it had
+        # while the nodes shared the untagged LAN: the operator's own machines
+        # debugging a node directly, a ping, a host path that hairpins. What
+        # the move changes is that the openness is now declared.
+        self.internal_cluster = unifi.FirewallZonePolicy(
+            f'{name}-internal-cluster',
+            name=f'{name} internal to cluster nodes',
+            description='Trusted home VLANs may reach the cluster nodes directly.',
+            action='ALLOW',
+            ip_version='BOTH',
+            protocol='all',
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal),
+            destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
+            auto_allow_return_traffic=True,
+            enabled=True,
+            opts=child,
+        )
+
+        # One order for the pair, and on this one the drops come first: an
+        # allow for the whole internal zone declared ahead of them would
+        # answer for the IoT VLAN too and the carve-out would match nothing.
+        self.internal_cluster_order = unifi.FirewallZonePolicyOrder(
+            f'{name}-internal-cluster-order',
+            source_zone_id=internal,
+            destination_zone_id=self.zone.id,
+            before_predefined_ids=[
+                self.iot_cluster_v4.id,
+                self.iot_cluster_v6.id,
+                self.internal_cluster.id,
+            ],
             site=site,
             opts=child,
         )
