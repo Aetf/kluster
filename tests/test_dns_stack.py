@@ -9,6 +9,7 @@ import asyncio
 from typing import Any, cast
 
 import pulumi
+import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -211,6 +212,40 @@ def test_no_record_still_points_at_the_retired_host() -> None:
     contents = {str(inputs.get('content')) for inputs in _all(RECORD).values()}
 
     assert not any('141.212.111.192' in content for content in contents)
+
+
+def test_a_member_missing_from_a_map_that_exists_is_named() -> None:
+    """A partial export is a roster entry configured without an address.
+
+    `str(None)` is a valid record content as far as this program is concerned,
+    so without the guard that entry reaches Cloudflare as the literal `None`
+    and comes back as a rejected record — a failure named after the record
+    instead of after the configuration that is short a value.
+    """
+    from kluster.stacks import dns
+
+    member = 'Aetf-Arch-Homelab'
+    published = {name: address for name, address in ZT_ADDRESSES.items() if name != member}
+
+    with pytest.raises(ValueError, match=member) as absent:
+        _ = dns._member_address(published, member)  # pyright: ignore[reportPrivateUsage]
+
+    # And the export it should have come from, so the reader knows which stack
+    # owes the value rather than only that one is missing.
+    assert dns.OUTPUT_ZT_ADDRESSES in str(absent.value)
+
+
+def test_no_map_at_all_is_not_that_mistake() -> None:
+    """An unapplied `physical` exports nothing, and that is a state, not a bug.
+
+    Declaring the block against it is what lets the two stacks be brought up in
+    the order the migration prescribes, so the guard above must not fire here —
+    `tests/test_dns_unapplied.py` is the same property seen from the program.
+    """
+    from kluster.stacks import dns
+
+    assert dns._member_address(None, 'Aetf-Arch-Homelab') == str(None)  # pyright: ignore[reportPrivateUsage]
+    assert dns._member_address({}, 'Aetf-Arch-Homelab') == str(None)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_no_rewrite_is_declared_while_no_app_declares_a_route() -> None:
