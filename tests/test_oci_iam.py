@@ -785,6 +785,22 @@ def seeded(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> KdbxSt
     return kit
 
 
+@pytest.fixture
+def unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`conventions` before the physical compartment's first mint.
+
+    The recorded OCID is today's fact; these tests exercise the paths that
+    produced it — creation, adoption by name, the announce — which exist for
+    the next consumer whose entry carries no OCID yet.
+    """
+    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    monkeypatch.setitem(
+        conventions.OCI_COMPARTMENTS,
+        conventions.PHYSICAL,
+        conventions.Compartment(consumer=intended.consumer, name=intended.name),
+    )
+
+
 def _compartments(tenancy: Tenancy) -> list[str]:
     return sorted(found.name for found in tenancy.identity.compartments.values())
 
@@ -793,7 +809,9 @@ def _policy(tenancy: Tenancy, name: str) -> list[str]:
     return next(policy.statements for policy in tenancy.identity.policies.values() if policy.name == name)
 
 
-def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(seeded: KdbxStore, tenancy: Tenancy) -> None:
+def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(
+    seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
+) -> None:
     intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
 
     _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
@@ -807,7 +825,7 @@ def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(seede
 
 
 def test_the_ocid_of_a_new_compartment_is_announced_as_the_line_to_commit(
-    seeded: KdbxStore, tenancy: Tenancy, caplog: pytest.LogCaptureFixture
+    seeded: KdbxStore, tenancy: Tenancy, caplog: pytest.LogCaptureFixture, unrecorded: None
 ) -> None:
     with caplog.at_level(logging.WARNING):
         _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
@@ -820,7 +838,9 @@ def test_the_ocid_of_a_new_compartment_is_announced_as_the_line_to_commit(
     assert 'conventions.OCI_COMPARTMENTS' in caplog.text
 
 
-def test_a_compartment_that_is_already_there_is_adopted_by_name(seeded: KdbxStore, tenancy: Tenancy) -> None:
+def test_a_compartment_that_is_already_there_is_adopted_by_name(
+    seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
+) -> None:
     _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
     first = next(iter(tenancy.identity.compartments.values())).id
 
@@ -834,7 +854,7 @@ def test_a_compartment_that_is_already_there_is_adopted_by_name(seeded: KdbxStor
     assert next(iter(tenancy.identity.compartments.values())).id == first
 
 
-def test_a_compartment_being_deleted_is_not_adopted(seeded: KdbxStore, tenancy: Tenancy) -> None:
+def test_a_compartment_being_deleted_is_not_adopted(seeded: KdbxStore, tenancy: Tenancy, unrecorded: None) -> None:
     intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
     going = _named('compartment', intended.name)
     going.lifecycle_state = 'DELETED'
@@ -913,7 +933,9 @@ def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxS
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {drill}']
 
 
-def test_a_mint_converges_the_seeds_own_policy_before_it_acts(seeded: KdbxStore, tenancy: Tenancy) -> None:
+def test_a_mint_converges_the_seeds_own_policy_before_it_acts(
+    seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
+) -> None:
     seed_policy = next(policy for policy in tenancy.identity.policies.values() if policy.name == oci_iam.SEED_NAME)
     # A seed whose policy predates the compartment statement: it can still
     # write policy in the tenancy, which is what makes this self-repairing.
