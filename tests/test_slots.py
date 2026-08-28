@@ -23,6 +23,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
+from test_cli import commands as cli_commands
 
 from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
@@ -36,6 +37,18 @@ PASSPHRASE = 'a-recovered-passphrase'
 #: here can be mistaken for the real box.
 APPLIANCE = '198.51.100.7'
 OPERATOR_URL = f'postgres://operator@{APPLIANCE}:5432/pulumi_state?sslmode=verify-full'
+
+
+def _command_line(argv: list[str]) -> str:
+    """One leaf of the command tree as a `credentials …` line the map may name.
+
+    The walk that produces these fills in whatever a parser insists on, so the
+    options and their placeholder values are dropped: what a map row names is
+    the subcommand, never a particular invocation of it.
+    """
+    words = [word for word in argv if not word.startswith('-') and not word.startswith('placeholder')]
+    return ' '.join(('credentials', *words))
+
 
 #: §3 rows the map deliberately does not carry. Empty, and meant to stay that
 #: way: a credential the register names is a credential something has to
@@ -74,6 +87,24 @@ def test_every_register_row_is_in_the_map() -> None:
     missing = [credential for credential in register_credentials() if credential not in mapped | UNMAPPED]
 
     assert missing == []
+
+
+def test_a_row_the_map_calls_built_is_a_command_the_tree_carries() -> None:
+    # `derived ls` prints each minted row's producer, with an "unbuilt" note
+    # where there is none. An operator reads that as an instruction, so a row
+    # naming a `credentials derived` command it does not carry -- or carrying
+    # one while still calling itself unbuilt -- sends them to a subcommand that
+    # is not there, or away from one that is.
+    tree = {_command_line(argv) for argv in cli_commands()}
+
+    for name, row in slots.ROWS.items():
+        source = row.source
+        if not isinstance(source, slots.Minted) or not source.command.startswith('credentials derived '):
+            continue
+        assert (source.command in tree) == (not source.unbuilt), (
+            f'the map says {name} is {"unbuilt" if source.unbuilt else "built"}, and '
+            f'`{source.command}` {"is" if source.command in tree else "is not"} in the command tree'
+        )
 
 
 def test_the_map_targets_environments_the_forge_stack_declares() -> None:

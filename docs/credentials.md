@@ -418,7 +418,7 @@ by hand.
 | OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
 | Cloudflare token (zones) | CF seed token | DNS edit, estate zones only | Pulumi config secret + CI env | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret | cert-manager |
-| Cloudflare token (gateway ACME) | CF seed token | zone-scoped, gateway's own issuance | gw-config device secret | UDM caddy |
+| Cloudflare token (gateway ACME) | CF seed token | DNS edit on the single zone the gateway's own vhosts are served under | Pulumi config secret (`physical`) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret + CI env | `physical` |
 | B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret · on-box | restic/barman, ops-repo workflow, micro cron |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
@@ -561,6 +561,7 @@ the row name.
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived cloudflare-zones mint` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. |
+| `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the single zone its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
@@ -602,12 +603,12 @@ are the two cases they exist for.
 rows are `credentials derived <row> generate`. A row is implemented when
 its consumer exists: minting a credential
 that has no slot to be delivered into would park a secret, which rule 2
-forbids. Four are delivered today — the zones token, the two OCI keys
-and the B2 management key; the DNS-01 token and the
-gateway's ACME token join them with cert-manager and the gateway. The
-GitHub-secret half of a row is delivered separately, by `credentials
-derived sync` rather than by the row's own command, for the rows whose
-value can be obtained without minting one (below).
+forbids. Five are delivered today — the zones token, the gateway's ACME
+token, the two OCI keys and the B2 management key; the DNS-01 token
+joins them with cert-manager. The GitHub-secret half of a row is
+delivered separately, by `credentials derived sync` rather than by the
+row's own command, for the rows whose value can be obtained without
+minting one (below).
 
 §3's **device rows** are neither minted nor escrowed, so they are
 `credentials derived <row> record`: the command prints the console
