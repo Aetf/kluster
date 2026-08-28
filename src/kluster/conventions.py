@@ -152,25 +152,55 @@ VCN_SUBNET_CIDR = IPv4Network('10.20.0.0/24')
 # Home site: the LAN, the homelab host, the gateway
 # ---------------------------------------------------------------------------
 
-#: The three home VLANs, as the gateway routes them: br0 untagged (the homelab
-#: host, the worker VM and the BGP session), br2 (Home Assistant and its
-#: devices — the LAN's least-trusted population), br5 (containers). Named here
-#: rather than written out at each use because more than one package addresses
-#: them: the ZeroTier managed routes below, the gateway's firewall groups, and
-#: the worker VM's own subnet.
+#: The home subnets the gateway routes, other than the cluster's own below:
+#: the untagged server LAN (the homelab host itself and the LAN's general
+#: population), the IoT VLAN (Home Assistant and its devices — the LAN's
+#: least-trusted population), and the container VLAN. Named here rather than
+#: written out at each use because more than one package addresses them: the
+#: ZeroTier managed routes below and the gateway's firewall census.
+#:
+#: The estate numbers every subnet the gateway serves 192.168.<VLAN id × 10>,
+#: which is why a VLAN id and a third octet are one decision written twice.
 VLAN_SERVER = IPv4Network('192.168.80.0/24')
 VLAN_IOT = IPv4Network('192.168.90.0/24')
 VLAN_CONTAINER = IPv4Network('10.0.5.0/24')
+
+#: The site's unique-local prefix. Each subnet's /64 is numbered after the
+#: third octet of its IPv4 subnet, spelled as those same digits: `:80::` is
+#: the server LAN, `:90::` the IoT VLAN, `:5::` the containers, and the two
+#: below follow it. Unique-local rather than global because the site's
+#: delegated prefix rotates while the things that name these addresses —
+#: firewall rules, resolver rewrites — have to keep matching.
+SITE_ULA = IPv6Network('fd1a:665f:8bcb::/48')
+
+#: The cluster's own VLAN: where every Talos node on this site lives, with
+#: static addressing and no DHCP server (physical/gateway.md §4). A VLAN of
+#: its own rather than a corner of the server LAN, because a population in
+#: its own subnet is one the gateway can name in a policy and a population
+#: sharing the untagged LAN is not.
+CLUSTER_VLAN_ID = 7
+CLUSTER_VLAN_V4 = IPv4Network('192.168.70.0/24')
+CLUSTER_VLAN_V6 = IPv6Network('fd1a:665f:8bcb:70::/64')
+
+#: The gateway's own leg on that VLAN: the nodes' default route, and the
+#: address the BGP session with the worker is held at. It is a decision of
+#: this program rather than a pre-existing site fact — the VLAN is declared
+#: here — so the machine configuration and the gateway both read it from
+#: here instead of from configuration that could disagree.
+CLUSTER_VLAN_GATEWAY_V4 = IPv4Address('192.168.70.1')
 
 #: The homelab worker: one large VM under libvirt on the homelab host, a pure
 #: worker because the control plane is cloud-side (nodes.md §4.2).
 HOMELAB_NODE = 'worker'
 
 #: Its address is a constant rather than a lease: the gateway's FRR names it
-#: as a BGP neighbour, so it is configured statically in machine config on one
-#: side and written into the neighbour statement on the other
-#: (physical/homelab-host.md §2).
-HOMELAB_NODE_IPV4 = IPv4Address('192.168.80.238')
+#: as a BGP neighbour, the peer-port forward sends traffic to it and day 1
+#: dials apid at it, so it is configured statically in machine config on one
+#: side and read from here on the others (physical/homelab-host.md §2).
+#: Nodes number from `.10`; `.1` is the gateway above and `.2` the homelab
+#: host's own leg on the bridge, which is host preparation rather than
+#: anything this program declares.
+HOMELAB_NODE_IPV4 = IPv4Address('192.168.70.10')
 
 #: Every Talos node this program declares.
 ALL_NODES = (*CLOUD_NODES, HOMELAB_NODE)
@@ -181,11 +211,11 @@ ALL_NODES = (*CLOUD_NODES, HOMELAB_NODE)
 #: Growing it is an edit here and a previewed apply.
 HOMELAB_VCPUS = 12
 HOMELAB_MEMORY_GIB = 10
-HOMELAB_DISK_GB = 60
 
-#: The host bridge the worker's tap joins. A second bridge on purpose: the
-#: existing `kvmbr0` enslaves the IoT VLAN, which is where the Home Assistant
-#: domain belongs and where a cluster node does not (physical/homelab-host.md §2).
+#: The host bridge the worker's tap joins, which bridges the cluster VLAN's
+#: tagged subinterface. A second bridge on purpose: the existing `kvmbr0`
+#: enslaves the IoT VLAN, which is where the Home Assistant domain belongs and
+#: where a cluster node does not (physical/homelab-host.md §2).
 HOMELAB_BRIDGE = 'kvmbr1'
 
 #: The account the gateway is configured as. It has no other.
@@ -213,6 +243,14 @@ UNIFI_SITE = 'default'
 #: fight the BGP host routes (architecture.md §3.4, physical/gateway.md §4.1).
 UNIFI_GROUP_LAN_POOL_V4 = 'kluster-lan-pool-v4'
 UNIFI_GROUP_LAN_POOL_V6 = 'kluster-lan-pool-v6'
+
+#: The cluster VLAN as controller-side objects: the network the gateway serves
+#: it as, and the firewall zone that network is alone in. The contrast with the
+#: pool above is the whole point — the VLAN is a network object *so that* it
+#: can be named, and the pool is not one so that it cannot fight the host
+#: routes. Both names are this program's, and both are what the console shows.
+UNIFI_NETWORK_CLUSTER = CLUSTER_NAME
+UNIFI_ZONE_CLUSTER = CLUSTER_NAME
 
 # ---------------------------------------------------------------------------
 # Cluster networking
@@ -246,22 +284,24 @@ POOL_LAN = 'lan'
 #: `serviceSelector` matches on it.
 LB_POOL_LABEL = f'{LABEL_DOMAIN}/lb-pool'
 
-#: The `lan` pool: a dedicated dual-stack subnet, deliberately outside the
-#: LAN's own 192.168.80.0/24, BGP-announced to the UDM (architecture.md §3.4).
-#: The ULA /64 comes out of the site's existing fd1a:665f:8bcb::/48, whose
-#: per-VLAN /64s are numbered after the v4 third octet (:80:: = LAN,
-#: :90:: = IoT, :5:: = container VLAN) — so the pool is :70::.
-LAN_POOL_V4 = IPv4Network('192.168.70.0/24')
-LAN_POOL_V6 = IPv6Network('fd1a:665f:8bcb:70::/64')
+#: The `lan` pool: a dedicated dual-stack subnet, deliberately not a subnet
+#: the gateway serves — not the cluster VLAN the announcing node sits on and
+#: not the server LAN either — BGP-announced to the UDM as host routes
+#: (architecture.md §3.4). It takes the third octet one along from the cluster
+#: VLAN's, and its /64 follows `SITE_ULA`'s numbering from that, so the pool
+#: and the nodes that announce it read as neighbours without ever being one
+#: network.
+LAN_POOL_V4 = IPv4Network('192.168.71.0/24')
+LAN_POOL_V6 = IPv6Network('fd1a:665f:8bcb:71::/64')
 
 #: Fixed VIPs out of the `lan` pool. They are literals rather than
 #: pool-allocated because things outside the cluster name them: the UDM's
 #: IoT→media firewall allow (physical/gateway.md §4.2) and the AdGuard
 #: rewrites' targets (dns.md §3).
-VIP_LAN_V4 = IPv4Address('192.168.70.1')
-VIP_LAN_V6 = IPv6Address('fd1a:665f:8bcb:70::1')
-VIP_MEDIA_V4 = IPv4Address('192.168.70.2')
-VIP_MEDIA_V6 = IPv6Address('fd1a:665f:8bcb:70::2')
+VIP_LAN_V4 = IPv4Address('192.168.71.1')
+VIP_LAN_V6 = IPv6Address('fd1a:665f:8bcb:71::1')
+VIP_MEDIA_V4 = IPv4Address('192.168.71.2')
+VIP_MEDIA_V6 = IPv6Address('fd1a:665f:8bcb:71::2')
 
 #: The `internet` pool holds on-the-wire node addresses — private IPv4s
 #: (OCI 1:1-NATs the public v4, so public literals never match) and v6 GUAs.
@@ -419,9 +459,12 @@ ZT_ROLE_PERSONAL = 0
 ZT_ROLE_INFRA = 1
 ZT_ROLE_CI = 2
 
-#: LAN subnets the UDM member routes for ZT clients.
+#: Home subnets the UDM member routes for ZT clients. The cluster VLAN is here
+#: because a run reaches the worker's machine API over the overlay, and the
+#: pool because that is how a person off-site reaches a cluster service.
 ZT_MANAGED_ROUTES = (
     VLAN_SERVER,
+    CLUSTER_VLAN_V4,
     VLAN_IOT,
     VLAN_CONTAINER,
     LAN_POOL_V4,  # reached via the UDM's BGP-learned route

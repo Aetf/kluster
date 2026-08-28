@@ -297,9 +297,11 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             # this disk needs.
             disks=[libvirt.DomainDiskArgs(volume_id=self.volume.id)],
             cloudinit=self.seed.id,
-            # The second host bridge, on the untagged server LAN. The existing
-            # bridge enslaves the IoT VLAN, which is where the Home Assistant
-            # domain belongs and a cluster node does not.
+            # The second host bridge, which is the one over the cluster VLAN.
+            # The existing bridge enslaves the IoT VLAN, which is where the
+            # Home Assistant domain belongs and a cluster node does not; the
+            # worker reaches its own subnet, its default route and its BGP
+            # peer through this one.
             network_interfaces=[libvirt.DomainNetworkInterfaceArgs(bridge=bridge)],
             # The host is headless, so a serial console is how a machine that
             # fails before apid comes up says why.

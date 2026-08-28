@@ -19,10 +19,11 @@ assigns to the finished instance — the augmented node's secondary private IP �
 would wait on the instance that is waiting on it. Day 1 carries those
 addresses instead, over apid, on top of the configuration the machine booted.
 
-The homelab worker's address runs the other way. Nothing assigns it — the LAN
-offers a lease and this program wants a constant, because the gateway's BGP
-neighbour statement names that constant too — so the worker states its own
-address, and states it in the configuration it boots with.
+The homelab worker's address runs the other way. Nothing assigns it — the
+cluster VLAN it sits on carries no DHCP server at all, by design, because the
+gateway's BGP neighbour statement names that address as a constant — so the
+worker states its own address, and states it in the configuration it boots
+with.
 
 Day-2 is deliberately `talosctl` — upgrades, `upgrade-k8s` and etcd snapshots
 are imperative operations, and wrapping them in fake-declarative command
@@ -82,14 +83,6 @@ ANYWHERE: tuple[str, ...] = ('0.0.0.0/0', '::/0')
 #: characters as the firewall subnet above and a different thing entirely:
 #: there it is who may come in, here it is where everything goes out.
 DEFAULT_ROUTE_V4 = '0.0.0.0/0'
-
-#: The home LAN's router, and so the worker VM's default route. It is the same
-#: box the worker peers with over BGP — that LAN has one router — but the two
-#: are stated separately because they authorize different things: this is
-#: where the node's traffic goes, and `bgp_peers` is who may talk routing to
-#: it. It is needed at all only because the worker's address is static: the
-#: lease that would have carried a default route is the thing being refused.
-HOME_ROUTER_IPV4 = IPv4Address('192.168.80.1')
 
 
 @dataclass(frozen=True)
@@ -227,7 +220,7 @@ class StaticAddress:
     """A node's own addressing on a network that will not hand it out.
 
     `address` carries its prefix rather than being a bare host, because the
-    prefix is what makes the LAN a connected route; `gateway` is the next hop
+    prefix is what makes the subnet a connected route; `gateway` is the next hop
     for everything else.
     """
 
@@ -237,21 +230,21 @@ class StaticAddress:
 
 #: Nodes whose machine configuration has to state their address, because
 #: nothing else will. Only the homelab worker qualifies. A cloud node is
-#: handed its address by the platform it boots on, but the worker is a VM on a
-#: LAN whose only offer is a DHCP lease — and three other places already name
-#: its address as a constant: the gateway's FRR neighbour statement, the
-#: gateway's port forward for the qbittorrent peer port, and day 1's apid
-#: endpoint. A lease would make all three a guess (physical/homelab-host.md
-#: §2).
+#: handed its address by the platform it boots on, but the worker is a VM on
+#: the cluster VLAN, which runs no DHCP server — and three other places
+#: already name its address as a constant: the gateway's FRR neighbour
+#: statement, the gateway's port forward for the qbittorrent peer port, and
+#: day 1's apid endpoint. A lease would make all three a guess
+#: (physical/homelab-host.md §2).
 #:
 #: This is a table rather than a constructor input on purpose. The address is
 #: not a decision a caller makes: a stack free to pass one could tell the
-#: machine an address the router was never told about, which is the failure
+#: machine an address the gateway was never told about, which is the failure
 #: the constant exists to prevent.
 STATIC_ADDRESSES: Mapping[str, StaticAddress] = {
     conventions.HOMELAB_NODE: StaticAddress(
-        address=IPv4Interface(f'{conventions.HOMELAB_NODE_IPV4}/{conventions.VLAN_SERVER.prefixlen}'),
-        gateway=HOME_ROUTER_IPV4,
+        address=IPv4Interface(f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN_V4.prefixlen}'),
+        gateway=conventions.CLUSTER_VLAN_GATEWAY_V4,
     ),
 }
 
@@ -261,7 +254,7 @@ def static_address_patch(static: StaticAddress) -> dict[str, Any]:
 
     The counterpart of `secondary_address_patch` for a machine no platform
     configures on its behalf. Two differences from that one, which are the
-    same decision twice: DHCP is off, and the address carries the LAN's prefix
+    same decision twice: DHCP is off, and the address carries the subnet's prefix
     instead of /32. With no lease there is no subnet route to conflict with,
     and with no subnet route the address has to bring one. The default route
     is then explicit, because carrying it was the lease's other job.
@@ -358,8 +351,8 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         than a machine one, so it is part of what the machine boots with.
 
     A node named in `STATIC_ADDRESSES` also boots with its own address, its
-    LAN's prefix and a default route, rather than with whatever a DHCP server
-    offers it.
+    subnet's prefix and a default route, rather than with whatever a DHCP
+    server offers it.
     """
 
     def __init__(

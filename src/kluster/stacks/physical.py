@@ -85,11 +85,14 @@ async def main() -> None:
         control_plane_nodes=conventions.CLOUD_NODES,
         worker_nodes=(conventions.HOMELAB_NODE,),
         talos_version=talos_version,
-        # Who may open a BGP session with the worker. The gateway's own address
-        # on the server LAN is a site fact — the router held it long before this
-        # program — and scoping the opening to it rather than to the LAN is what
-        # keeps every other host on that LAN out of the routing table.
-        bgp_peers={conventions.HOMELAB_NODE: config.require('gatewayBgpPeer')},
+        # Who may open a BGP session with the worker: the gateway's leg on the
+        # cluster VLAN, as a /32. Scoping the opening to that one address
+        # rather than to the VLAN is what keeps every other node on it out of
+        # the worker's routing table. It is derived rather than configured
+        # because the VLAN and its gateway are this program's own decision
+        # (`conventions`), and a second place to state it is a second place
+        # for it to be wrong.
+        bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN_GATEWAY_V4}/32'},
     )
 
     placements = async_output(lambda: _placements(compartment_id))

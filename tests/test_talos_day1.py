@@ -53,7 +53,7 @@ ENDPOINT = 'https://203.0.113.10:6443'
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='
 KUBECONFIG = 'apiVersion: v1\nkind: Config\n'
 TALOSCONFIG = 'context: kluster\n'
-ADDRESSES = {'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13', 'homelab': '192.168.80.51'}
+ADDRESSES = {'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13', 'homelab': '192.168.70.51'}
 SECONDARY = '10.20.0.42'
 
 
@@ -121,7 +121,7 @@ def build_cluster(**kwargs: Any) -> Any:
 
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
-    kwargs.setdefault('bgp_peers', {'homelab': '192.168.80.1/32'})
+    kwargs.setdefault('bgp_peers', {'homelab': '192.168.70.1/32'})
     return TalosCluster(
         'kluster',
         cluster_name='kluster',
@@ -365,7 +365,7 @@ async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
             if patch.get('kind') == 'NetworkRuleConfig' and BGP_PORT in patch['portSelector']['ports']
         ]
 
-    assert (await bgp_rules('homelab'))[0]['ingress'] == [{'subnet': '192.168.80.1/32'}]
+    assert (await bgp_rules('homelab'))[0]['ingress'] == [{'subnet': '192.168.70.1/32'}]
     for node in ('cp1', 'cp2', 'cp3'):
         assert not await bgp_rules(node)
 
@@ -373,6 +373,6 @@ async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
 @pytest.mark.asyncio
 async def test_a_stranger_cannot_be_named_by_either_component(fake: Fake) -> None:
     with pytest.raises(ValueError, match='BGP peers name nodes that are not in the cluster'):
-        build_cluster(bgp_peers={'nowhere': '192.168.80.1/32'})
+        build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'})
     with pytest.raises(ValueError, match='secondary addresses name nodes that are not in the cluster'):
         build(secondary_addresses={'nowhere': SECONDARY})
