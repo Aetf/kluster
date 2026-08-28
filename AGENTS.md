@@ -83,3 +83,34 @@ A brief carries, and an agent is finished only when it has all of them:
 
 An agent that finishes early does not pick up more work; it reports.
 Scope creep is the failure mode this structure exists to prevent.
+
+### How progress is reported
+
+The ops repository's issues are the work ledger, and GitHub's own
+machinery keeps it true — nothing is reported twice by hand that a
+merge can report once:
+
+-   **Every task is an ops issue** carrying an `area/*` label, a
+    `kind/*` label, and a **milestone** (the roadmap's phases M0–M4
+    plus `Parallel`; the index is the roadmap issue). Issues needing
+    an operator ruling carry `decision`; issues that gate the next
+    milestone carry `blocker`. The project board tracks these issues;
+    labels and milestones are what make its views mean something.
+-   **Dispatch is visible**: the dispatcher adds `in-flight` when a
+    builder starts and the brief names the issue; the label comes off
+    when the pull request merges or the dispatch is abandoned.
+-   **The pull request closes the issue**: its description carries
+    `Closes Aetf/kluster-ops#N` (cross-repository closing works and is
+    the one mechanism that cannot forget), so the merge itself moves
+    the ledger. One pull request may close several issues; an issue
+    only partly addressed is *referenced* without the keyword and kept
+    open with a comment saying what remains.
+-   **Findings become issues, not comments in passing.** An agent's
+    unpredicted discovery — a mismatch, a dead mechanism, a stale
+    document — is filed as its own issue, labeled and put on a milestone (by the
+    dispatcher where the agent lacks standing). The discovery rate of
+    implementation work is the ledger's main source of truth about
+    what is left.
+-   **Corrections edit in place.** A wrong statement in an issue body
+    or comment is fixed where it stands, with an *(edited: …)* note —
+    never a trailing correction the reader must merge themselves.
