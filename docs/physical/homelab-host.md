@@ -60,13 +60,14 @@ So the host network config (aconfmgr-managed systemd-networkd) gains
 three things, in the same change-set that installs the libvirt
 resources (§4):
 
--   an **`enp7s0.7` tagged VLAN interface** on the physical NIC. The
-    path carries it: the host reaches the UDM's port 8 through an
-    unmanaged rack switch, the port's profile allows all tagged VLANs
-    with the server LAN as its native network, and the HAOS domain's
-    own tagged VLAN over `kvmbr0` already proves 802.1Q frames cross
-    the unmanaged switch intact;
--   **`kvmbr1`, a bridge over `enp7s0.7`**, which the worker's tap
+-   a tagged VLAN interface named **`kluster`** (VLAN id 7 on the
+    physical NIC; netdevs carry semantic names in this estate, as the
+    IoT VLAN's `iot` does). The path carries it: the host reaches the
+    UDM's port 8 through an unmanaged rack switch, the port's profile
+    allows all tagged VLANs with the server LAN as its native network,
+    and the HAOS domain's own tagged VLAN over `kvmbr0` already proves
+    802.1Q frames cross the unmanaged switch intact;
+-   **`kvmbr1`, a bridge over `kluster`**, which the worker's tap
     joins. `enp7s0` itself is untouched and keeps carrying the host's
     untagged 192.168.80.x address, so nothing moves and there is no
     connectivity break to schedule;
@@ -112,7 +113,7 @@ A prerequisite the Pulumi program assumes rather than manages (the
 host is not a Pulumi target; the same boundary as the NAS role). Its
 contents, so nothing is discovered mid-bootstrap:
 
--   the `enp7s0.7` VLAN interface, the `kvmbr1` bridge over it, and the
+-   the `kluster` VLAN interface, the `kvmbr1` bridge over it, and the
     host's own 192.168.70.2 leg on that bridge (§2) — `enp7s0` and its
     untagged address are left alone;
 -   the nodatacow subvolume (§1) + a libvirt storage pool pointing at
@@ -134,3 +135,37 @@ contents, so nothing is discovered mid-bootstrap:
 
 The vfio-pci host binding is deliberately *not* here — it lands in the
 Wave C cutover (§3, migration.md).
+
+## 5. NAS access from the cluster: NFS over the host leg
+
+The VM boundary makes some cross-boundary mechanism mandatory: the
+legacy cluster's pods ran on the host that *is* the NAS and reached the
+data by `hostPath`, and a pod inside the worker cannot. Two candidates
+cross that boundary, and **NFS is the one in use**:
+
+-   **Maturity.** Talos grew virtiofs support (`ExternalVolumeConfig`)
+    only in the 1.13 development cycle, and not under SELinux
+    enforcing; the storage path everything media-shaped depends on does
+    not ride a feature that new.
+-   **Volume semantics.** An NFS volume is a *pod-level* mount with its
+    access control on the export line; a virtiofs share is a
+    *node-level* mount consumed through `hostPath`, and it couples the
+    data path into the domain XML — growing the device is a domain
+    redefine, i.e. a downtime window.
+-   **Workload shape.** The NAS traffic is jellyfin, qbittorrent and
+    immich originals — large sequential files. virtiofs's advantage
+    (shared page cache, cheap metadata) lives in small-file territory
+    this workload does not occupy, and virtio-net over an on-box bridge
+    is not the bottleneck.
+
+virtiofs remains the recorded alternative, with criteria: a measured
+metadata bottleneck on NFS (an immich scan, say) *and* the Talos
+support having aged through a stable minor.
+
+NFS's theoretical portability — any node could mount the export — is
+deliberately not available here, twice over: no route exists from a
+cloud node to the host leg (KubeSpan does not carry that subnet, and
+the leg itself has `IPForward=no`), and the export admits exactly
+192.168.70.10. A pod that needs NAS data therefore schedules on the
+worker, and opening a remote path would be an explicit design change
+to both routing and the export — not a side effect of using NFS.
