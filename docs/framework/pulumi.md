@@ -191,71 +191,66 @@ The framework is implemented in the library `src/putils` (stable; verified by
 -   `paio.py`: Handles bridging `asyncio` with Pulumi, including `async_output`
     and `resolve`.
 
-## 3. Layering & Stack Structure
+## 3. Stack Programs
 
-> **Status**: decided 2026-08-22 (interactive review; `dns` added the
-> same day). Five stacks in one project, one environment: the four CI
-> deploys, plus the `github` stack that declares the forge those four
-> are deployed by and is applied by hand. The earlier
-> proposal (infra-homelab / infra-cloud / k8s-base / applications) is
-> superseded: splitting the physical layer by site bought nothing (same
-> change cadence, mutual references), while the apps/base split earned
-> its keep — see the frequency argument below.
+A Pulumi *project* holds several *stacks*, and here they all share one
+Python program. `__main__.py` hands `pulumi.run` an async entrypoint,
+which looks `pulumi.get_stack()` up in a stack-name → program table
+(`kluster.stacks`) and awaits exactly that program; an unknown name
+fails by name rather than quietly declaring nothing. Stack selection is
+the whole dispatch mechanism, so a run can only declare what the
+selected program declares, and no configuration flag widens it. Because
+the entrypoint dispatches rather than declares, a program publishes its
+stack outputs with `pulumi.export` instead of returning a mapping.
 
-### 3.1 The stacks
+Which stacks exist, what each one owns, and where the boundaries
+between them fall are design decisions rather than mechanism:
+[declarative/README.md](../declarative/README.md) §1.
 
-| Stack | Contents | Change cadence |
-| --- | --- | --- |
-| `physical` | OCI: VCN, 3× A1 nodes, NLB, reserved IPs, security lists, block volumes; libvirt: Talos worker VM + adopted HAOS domain; gw-config provider (FRR/BGP, nspawn estate); UniFi firewall rules; Talos machine configs + bootstrap (kubeconfig is an output); B2 buckets + keys | low (~monthly: Talos upgrades, firewall tweaks) |
-| `dns` | Zones + estate records that belong to no app (mail, ZT hosts, verifications, family/alias zones) + the anchors (declarative/dns.md) | low (rare, and independent of the cluster) |
-| `k8s-base` | Everything cluster-scoped speaking the k8s API: Cilium (LB pools, BGP peering, Gateway API, gateways), VolSync, cert-manager, CNPG operator, sealed-secrets controller, VictoriaMetrics + grafana | medium (renovate chart bumps) |
-| `apps` | Every application component: workloads, their namespaces, PVCs, HTTPRoutes/Services, SealedSecrets, **and their DNS records** (CNAMEs to the dns stack's anchors, declared next to the app) | high (the daily driver; ~80–90% of all ups touch only this stack) |
-| `github` | The forge the other four are deployed by: both repositories, the Environments and their gates, branch protection ([github.md](github.md)). The Apps and their installations stay console state, audited rather than declared (github.md §4) | lowest — and the only stack CI does not apply |
+### 3.1 Cross-stack data
 
-Boundary rules:
+A value reaches another stack by one of two routes, and they carry
+different things:
 
--   **The only hard boundary is "exists before the k8s API does"** —
-    that is `physical` vs the rest. The base/apps split is a blast-radius
-    and preview-hygiene boundary: a Cilium upgrade can never ride along
-    inside an app deploy, and app previews don't load the operator
-    machinery.
--   **Conventions are code, not stack outputs.** Gateway names, pool
-    labels, storage-class names and the ZeroTier roster live in a
-    shared `conventions.py` — made possible by giving
-    cross-stack-referenced singletons explicit names (autonaming
-    disabled; see cluster-infra.md §0). A table two stacks decide from
-    belongs there even when only one of them declares resources for it:
-    `physical` admits overlay members by the roster and `dns` publishes
-    the `*.zt` host block from it, so it is stated once rather than
-    imported across a package boundary. Resources that deliberately
-    keep autonaming expose their generated names as stack outputs —
-    dynamic names are machine facts. StackReferences otherwise carry
-    only machine facts: physical's kubeconfig, node IPs, NLB IP, bucket
-    names and `zerotier_addresses` (the overlay address ZeroTier
-    Central assigned each member) — and `dns`'s zone IDs, consumed by
-    `apps` for its co-located records (declarative/dns.md §1).
--   **Namespaces belong to apps**: each app component creates its own
-    namespace (legacy habit preserved); `k8s-base` owns only shared,
-    cluster-scoped infrastructure.
--   **Cross-stack resource dependency (apps need base's CRDs/operators)
-    is not expressible in Pulumi** — deploy order is CI's job
-    ([ci.md](ci.md)).
+-   **A stack output, read through a `StackReference`:**
 
-### 3.2 Cross-Stack Output Reuse
+    ```python
+    import pulumi
 
-`StackReference` for the physical machine facts only:
+    physical = pulumi.StackReference('organization/kluster/physical')
+    kubeconfig = physical.get_output('kubeconfig')
+    ```
 
-```python
-import pulumi
+    This is the only route for a value no program can know before an
+    apply — an identifier the cloud generates, an address it assigns, a
+    credential a resource mints. The cost is that a reader sees
+    whatever the producer published last, so a preview taken before the
+    producer applies previews stale values.
 
-physical = pulumi.StackReference("organization/kluster/physical")
-kubeconfig = physical.get_output("kubeconfig")
-```
+-   **A Python module both programs import.** The value is a literal,
+    so it is concrete during preview and imposes no apply order. It
+    only works for names the program itself chooses: a resource left to
+    Pulumi's autonaming has no literal to share, so either autonaming
+    is disabled and the name becomes shared code, or the generated name
+    travels as a stack output.
+
+Neither route is a dependency Pulumi can schedule. A resource in one
+stack cannot depend on a resource in another, so any ordering the
+resources really need — CRDs before the custom resources that are
+instances of them, an API server before anything that speaks to it —
+belongs to the deployment pipeline ([ci.md](ci.md)).
+
+Which values take which route here is a design decision:
+[declarative/README.md](../declarative/README.md) §2.
 
 ## 4. CRD Types Handling
 
-For custom resources (like Cilium's CRDs), we will continue to use the
-`src/kluster/scripts/update_crds.py` script to generate Python types using
-`crd2pulumi`. This ensures type safety and autocomplete when using CRDs in our
-Pulumi code. The framework will assume these generated types are available in
-the Python path.
+Custom resources are written against generated Python types, so
+declaring one gets the same type checking and completion as declaring a
+built-in resource. The `update_crds` console script
+(`src/kluster/scripts/update_crds/`) renders the pinned chart set to
+collect the CRD schemas without touching a cluster and hands them to
+`crd2pulumi`, which writes the bindings into `packages/crds`; running
+it is the only supported way to change anything under that directory.
+The generated package is excluded from the type-annotation standard the
+handwritten code holds to — it is not ours to annotate.
