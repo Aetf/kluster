@@ -165,7 +165,7 @@ DEVICES: dict[str, Device] = {
             register='UniFi API key',
             title='the UniFi API key',
             stack=PHYSICAL_STACK,
-            holds="the Network API key and the controller's address",
+            holds='the Network API key',
             console=(
                 'The UniFi console → Settings → Admins & Users → Add Admin, as a\n'
                 '  *local* admin rather than a Ubiquiti SSO account: a key inherits\n'
@@ -180,12 +180,11 @@ DEVICES: dict[str, Device] = {
                 '  and re-running this command with a fresh one is the whole of a\n'
                 '  rotation — delete the superseded key on the same page.\n'
                 f'  The controller answers over ZeroTier at https://{conventions.ZT_UDM},\n'
-                '  which is what the API URL below is (physical/gateway.md §2.3).'
+                '  which the stack derives from that same constant — the address is\n'
+                '  not recorded here, so there is no second copy of it to disagree\n'
+                '  (physical/gateway.md §2.3).'
             ),
-            fields=(
-                Field('api-key', 'unifiApiKey', 'the API key the console showed once'),
-                Field('api-url', 'unifiApiUrl', "the controller's base URL", secret=False),
-            ),
+            fields=(Field('api-key', 'unifiApiKey', 'the API key the console showed once'),),
         ),
         Device(
             member='adguard',

@@ -24,7 +24,13 @@ from kluster.scripts.credentials.kdbx import KdbxError
 
 UNIFI = devices.DEVICES['unifi']
 ADGUARD = devices.DEVICES['adguard']
-API_URL = 'https://198.51.100.1'
+ZEROTIER = devices.DEVICES['zerotier']
+NETWORK_ID = '0123456789abcdef'
+
+
+def refuses(prompt: str) -> str:
+    """A plain-value prompt that must never be reached."""
+    raise AssertionError(f'nothing plain should have been asked for, and this was: {prompt}')
 
 
 def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
@@ -91,16 +97,21 @@ def test_every_field_is_addressable_from_the_command_line(member: str) -> None:
 
 
 def test_the_console_steps_are_printed_before_the_value_is_asked_for(
-    tmp_path: Path, typed: None, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     slot, runner = stack(UNIFI.stack)
     asked: list[str] = []
 
-    def watching(_prompt: str) -> str:
+    def watching(_prompt: str = '') -> str:
         asked.append(caplog.text)
-        return API_URL
+        return 'an-api-key'
 
-    _ = devices.deliver(UNIFI, stack=slot, prompt=watching)
+    monkeypatch.setattr('getpass.getpass', watching)
+
+    # The delivery is the key alone: the controller's address is a constant
+    # the consuming stack derives, so a run that asked for it in plain text
+    # would be recording a second copy of something already stated.
+    _ = devices.deliver(UNIFI, stack=slot, prompt=refuses)
 
     # The steps are the register's answer to "where does this come from", and
     # an operator asked for a value before being told where to get it has to go
@@ -108,7 +119,7 @@ def test_the_console_steps_are_printed_before_the_value_is_asked_for(
     (before,) = asked
     for line in UNIFI.console.splitlines():
         assert line.strip() in before
-    assert runner.config['unifiApiUrl'] == API_URL
+    assert runner.config == {'unifiApiKey': 'an-api-key'}
 
 
 def test_the_typed_values_land_in_the_stack_the_row_names(typed: None) -> None:
@@ -123,23 +134,23 @@ def test_the_typed_values_land_in_the_stack_the_row_names(typed: None) -> None:
 
 
 def test_a_secret_field_is_encrypted_and_a_plain_one_is_not(typed: None) -> None:
-    slot, runner = stack(UNIFI.stack)
+    slot, runner = stack(ZEROTIER.stack)
 
-    _ = devices.deliver(UNIFI, stack=slot, given={'api-url': API_URL})
+    _ = devices.deliver(ZEROTIER, stack=slot, given={'network-id': NETWORK_ID})
 
     # Which channel each key takes is the assertion, not merely that the value
-    # arrived: the address is an identifier the committed file may carry in the
-    # clear, and the key it travels with is not.
+    # arrived: the network id is an identifier the committed file may carry in
+    # the clear, and the token it travels with is not.
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
-    assert secret == ['unifiApiKey']
-    assert plain == ['unifiApiUrl']
+    assert secret == ['zerotierApiToken']
+    assert plain == ['zerotierNetworkId']
 
 
 def test_the_stack_is_created_when_the_backend_has_none(typed: None) -> None:
     slot, runner = stack(UNIFI.stack)
 
-    _ = devices.deliver(UNIFI, stack=slot, given={'api-url': API_URL})
+    _ = devices.deliver(UNIFI, stack=slot)
 
     # A workstation that has never selected this stack is the ordinary case at
     # bring-up, so the push cannot assume one exists.
@@ -163,18 +174,18 @@ def test_a_value_in_a_file_is_delivered_without_a_prompt(tmp_path: Path) -> None
     # carrying one can never compare equal to itself on read-back.
     _ = key.write_text('an-api-key\n')
 
-    _ = devices.deliver(UNIFI, stack=slot, given={'api-key': str(key), 'api-url': API_URL})
+    _ = devices.deliver(UNIFI, stack=slot, given={'api-key': str(key)}, prompt=refuses)
 
     # Nothing is patched at `getpass` here: a run that asked for anything would
     # fail rather than pass.
-    assert runner.config == {'unifiApiKey': 'an-api-key', 'unifiApiUrl': API_URL}
+    assert runner.config == {'unifiApiKey': 'an-api-key'}
 
 
 def test_a_value_can_be_piped_in(monkeypatch: pytest.MonkeyPatch) -> None:
     slot, runner = stack(UNIFI.stack)
     monkeypatch.setattr('sys.stdin', io.StringIO('a-piped-key\n'))
 
-    _ = devices.deliver(UNIFI, stack=slot, given={'api-key': devices.STDIN, 'api-url': API_URL})
+    _ = devices.deliver(UNIFI, stack=slot, given={'api-key': devices.STDIN}, prompt=refuses)
 
     assert runner.config['unifiApiKey'] == 'a-piped-key'
 

@@ -387,18 +387,34 @@ def test_a_device_row_takes_no_stack_of_its_own() -> None:
 
 
 def test_what_a_device_run_is_handed_reaches_the_delivery(dispatch: Dispatch, tmp_path: Path) -> None:
-    key = tmp_path / 'api-key'
-    _ = key.write_text('an-api-key\n')
+    token = tmp_path / 'api-token'
+    _ = token.write_text('a-central-token\n')
 
-    assert (
-        cli.main(['derived', 'unifi', 'record', '--api-key-file', str(key), '--api-url', 'https://198.51.100.1']) == 0
-    )
+    assert cli.main(['derived', 'zerotier', 'record', '--api-token-file', str(token), '--network-id', 'abc']) == 0
 
     # A secret is named as a file and a plain field as its value, and both
     # arrive addressed by the field name the table gives them.
     (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'devices.deliver']
     assert not rest
-    assert kwargs['given'] == {'api-key': str(key), 'api-url': 'https://198.51.100.1'}
+    assert kwargs['given'] == {'api-token': str(token), 'network-id': 'abc'}
+
+
+def test_the_controller_row_records_the_key_and_no_address(dispatch: Dispatch, tmp_path: Path) -> None:
+    key = tmp_path / 'api-key'
+    _ = key.write_text('an-api-key\n')
+
+    assert cli.main(['derived', 'unifi', 'record', '--api-key-file', str(key)]) == 0
+
+    (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'devices.deliver']
+    assert not rest
+    assert kwargs['given'] == {'api-key': str(key)}
+
+    # The controller answers at the overlay address this program's own
+    # ZeroTier roster assigns the gateway, which the consuming stack derives.
+    # There is therefore nothing to record it with -- an option to would be
+    # inviting a second copy of a stated constant.
+    with pytest.raises(SystemExit):
+        _ = cli.main(['derived', 'unifi', 'record', '--api-key-file', str(key), '--api-url', 'https://198.51.100.1'])
 
 
 def test_the_passphrase_is_written_to_its_slot_rather_than_redirected(dispatch: Dispatch) -> None:

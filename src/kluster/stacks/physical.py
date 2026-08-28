@@ -177,7 +177,13 @@ def declare_gateway(config: pulumi.Config) -> None:
     )
     gateway.declare_firewall(
         conventions.CLUSTER_NAME,
-        api_url=config.require('unifiApiUrl'),
+        # The same address the estate's SSH goes to, for the same reason: the
+        # controller answers on the gateway's own overlay address, which this
+        # program assigns in the ZeroTier roster above and therefore already
+        # knows (physical/gateway.md §2.3). Recording it beside the API key
+        # would be a second copy of a stated constant, free to disagree with
+        # the roster that decides it.
+        api_url=f'https://{conventions.ZT_UDM}',
         api_key=config.require_secret('unifiApiKey'),
         site=conventions.UNIFI_SITE,
         worker_gua=config.require('workerGua'),
