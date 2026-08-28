@@ -13,7 +13,29 @@ into two Pulumi resources (architecture.md §5.2):
     and where it lands. The bytes are fetched on the runner, checked against the
     pin, and streamed to the device; what state carries is the pin, and what the
     device carries is a marker file beside the payload naming the digest it
-    holds. A preview compares two hashes, never megabytes.
+    holds. A preview compares two hashes, never megabytes. An artifact may also
+    name a directory to `extract` into, for the payloads that are root
+    filesystem archives rather than single files.
+
+**An extracted artifact owns two things on the device**: the archive at
+`target`, and the tree unpacked from it. The tree is derived state -- the push
+puts it there, the push replaces it, and the push takes it away -- so it is
+never edited in place: the archive is unpacked into a sibling staging directory
+and moved into position with two renames, and no moment passes in which a
+half-extracted tree is the one a container boots. The tree it displaced is left
+behind until the *next* push clears it, because at the moment of the swap the
+container is still running on it and has not yet been restarted.
+
+**The digest pins the artifact as published, not the bytes on the wire.** The
+estate's root filesystems are published compressed; the runner verifies the
+downloaded bytes against the pin, decompresses them, and pushes the plain
+archive, because the device cannot be assumed to have a decompressor while `tar`
+is the floor every such system clears. So the chain is: the pin verifies
+what was downloaded, decompression is a function of bytes already verified, the
+session that carries them is pinned by host key, and the markers the device
+keeps record *the pin* -- which is therefore the digest of the published archive
+and not of the file lying beside the marker. A marker is the device's claim
+about provenance, not a checksum of its neighbour.
 
 **Both resources diff against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
@@ -46,6 +68,14 @@ failed create raises, which means the resource is not recorded -- the file may
 already exist on the device, and the retry rewrites the same bytes, both
 operations being idempotent by construction.
 
+An extracted artifact adds two steps inside that order: the tree is replaced
+after the archive lands and *before* the hook, and the marker beside the tree is
+written in that same window. That is what lets a hook notice the tree changed --
+the gateway estate's hook is a script that restarts a container only when a file
+it reads has changed, and a marker written after the hook would be a change the
+hook could never see. The marker beside the archive stays last, because it is
+the claim that the whole sequence succeeded.
+
 Secret-bearing inputs are declared secret: the client private key always, and a
 file's content on request (`secret=True`), for the files that carry device
 credentials. Content is not secret by default, because a secret input renders as
@@ -66,6 +96,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
+import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -74,6 +106,7 @@ from typing import Any, final
 import pulumi
 import pulumi.dynamic as dynamic
 import requests
+import zstandard
 from pulumi.runtime import rpc
 
 from kluster.gateway import ssh
@@ -82,9 +115,13 @@ __all__ = (
     'ADDRESS',
     'ARTIFACT_DECLARED',
     'CREDENTIALS',
+    'EXTRACTING_SUFFIX',
     'FILE_DECLARED',
+    'SUPERSEDED_SUFFIX',
+    'ZSTD_MAGIC',
     'Connection',
     'DigestMismatch',
+    'ExtractFailed',
     'GwArtifact',
     'GwArtifactProvider',
     'GwFile',
@@ -94,7 +131,10 @@ __all__ = (
     'gone',
     'marker_path',
     'open_transport',
+    'plain_archive',
+    'purge_script',
     'secret_outputs',
+    'unpack_script',
 )
 
 #: Where the device answers and as whom the session authenticates. These are
@@ -119,7 +159,7 @@ FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
 #: The same for a `GwArtifact`. The digest is the payload's identity and the URL
 #: is only where the bytes were found, but both are declared, so moving a release
 #: to another mirror is a diff a reviewer sees.
-ARTIFACT_DECLARED = ('url', 'sha256', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
+ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
 
 #: How long the runner may spend fetching an artifact before giving up.
 FETCH_TIMEOUT = 300
@@ -129,6 +169,19 @@ FETCH_TIMEOUT = 300
 #: payload's ownership.
 MARKER_MODE = '0644'
 
+#: The first four bytes of a zstd frame. Recognizing the compression rather than
+#: declaring it keeps one knob off the resource: what the device must receive is
+#: a plain archive either way, and a publisher that stopped compressing would
+#: otherwise turn a working pin into a corrupt one.
+ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
+
+#: Where a tree is assembled before it becomes the live one, and where the tree
+#: it displaced waits to be cleared. Both sit beside the tree rather than in a
+#: temporary directory, so the renames that swap them stay within one filesystem
+#: and are therefore atomic.
+EXTRACTING_SUFFIX = '.kluster-extracting'
+SUPERSEDED_SUFFIX = '.kluster-superseded'
+
 
 @final
 class HookFailed(Exception):
@@ -137,6 +190,17 @@ class HookFailed(Exception):
     def __init__(self, command: str, exit_status: int, stderr: str) -> None:
         super().__init__(f'post-apply hook `{command}` exited {exit_status}: {stderr.strip() or "(no output)"}')
         self.command: str = command
+        self.exit_status: int = exit_status
+        self.stderr: str = stderr
+
+
+@final
+class ExtractFailed(Exception):
+    """Unpacking the payload failed, so the tree the device boots is untouched."""
+
+    def __init__(self, directory: str, exit_status: int, stderr: str) -> None:
+        super().__init__(f'unpacking into {directory} exited {exit_status}: {stderr.strip() or "(no output)"}')
+        self.directory: str = directory
         self.exit_status: int = exit_status
         self.stderr: str = stderr
 
@@ -201,8 +265,63 @@ def fetch(url: str) -> bytes:
     return response.content
 
 
+def plain_archive(data: bytes) -> bytes:
+    """The archive as the device will read it, decompressed here if it arrived so.
+
+    Decompression runs on the runner rather than on the device on purpose. The
+    gateway's user space is the cut-down one a router ships, where a zstd binary
+    is not something a deployment may assume; extracting an uncompressed archive
+    with `tar` is the floor every such system clears. The cost is that the bytes
+    on the device are not the bytes the pin names -- see the module docstring on
+    what the digest verifies and where.
+    """
+    if not data.startswith(ZSTD_MAGIC):
+        return data
+    # `stream_reader` rather than `decompress`: the latter refuses a frame whose
+    # header omits the uncompressed size, which is a legal thing for a
+    # compressor to write and not something a consumer gets to require.
+    with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data), read_across_frames=True) as reader:
+        return reader.read()
+
+
+def unpack_script(archive: str, directory: str) -> str:
+    """The commands that make `directory` the contents of `archive`, atomically.
+
+    Unpacked into a sibling staging directory and moved into place with two
+    renames, so the tree a container boots is either the previous one or the new
+    one and never a partial one. What the swap displaced is left as a sibling
+    too: the container is still running on those files at this point in the
+    sequence -- the hook that restarts it has not run yet -- so it is cleared at
+    the start of the *next* push instead, along with any staging directory a
+    failed run left behind.
+    """
+    quoted_archive, quoted_directory = shlex.quote(archive), shlex.quote(directory)
+    staging = shlex.quote(f'{directory}{EXTRACTING_SUFFIX}')
+    superseded = shlex.quote(f'{directory}{SUPERSEDED_SUFFIX}')
+    return ' && '.join(
+        (
+            f'rm -rf {staging} {superseded}',
+            f'mkdir -p {staging}',
+            f'tar -xf {quoted_archive} -C {staging}',
+            f'if [ -e {quoted_directory} ]; then mv {quoted_directory} {superseded}; fi',
+            f'mv {staging} {quoted_directory}',
+        )
+    )
+
+
+def purge_script(directory: str) -> str:
+    """The command that removes a tree and every sibling the swap uses."""
+    paths = (directory, f'{directory}{EXTRACTING_SUFFIX}', f'{directory}{SUPERSEDED_SUFFIX}')
+    return 'rm -rf ' + ' '.join(shlex.quote(path) for path in paths)
+
+
 def marker_path(target: str) -> str:
-    """Where the digest of the payload at `target` is recorded on the device."""
+    """Where the digest of the payload at `target` is recorded on the device.
+
+    A tree gets one of these too, beside it rather than inside it: a file the
+    push wrote into the tree would be a file inside the container's root
+    filesystem, and the tree is the image, not the estate's bookkeeping.
+    """
     return f'{target}.digest'
 
 
@@ -400,7 +519,7 @@ class GwArtifactProvider(dynamic.ResourceProvider):
     """A digest-pinned payload on the device, tracked by a marker file."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        failures = [*_absolute(news, 'target'), *_octal(news, 'mode')]
+        failures = [*_absolute(news, 'target'), *_absolute(news, 'extract'), *_octal(news, 'mode')]
         sha256 = news.get('sha256')
         if sha256 is not None and not is_unknown(sha256) and not _is_sha256(str(sha256)):
             failures.append(dynamic.CheckFailure('sha256', f'must be a hex SHA-256 digest, got {sha256!r}'))
@@ -438,31 +557,51 @@ class GwArtifactProvider(dynamic.ResourceProvider):
         actual = hashlib.sha256(data).hexdigest()
         if actual != expected:
             raise DigestMismatch(url, expected, actual)
-        run_sync(self._land(props, data, actual))
+        # Decompressed only after the pin has been checked, so what is unpacked
+        # is a function of bytes this runner has already vouched for.
+        payload = plain_archive(data) if _extract(props) else data
+        run_sync(self._land(props, payload, actual))
 
     async def _land(self, props: Mapping[str, Any], data: bytes, digest: str) -> None:
         target = str(props['target'])
+        tree = _extract(props)
         async with open_transport(device(props)) as transport:
             await transport.write(target, data, mode=str(props['mode']), owner=_owner(props))
+            if tree:
+                await self._unpack(transport, target, tree)
+                # Before the hook, because the hook is what notices: the estate's
+                # hook restarts a container when a file it reads has changed, and
+                # this marker is that file.
+                await _mark(transport, tree, digest)
             await run_hook(transport, props)
             # Written last, and only once everything else has succeeded: the
             # marker is the claim that this device holds these bytes and has
             # acted on them.
-            await transport.write(marker_path(target), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
+            await _mark(transport, target, digest)
+
+    async def _unpack(self, transport: ssh.Transport, archive: str, directory: str) -> None:
+        result = await transport.run(unpack_script(archive, directory))
+        if not result.ok:
+            raise ExtractFailed(directory, result.exit_status, result.stderr)
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         target = str(props['target'])
+        tree = _extract(props)
+        pinned = str(props['sha256']).lower()
         async with open_transport(device(props)) as transport:
             stat = await transport.stat(target)
             if stat is None:
                 return True
             if not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat):
                 return True
+            if tree and not await _tree_holds(transport, tree, pinned):
+                return True
             marker = await transport.read(marker_path(target))
-            return marker is None or marker.decode(errors='replace').strip() != str(props['sha256']).lower()
+            return marker is None or marker.decode(errors='replace').strip() != pinned
 
     async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
         target = str(props['target'])
+        tree = _extract(props)
         async with open_transport(device(props)) as transport:
             stat = await transport.stat(target)
             marker = None if stat is None else await transport.read(marker_path(target))
@@ -470,9 +609,14 @@ class GwArtifactProvider(dynamic.ResourceProvider):
                 # A payload with no marker is a payload of unknown provenance,
                 # which is the same situation as no payload at all.
                 return gone()
+            claimed = marker.decode(errors='replace').strip()
+            if tree and not await _tree_holds(transport, tree, claimed):
+                # The archive alone is not the resource: what the estate runs is
+                # the tree, and a tree someone removed is a resource to create.
+                return gone()
             outs = {
                 **props,
-                'sha256': marker.decode(errors='replace').strip(),
+                'sha256': claimed,
                 'mode': stat.mode,
                 'owner': _observed_owner(props.get('owner'), stat),
             }
@@ -480,9 +624,13 @@ class GwArtifactProvider(dynamic.ResourceProvider):
 
     async def _delete(self, props: Mapping[str, Any]) -> None:
         target = str(props['target'])
+        tree = _extract(props)
         async with open_transport(device(props)) as transport:
             await transport.remove(marker_path(target))
             await transport.remove(target)
+            if tree:
+                await transport.remove(marker_path(tree))
+                _ = await transport.run(purge_script(tree))
             await run_hook(transport, props)
 
 
@@ -541,6 +689,7 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
     url: pulumi.Output[str]
     sha256: pulumi.Output[str]
     target: pulumi.Output[str]
+    extract: pulumi.Output[str | None]
     mode: pulumi.Output[str]
     owner: pulumi.Output[str | None]
     hook: pulumi.Output[str | None]
@@ -553,6 +702,7 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
         url: pulumi.Input[str],
         sha256: pulumi.Input[str],
         target: pulumi.Input[str],
+        extract: pulumi.Input[str] | None = None,
         mode: pulumi.Input[str] = '0644',
         owner: pulumi.Input[str] | None = None,
         hook: pulumi.Input[str] | None = None,
@@ -563,6 +713,13 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
         The bytes never enter state: `url` is fetched on the runner at apply
         time, checked against `sha256`, and streamed to the device, which keeps a
         marker beside the payload naming what it holds.
+
+        `extract` names a directory the payload is unpacked into, for an archive
+        rather than a single file, and the resource owns that directory: it
+        replaces it whole on a new pin and removes it on a delete. Only `target`
+        is a replacement, so a caller that moves the tree is expected to move the
+        archive with it -- both are named after the same thing, and a tree left
+        at the old path would be an orphan nothing declares.
         """
         super().__init__(
             GwArtifactProvider(),
@@ -572,6 +729,7 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
                 'url': url,
                 'sha256': sha256,
                 'target': target,
+                'extract': extract,
                 'mode': mode,
                 'owner': owner,
                 'hook': hook,
@@ -585,6 +743,30 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
 
 def _identifier(props: Mapping[str, Any], location: str) -> str:
     return f'{props["username"]}@{props["host"]}:{props["port"]}{location}'
+
+
+def _extract(props: Mapping[str, Any]) -> str | None:
+    """The directory this artifact is unpacked into, if it is unpacked at all."""
+    directory = props.get('extract')
+    return str(directory) if directory else None
+
+
+async def _mark(transport: ssh.Transport, location: str, digest: str) -> None:
+    """Record which published artifact the payload or tree at `location` came from."""
+    await transport.write(marker_path(location), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
+
+
+async def _tree_holds(transport: ssh.Transport, directory: str, digest: str) -> bool:
+    """Whether the device has a tree at `directory` unpacked from `digest`.
+
+    Both halves are asked about, because either can be false on its own: a
+    firmware update takes the tree and leaves nothing, and a marker naming
+    another digest is a tree from a pin nobody declares any more.
+    """
+    if await transport.stat(directory) is None:
+        return False
+    marker = await transport.read(marker_path(directory))
+    return marker is not None and marker.decode(errors='replace').strip() == digest
 
 
 def _owner(props: Mapping[str, Any]) -> str | None:

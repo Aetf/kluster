@@ -13,7 +13,10 @@ file, and the relationships between them are the design:
     digest, a unit that runs it under `systemd-nspawn`, and the files the
     container reads. The root filesystems are built by another repository's
     continuous integration and travel as a URL and a digest — never as bytes in
-    state — so a preview compares two hashes rather than megabytes.
+    state — so a preview compares two hashes rather than megabytes. They are
+    published as archives, so the pinned artifact lands as a tarball and the
+    push unpacks it into a per-member tree the unit boots with `--directory=`;
+    the tree is the push's to replace and never the container's to keep.
 -   **The recovery script**, under `on_boot.d`. This is the piece that makes the
     estate survive a firmware update with nothing else present: it installs the
     units, retires the ones the estate no longer declares, and starts what is
@@ -76,6 +79,7 @@ __all__ = (
     'IMAGE_DIR',
     'MAX_PREFIXES',
     'ON_BOOT_SCRIPT',
+    'ROOT_DIR',
     'SECRET_DIR',
     'STATE_DIR',
     'UNIT_DIR',
@@ -90,6 +94,7 @@ __all__ = (
     'on_boot_script',
     'parse_addresses',
     'parse_rootfs',
+    'root_path',
     'unit_file',
     'unit_name',
 )
@@ -101,7 +106,14 @@ __all__ = (
 #: The estate's root. Everything below it survives a firmware update because
 #: `/data` does; everything outside it is re-materialized from here at boot.
 ESTATE_ROOT = f'{conventions.GW_DATA_ROOT}/estate'
+#: The pinned artifacts as they are published: one root filesystem tarball per
+#: member, with the digest marker the artifact resource keeps beside each.
 IMAGE_DIR = f'{ESTATE_ROOT}/images'
+#: The trees unpacked from those tarballs, which are what the units boot. A tree
+#: is derived state the push owns: it is replaced whole when the pin moves and
+#: nothing in it is worth keeping, which is why per-container writable state is
+#: bind-mounted from `STATE_DIR` instead of living here.
+ROOT_DIR = f'{ESTATE_ROOT}/roots'
 UNIT_DIR = f'{ESTATE_ROOT}/units'
 CONFIG_DIR = f'{ESTATE_ROOT}/config'
 SECRET_DIR = f'{ESTATE_ROOT}/secrets'
@@ -132,7 +144,9 @@ UNIT_PREFIX = 'kluster-'
 SCRIPT_MODE = '0755'
 CONFIG_MODE = '0644'
 SECRET_MODE = '0600'
-#: A root filesystem is not secret, but it is also nobody's to read.
+#: A root filesystem is not secret, but it is also nobody's to read. This is the
+#: mode of the tarball; what the tree gets is whatever the archive carries, which
+#: is the container's own idea of its permissions and not the estate's.
 IMAGE_MODE = '0600'
 
 # ---------------------------------------------------------------------------
@@ -164,7 +178,14 @@ VHOST_ADGUARD = {'adguard-alice': f'alice.{conventions.ZONE_PRIMARY}', 'adguard-
 #: digest bump replaces the software and keeps the configuration; and the name
 #: the estate delivers its seed under, which is deliberately not the name the
 #: instance reads, so that delivering one can never overwrite the other.
-ADGUARD_STATE = '/opt/adguardhome/work'
+#:
+#: The working directory is the image's, not a path of this program's choosing:
+#: the resolver is started with `-w /data/adguard -c /data/adguard/AdGuardHome.yaml`
+#: and its installation lives at `ADGUARD_INSTALL`, which the tree carries and a
+#: digest bump replaces. Splitting them that way is what makes the software
+#: disposable and the configuration durable, so the bind lands on the state half.
+ADGUARD_STATE = '/data/adguard'
+ADGUARD_INSTALL = '/opt/AdGuardHome'
 ADGUARD_SEED = 'AdGuardHome.seed.yaml'
 
 #: Where caddy reads the zone-scoped token it answers DNS-01 challenges with.
@@ -271,7 +292,13 @@ def unit_name(container: str) -> str:
 
 
 def image_path(container: str) -> str:
-    return f'{IMAGE_DIR}/{container}.raw'
+    """Where the member's root filesystem tarball lands, as published."""
+    return f'{IMAGE_DIR}/{container}.tar'
+
+
+def root_path(container: str) -> str:
+    """The tree unpacked from that tarball, which is what the unit boots."""
+    return f'{ROOT_DIR}/{container}'
 
 
 def state_path(container: str) -> str:
@@ -363,6 +390,13 @@ def unit_file(container: Container) -> str:
     so host networking is the *absence* of a bridge argument rather than a flag
     — which is why the ZeroTier member is described by having no address rather
     than by a switch.
+
+    The root is a directory rather than a filesystem image because that is the
+    shape the pins arrive in: the artifacts are root filesystem tarballs, and
+    `--image=` boots a partitioned or filesystem image, not an archive. Turning
+    one into the other on the device would mean building a filesystem and
+    loop-mounting it there; unpacking it is the same information with none of
+    the machinery.
     """
     command = [
         '/usr/bin/systemd-nspawn',
@@ -370,7 +404,7 @@ def unit_file(container: Container) -> str:
         '--keep-unit',
         '--boot',
         f'--machine={container.name}',
-        f'--image={image_path(container.name)}',
+        f'--directory={root_path(container.name)}',
     ]
     if not container.host_network:
         command.append(f'--network-bridge={CONTAINER_BRIDGE}')
@@ -475,8 +509,11 @@ def adguard_seed(address: IPv4Address) -> str:
     its API, and the `dns` stack writes the split-horizon rewrites that way. So
     the estate declares what the instance needs in order to exist at all —
     where it listens, what it forwards to — and the recovery script installs it
-    only where there is no configuration, which is the state of a container
-    whose image was just replaced.
+    only where there is no configuration. That is the state of a member whose
+    working directory the device has never held: a new instance, or a device
+    rebuilt from nothing. Replacing the root filesystem is not such a moment,
+    because the working directory is bind-mounted from the device and survives
+    the tree that is thrown away with it.
     """
     upstreams = '\n'.join(f'    - {upstream}' for upstream in ADGUARD_UPSTREAMS)
     return '\n'.join(
@@ -586,14 +623,14 @@ seed_state() {{
 install -d "$SYSTEMD" "$STATE"
 
 # What is declared *and* has landed. A deployment writes this script before the
-# files it describes, so a member whose unit or image is still missing is a
-# member this run has nothing to do about -- not an error, and not a reason to
-# leave the rest unconverged.
+# files it describes, so a member whose unit or root filesystem tree is still
+# missing is a member this run has nothing to do about -- not an error, and not
+# a reason to leave the rest unconverged.
 READY=""
 for unit in $DECLARED; do
     [ -e "$UNITS/$unit" ] || continue
     machine=${{unit#{UNIT_PREFIX}}}
-    [ -e "{IMAGE_DIR}/${{machine%.service}}.raw" ] || continue
+    [ -d "{ROOT_DIR}/${{machine%.service}}" ] || continue
     install -m {CONFIG_MODE} "$UNITS/$unit" "$SYSTEMD/$unit"
     READY="$READY $unit"
 done
@@ -640,14 +677,18 @@ done
 def _stamp_inputs(container: Container) -> tuple[str, ...]:
     """The files whose contents decide whether a container must be restarted.
 
-    The image is represented by its digest marker rather than by itself: the
-    marker is a line of text the artifact resource writes beside the payload,
-    and reading a root filesystem to notice it is unchanged would cost more
-    than the restart.
+    The root filesystem is represented by the digest marker beside its *tree*
+    rather than by the tree itself: the marker is a line of text the artifact
+    resource writes once the tree is in place, and walking a root filesystem to
+    notice it is unchanged would cost more than the restart. The tree's marker
+    rather than the tarball's, because the tarball's is written after this
+    script has already run — it is the claim that the push as a whole
+    succeeded, and a container that waited for it would learn of a new root
+    filesystem one deployment late.
     """
     return (
         f'{UNIT_DIR}/{unit_name(container.name)}',
-        f'{image_path(container.name)}.digest',
+        f'{root_path(container.name)}.digest',
         *(dropin_path(container.name, dropin) for dropin in container.files),
     )
 
@@ -752,15 +793,22 @@ def census(
             state=ADGUARD_STATE,
             files=(
                 Dropin(name='host0.network', target=HOST0_CONFIG, content=host0_network(addresses[instance])),
+                # Read-only beside the installation rather than in the working
+                # directory: the working directory is where the live
+                # configuration goes, and a seed delivered into it would be a
+                # second file the instance might one day decide to read.
                 Dropin(
                     name=ADGUARD_SEED,
-                    target=f'/opt/adguardhome/seed/{ADGUARD_SEED}',
+                    target=f'{ADGUARD_INSTALL}/{ADGUARD_SEED}',
                     content=adguard_seed(addresses[instance]),
                 ),
             ),
             # The live configuration is the instance's own: it rewrites the
             # file whenever the `dns` stack adds a rewrite through its API. So
             # the seed is placed once, into a work directory that has none.
+            # `into` is relative to the state directory the estate keeps on the
+            # device, which is bind-mounted at `ADGUARD_STATE` -- so the seed
+            # lands at exactly the path the instance is started with.
             seed=Seed(source=ADGUARD_SEED, into='AdGuardHome.yaml'),
         )
         for instance in sorted(VHOST_ADGUARD)
@@ -835,6 +883,7 @@ class Estate(Component):
                 url=container.rootfs.url,
                 sha256=container.rootfs.sha256,
                 target=image_path(container.name),
+                extract=root_path(container.name),
                 mode=IMAGE_MODE,
                 owner=conventions.GW_SSH_USER,
                 hook=ON_BOOT_HOOK,

@@ -33,7 +33,18 @@ declarative/physical.md §4.
     legible at a glance.
 -   **nspawn estate** (units + digest-pinned rootfs pushed by the
     gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
-    **ZeroTier member container** (§2) as the fourth member.
+    **ZeroTier member container** (§2) as the fourth member. A pin
+    names a published root filesystem **archive**: the runner verifies
+    its digest and decompresses it, the push unpacks it into a
+    per-member directory tree, and the unit boots that tree with
+    `systemd-nspawn --directory=`. The tree is derived state the push
+    replaces whole and never edits, so nothing worth keeping lives in
+    it — a member's writable state is bind-mounted from `/data`
+    instead, which is also what makes a rootfs bump a software swap
+    rather than a new identity. Decompressing on the runner rather
+    than on the device is deliberate: the box's userland is the
+    cut-down one a router ships, where `tar` can be relied on and a
+    zstd binary cannot.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.

@@ -377,6 +377,7 @@ unifios-utilities
 un-NATed
 unprotect
 URNs
+userland
 uv
 vchord
 VCN
@@ -416,6 +417,7 @@ ZeroTier
 ZeroTierOne
 ZFS-over-JBOD
 Zincati
+zstd
 zt
 ZT
 ZT-forwarded
