@@ -214,8 +214,8 @@ def test_a_run_reaches_four_destinations_and_each_of_them_in_both_directions() -
     expected = [
         (f'{conventions.ZT_UDM}/32', zerotier.SSH_PORT),
         (f'{conventions.ZT_UDM}/32', zerotier.UNIFI_API_PORT),
-        (f'{ADGUARD[0]}/32', zerotier.ADGUARD_API_PORT),
-        (f'{ADGUARD[1]}/32', zerotier.ADGUARD_API_PORT),
+        (f'{ADGUARD[0]}/32', conventions.ADGUARD_API_PORT),
+        (f'{ADGUARD[1]}/32', conventions.ADGUARD_API_PORT),
         (f'{HOMELAB_ZT}/32', zerotier.SSH_PORT),
     ]
     for destination, port in expected:

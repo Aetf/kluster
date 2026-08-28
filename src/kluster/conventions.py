@@ -246,6 +246,15 @@ GW_ON_BOOT_D = f'{GW_DATA_ROOT}/on_boot.d'
 #: for the gateway to route through it (architecture.md §5.3).
 GW_ESTATE = ('caddy', 'adguard-alice', 'adguard-bob', 'zerotier')
 
+#: AdGuard Home's administration and API port. Three declarations meet on it:
+#: the caddy vhost that proxies each instance's interface, the seed that tells
+#: the instance where to listen, and the ZeroTier flow rule that admits a
+#: continuous-integration member to exactly that port so the `dns` stack can
+#: write its rewrites. It is a convention rather than a constant each of them
+#: keeps, because the three are free to disagree and the failure is a resolver
+#: that answers nothing anyone asked it.
+ADGUARD_API_PORT = 3000
+
 #: The controller site the UniFi resources are declared in. `default` is the
 #: internal name whatever the site is labelled in the interface.
 UNIFI_SITE = 'default'

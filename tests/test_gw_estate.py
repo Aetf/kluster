@@ -298,7 +298,7 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     assert environment[estate.ENV_IPV6_TOKEN] == f'::{address}'
 
     seed = estate.adguard_seed(ADDRESSES['adguard-alice'])
-    assert f'{ADDRESSES["adguard-alice"]}:{estate.ADGUARD_API_PORT}' in seed
+    assert f'{ADDRESSES["adguard-alice"]}:{conventions.ADGUARD_API_PORT}' in seed
     for upstream in estate.ADGUARD_UPSTREAMS:
         assert upstream in seed
     assert len(estate.ADGUARD_UPSTREAMS) > 1
@@ -317,7 +317,7 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     assert rendered.count(f'dns cloudflare {{file.{estate.CADDY_TOKEN_PATH}}}') == 3
     for instance, name in estate.VHOST_ADGUARD.items():
         assert name in rendered
-        assert f'http://{ADDRESSES[instance]}:{estate.ADGUARD_API_PORT}' in rendered
+        assert f'http://{ADDRESSES[instance]}:{conventions.ADGUARD_API_PORT}' in rendered
     # The console presents its own certificate to the proxy and the name that
     # matters is the one the client asked for, which Caddy forwards unchanged.
     assert 'tls_insecure_skip_verify' in rendered
