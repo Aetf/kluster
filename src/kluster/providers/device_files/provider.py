@@ -170,10 +170,13 @@ __all__ = (
 ADDRESS = ('host', 'port', 'username')
 
 #: The key the device must present. Declared like the address and for the same
-#: reason: it is a public key the caller decides on, it belongs in a preview
-#: where a reviewer can read it, and a provider has no way to reach the caller's
-#: decisions for itself. The credential that answers it goes the other way --
-#: `PRIVATE_KEY_CONFIG`, read in `configure` and declared by nobody.
+#: reason: it is the caller's decision, and a provider has no way to reach the
+#: caller's decisions for itself. A public key by nature, so a pin a reviewer can
+#: read is the intended end state -- but the stack program supplies it as a
+#: secret-typed configuration value today, and secretness travels with the value,
+#: so a preview redacts it until the pin moves into `conventions` (rfc-002 §11).
+#: The credential that answers it goes the other way -- `PRIVATE_KEY_CONFIG`,
+#: read in `configure` and declared by nobody.
 PIN = ('host_key',)
 
 #: What a `DeviceFile` declares beyond its own path.
@@ -282,11 +285,13 @@ class DigestMismatch(Exception):
 class Connection:
     """Where and as whom to write, and the key the device must present.
 
-    Everything here is public and everything here is a caller's decision, which
-    is why it travels as resource inputs. `host_key` is the pin, and it is
+    Everything here is a caller's decision, which is why it travels as resource
+    inputs, and none of it is a credential. `host_key` is the pin, and it is
     required: there is no shape of this object that means "trust whatever
-    answers". The credential the session authenticates with is not here at all --
-    it is `PRIVATE_KEY_CONFIG`, read in the provider's own process.
+    answers". It is a public key that the program hands over as a secret-typed
+    value, so a preview redacts it for now (see `PIN`). The credential the
+    session authenticates with is not here at all -- it is
+    `PRIVATE_KEY_CONFIG`, read in the provider's own process.
     """
 
     host: pulumi.Input[str]
@@ -528,6 +533,11 @@ class DeviceProvider(dynamic.ResourceProvider, abc.ABC):
         property whose change is a visible diff (rfc-002 §7.5 E8). Nothing a
         caller declares would show a credential rotation or a change to this
         module.
+
+        A preview may hand this an endpoint that is still a placeholder, which
+        the rendered session string then carries. Nothing reads it: the raw
+        property is in the bag too, so `diff` answers "unknown" before any
+        comparison of the stamps happens.
         """
         return dynamic.CheckResult({**news, SESSION: self._session(news), PROVIDER_VERSION: VERSION}, failures)
 

@@ -77,9 +77,11 @@ class Gateway(Component):
 
         `host_key` is the pinned SSH host key: a bare `ssh-ed25519 <blob>` line
         with no host name in front of it, so it matches the device at whichever
-        address the session dials. It is a public key and travels as an ordinary
-        input, where a preview shows it and a reviewer can check it. The client
-        credential that answers it is not a parameter here at all.
+        address the session dials. A public key by nature, and a pin is worth
+        more when a reviewer can read it — but the stack program supplies it as
+        a secret-typed configuration value, so previews redact it until the pin
+        moves into `conventions` (rfc-002 §11). The client credential that
+        answers it is not a parameter here at all.
 
         `worker_gua` is the worker VM's global IPv6 address: the one firewall
         rule that cannot be written against a stable object, because the
