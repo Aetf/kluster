@@ -149,9 +149,9 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
 def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
     """Two things the gateway's entry must say on the day the ceremony adds it.
 
-    The estate's SSH, the controller's API and every managed route's next hop
-    all derive from `ZT_UDM`, so an entry at any other address would point all
-    three somewhere the member is not. And the gateway is infrastructure: an
+    The device's SSH, the controller's API and every managed route's next hop
+    all derive from `conventions.overlay.UDM`, so an entry at any other address
+    would point all three somewhere the member is not. And the gateway is infrastructure: an
     entry carrying the permissive default role would put the box every route
     runs through on the same footing as a phone. The entry is absent until the
     ceremony reads the minted node id and adds it (physical/gateway.md §2.5),
@@ -322,8 +322,8 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
     That is what lets the gateway be absent during a first bring-up with no
     relaxation to switch on: there is no configured mapping the roster could
     be short against, so an entry that has not been written yet declares
-    nothing and costs nothing. The routes name `ZT_UDM` as their next hop
-    either way — a route to a router that has not joined yet is the ordinary
+    nothing and costs nothing. The routes name the gateway's overlay address
+    as their next hop either way — a route to a router that has not joined yet is the ordinary
     state of a bring-up.
     """
     declared_members = {name for typ, name, _ in declared if typ == 'zerotier:index/member:Member'}

@@ -14,6 +14,7 @@ which is where a wiring mistake would surface.
 from __future__ import annotations
 
 import asyncio
+import re
 from ipaddress import IPv4Address
 from typing import Any, cast
 
@@ -419,22 +420,38 @@ def test_a_service_is_restarted_only_when_something_it_reads_changed() -> None:
     assert 'cksum' in script
 
 
+def stamped_arms(script: str) -> dict[str, set[str]]:
+    """What the rendered script checksums, per unit, read back out of it.
+
+    The stamped set reaches the device as one shell `case` arm per unit, and
+    that text is the only thing the device acts on — so the case is read as the
+    device reads it rather than through the property that produced it.
+    """
+    return {
+        unit: set(paths.split())
+        for unit, paths in re.findall(r'^\s*(\S+\.service)\) stamped="([^"]*)" ;;$', script, re.MULTILINE)
+    }
+
+
 def test_the_stamped_sets_are_the_children_and_nothing_else(stack: services.DeviceServices) -> None:
-    """A stamp cannot name a file no resource declares.
+    """A stamp cannot name a file no resource declares, or miss one that does.
 
     The script is rendered from the same declarations the containers are built
-    from, so the two cannot drift: every path the script checksums belongs to a
-    file this component declares, and every service the device is told to run
-    is one of these children.
+    from, so what the device checksums for a service is exactly the files that
+    service's component declares — no extra path a hand-written case arm could
+    add, and none dropped. Set equality both ways is the whole claim: a path in
+    the script that belongs to no child is a restart nothing can trigger, and a
+    child's file missing from the script is a change the device never notices.
     """
-    script = services.recovery_script(declarations())
-    for child in stack.containers:
-        assert child.unit_name in script
-        for path in child.stamped_set:
-            assert path in script
+    arms = stamped_arms(services.recovery_script(declarations()))
 
-    stamped = {path for child in stack.containers for path in child.stamped_set}
-    assert stamped == {path for declaration in declarations() for path in declaration.stamped_set}
+    assert arms == {child.unit_name: set(child.stamped_set) for child in stack.containers}
+    # And every declared path is a file some child of this component owns.
+    declared_paths = {
+        inputs['path'] for typ, _, inputs in declared if typ == 'pulumi-python:dynamic/device:File' and 'path' in inputs
+    }
+    marker_paths = {f'{container.root_path(child_name)}.digest' for child_name in SERVICES}
+    assert set().union(*arms.values()) <= declared_paths | marker_paths
 
 
 def test_a_new_root_filesystem_is_noticed_through_the_marker_beside_the_tree() -> None:

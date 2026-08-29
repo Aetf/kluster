@@ -73,7 +73,8 @@ API_TOKEN_KEY = 'cloudflare:apiToken'
 ACCOUNT_KEY = 'cloudflareAccountId'
 
 #: Where the `physical` stack reads the gateway's ACME token before writing it
-#: onto the device beside the nspawn units it belongs to (`components/gateway/estate.py`).
+#: onto the device beside the nspawn unit it belongs to
+#: (`components/gateway/container.py`).
 #: Bare, and therefore in this project's namespace, for the reason the account
 #: id above is: nothing but this repository's own programs read it, and the
 #: prefix `pulumi config set` applies is the one `pulumi.Config()` resolves
@@ -81,7 +82,7 @@ ACCOUNT_KEY = 'cloudflareAccountId'
 GATEWAY_ACME_KEY = 'gatewayAcmeToken'
 
 #: The stack that runs on the cloud account and the backup account and that
-#: declares the gateway's estate, and therefore the slot the OCI, B2 and
+#: declares the gateway's services, and therefore the slot the OCI, B2 and
 #: gateway-ACME credentials are delivered into.
 #:
 #: Not an argument, unlike the zones token's stack. What each of those rows

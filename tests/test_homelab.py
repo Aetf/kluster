@@ -439,7 +439,7 @@ def test_the_identity_is_materialised_where_only_this_machine_can_read_it(tmp_pa
 def test_the_pin_is_written_against_the_address_the_session_dials(tmp_path: Path) -> None:
     """A `known_hosts` entry is keyed by host, so the key it is keyed by matters.
 
-    The estate stores the pin as a bare `ssh-ed25519 <blob>` with no host name
+    A device file stores the pin as a bare `ssh-ed25519 <blob>` with no host name
     in front of it, which is what lets one pinned key match a device at either
     of its addresses. A `known_hosts` file has no such form: the address the
     URI dials is written in front of the blob here, at the moment the endpoint

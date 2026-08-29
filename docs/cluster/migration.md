@@ -1,7 +1,7 @@
 # Migration Plan: Legacy (kluster-code) → Next Gen
 
 How the workloads and data move from the k3s legacy cluster to the new
-one, in dependency-ordered waves, ending with the legacy estate
+one, in dependency-ordered waves, ending with the legacy deployment
 decommissioned. Target shapes per app are
 [declarative/workloads.md](../declarative/workloads.md); this document
 owns sequencing, data movement, and teardown.
