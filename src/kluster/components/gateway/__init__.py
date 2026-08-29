@@ -11,8 +11,10 @@ credential and neither implies the other:
     `kluster.providers.device_files`, a dynamic provider whose `diff` reads the
     device and whose `create`/`update` writes and then runs a hook. Bulk
     artifacts (container root filesystems built by CI) travel as a URL and a
-    digest, never as bytes in state, so a preview stays cheap. `Gateway` opens
-    that session and hands it down; nothing below reads a credential for it.
+    digest, never as bytes in state, so a preview stays cheap. `Gateway` says
+    where the device answers and which host key it must present; the credential
+    that opens the session is the provider's own, read in its `configure` and
+    handled by nothing here (rfc-002 §7.4).
 -   **The UniFi controller**, over its API, for the firewall. Those resources
     live in this stack and not beside the applications whose traffic they
     admit — the one deliberate exception to co-location, because a gateway
@@ -55,7 +57,6 @@ class Gateway(Component):
         *,
         host: str,
         host_key: pulumi.Input[str],
-        private_key: pulumi.Input[str],
         caddy: CaddyService,
         resolvers: Sequence[ResolverService],
         overlay_daemon: OverlayDaemon,
@@ -74,10 +75,11 @@ class Gateway(Component):
         gateway's overlay address is one of the services this run is delivering
         (physical/gateway.md §2.5).
 
-        `host_key` is the pinned SSH host key and `private_key` the client
-        credential. The pinned key is stored as a bare `ssh-ed25519 <blob>` line
+        `host_key` is the pinned SSH host key: a bare `ssh-ed25519 <blob>` line
         with no host name in front of it, so it matches the device at whichever
-        address the session dials.
+        address the session dials. It is a public key and travels as an ordinary
+        input, where a preview shows it and a reviewer can check it. The client
+        credential that answers it is not a parameter here at all.
 
         `worker_gua` is the worker VM's global IPv6 address: the one firewall
         rule that cannot be written against a stable object, because the
@@ -93,7 +95,6 @@ class Gateway(Component):
             f'{name}-services',
             connection=Connection(
                 host=host,
-                private_key=private_key,
                 host_key=host_key,
                 username=conventions.gateway.SSH_USER,
             ),

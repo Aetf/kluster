@@ -244,9 +244,13 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 
 Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
-hooks; the UDM's **SSH host key is pinned** in provider config — the
-session crosses ZeroTier, and an accept-new first contact would hand
-a MITM root on the gateway) manages the device's entire desired state — FRR/BGP
+hooks; the UDM's **SSH host key is pinned** — the session crosses
+ZeroTier, and an accept-new first contact would hand a MITM root on
+the gateway — while the client credential that answers the pin is read
+by the provider itself, out of stack configuration, and appears on no
+resource: what a resource carries is a short digest of it, which is
+what makes a rotation visible in a preview) manages the device's
+entire desired state — FRR/BGP
 (neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
 output of the libvirt resource: the worker's address is written statically into
 its machine config, and everything that names it — the routing session, the

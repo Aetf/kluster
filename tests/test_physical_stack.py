@@ -795,6 +795,24 @@ async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> 
 
 
 @pytest.mark.asyncio
+async def test_the_program_never_reads_the_devices_own_credential() -> None:
+    """`gatewayPrivateKey` configures a provider, so the provider reads it.
+
+    For a dynamic provider that line is `configure`, in the plugin's process
+    (rfc-002 §7.4) — so the key is absent from every read this program performs,
+    and a run whose configuration lacks it gets as far as declaring the gateway.
+    What the device-files provider does with a configuration that lacks it is
+    the provider's own test.
+    """
+    pulumi.runtime.set_all_config(
+        {name: value for name, value in STACK_CONFIG.items() if name != 'kluster:gatewayPrivateKey'}
+    )
+
+    physical.declare_gateway(pulumi.Config())
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+
+@pytest.mark.asyncio
 async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> None:
     """The gateway and the overlay, exercised without the rest of the stack.
 
