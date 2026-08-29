@@ -1024,9 +1024,11 @@ def test_an_archive_that_is_not_compressed_survives_the_decompression_step() -> 
 def test_only_a_files_content_is_ever_kept_out_of_plain_state() -> None:
     """The provider echoes its inputs back, so a secret one has to be marked.
 
-    There is one: the credential is not a property of any resource, and the pin
-    is a public key that a diff should show — a pin nobody can read is a pin
-    nobody reviews.
+    There is one. The credential is not a property of any resource, and the
+    provider marks nothing about the connection: the pin is a public key, and a
+    pin a reviewer can read is worth more than a redacted one. What redacts it
+    in a preview today is the program, which supplies it as a secret-typed
+    configuration value.
     """
     assert provider.secret_outputs() == []
     assert provider.secret_outputs(secret_content=True) == ['content']
