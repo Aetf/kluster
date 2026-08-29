@@ -856,17 +856,21 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Moc
     five, which is the test rfc-002 §8.1 gives for what the stack program owns.
     Its region is not configuration: it is a permanent property of the account
     and lives in `conventions`, so the line that builds it reads exactly the
-    secrets.
+    four secrets -- which is also the whole of what the committed file has to
+    carry for this account.
     """
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
     built = setup.inputs[f'{conventions.CLUSTER_NAME}-oci']
     assert built['region'] == conventions.OCI_TENANCY.region
-    # The three secrets arrive wrapped: the engine sees a marked value, which
-    # is what keeps a signing key out of a preview and out of a log.
+    # All four arrive wrapped: the engine sees a marked value, which is what
+    # keeps a signing key -- and the three identifiers that say whose it is --
+    # out of a preview and out of a log. `_unwrapped` asserts the marking, so
+    # a value that lost it fails here rather than reaching a diff in the clear.
     assert _unwrapped(built['tenancyOcid']) == TENANCY_ID
     assert _unwrapped(built['userOcid']) == ACCOUNT_CONFIG['kluster:ociUserOcid']
+    assert _unwrapped(built['fingerprint']) == ACCOUNT_CONFIG['kluster:ociFingerprint']
     assert _unwrapped(built['privateKey']) == ACCOUNT_CONFIG['kluster:ociPrivateKey']
 
     signed = {name for name, typ in setup.types.items() if typ.startswith('oci:')}

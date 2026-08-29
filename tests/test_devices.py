@@ -83,7 +83,14 @@ def required(name: str) -> dict[str, bool]:
 
 
 def _constant(path: Path, name: str) -> str:
-    """The string a module-level assignment binds `name` to."""
+    """The string a module-level assignment binds `name` to.
+
+    Only in the module that reads it, which is the convention every credential
+    key here follows: the component that reads a key names it beside itself. A
+    key named by a constant *imported* from elsewhere is not resolved and
+    raises rather than being silently dropped, so the contract this file holds
+    cannot quietly stop covering a key.
+    """
     for node in ast.walk(ast.parse(path.read_text())):
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
             for target in node.targets:

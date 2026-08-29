@@ -52,9 +52,9 @@ KUBE_API_PORT = 6443
 #: because the two guardrail resources need it: both are tenancy-level objects
 #: that *name* a compartment rather than living in one — the quota policy and
 #: the budget. TODO(kluster-ops#117): it is an identity rather than a secret
-#: and belongs in `conventions` beside the region, which needs both this sink
-#: retired and a ruling on committing an account identifier to a public
-#: repository.
+#: and belongs in `conventions` beside the region — that is ruled, and what is
+#: left is implementing it: the mint stops writing this key and verifies the
+#: recorded OCID instead.
 OCI_TENANCY_OCID = 'ociTenancyOcid'
 OCI_USER_OCID = 'ociUserOcid'
 OCI_FINGERPRINT = 'ociFingerprint'
