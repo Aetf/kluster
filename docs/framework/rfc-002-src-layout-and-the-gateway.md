@@ -215,6 +215,17 @@ a firmware update leaves alone: the root filesystem archives and the trees
 unpacked from them, the unit files, the configuration each container reads, the
 per-container writable state, and one recovery script.
 
+**Three of the four containers sit on the container VLAN; the overlay daemon
+runs in the host's own network namespace, and must.** `systemd-nspawn` shares
+the host's namespace unless it is given a bridge, so that property is expressed
+by *not* passing one — which makes it easy to lose by accident in a refactor,
+and is why it is written here as a requirement rather than left as a fact of the
+code. The daemon creates an interface when it joins, and the gateway routes
+through that interface; an interface created inside a private namespace is
+invisible to the router that has to use it, so the member would join and route
+nothing. The declaration says the same thing by giving that service no address
+(§5.3): no address means no bridge, and no bridge means the host's namespace.
+
 The images are Alpine with s6-overlay rather than systemd, and two consequences
 run through everything below. A container is told things through **its PID 1's
 environment**, because that is what its own startup scripts read; a drop-in
@@ -716,24 +727,32 @@ session** — it passes the provider, as it must anyway, and the derived propert
 appears. That is the recommendation: one place computes it, no call site can
 forget it, and the two resource classes cannot disagree about how it is spelled.
 
-**The alternative considered: making the session a resource of its own.** A
-`DeviceSession` dynamic resource — no-op create and update, inputs limited to
-the endpoint and the credential digest, never the secret — would be the dynamic
-analog of a provider resource: one named object in state that says which session
-is current, which the file resources depend on and take their session input
-from. It is an appealing shape, and it is rejected for a specific reason rather
-than on taste.
+**The alternative considered: a stateless provider plus a session resource.**
+The appealing version of this is not merely cosmetic. If the connection lived on
+a `DeviceSession` *resource* — its secret marked secret there, once — and the
+provider looked it up while provisioning, then the provider instance would carry
+no connection at all, would be identical for every resource, and would never
+change when a credential rotated. The rotation would be a diff on one visible
+object, and the pickled blob would stop moving.
 
-It does not achieve what it appears to achieve. The hope is one diff per
-rotation instead of N, but the N cannot be avoided: each file resource's stored
-`__provider` is what a later *delete* is executed with, so a rotation that did
-not update every resource would leave each of them holding a superseded key, and
-the destroy months later would authenticate with a key that no longer opens the
-door. Every resource must therefore be updated on a rotation whatever the shape,
-so the session resource adds a diff rather than replacing N of them — an extra
-object that actuates nothing, in exchange for a label. If a future reader wants
-the connection to have a name in state, the honest way to get it is the
-component output of point 2 above, which costs no resource at all.
+**It is not implementable, for a reason in the provider interface rather than in
+this design.** A dynamic provider's methods receive exactly one thing: the
+property bag of the resource being provisioned. `create`, `diff`, `update`,
+`read` and `delete` are handed that resource's own inputs and state, and nothing
+else — there is no handle to the engine, no state-lookup call, and no way to
+reach another resource, in the parent chain or anywhere else. `configure`
+adds only stack configuration. So connection material can reach the provider by
+exactly two routes: captured on the provider instance, which is what this design
+does, or declared as inputs on every resource, which is what it is moving away
+from. A session resource could hold the values, but the file resources would
+have to take them back as inputs to make them reachable — reintroducing N copies
+of the secret, which is the thing being fixed.
+
+The cost of the route taken is the one named above: the connection has no
+visible object, so the derived session input is what makes a rotation legible.
+If the dynamic-provider interface ever grows a way to read another resource's
+state at provision time, this is the design to revisit, and the session resource
+is what to revisit it with.
 
 The resource identifier becomes the path on the device alone, a provider
 instance now standing for exactly one device. It is minted at create, never
@@ -827,7 +846,48 @@ Four consequences:
     signature.** Not the component that builds the provider — it reads it — and
     not any component below.
 
-### 8.2 Every provider this stack uses
+### 8.2 Forgetting the parent, and why a transformation cannot fix it
+
+Everything in §8.1 rests on a child being a child: a resource inherits its
+provider from its parent, so a resource constructed inside a component without
+`parent=` set inherits from the stack instead, silently gets the default
+provider, and — with default providers disabled — fails with an error about a
+missing provider rather than about a missing parent. It is the easiest mistake
+in the codebase to make and the least obvious to read.
+
+**The mechanism that looks like the answer is closed.** Pulumi's Python SDK runs
+registered transformations at every resource registration and lets them rewrite
+properties and options, so a stack transformation could in principle read a
+context variable naming the component under construction and fill in the parent.
+It cannot: the SDK compares the returned options and raises
+`Transformations cannot currently be used to change the 'parent' of a resource.`
+The parent is what selects which transformations run and what other options are
+inherited, so it is fixed before transformations see it.
+
+**So the framework enforces instead of repairing**, in two parts, both in
+`putils`:
+
+*   **A context variable naming the component being constructed.**
+    `Component.__init__` pushes itself onto it and `register_outputs` pops it —
+    a pairing this repository already treats as mandatory, which is what makes
+    it a usable scope.
+*   **One stack transformation that refuses.** It cannot set the parent, but it
+    can see that a resource is being registered while a component is under
+    construction and its options name no parent, and fail with the resource's
+    name and the component's. The mistake becomes impossible to commit rather
+    than merely discouraged, and it is caught at construction rather than at
+    apply.
+
+`child_opts()` stays the ergonomic path, and now it has a backstop. This is a
+change to the framework rather than to any stack, so it lands as its own slice
+(§15) and carries its own test: a resource constructed without a parent inside a
+component raises, and the same construction outside one does not.
+
+Unrelated, and worth separating because the two were confused: the invoke rule
+in §8.1 is about *provider* inheritance for a function call, not about parents
+of resources. An invoke takes a parent only to find that parent's provider.
+
+### 8.3 Every provider this stack uses
 
 | Provider | Built by | Reaches | Credential, read at that line |
 | --- | --- | --- | --- |
@@ -835,7 +895,7 @@ Four consequences:
 | controller | `Gateway` | set on its `SiteFirewall` child | the controller API key |
 | device files | `Gateway` | its own children, as an object (§7.4) | the device's SSH private key |
 | overlay | `Overlay` | its own children, by inheritance | the network administration token |
-| libvirt | `HomelabHost` | its own children, by inheritance | the host's SSH private key (§8.3) |
+| libvirt | `HomelabHost` | its own children, by inheritance | the host's SSH private key (§8.4) |
 | backup | `BackupBucket` | its own children, by inheritance | the backup account's key pair |
 
 Only the first is shared, and that is what puts it in the stack program: five
@@ -855,7 +915,7 @@ key and builds the session and the provider together, and the "reaches" column
 means an object passed down the same tree, because the mechanism cannot carry a
 dynamic provider through resource options (§7.1).
 
-### 8.3 The libvirt transport's absolute paths
+### 8.4 The libvirt transport's absolute paths
 
 The libvirt provider is configured by a URI, and this program builds that URI
 from two files it writes into the checkout: the client identity and a one-line
@@ -1192,7 +1252,7 @@ class B2Account:
 Both providers' ambient namespaces retire entirely — not "retire as readers",
 but stop existing: with default providers disabled there is nothing left to
 configure through them, and what remains in stack configuration is three secrets
-for one account and two for the other, read where each provider is built (§8.2).
+for one account and two for the other, read where each provider is built (§8.3).
 The identity-domain endpoint and name that used to sit beside these are gone
 too, for a different reason: they were read only to declare the chunk store's
 user, and the chunk store is deleted (§10.5). The credentials scripts keep their
@@ -1333,7 +1393,7 @@ the stack performs today:
 | the backup account's key pair | inside `BackupBucket`, at the line that builds its provider |
 | `unifiApiKey` | inside `Gateway`, at the line that builds the controller provider |
 | `zerotierApiToken` | inside `Overlay`, at the line that builds its provider |
-| `libvirtPrivateKey` | inside `HomelabHost`, at the line that builds its provider (§8.3) |
+| `libvirtPrivateKey` | inside `HomelabHost`, at the line that builds its provider (§8.4) |
 | `gatewayPrivateKey` | inside `Gateway`, at the line that builds the device session (§7.4) |
 | `gatewayBootstrapHost` | the same line — it is where that session dials |
 | `gatewayRootfs` | four `image:` pins (§11.1) |
@@ -1463,52 +1523,45 @@ imported by a stack whose state lives in Pulumi Cloud, and this project's state
 is in a self-managed backend. Project-level configuration costs nothing and is
 already in the file that exists.
 
-**What renovate can and cannot do with these.** It reads none of the keys today
-— the configuration has a custom manager for the Talos version alone, and its
-"in-cluster" rule names two stack files that do not exist yet — so a manager per
-kind is required work either way. The interesting question is what shape of
-artifact makes those managers possible:
+**Renovate, for the `rootfs-` kind only.** The other kinds are solved already:
+the legacy repository has working custom managers for chart and image pins in
+stack configuration, and this repository reuses that design — a regex manager per
+kind over the file the pins live in, which is now one file rather than five.
+Talos keeps the manager it already has, re-pointed at its new key. What is
+genuinely unsettled is the root filesystems, because their publication format
+decides what a manager can do:
 
-*   **A registry image** is the easy case: one data source bumps the tag and the
-    digest together, in the documented `tag@sha256:…` form, and the digest costs
-    a request against the registry rather than a download.
-*   **A release tag plus an asset checksum** — today's root filesystems — is
-    *not* the dead end it looks like. Renovate has a data source built for
-    exactly it, which resolves a release asset's own sha256 by fetching the
-    release's checksum manifest. But it constrains publication in four ways: the
-    tag and the checksum must be in **one file**, the asset's **filename must
-    contain the version**, the hash must be raw sha256 or sha512, and the
-    release should carry a small `SHA256SUMS` asset — without one, renovate
-    downloads assets until a hash matches, which for a root filesystem tarball
-    is an expensive way to learn a number. Note also that the *ordinary*
-    releases data source will not do this: its digest is the release's commit,
-    not an asset's hash.
-*   **A commit hash** works through the git-refs data source, with the branch
-    named in the manager's template and the hash captured as the digest. Its
-    limit is that a bare hash with no accompanying human-readable ref is not
-    updatable at all — renovate needs the branch or tag beside it — and it
-    cannot know whether a build for the new commit actually produced an
-    artifact.
+**The root filesystems are published as registry images**, tagged by commit and
+pinned here as a tag and a digest. That is what makes the pin maintainable: one
+data source bumps tag and digest together in the documented `tag@sha256:…` form,
+the digest costs a registry request rather than a download, and the pins stop
+being a kind of their own — the `rootfs-` prefix exists only until the
+publication changes, after which these are `image-` entries like any other.
 
-So the publication format is the lever, and it sits in the repository that
-builds these images rather than in this one. **Recommendation: publish the root
-filesystems as ordinary registry images**, pinned here as a tag and a digest.
-Then they stop being a third kind: the pin is an image reference, renovate's own
-container data source maintains it, both halves move together, and the `rootfs-`
-prefix retires into `image-`. The consuming side changes little — the runner
-pulls and exports a root filesystem instead of downloading a release asset, and
-the device still receives a plain archive it can unpack.
+Two facts drive it. A **commit-hash tag** is what makes each build addressable
+without inventing a version stream for images that have none. A **registry
+digest** is the only artifact identity renovate maintains natively end to end.
 
-If that move is not made, the fallback is **not** a change of format but three
-constraints on the current one: put the release and its checksum on one line of
-one file, name the asset after the version, and publish a `SHA256SUMS` beside
-it. That is enough for renovate to maintain both halves, and it is a smaller ask
-of the build than a registry is. Either way the `rootfs-` kind of §11.1 stands
-until the publication changes; what this section rules out is leaving the pins
-unmaintainable and calling it inevitable.
+The build side is the image repository's work; specifying the format is this
+document's, and the two are sequenced in §15.
 
-Specifying that is in this document's scope; doing it is the image repository's
-work, and the two are sequenced in §15.
+**Alternative considered: keep release assets, and publish checksums beside
+them.** Renovate has a data source that resolves a release asset's own sha256
+from the release's checksum manifest, so today's shape *can* be maintained
+automatically. It was not chosen, because it constrains publication in four ways
+where the registry constrains it in none:
+
+| | Release assets with checksums | Registry images |
+| --- | --- | --- |
+| Tag and digest in one place | required to be one file, one line | native to the reference |
+| Asset naming | filename must contain the version | free |
+| Hash format | raw sha256 or sha512 only | native |
+| Cost of a check | downloads assets unless a `SHA256SUMS` asset exists | one registry request |
+
+The third option, pinning by commit through the git-refs data source, was
+rejected for a different reason: it maintains a hash against a moving branch,
+and nothing in it knows whether the build for that commit ever produced an
+artifact.
 
 --------------------------------------------------------------------------------
 
@@ -1603,81 +1656,100 @@ fields would refuse:
 
 ### 13.2 What each option detects, enforces and recreates
 
-The question that decides this is drift, so the three options are compared on it
-directly. The short answer to "does (c) have no drift detection, and is the
-on-host XML still a source of truth that can change silently?" is **yes, for
-exactly the parts the transform supplies.**
+Four ways to make adoption mean something, compared on the three things that
+matter. "Detects" means: appears in `pulumi preview` without anyone running a
+separate procedure.
 
-| | Detects drift in | Enforces | Recreates |
+| | Detects drift in | Enforces | Recreates after an external delete |
 | --- | --- | --- | --- |
-| **(a)** partial declaration + transform for passthrough | the read-back fields only | 4 fields refuse; the rest silently no-op | most of the machine, without the TPM or secure boot |
-| **(b)** full XML in the repository | nothing, through Pulumi | lifecycle only, plus `protect` | the machine exactly — the file *is* the definition |
-| **(c)** (a) plus TPM and loader in the transform | the read-back fields only — **not** anything the transform injects | same as (a) | the machine, if the transform is faithful |
+| **(a)** declare what the provider reads, transform for passthrough | the read-back fields | 4 fields refuse; the rest silently no-op | most of the machine, without TPM or secure boot |
+| **(b)** full XML in the repository, provider owns lifecycle | nothing | lifecycle only, plus `protect` | **defines an empty machine** — see below |
+| **(c)** (a) plus TPM and loader in the transform | the read-back fields — **not** what the transform injects | as (a) | the machine, if the transform is faithful |
+| **(d)** define the domain ourselves over SSH | **the whole definition** | the whole definition | the machine, from the checked-in definition |
 
-The row that matters is the middle column of (c). The provider has no `hostdev`
-input, never populates `tpm` on read, and generates its own loader element — so
-the very parts the transform exists to supply are parts the provider cannot read
-back. Nothing compares them against the host, ever. Generating the fragment from
-a live `dumpxml` and proving it by defining a scratch domain is a **one-time
-adoption safeguard**: it establishes that the transform was faithful on the day
-it was written, and says nothing on any day after. If someone adds a USB device
-to the running machine, (c) is silent, exactly as (b) is.
+Three findings decide it.
 
-So (c)'s advantage over (b) is narrower than it looked, and it is worth naming
-precisely: recreation is an ordinary `pulumi up` rather than a documented manual
-step, and the dozen read-back fields appear in previews. Its costs are a second
-source of truth for the injected parts, a transform to maintain, and an
-enforcement story that is mostly silent no-ops.
+**The provider never sees the full XML.** In (a) and (c) it composes a
+definition from its own inputs plus the transform; in (b) it is not given the
+XML at all — the file is applied by `virsh define` outside Pulumi, and the
+provider declares only `autostart` and `running` on the domain it adopted. At
+preview time, it reads the live domain into the fields its own read implements
+and no others, which is why the "detects" column is what it is.
 
-**(b) has a property neither of the others has: a complete artifact.** The
-checked-in XML covers the whole definition, including everything the provider
-cannot express — which makes `virsh dumpxml` against it a *complete* drift
-check, not a partial one. That check is a scheduled drill or a test rather than
-a preview, but it is the only option here whose coverage is total, and managing
-a full domain definition as a file is already known to be practical from
-managing this one under `yadm`.
+**(b) has a footgun, and it is the original failure automated.** If the domain
+is deleted on the host while its disks survive, the provider's read finds
+nothing, clears the resource's id, and the resource leaves state. The next `up`
+then *creates* it — from the declared inputs, which in (b) are the lifecycle
+fields alone. The result is a domain with no disks, no passthrough and no TPM,
+wearing the right name. `protect` does not help: it guards deletion and
+replacement, not creation. So (b) is only safe as a written procedure —
+`virsh define` first, refresh second, apply third — and an ordinary
+`up --refresh` run in the wrong order produces the empty machine.
 
-**Recommendation, revised: (b), plus the drill.** Concretely:
+**(d) removes the reason the others are partial.** The provider is not asked to
+model a domain at all; it is asked to make the host's definition equal a file:
 
-*   the full domain XML lives in the repository, rendered by the same file
-    mechanism as everything else (§9.1);
-*   Pulumi owns the domain's **lifecycle** — that it exists, `autostart`,
-    `running` — and `protect`, which are the fields it can actually enforce;
-*   a **drift drill** diffs `virsh dumpxml` against the file, on the schedule
-    the other drills run on. It is the drift detection, and it covers
-    everything;
-*   recreation is a documented `virsh define` of that file, followed by an apply
-    that reasserts the lifecycle.
+*   **inputs**: the full domain XML, checked in and rendered by the mechanism of
+    §9, plus the two lifecycle flags;
+*   **create**: `virsh define`, then autostart and start. Adoption needs no
+    import — defining over an existing domain replaces its persistent
+    definition, and if the file was generated from that domain the change is
+    nil;
+*   **diff**: normalized `virsh dumpxml --inactive` against the declared XML.
+    The persistent definition is the one compared, because that is the one
+    `define` writes; a running domain keeps its live definition until it next
+    boots;
+*   **update**: define again;
+*   **delete**: refused while protected; otherwise `virsh undefine`, which
+    leaves storage alone;
+*   **after an external delete**: an ordinary diff, and the next apply defines
+    the machine back around its surviving disks. Automatically, and completely,
+    because the file is complete.
 
-One practical caveat, and it is the reason the drill needs a slice of its own
-rather than a line: libvirt rewrites what it is given — it fills in PCI
-addresses, aliases and defaults — so a naive diff between the file and
-`dumpxml` is noisy. The drill compares the definition as libvirt reports it,
-against a file kept in that same form, and the slice that lands it settles
-whether the stored artifact is the raw `dumpxml` or a normalized subset.
+### 13.3 The recommendation, and what it costs
 
-This overrules §13.1's framing that more declaration is better. What the
-provider can enforce here is four fields; what it can *report* is a dozen; what
-the machine actually is, is a hundred lines of XML. The option that treats the
-XML as the artifact tells the truth about that, and the option that spreads it
-across a declaration and a transform does not.
+**(d), for the adopted domain.** It is the only option that detects drift in the
+passthrough devices, the TPM and the loader — the parts that make this machine
+that machine — and the only one whose recreation path is the same code path as
+its steady state. It also removes the second source of truth that (c) was
+rejected for: there is one definition, in the repository, and the diff is
+against the host.
 
-**What none of the three restores is the data.** An apply, or a `virsh define`,
-after an accidental removal gets back a domain that boots the same disk images
-with the same identity on the same bridge. If the disk images themselves are
-gone, what brings the home's automation back is its own backup regime, and no
-amount of declaring in this program changes that. The value here is precisely
-the part that *is* reproducible: a definition that otherwise exists in exactly
-one place, on the host, and would be reconstructed from memory at the worst
-possible moment.
+Three costs, stated plainly:
 
-The ratchet that exists today — every input the provider accepts is accounted
-for, so a provider release that grows a field fails a test instead of silently
-proposing a change to a running Home Assistant — is kept, and under the
-recommendation it barely changes: the lifecycle fields are declared and
-everything else stays ignored, so the assertion becomes "every field is either
-declared or ignored" with a short declared set. What is new beside it is the
-drill, which is where the coverage actually comes from.
+*   **We own the normalization.** `dumpxml` emits more than `define` was given:
+    security labels, device aliases, and address elements libvirt assigns. The
+    answer is to check in the **fully expanded** definition — what the host
+    reports today, not a hand-minimal XML — so that most of that is already in
+    the file and the remaining volatile subtrees are few. Which subtrees those
+    are is established empirically in the slice that lands this, by defining and
+    dumping until the round trip is stable; the RFC does not guess at the list.
+*   **The worker VM stays on the libvirt provider.** Its declaration creates a
+    volume from a local image file, which means uploading a gigabyte into a
+    pool — a provisioning operation `virsh` over an SSH channel would have to
+    reimplement badly. So the boundary is: the adopted domain is defined by us,
+    the created VM is declared by the provider. The libvirt provider therefore
+    does *not* leave the stack, and §8.4's relative-path work stands.
+*   **A second SSH session, to a second host.** The device-files provider family
+    grows an instance pointed at the homelab host, authenticating as the same
+    service account the libvirt URI already uses. That is one more session to
+    hold, and it is the same shape as the gateway's.
+
+The alternative if (d) is judged too much machinery is **(b) plus a drift
+drill** — the full XML as artifact, a scheduled `dumpxml` diff for detection,
+and the define-then-refresh procedure written down where whoever recreates the
+domain will find it. It gets the same coverage as (d) at the price of the
+footgun above and of detection that only runs when the drill does.
+
+The ratchet that guards the adopted domain today — every input the libvirt
+provider accepts is accounted for, so a provider release that grows a field
+fails a test rather than silently proposing a change to a running Home
+Assistant — **retires with the provider** under (d): there is no longer a
+libvirt resource for that domain to grow fields on. What replaces it is
+narrower and stronger: the diff itself is the check, and the test that matters
+is the round-trip one — define the checked-in definition into a scratch domain,
+dump it, and assert it normalizes equal to the file. The ratchet stays where the
+worker VM is declared, which is still the provider's.
 
 --------------------------------------------------------------------------------
 
@@ -1704,11 +1776,11 @@ work described here leaves for it.
     unique addresses inside the overlay subnet, the gateway at the address
     clients dial, the roster within the multicast limit — which is what is left
     of `parse_members`.
-*   **The adopted domain gains a drill, and keeps its ratchet.** The ratchet's
-    assertion widens from "every input is ignored" to "every input is either
-    declared or ignored". The drift check itself is not a test but a drill that
-    diffs the host's definition against the checked-in artifact (§13.2), which
-    is where the coverage comes from.
+*   **The adopted domain's tests move with its mechanism.** The libvirt ratchet
+    stays for the worker VM, which still uses that provider. The adopted domain
+    gains a round-trip test instead: the checked-in definition, defined into a
+    scratch domain and dumped, normalizes equal to the file it came from (§13.3)
+    — which is what makes the normalization rules a fact rather than a hope.
 *   **Several assertions on stack configuration keys retire** with the keys
     (§11), and the site-fact refusal tests shrink to the keys that remain.
 
@@ -1716,7 +1788,7 @@ work described here leaves for it.
 
 ## 15. How we get there
 
-Nine slices, in this order, each an issue cut from this document. The order is
+Eleven slices, in this order, each an issue cut from this document. The order is
 chosen so that nothing is moved twice: homes first, then the data every layer
 reads, then the text, then the structure that consumes both.
 
@@ -1729,24 +1801,35 @@ reads, then the text, then the structure that consumes both.
 3.  **The roster carries identities** (§10.2): `zerotierMembers`, the
     `zerotier_addresses` export and the `dns` StackReference retire together,
     because each is the other's only remaining reason to exist.
-4.  **Providers, explicitly** (§8): every provider built where its credentials
+4.  **The parent backstop** (§8.2), in `putils`: the context variable and the
+    transformation that refuses an unparented resource inside a component. It
+    comes before the provider slice because that slice's correctness depends on
+    parentage, and it is framework code with its own tests.
+5.  **Providers, explicitly** (§8): every provider built where its credentials
     are read and set on its top-level component, default providers disabled, the
     ambient namespaces gone, and the libvirt URI's paths made relative. This one
     is worth its own live drill: it changes how every resource in the stack is
     authenticated.
-5.  **Rendered configuration from files** (§9): the mechanism, then the eight
+6.  **Rendered configuration from files** (§9): the mechanism, then the eight
     literals, with the render functions' signatures unchanged.
-6.  **The gateway component tree** (§4, §5): `Gateway`, `DeviceServices`,
+7.  **The gateway component tree** (§4, §5): `Gateway`, `DeviceServices`,
     `Container`, the typed declarations, the units' own dependencies, and the
     vocabulary of §3 applied throughout.
-7.  **The overlay leaves the gateway** (§6): `components/overlay/`, the rule
+8.  **The overlay leaves the gateway** (§6): `components/overlay/`, the rule
     composition as a pure function, the stack program composing it.
-8.  **The device-file provider** (§7.4): the connection onto the provider
+9.  **The device-file provider** (§7.4): the connection onto the provider
     instance, the derived session input, the pin as a component output.
-9.  **The stack program** (§11, §12), then the caddy certificate (§9.3), then
-    **the adopted domain** (§13) — the last two touch live systems and are worth
-    landing alone, and the domain cannot start until §13.2 has been ruled on.
+10. **The stack program** (§11, §12), then the caddy certificate (§9.3).
+11. **The adopted domain** (§13), last and alone: it needs a ruling on §13.2
+    first, and under the recommended option it also needs the round-trip
+    normalization established against the live machine before anything is
+    declared.
 
-Slices 1 to 3 are mechanical and reviewable by diff; 4 to 9 each rewrite their
+Alongside, and not this repository's to implement: the root filesystems'
+publication moves to registry images (§11.1). Until it does, the pins stay
+manual, which is the one thing in this document that a merge here cannot
+finish.
+
+Slices 1 to 3 are mechanical and reviewable by diff; 4 to 11 each rewrite their
 own tests. None of them is a migration: the `physical` stack has no state, so
 every rename in this document is a rename and not a replacement.
