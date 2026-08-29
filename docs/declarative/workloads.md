@@ -3,8 +3,8 @@
 The per-app pattern: one Python component per application, declaring everything
 the app needs — workload, storage, exposure, DNS, secrets, backups, placement —
 so that "deploy an app" is one reviewable diff in one place. This is the top
-stack of [framework/pulumi.md](../framework/pulumi.md) §3 and the home of
-~80–90% of all future changes.
+stack of [README.md](README.md) §1 and the home of ~80–90% of all future
+changes.
 
 > **Status**: designed 2026-08-22. Not implemented.
 
@@ -14,7 +14,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 
 | Concern | Declared as | Governed by |
 | --- | --- | --- |
-| Namespace | created by the component (never shared) | pulumi.md §3 |
+| Namespace | created by the component (never shared) | README.md §1 |
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |

@@ -4,8 +4,8 @@ How the in-cluster foundations are declared — the component set, its
 install/dependency order, and the configuration points already decided
 elsewhere (architecture.md for the network design, storage.md for
 storage, nodes.md §4.4 for why this list is as small as it is). This is
-the middle stack of [framework/pulumi.md](../framework/pulumi.md) §3:
-everything cluster-scoped that speaks the k8s API, consumed by `apps`.
+the middle stack of [README.md](README.md) §1: everything cluster-scoped
+that speaks the k8s API, consumed by `apps`.
 
 > **Status**: designed 2026-08-22. Not implemented.
 

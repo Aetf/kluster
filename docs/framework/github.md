@@ -4,8 +4,8 @@ How the GitHub side of the system is declared: the two repositories,
 the Environments that partition CI's credentials, the gates and
 protections that make the zero-diff proof load-bearing, and the two
 single-purpose Apps. Everything here is `github` stack content
-(pulumi.md §3.1); this document holds the *why*, the stack holds the
-*what*.
+([declarative/README.md](../declarative/README.md) §1); this document
+holds the *why*, the stack holds the *what*.
 
 It exists because the forge was the one part of the estate with no
 declaration anywhere. The repository this file lives in is deployed by

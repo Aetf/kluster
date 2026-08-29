@@ -1,6 +1,7 @@
 # CI & State Backend
 
-Objective: how the four deployed stacks ([pulumi.md](pulumi.md) §3) are
+Objective: how the four deployed stacks
+([declarative/README.md](../declarative/README.md) §1) are
 driven — the forge they run on is itself declared, but applied by hand
 ([github.md](github.md)) —
 where state lives, how CI reaches everything, and the pipeline shape.
