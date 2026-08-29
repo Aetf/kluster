@@ -30,6 +30,7 @@ from kluster.components import homelab
 from kluster.components.cloud import nodes
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Rootfs
+from kluster.components.overlay import flow_rules
 from kluster.lib import workstation
 from kluster.stacks import physical
 
@@ -356,6 +357,32 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     assert (tmp_path / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
     # And no key holds any of it: what is configured is the credential alone.
     assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
+
+
+@pytest.mark.asyncio
+async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Mocks) -> None:
+    """The policy is composed here, out of the facts the program already holds.
+
+    `Overlay` declares none of it (rfc-002 §6), so this is where the four
+    destinations a run may reach are decided — and each of them is read from
+    the table that also declares the thing it names. A second statement of any
+    of those addresses would be free to disagree with the one the packets are
+    matched against: the homelab host is at the address the roster authorizes
+    it on, and the resolvers at the site addresses the service census gives
+    them, which is what their packets carry after the gateway routes them.
+    """
+    homelab_address = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
+    ci = conventions.overlay.Role.CI
+
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    rendered = cast('str', setup.inputs[f'{conventions.CLUSTER_NAME}-network']['flowRules'])
+    assert f'accept tseq role {ci} and ipdest {homelab_address}/32 and dport {flow_rules.SSH_PORT};' in rendered
+    assert f'accept tseq role {ci} and ipdest {conventions.overlay.UDM}/32 and dport {flow_rules.SSH_PORT};' in rendered
+    for resolver in conventions.gateway.RESOLVERS:
+        port = conventions.gateway.ADGUARD_API_PORT
+        assert f'accept tseq role {ci} and ipdest {resolver.address}/32 and dport {port};' in rendered
 
 
 @pytest.mark.asyncio

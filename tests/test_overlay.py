@@ -1,24 +1,21 @@
-"""The overlay's roster, routes and flow rules, asserted without Central.
+"""The overlay's roster and the network declared from it, asserted without Central.
 
-The flow rules are the interesting half. They are a string in a resource, so a
-reviewer sees them as a blob and a mistake in them shows up as a job that cannot
-reach the gateway — or, far worse, as one that can reach everything. The suite
-therefore asserts the properties the design argues for rather than the text: that
-each allowed flow is declared in both directions, that a run reaches four
-destinations and no fifth one, that nothing may open a connection towards a run,
-and that everyone else falls through untouched.
+Two things are checked here, and the rule program is neither of them: it arrives
+as a parameter and has its own suite (`test_flow_rules.py`).
 
-The roster is asserted the same way, and here it is the *only* way. The roster
-is static code, so nothing can break one of its invariants at runtime that these
-cases did not already catch — which is why the program itself checks none of
-them (rfc-002 §10.2).
+The roster is asserted as invariants, and here that is the *only* way. The
+roster is static code, so nothing can break one of its invariants at runtime
+that these cases did not already catch — which is why the program itself checks
+none of them (rfc-002 §10.2).
+
+The declaration is asserted against the roster rather than against a fixture of
+its own, because a member exists for one reason: an entry exists.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
-from ipaddress import IPv4Address
 from typing import Any, cast
 
 import pulumi
@@ -33,12 +30,11 @@ NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'
 API_TOKEN = 'a-central-token'
 
-#: The homelab host's overlay address, as the flow-rule cases name it.
-#: `flow_rules` is a pure function of what it is handed, so those cases keep a
-#: literal; that the roster is what hands it over is a case of its own.
-HOMELAB_OVERLAY = IPv4Address('10.144.180.10')
-#: The resolvers' container-VLAN addresses, likewise as literals.
-RESOLVERS = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
+#: The rule program the fixture hands the component. It is a sentinel rather
+#: than the real thing: what these cases are about is that the component
+#: carries what it is given and composes nothing, and the program's own content
+#: is `test_flow_rules.py`'s subject.
+RULES = '# handed in, not composed\naccept;\n'
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -82,7 +78,7 @@ async def stack() -> None:
     overlay_module.Overlay(
         NAME,
         network_id=NETWORK_ID,
-        resolvers=RESOLVERS,
+        flow_rules=RULES,
     )
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
     _ = await asyncio.gather(*pending)
@@ -91,10 +87,6 @@ async def stack() -> None:
 
 def registered(name: str) -> dict[str, Any]:
     return next(inputs for _, declared_name, inputs in declared if declared_name == name)
-
-
-def rules() -> str:
-    return overlay_module.flow_rules(udm=conventions.overlay.UDM, homelab=HOMELAB_OVERLAY, resolvers=RESOLVERS)
 
 
 ##
@@ -192,91 +184,6 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
 
 
 ##
-## The flow rules
-##
-
-
-def test_a_run_reaches_four_destinations_and_each_of_them_in_both_directions() -> None:
-    """Evaluation is stateless, so a reply is a separate decision.
-
-    An allow written only outbound produces a connection that opens and never
-    answers — and the failure looks like an unreachable host rather than like a
-    missing rule.
-    """
-    rendered = rules()
-    ci = conventions.overlay.Role.CI
-    expected = [
-        (f'{conventions.overlay.UDM}/32', overlay_module.SSH_PORT),
-        (f'{conventions.overlay.UDM}/32', overlay_module.UNIFI_API_PORT),
-        (f'{RESOLVERS[0]}/32', conventions.gateway.ADGUARD_API_PORT),
-        (f'{RESOLVERS[1]}/32', conventions.gateway.ADGUARD_API_PORT),
-        (f'{HOMELAB_OVERLAY}/32', overlay_module.SSH_PORT),
-    ]
-    for destination, port in expected:
-        assert f'accept tseq role {ci} and ipdest {destination} and dport {port};' in rendered
-        assert f'accept treq role {ci} and ipsrc {destination} and sport {port};' in rendered
-
-    # Four destinations, five flows: the gateway answers on two ports, being
-    # both the box the desired state is pushed to and the controller it is
-    # configured through.
-    assert len({destination for destination, _ in expected}) == 4
-    assert rendered.count(f'accept tseq role {ci}') == len(expected)
-
-
-def test_a_run_may_reach_nothing_else_and_nothing_may_reach_a_run() -> None:
-    """The drops close both directions, and they come after the allows.
-
-    Order is the whole rule: a drop declared first would make the four allows
-    unreachable, and one declared only outbound would leave a run addressable
-    from any member of the network.
-    """
-    rendered = rules()
-    ci = conventions.overlay.Role.CI
-    lines = [line for line in rendered.splitlines() if line and not line.startswith('#')]
-
-    assert f'drop tseq role {ci};' in lines
-    assert f'drop treq role {ci};' in lines
-    assert lines.index(f'drop tseq role {ci};') > max(
-        index for index, line in enumerate(lines) if line.startswith(f'accept tseq role {ci}')
-    )
-    # And the fallthrough is last of all, or it would answer for everyone.
-    assert lines[-1] == 'accept;'
-
-
-def test_the_rules_never_negate_a_tag_or_an_address() -> None:
-    """Negation over missing information misfires in this engine.
-
-    A `not` combined with a tag or an address matcher inverts the zeros that
-    stand for "not known yet" rather than the condition, and does so
-    differently in each address family. The stock ethertype filter is the one
-    exception: it ships that way and predates the quirk.
-    """
-    rendered = rules()
-    negations = [line.strip() for line in rendered.splitlines() if 'not ' in line]
-
-    assert negations == ['not ethertype ipv4', 'and not ethertype arp', 'and not ethertype ipv6']
-
-
-def test_personal_members_are_untouched_by_every_rule_above_the_fallthrough() -> None:
-    """The overlay is also the personal devices' own segment.
-
-    Every rule the confinement adds names a tagged endpoint, so a personal
-    device's traffic — unicast, broadcast and multicast discovery alike —
-    reaches the final accept unchanged.
-    """
-    rendered = rules()
-    # The base filter is a bare `drop` whose matchers are the lines under it,
-    # so the block is taken out whole before the rest is examined.
-    body = rendered.split('accept ethertype arp;', 1)[1]
-    decisions = [line for line in body.splitlines() if line.startswith(('accept', 'drop')) and line != 'accept;']
-
-    assert decisions, 'the confinement declared something'
-    assert all(f'role {conventions.overlay.Role.CI}' in line for line in decisions)
-    assert f'default {conventions.overlay.Role.PERSONAL}' in rendered
-    assert f'  id {conventions.overlay.TAG_ROLE_ID}' in rendered
-
-
-##
 ## The declaration
 ##
 
@@ -316,6 +223,17 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     assert conventions.CLUSTER_VLAN.v4 in conventions.overlay.MANAGED_ROUTES
 
 
+def test_the_network_carries_the_rules_it_was_handed_and_composes_none() -> None:
+    """Policy is the caller's, and the component is the delivery of it.
+
+    What confines a run is a fact about how continuous integration reaches this
+    site, not about ZeroTier, so it is composed where those facts live and
+    passed in whole (rfc-002 §6). A component that reached for the roster or
+    the resolver census itself would be a second place the policy is decided.
+    """
+    assert registered(f'{NAME}-network')['flowRules'] == RULES
+
+
 def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted() -> None:
     """A member exists because an entry exists, and for no other reason.
 
@@ -330,23 +248,6 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
 
     assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.overlay.ROSTER}
     assert {route['via'] for route in registered(f'{NAME}-network')['routes']} == {str(conventions.overlay.UDM)}
-
-
-def test_the_libvirt_flow_rule_names_the_address_the_roster_places_the_host_at() -> None:
-    """The rule and the session dial one address, and the roster is that address.
-
-    A run reaches the homelab host member to member, and the rule that lets it
-    through is written from the same entry the session's URI is built from — so
-    a second statement of that address, anywhere, would be free to disagree
-    with the one the packets are actually matched against.
-    """
-    homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
-    rendered = cast('str', registered(f'{NAME}-network')['flowRules'])
-
-    assert (
-        f'accept tseq role {conventions.overlay.Role.CI} and ipdest {homelab}/32 and dport {overlay_module.SSH_PORT};'
-        in rendered
-    )
 
 
 def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:

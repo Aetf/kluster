@@ -172,6 +172,40 @@ the pool is reached through the UDM's own BGP-learned route, one hop.
 The legacy `10.42.0.0/24`-via-VPS route is deleted in Wave F. The
 homelab host advertises nothing.
 
+**There is no router object.** ZeroTier's model is an emulated switch:
+a route is `{target, via}` on the *network*, and `via` is nothing but
+an address belonging to some member. That member forwards because
+forwarding is configured on the device, not because the controller
+made it a router — ZeroTier has no concept of one. So the UDM is told
+two separate things by two separate mechanisms: the route table here,
+and its own routing and forwarding configuration as files on the box
+(§1). The rest of the mechanism follows from that, and is worth
+stating because the intuitive answers are wrong:
+
+-   **Routes reach every member, not the ones that need them.** The
+    controller hands the whole network configuration, routes included,
+    to each member as it joins or refreshes. A route added here is
+    added to every joined device.
+-   **Each member installs them into its own operating system**, gated
+    by a client-side setting: `allowManaged`, on by default for
+    private ranges, and `allowGlobal` and `allowDefault`, both off. A
+    phone off-site routes the home subnets into its ZT interface
+    because its own client put them there, not because anything
+    server-side steered it.
+-   **A member sitting on one of those subnets does not refuse the
+    route.** The client installs the overlapping route anyway and
+    arranges to *lose*: it gives the route a high metric, so the
+    kernel prefers the directly connected path. On BSD-derived
+    systems the add simply fails against the existing route, to the
+    same effect. Only the default route is ever overridden, and only
+    under `allowDefault`, by splitting it into two halves that win on
+    prefix length.
+-   **The return path is not part of this at all.** A managed route
+    fixes one direction. Replies come back because the UDM is the
+    LAN's default gateway, which it is here; anywhere that were not
+    true the return leg would need a static route on whatever is, or
+    masquerading.
+
 **Every managed route is IPv4, and the pool's ULA /64 is deliberately
 not among them.** The overlay assigns no v6 address to any member
 either (`assign_ipv6s` has all three schemes off), and the two facts
