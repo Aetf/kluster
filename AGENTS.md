@@ -101,7 +101,7 @@ Two angles, one reviewer each (they may run in parallel):
 2.  **Architecture & style**, against `docs/style/`: config
     read at the right layer, resources on the right component,
     providers inherited not re-plumbed, names and comments that survive
-    the canon's tests, censuses where they belong.
+    the style rules' tests, censuses where they belong.
 
 Findings go to the builder as one fix cycle (mid-flight message or a
 follow-up brief); a finding the operator must rule on becomes a

@@ -1,4 +1,4 @@
-# Style Canon
+# Style Rules
 
 How code and prose in this repository are written, whatever the
 language. The review gate in AGENTS.md holds every change to it.
@@ -59,7 +59,7 @@ the design; this directory owns how things are written.
 
 ## Review gate
 
-Every pull request passes an independent review against this canon
+Every pull request passes an independent review against these rules
 before merge — see AGENTS.md "Review stage". Major structural changes
 go the other way around: an RFC under `docs/framework/` states the
 desired end state and is approved before implementation starts.
