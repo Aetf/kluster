@@ -21,7 +21,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Exposure | pool label + route kind per the routing matrix, via the helpers (`public_route`/`public_port`/`lan_route`); `public_port` alone also emits the NLB listener + security rule for its port (dns.md §5); `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `iot_reachable=True` attaches `media-gw` — the explicit "IoT may reach this" decision (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
 | DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
-| Placement | scheduling constraints only: site pool (cloud/homelab), the augmented node for dedicated-VIP workloads, GPU resource requests | architecture.md §3.6 |
+| Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
 | Network policy | per-namespace default-deny + explicit allows, part of the component | architecture.md §4.1 |
 | Monitoring | scrape/dashboard labels per the legacy conventions (`release`, `grafana_dashboard`) so VictoriaMetrics/grafana pick them up | cluster-infra.md §1 |
 
@@ -35,8 +35,7 @@ default — non-root, no added capabilities, RuntimeDefault seccomp
 (part of containing third-party binaries on the combined CP+ingress
 nodes, architecture.md §4.1). An exception is a declared component
 parameter with the reason on record — the same discipline as
-`backup=None`; the JuiceFS sidecar namespace (§4) is the one current
-holder.
+`backup=None`. No workload in the design holds one today.
 
 ## 2. Choosing storage: two axes, then the data's character
 
@@ -121,10 +120,12 @@ per-app number:
 
 -   **Dedicated-VIP workload (hath)**: LB Service requesting the
     dedicated VIP + a `CiliumEgressGatewayPolicy` with `egressIP` = the
-    secondary private IP + node affinity to the augmented node (cache
-    volume locality) + strict CPU limits. All four pieces in the one
-    component (architecture.md §3.2). The cache volume is
-    `protect=True` and moved-never-recreated (storage.md §3.3).
+    secondary private IP + a claim on its cache volume + strict CPU
+    limits. All four pieces in the one component (architecture.md
+    §3.2), and none of them names a node: the volume's entry declares
+    that it follows the dedicated VIP, so the volume's node label and
+    the VIP are on the same machine by construction. The cache volume
+    is `protect=True` and moved-never-recreated (storage.md §3.3).
 -   **Split-horizon app (immich)**: one set of pods, two exposures
     (`public_route` to both gateways) — the helper emits both routes,
     the public CNAME, and the LAN rewrite. The immich LAN-direct rule
@@ -142,15 +143,14 @@ per-app number:
     hostname behind Authelia forward-auth on `internet-gw`, plus the
     LAN rewrite to `lan-gw` — continuing the legacy `bt.` entry rather
     than going rewrite-only.
--   **JuiceFS-quarantined app (VPS-successor syncthing + dav)**:
-    in-pod juicefs mount (sidecar, no CSI) with 0.5–1 GiB requests,
-    SQLite metadata on local-path on the node's boot volume
-    (`backup=None` — the auto metadata dump to the bucket plus
-    syncthing reseed are the recovery, storage.md §6), its own OCI
-    bucket (from physical outputs). Implementation fact: an in-pod FUSE mount needs
-    `/dev/fuse` + `SYS_ADMIN` (a privileged-PSS namespace) — this app
-    is the one standing exception to the unprivileged default, on
-    record here rather than discovered at deploy time.
+-   **Block-volume app (cloud-side syncthing + dav)**: a `local`
+    PersistentVolume over the node volume the `physical` stack attached
+    (`conventions.NODE_VOLUMES`), with node affinity on that volume's
+    node label, claimed by an ordinary PVC. `backup=None` on record —
+    every client holds a subset and `syncthing-nas` holds the full set,
+    so a reseed over the syncthing protocol is the recovery
+    (storage.md §6). No sidecar, no privileged namespace, and no
+    filesystem between the app and its data.
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
     local-path + barman to B2, monthly restore drill inherited from the
     legacy discipline (storage.md §5). **Major-version policy

@@ -91,7 +91,7 @@ class Oci:
         complete answer, and the warning names the command that replaces it.
 
         The compartment is not part of that answer. It is a boundary this
-        program decides (`conventions.OCI_COMPARTMENTS`), so the minted slot
+        program decides (`conventions.OCI_TENANCY.compartments`), so the minted slot
         carries the credential alone and the mapping says where it acts;
         `--compartment` overrides both, and a configuration file that names a
         `compartment-id` of its own — the hand-written one above, or one an
@@ -120,12 +120,12 @@ class Oci:
         compartment = (
             compartment_id
             or config.get('compartment-id')
-            or conventions.OCI_COMPARTMENTS[conventions.STATE_BACKEND].ocid
+            or conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
         )
         if not compartment:
             raise ValueError(
                 f'no compartment: pass --compartment, set compartment-id in {location}, or record the '
-                "appliance's compartment in `conventions.OCI_COMPARTMENTS`"
+                "appliance's compartment in `conventions.OCI_TENANCY.compartments`"
             )
         return cls(compartment_id=str(compartment), config=config)
 

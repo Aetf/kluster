@@ -34,14 +34,16 @@ BGP_PASSWORD = 'a-session-password'
 ACME_TOKEN = 'a-zone-scoped-token'
 
 DIGEST = 'f' * 64
+MEMBERS = tuple(service.name for service in conventions.GW_SERVICES)
+#: Where the census places the bridged services, restated rather than read back
+#: from it: these are the addresses the LAN's leases already point at, so one
+#: that moves should have to move here too.
 ADDRESSES = {
-    'caddy': IPv4Address('10.0.5.10'),
-    'adguard-alice': IPv4Address('10.0.5.11'),
-    'adguard-bob': IPv4Address('10.0.5.12'),
+    'caddy': IPv4Address('10.0.5.180'),
+    'adguard-alice': IPv4Address('10.0.5.3'),
+    'adguard-bob': IPv4Address('10.0.5.4'),
 }
-ROOTFS = {
-    name: estate.Rootfs(url=f'https://example.invalid/{name}.tar.zst', sha256=DIGEST) for name in conventions.GW_ESTATE
-}
+ROOTFS = {name: estate.Rootfs(url=f'https://example.invalid/{name}.tar.zst', sha256=DIGEST) for name in MEMBERS}
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -77,7 +79,6 @@ async def stack() -> None:
         bgp_password=BGP_PASSWORD,
         acme_token=ACME_TOKEN,
         rootfs=ROOTFS,
-        addresses=ADDRESSES,
     )
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
     _ = await asyncio.gather(*pending)
@@ -89,7 +90,7 @@ def registered(name: str) -> dict[str, Any]:
 
 
 def census() -> tuple[estate.Container, ...]:
-    return estate.census(rootfs=ROOTFS, addresses=ADDRESSES, acme_token=ACME_TOKEN)
+    return estate.census(rootfs=ROOTFS, acme_token=ACME_TOKEN)
 
 
 ##
@@ -104,24 +105,13 @@ def test_the_estate_is_the_four_members_the_design_names() -> None:
     image pinned for a member nobody declared would be a payload pushed to the
     device for no reason at all, which is how an estate accumulates history.
     """
-    assert tuple(sorted(container.name for container in census())) == tuple(sorted(conventions.GW_ESTATE))
+    assert tuple(sorted(container.name for container in census())) == tuple(sorted(MEMBERS))
 
     with pytest.raises(ValueError, match='no image pinned for zerotier'):
-        estate.census(
-            rootfs={name: pin for name, pin in ROOTFS.items() if name != 'zerotier'},
-            addresses=ADDRESSES,
-            acme_token=ACME_TOKEN,
-        )
+        estate.census(rootfs={name: pin for name, pin in ROOTFS.items() if name != 'zerotier'}, acme_token=ACME_TOKEN)
     with pytest.raises(ValueError, match='thermostat is not a member of the estate'):
         estate.census(
             rootfs={**ROOTFS, 'thermostat': estate.Rootfs(url='https://example.invalid/x', sha256=DIGEST)},
-            addresses=ADDRESSES,
-            acme_token=ACME_TOKEN,
-        )
-    with pytest.raises(ValueError, match='no address for adguard-bob'):
-        estate.census(
-            rootfs=ROOTFS,
-            addresses={name: address for name, address in ADDRESSES.items() if name != 'adguard-bob'},
             acme_token=ACME_TOKEN,
         )
 
@@ -164,8 +154,8 @@ def test_the_routing_configuration_confines_what_the_peer_may_announce() -> None
     assert f'router bgp {conventions.UDM_ASN}' in rendered
     assert f'neighbor {peer} password {BGP_PASSWORD}' in rendered
     assert f'neighbor {peer} maximum-prefix {estate.MAX_PREFIXES}' in rendered
-    assert f'permit {conventions.LAN_POOL_V4} le 32' in rendered
-    assert f'permit {conventions.LAN_POOL_V6} le 128' in rendered
+    assert f'permit {conventions.LAN_POOL.v4} le 32' in rendered
+    assert f'permit {conventions.LAN_POOL.v6} le 128' in rendered
     assert rendered.count('deny any') == 2, 'each family admits the pool and refuses the rest'
     # Both families ride the one session, so both have to be activated on it.
     assert rendered.count(f'neighbor {peer} activate') == 2
@@ -292,8 +282,8 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     address = ADDRESSES['adguard-alice']
     environment = estate.net_setup_environment(address)
 
-    assert environment[estate.ENV_IPV4_CIDR] == f'{address}/{conventions.VLAN_CONTAINER.prefixlen}'
-    assert environment[estate.ENV_IPV4_GATEWAY] == str(next(conventions.VLAN_CONTAINER.hosts()))
+    assert environment[estate.ENV_IPV4_CIDR] == f'{address}/{conventions.CONTAINER_VLAN.v4.prefixlen}'
+    assert environment[estate.ENV_IPV4_GATEWAY] == str(conventions.CONTAINER_VLAN.require_gateway())
     # The v6 half is an interface identifier, not an address: the prefix keeps
     # arriving in advertisements, so the resolver survives it changing.
     assert environment[estate.ENV_IPV6_TOKEN] == f'::{address}'
@@ -312,13 +302,14 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     device and nowhere else — never the cluster issuer's, which is the point of
     there being two.
     """
-    rendered = estate.caddyfile(adguard={name: ADDRESSES[name] for name in estate.VHOST_ADGUARD})
+    rendered = estate.caddyfile()
 
-    assert estate.VHOST_CONTROLLER in rendered
+    assert conventions.VHOST_CONTROLLER in rendered
     assert rendered.count(f'dns cloudflare {{file.{estate.CADDY_TOKEN_PATH}}}') == 3
-    for instance, name in estate.VHOST_ADGUARD.items():
-        assert name in rendered
-        assert f'http://{ADDRESSES[instance]}:{conventions.ADGUARD_API_PORT}' in rendered
+    for instance in estate.resolvers():
+        assert instance.vhost is not None
+        assert instance.vhost in rendered
+        assert f'http://{ADDRESSES[instance.name]}:{conventions.ADGUARD_API_PORT}' in rendered
     # The console presents its own certificate to the proxy and the name that
     # matters is the one the client asked for, which Caddy forwards unchanged.
     assert 'tls_insecure_skip_verify' in rendered
@@ -340,7 +331,7 @@ def test_the_member_carrying_the_session_is_converged_last() -> None:
     declared_units = next(line for line in script.splitlines() if line.startswith('DECLARED='))
 
     assert declared_units.rstrip('"').endswith(estate.unit_name('zerotier'))
-    assert all(estate.unit_name(name) in declared_units for name in conventions.GW_ESTATE)
+    assert all(estate.unit_name(name) in declared_units for name in MEMBERS)
 
 
 def test_a_container_is_restarted_only_when_something_it_reads_changed() -> None:
@@ -482,7 +473,7 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes() -> None:
         for typ, name, inputs in declared
         if typ == 'pulumi-python:dynamic/gateway:Artifact'  # noqa: S105 -- a resource type, not a credential
     ]
-    assert sorted(name for name, _ in images) == sorted(f'{NAME}-image-{member}' for member in conventions.GW_ESTATE)
+    assert sorted(name for name, _ in images) == sorted(f'{NAME}-image-{member}' for member in MEMBERS)
     for name, inputs in images:
         assert inputs['sha256'] == DIGEST, name
         assert inputs['url'].endswith('.tar.zst'), name
@@ -490,7 +481,7 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes() -> None:
 
     # Every member's artifact owns the tree its unit boots, so a pin that moves
     # replaces the root filesystem rather than leaving a tarball nobody unpacks.
-    for member in conventions.GW_ESTATE:
+    for member in MEMBERS:
         inputs = registered(f'{NAME}-image-{member}')
         assert inputs['target'] == estate.image_path(member)
         assert inputs['extract'] == estate.root_path(member)
@@ -513,18 +504,16 @@ async def test_the_device_secrets_are_declared_secret() -> None:
     assert frr['path'] == estate.FRR_CONFIG
 
 
-def test_the_pins_and_the_addresses_are_read_from_configuration() -> None:
-    """Both are site facts: what the build produced, and where the LAN expects.
+def test_the_pins_are_read_from_configuration() -> None:
+    """A digest is a site fact: whatever the build produced.
 
-    They are checked as they cross into the program, so a truncated digest is a
+    It is checked as it crosses into the program, so a truncated digest is a
     named configuration error rather than a push that reaches the device and is
     refused there.
     """
     url = 'https://example.invalid/caddy.tar.zst'
     pins = estate.parse_rootfs({'caddy': {'url': url, 'sha256': DIGEST.upper()}})
     assert pins['caddy'] == estate.Rootfs(url=url, sha256=DIGEST)
-
-    assert estate.parse_addresses({'caddy': '10.0.5.10'}) == {'caddy': IPv4Address('10.0.5.10')}
 
     with pytest.raises(ValueError, match='is not a hex sha256 digest'):
         estate.parse_rootfs({'caddy': {'url': url, 'sha256': 'abc'}})

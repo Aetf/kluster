@@ -102,7 +102,7 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
     # The slot is the signing configuration, and where the appliance may act is
     # a convention beside it: the mapping is the one place the compartment is
     # written down, so nothing can drift from it.
-    assert client.compartment_id == conventions.OCI_COMPARTMENTS[conventions.STATE_BACKEND].ocid
+    assert client.compartment_id == conventions.OCI_TENANCY.compartments[conventions.STATE_BACKEND].ocid
     assert (client.config['user'], client.config['tenancy']) == (APPLIANCE_USER, APPLIANCE_TENANCY)
 
 

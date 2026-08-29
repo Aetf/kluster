@@ -75,11 +75,12 @@ from urllib.parse import urlencode
 import pulumi
 import pulumi_libvirt as libvirt
 
+from kluster import conventions
 from kluster.components.talos import TalosCluster
 from kluster.lib import workstation
 from putils import Component
 
-__all__ = ('HOST_KEY', 'LIBVIRT_USER', 'HomelabHost', 'connection_uri', 'declare', 'slot')
+__all__ = ('LIBVIRT_USER', 'HomelabHost', 'connection_uri', 'declare', 'slot')
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
@@ -145,15 +146,6 @@ HOST_OWNED: tuple[str, ...] = (
 #: by the host's own configuration management (homelab-host.md §4).
 LIBVIRT_USER = 'virt'
 
-#: The host's SSH host key, pinned. It is code rather than configuration for
-#: two reasons: a public key is not a secret, and a pin typed in beside the
-#: client credential could be replaced by whoever could already replace the
-#: credential. Stored in the estate's `authorized_keys` form — the bare
-#: `ssh-ed25519 AAAA…` blob, no host name in front of it
-#: (`providers/device_files/ssh.py`) — so the address it is written against is
-#: decided where the session is dialled rather than carried around with the key.
-HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIHV/ogdnUUf2j2DIffv86Ra43SS672UCZt3kXSvs6FF'
-
 #: The workstation slot the run materializes its transport into
 #: (credentials.md §1 rule 6): the checkout's git-ignored `.credentials/`, one
 #: directory deeper so this pair sits beside another consumer's rather than in
@@ -188,8 +180,8 @@ def connection_uri(*, host: str, private_key: str, directory: Path | None = None
 
     -   the client identity, `0600` in a `0700` directory (`workstation`);
     -   a `known_hosts` file holding one line — `host` followed by the pinned
-        `HOST_KEY`. The pin is written against the address the URI dials,
-        which is what the verifier matches on.
+        `conventions.HOMELAB_HOST_KEY`. The pin is written against the address
+        the URI dials, which is what the verifier matches on.
 
     What the provider honours here is not libvirt's own remote driver: the
     bridged Terraform provider parses the URI itself and dials over Go's SSH
@@ -224,7 +216,7 @@ def connection_uri(*, host: str, private_key: str, directory: Path | None = None
         raise ValueError(f'{target} contains a "$", which the libvirt provider expands before opening the file')
 
     keyfile = workstation.write(target / KEYFILE, private_key)
-    known_hosts = workstation.write(target / KNOWN_HOSTS, f'{host} {HOST_KEY}')
+    known_hosts = workstation.write(target / KNOWN_HOSTS, f'{host} {conventions.HOMELAB_HOST_KEY}')
     query = urlencode(
         {
             'keyfile': str(keyfile),

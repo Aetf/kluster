@@ -90,7 +90,7 @@ Created as each area reaches detailed design:
 -   **[workloads.md](workloads.md)** (written) — the per-app component
     contract (workload/storage/backup/exposure/DNS/secrets/placement/
     policy/monitoring in one place), the shaped patterns (dedicated-VIP,
-    split-horizon, bulk-egress, JuiceFS-quarantined, CNPG), and the
+    split-horizon, bulk-egress, block-volume, CNPG), and the
     porting rule from kluster-code.
 
 The `github` stack has no document here: what it declares is designed

@@ -98,8 +98,8 @@ the VPS empties progressively):
     (continuwuity, rsync its local-path state; its `.well-known`
     delegation rides the blog instance, workloads.md §4, so it is
     already serving by this point) → cloud syncthing/dav successor
-    (**no data copy**: fresh per-app JuiceFS bucket, the replica
-    reseeds itself from syncthing-nas over the syncthing protocol)
+    (**no data copy**: a fresh block volume, and the replica reseeds
+    itself from syncthing-nas over the syncthing protocol)
     with **stdiscosrv** alongside it (raw TCP `public_port`,
     workloads.md §5).
 -   **Wave B — homelab VM, light**: monitoring (VictoriaMetrics fresh —

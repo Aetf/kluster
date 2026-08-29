@@ -26,8 +26,6 @@ config:
   oci:region: us-phoenix-1
   kluster-py:budgetAlertRecipients:
     secure: v1:nZYApv0IPqqPmA8v:gq8KLjzOm+VF9L9fEfqBuP6weEuhkqTjagVcx8RP4+9HT7tWLY0l5W72xmA1MA==
-  kluster-py:b2Region: us-west-002
-  kluster-py:gatewayAddresses: '{"caddy":"10.0.5.180","adguard-alice":"10.0.5.3","adguard-bob":"10.0.5.4"}'
   kluster-py:gatewayBgpPassword:
     secure: v1:wBdxusHiDpECsu68:foOGUk8WIHDIwueFbHlYXIFkpStxgkHQiqZHOppNjDfgUlt1L9PGhmwX7UKuk5Un
   kluster-py:gatewayRootfs: |-

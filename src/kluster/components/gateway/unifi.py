@@ -5,8 +5,8 @@ Two kinds of thing are declared here, and the first is why the second can be
 written at all.
 
 **The cluster VLAN, as a network object and a zone of its own.** Cluster nodes
-do not share the untagged server LAN: they sit on `conventions.CLUSTER_VLAN_V4`
-behind VLAN id `conventions.CLUSTER_VLAN_ID`, which the controller serves with
+do not share the untagged server LAN: they sit on the subnet and VLAN id
+`conventions.CLUSTER_VLAN` declares, which the controller serves with
 no DHCP server — every node states its own address in machine configuration
 (`components/talos/`), so a lease would be a second opinion about an address
 three other places already treat as constant. Being a network object is what
@@ -84,7 +84,7 @@ the applications whose traffic they admit.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from ipaddress import IPv4Address, IPv6Address, IPv6Network
+from ipaddress import IPv4Address, IPv6Address
 
 import pulumi
 import pulumi_unifi as unifi
@@ -102,13 +102,6 @@ __all__ = ('STATIC_HOSTS', 'Firewall')
 ZONE_INTERNAL = 'Internal'
 ZONE_EXTERNAL = 'External'
 
-#: The IoT VLAN's unique-local prefix, out of `conventions.SITE_ULA` and
-#: numbered after the third octet of `conventions.VLAN_IOT` like every other
-#: /64 at the site. It is the ULA rather than a global prefix on purpose: the
-#: site's delegated prefix rotates, while a rule has to keep matching, and a
-#: client reaching a ULA destination sources from its own ULA.
-VLAN_IOT_V6 = IPv6Network('fd1a:665f:8bcb:90::/64')
-
 #: The port the media Gateway serves. The one thing the IoT VLAN may reach in
 #: the pool, and it is HTTPS because everything behind that Gateway is.
 MEDIA_PORT = 443
@@ -123,7 +116,7 @@ NETWORK_PURPOSE = 'corporate'
 #: The controller spells a network's addressing as its *own* interface
 #: address plus the prefix — `10.0.0.1/24`, not `10.0.0.0/24` — so the subnet
 #: and the gateway are one field.
-CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN_GATEWAY_V4}/{conventions.CLUSTER_VLAN_V4.prefixlen}'
+CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN.require_gateway()}/{conventions.CLUSTER_VLAN.v4.prefixlen}'
 
 #: How many times the provider may re-attempt a request the controller failed
 #: transiently. Deliberately small: the controller's login rate limit is
@@ -209,7 +202,7 @@ class Firewall(Component):
             name=conventions.UNIFI_NETWORK_CLUSTER,
             purpose=NETWORK_PURPOSE,
             subnet=CLUSTER_SUBNET,
-            vlan_id=conventions.CLUSTER_VLAN_ID,
+            vlan_id=conventions.CLUSTER_VLAN.vlan_id,
             dhcp_enabled=False,
             dhcp_v6_enabled=False,
             ipv6_interface_type='pd',
@@ -224,17 +217,17 @@ class Firewall(Component):
         # for one subnet because a group holds one address family.
         self.pool_v4 = unifi.FirewallGroup(
             f'{name}-pool-v4',
-            name=conventions.UNIFI_GROUP_LAN_POOL_V4,
+            name=conventions.LAN_POOL.group_v4,
             type='address-group',
-            members=[str(conventions.LAN_POOL_V4)],
+            members=[str(conventions.LAN_POOL.v4)],
             site=site,
             opts=child,
         )
         self.pool_v6 = unifi.FirewallGroup(
             f'{name}-pool-v6',
-            name=conventions.UNIFI_GROUP_LAN_POOL_V6,
+            name=conventions.LAN_POOL.group_v6,
             type='ipv6-address-group',
-            members=[str(conventions.LAN_POOL_V6)],
+            members=[str(conventions.LAN_POOL.v6)],
             site=site,
             opts=child,
         )
@@ -248,10 +241,10 @@ class Firewall(Component):
             action='ALLOW',
             ip_version='IPV4',
             protocol='tcp',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.VLAN_IOT)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(
                 zone_id=external,
-                ips=[str(conventions.VIP_MEDIA_V4)],
+                ips=[str(conventions.LAN_POOL.media_vip.v4)],
                 port=MEDIA_PORT,
             ),
             # An allow whose return leg is not allowed is not an allow, and
@@ -267,10 +260,10 @@ class Firewall(Component):
             action='ALLOW',
             ip_version='IPV6',
             protocol='tcp',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(VLAN_IOT_V6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(
                 zone_id=external,
-                ips=[str(conventions.VIP_MEDIA_V6)],
+                ips=[str(conventions.LAN_POOL.media_vip.v6)],
                 port=MEDIA_PORT,
             ),
             auto_allow_return_traffic=True,
@@ -284,7 +277,7 @@ class Firewall(Component):
             action='BLOCK',
             ip_version='IPV4',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.VLAN_IOT)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external, ip_group_id=self.pool_v4.id),
             enabled=True,
             opts=child,
@@ -296,7 +289,7 @@ class Firewall(Component):
             action='BLOCK',
             ip_version='IPV6',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(VLAN_IOT_V6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=external, ip_group_id=self.pool_v6.id),
             enabled=True,
             opts=child,
@@ -390,7 +383,7 @@ class Firewall(Component):
             action='BLOCK',
             ip_version='IPV4',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.VLAN_IOT)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v4)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
             enabled=True,
             opts=child,
@@ -402,7 +395,7 @@ class Firewall(Component):
             action='BLOCK',
             ip_version='IPV6',
             protocol='all',
-            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(VLAN_IOT_V6)]),
+            source=unifi.FirewallZonePolicySourceArgs(zone_id=internal, ips=[str(conventions.IOT_VLAN.v6)]),
             destination=unifi.FirewallZonePolicyDestinationArgs(zone_id=self.zone.id),
             enabled=True,
             opts=child,

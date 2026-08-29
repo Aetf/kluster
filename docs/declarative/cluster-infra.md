@@ -12,7 +12,7 @@ that speaks the k8s API, consumed by `apps`.
 ## 0. Scope and rules
 
 -   Inputs (StackReference to `physical`): kubeconfig, node
-    primary/private IPs, the augmented node's secondary private IP, the
+    primary/private IPs, the dedicated-VIP node's secondary private IP, the
     NLB IP.
 -   **Names: explicit for shared singletons, outputs for the dynamic.**
     Cross-stack-referenced singletons (StorageClasses, Gateways, pools,
@@ -215,7 +215,7 @@ All decided behavior from architecture.md §3, expressed as config:
     KubeSpan underlay (WireGuard overhead — verify, don't assume).
 -   **LB IPAM**: two `CiliumLoadBalancerIPPool`s — `internet` (the
     on-the-wire node addresses: the three primary **private** IPv4s +
-    the v6 GUAs + the augmented node's secondary private IP — OCI
+    the v6 GUAs + the dedicated-VIP node's secondary private IP — OCI
     1:1-NATs public v4 to private, so public v4 literals would never
     match (architecture.md §3.2); all from physical outputs) and `lan`
     (`192.168.71.0/24` + the ULA /64, outside every home network and

@@ -41,9 +41,10 @@ workloads. This means the cloud pool needs:
 -   Ability to boot **Talos Linux** — a hard filter: the provider must
     support custom images/ISOs (excludes AWS Lightsail and most managed
     VPS products).
--   **Disk**: ~50 GB boot per node; hath's cache as a block volume on
-    its gateway node. 3 × boot + hath ≈ the 200 GB free block allowance —
-    slight paid overflow is cents (§3.2). etcd lives on the boot volume:
+-   **Disk**: ~50 GB boot per node, plus one attached block volume on
+    each of two nodes (hath's cache, the syncthing replica). That
+    overflows the 200 GB free block allowance by 160 GB, which is a few
+    dollars a month (§3.2). etcd lives on the boot volume:
     **verify fsync latency <10 ms at bootstrap** (OCI Balanced block
     volumes are typically ~1–2 ms; this is a check, not an assumption).
 
@@ -122,8 +123,8 @@ The legacy VPS NIC moved 1276 GB TX/30d, but decomposed:
 -   **hath is the only workload requiring a stable public IP** (inbound port
     and outbound on the same IP; the dedicated-VIP pattern,
     architecture.md §3.2). Its ~50–110 GB/mo fits trivially inside the
-    10 TB allowance, and its 50 Gi cache rides a block volume inside the
-    free 200 GB.
+    10 TB allowance, and its 50 GB cache rides a block volume on the
+    same node the VIP does (§3.2).
 
 ## 3. Provider comparison (cloud worker, dual-stack, Talos)
 
@@ -256,10 +257,12 @@ shape itself):
     5 volume backups. Beyond: $0.0255/GB-mo (+$0.017 at Balanced VPU).
     **The tenancy's footprint exceeds this by design**: OCI's minimum
     boot volume is 50 GB, so three A1 boots + the state-backend micro's
-    boot + hath's 50 GB cache volume = **250 GB**, i.e. ~$1.28/mo at
-    VPU 0. Accepted rather than designed around — the alternative
-    (folding hath's cache into a boot volume) would cost it the
-    independent-volume boundary storage.md §3.3 relies on.
+    boot + the two attached volumes (hath's 50 GB cache and the
+    syncthing replica's 110 GB) = **360 GB**, i.e. ~$4.08/mo at VPU 0.
+    Accepted rather than designed around — folding either dataset into a
+    boot volume would cost it the independent-volume boundary storage.md
+    §3.3 relies on, and the replica's alternative was a filesystem over
+    object storage at the same price (storage.md §6).
 -   **Bastion service: free** — an out-of-band SSH path to the node
     when the cluster/KubeSpan is down. Vault software keys + secrets:
     free. NLB ×1 + 10 Mbps flexible LB ×1: free (unused by the Cilium

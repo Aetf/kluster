@@ -22,7 +22,7 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 
 ## 0. Scope and outputs
 
-Owns: OCI (network, nodes, NLB, IPs, volumes, buckets, guardrails),
+Owns: OCI (network, nodes, NLB, IPs, volumes, guardrails),
 libvirt on the homelab host (worker VM + adopted HAOS domain), Talos
 day-1 (secrets → configs → apply → bootstrap), the gw-config and unifi
 resources on the UDM, and the B2 backup bucket. DNS lives in the `dns`
@@ -66,23 +66,31 @@ bucket names/endpoints.
     pods away from `user_data` (= the machine config, secrets included)
     is the baseline network policy (architecture.md §4.1,
     cluster-infra.md §2).
--   **One augmented node**: exactly one of the three additionally gets
-    a block volume, a **secondary private IP** on its VNIC, and the
-    **reserved public IP** assigned to it (the dedicated-VIP pattern,
-    architecture.md §3.2). Nothing about the node is hath-specific —
-    it is simply the node with extra storage and networking; hath (or
-    any future dedicated-VIP workload) lands on it via scheduling
-    constraints declared with the workload.
+-   **Two per-node capabilities, declared apart.** The **dedicated
+    VIP** — a **secondary private IP** on a VNIC plus the **reserved
+    public IP** assigned to it (architecture.md §3.2) — belongs to
+    exactly one node, named by `conventions.DEDICATED_VIP_NODE`.
+    **Block volumes** are a list any node may draw from:
+    `conventions.NODE_VOLUMES` gives each one a size, a mount path and
+    the node it attaches to, one volume per node so that the machine
+    configuration's disk selection stays "the disk that is not the boot
+    disk" and one node's loss takes one dataset rather than two. A
+    volume whose workload must also hold the VIP says so in its own
+    entry (`node=FOLLOWS_DEDICATED_VIP`) and resolves to whichever node
+    that is, so the pair cannot drift apart. Nothing about either node
+    is workload-specific: a workload reaches the address or the volume
+    through scheduling constraints declared with it.
 -   **NLB**: one Network Load Balancer with source-IP preservation
     (verification item) and a backend set of the three nodes, declared
     here; **listeners are not a fixed list** — the management listeners
     (6443/50000) live here, while service listeners are declared beside
     the services that need them, exactly like security rules and DNS
     records.
--   **Buckets**: the JuiceFS chunk bucket on OCI Object Storage
-    (storage.md §4/§6) + customer keys.
+-   **Buckets**: none on this provider. The one object bucket is the
+    backup bucket, which lives on B2 precisely because it must not
+    share a provider with what it insures (storage.md §4).
 -   **Protection**: data- and identity-bearing resources here — block
-    volumes (hath's cache above all), buckets, the reserved public IP,
+    volumes and their attachments, the reserved public IP,
     `machine_secrets` — carry `protect=True` per storage.md §3.3.
 -   **Guardrails**: compartment quotas pinning creatable shapes to the
     free envelope, plus a budget with alert rules (nodes.md §3.2).
@@ -132,14 +140,14 @@ machine_secrets
     changing) into machine config, accepting the cross-stack cost
     only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
-    the augmented node's secondary private IP on its interface;
+    the dedicated-VIP node's secondary private IP on its interface;
     the **local-path backing mount** (`/var/mnt/storage`, storage.md
     §2 — the StorageClass's provisioner is k8s-base's, but the disk
     path under it is machine config).
 -   **Two renderings, one configuration.** What a machine boots with is
     delivered before that machine exists (`user_data`, seed image), so
     it cannot name anything the cloud assigns to the finished instance:
-    a configuration naming the augmented node's secondary private IP
+    a configuration naming the dedicated-VIP node's secondary private IP
     would wait on the instance that waits on it. That address arrives on
     day 1 instead — the configuration applied over apid is the booted
     one plus the address — and every other node is applied the very

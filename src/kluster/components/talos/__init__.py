@@ -243,8 +243,8 @@ class StaticAddress:
 #: the constant exists to prevent.
 STATIC_ADDRESSES: Mapping[str, StaticAddress] = {
     conventions.HOMELAB_NODE: StaticAddress(
-        address=IPv4Interface(f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN_V4.prefixlen}'),
-        gateway=conventions.CLUSTER_VLAN_GATEWAY_V4,
+        address=IPv4Interface(f'{conventions.HOMELAB_NODE_IPV4}/{conventions.CLUSTER_VLAN.v4.prefixlen}'),
+        gateway=conventions.CLUSTER_VLAN.require_gateway(),
     ),
 }
 
