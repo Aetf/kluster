@@ -53,14 +53,22 @@ class Mocks(pulumi.runtime.Mocks):
         super().__init__()
         self.declared: list[tuple[str, str]] = []
         self.inputs: dict[str, dict[str, Any]] = {}
+        #: Which provider instance each resource was registered against, by
+        #: name, and the same for each function call: the engine hands a mock
+        #: the reference of the provider that would serve the request, which
+        #: is how a case can ask what a declaration authenticates as.
+        self.providers: dict[str, str] = {}
+        self.call_providers: dict[str, str] = {}
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         properties = dict(cast('dict[str, Any]', args.inputs))
         self.declared.append((args.typ, args.name))
         self.inputs[args.name] = properties
+        self.providers[args.name] = args.provider or ''
         return args.name + '_id', properties
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        self.call_providers[args.token] = args.provider or ''
         if args.token == 'unifi:index/getFirewallZone:getFirewallZone':
             name = str(cast('dict[str, Any]', args.args)['name'])
             return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}, []
@@ -70,6 +78,7 @@ class Mocks(pulumi.runtime.Mocks):
 @pytest_asyncio.fixture(autouse=True)
 async def mocks() -> Mocks:
     recorded = Mocks()
+    pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
     pulumi.runtime.set_mocks(recorded, project='kluster', stack='physical', preview=False)
     # Registrations are dispatched onto a queue that lives in module state and
     # therefore outlives a test's event loop. Emptying it here is what lets
@@ -97,7 +106,6 @@ def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -
     return unifi.Firewall(
         NAME,
         api_url=API_URL,
-        api_key=API_KEY,
         site=SITE,
         worker_gua=WORKER_GUA,
         peer_port=PEER_PORT,
@@ -585,7 +593,6 @@ async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
     firewall = gateway.declare_firewall(
         NAME,
         api_url=API_URL,
-        api_key=API_KEY,
         site=SITE,
         worker_gua=WORKER_GUA,
         peer_port=6881,
@@ -596,3 +603,45 @@ async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
     assert destination is not None
     assert destination.port == 6881
     assert await firewall.peer_v4.dst_port.future() == '6881'
+
+
+##
+## The controller connection
+##
+
+
+@pytest.mark.asyncio
+async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
+    """The key that can rewrite the home\'s firewall reaches one line.
+
+    It authorizes changes to the site\'s policy and nothing else in the program
+    has a use for it, so it is read at the line that builds the provider rather
+    than threaded through a signature (rfc-002 §8.1). What is still an argument
+    is the endpoint: which address the controller answers on is a site fact the
+    stack derives, not a credential.
+    """
+    import inspect
+
+    firewall = build()
+    assert await firewall.provider.api_key.future() == API_KEY
+    assert 'api_key' not in inspect.signature(unifi.Firewall.__init__).parameters
+
+
+@pytest.mark.asyncio
+async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Mocks) -> None:
+    """One provider, inherited by the whole subtree and by the zone lookups.
+
+    The zone, the network, the address groups, the policies and the port
+    forward are children of the component that built the provider, so each
+    takes it from its parent rather than naming it. The two zone lookups are
+    invokes, which inherit only through a parent -- so they name one, and the
+    provider they end up signing with is the same one.
+    """
+    _ = build()
+    await settled()
+
+    controller = [name for typ, name in mocks.declared if typ.startswith('unifi:index/')]
+    assert controller, 'the build declared no controller resources at all'
+    for name in controller:
+        assert f'{NAME}-unifi' in mocks.providers[name], f'{name} is not signed by the controller provider'
+    assert f'{NAME}-unifi' in mocks.call_providers['unifi:index/getFirewallZone:getFirewallZone']

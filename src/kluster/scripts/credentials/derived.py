@@ -92,19 +92,25 @@ GATEWAY_ACME_KEY = 'gatewayAcmeToken'
 #: so delivery is too.
 PHYSICAL_STACK = conventions.PHYSICAL
 
-#: Where the OCI provider reads its credential, namespaced to the provider as
-#: the provider requires. The compartment is not among them: it is a boundary
-#: this program decides rather than a part of the signing configuration, so it
-#: lives in `conventions` and the stack reads it there.
-OCI_TENANCY_KEY = 'oci:tenancyOcid'
-OCI_USER_KEY = 'oci:userOcid'
-OCI_FINGERPRINT_KEY = 'oci:fingerprint'
-OCI_PRIVATE_KEY_KEY = 'oci:privateKey'
-OCI_REGION_KEY = 'oci:region'
+#: Where the `physical` stack reads the OCI signing configuration. Bare, and
+#: therefore in this project's namespace, for the reason the account id above
+#: is: the provider is built by the stack program from these values rather than
+#: configured by an ambient namespace (rfc-002 §8.1), so the keys belong to the
+#: program that reads them and to no provider.
+#:
+#: Neither the region nor the compartment is among them. Both are facts about
+#: the account rather than parts of the signing configuration — the region is
+#: permanent per tenancy and the compartment is a boundary this program
+#: decides — so both live in `conventions` and the stack reads them there.
+OCI_TENANCY_KEY = 'ociTenancyOcid'
+OCI_USER_KEY = 'ociUserOcid'
+OCI_FINGERPRINT_KEY = 'ociFingerprint'
+OCI_PRIVATE_KEY_KEY = 'ociPrivateKey'
 
-#: Where the B2 provider reads its credential.
-B2_KEY_ID_KEY = 'b2:applicationKeyId'
-B2_KEY_KEY = 'b2:applicationKey'
+#: Where the backup bucket reads its account's key pair, in the same namespace
+#: and for the same reason.
+B2_KEY_ID_KEY = 'b2ApplicationKeyId'
+B2_KEY_KEY = 'b2ApplicationKey'
 
 #: The names these rows carry on the command line and in the slot map. One
 #: string per row, defined here because this is where the mint lives: the map
@@ -180,18 +186,17 @@ def cloudflare_gateway_acme(
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:
     """Write one OCI signing configuration into a stack's committed config.
 
-    The four keys the provider signs with are secrets. The key obviously is;
-    the tenancy and user OCIDs are account identifiers, which the kit itself
-    keeps as protected attributes (§2.1) and a public repository has no reason
-    to publish. The fingerprint is written here although §2.1 declines to store
-    one, because the provider takes it as a separate input rather than deriving
-    it — and it is computed from the key at push time, so the two cannot
-    disagree.
+    All four are secrets. The key obviously is; the tenancy and user OCIDs are
+    account identifiers, which the kit itself keeps as protected attributes
+    (§2.1) and a public repository has no reason to publish. The fingerprint is
+    written here although §2.1 declines to store one, because the provider
+    takes it as a separate input rather than deriving it — and it is computed
+    from the key at push time, so the two cannot disagree.
 
-    The fifth is plain: the region is a constant of this estate
-    (`conventions`), which is also where the compartment the key may act in
-    lives — a boundary this program decides is not something a credential
-    delivery gets to restate.
+    What the push does *not* write is where the key may act, and that is two
+    things rather than one: the region is a constant of this estate
+    (`conventions`), and so is the compartment beside it. A boundary this
+    program decides is not something a credential delivery gets to restate.
     """
     stack.fill(
         secret={
@@ -205,7 +210,7 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str
             # PEM to every reader of one, this provider included.
             OCI_PRIVATE_KEY_KEY: key.private_key.strip(),
         },
-        plain={OCI_REGION_KEY: key.region},
+        plain={},
         holds=holds,
     )
 

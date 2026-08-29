@@ -40,7 +40,14 @@ class Mocks(pulumi.runtime.Mocks):
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> None:
-    pulumi.runtime.set_all_config({'kluster:cloudflareAccountId': ACCOUNT_ID})
+    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
+
+    pulumi.runtime.set_all_config(
+        {
+            'kluster:cloudflareAccountId': ACCOUNT_ID,
+            f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': 'a-zones-token',
+        }
+    )
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='dns', preview=True)
     from kluster.stacks import dns
 

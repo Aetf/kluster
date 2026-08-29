@@ -43,14 +43,22 @@ from putils import async_output
 #: Talos' own API port, and the endpoint scheme the machine config expects.
 KUBE_API_PORT = 6443
 
-#: The tenancy the OCI credential signs for, read out of the provider's own
-#: configuration rather than restated as a key of this program's. It is the
-#: account the key belongs to, written beside the key by the mint that issued
-#: it (credentials.md §3), and the two guardrail resources need it because both
-#: are tenancy-level objects that *name* a compartment rather than living in
-#: one: the quota policy and the budget.
-OCI_NAMESPACE = 'oci'
-OCI_TENANCY_KEY = 'tenancyOcid'
+#: What the cloud provider is built from. Its region is a fact about the
+#: account and lives in `conventions`; these four are the secrets, and they are
+#: read at the line that builds the provider and nowhere else (rfc-002 §8.1).
+#:
+#: The tenancy is among them because it is the account the key signs for,
+#: written beside the key by the mint that issued it (credentials.md §3), and
+#: because the two guardrail resources need it: both are tenancy-level objects
+#: that *name* a compartment rather than living in one — the quota policy and
+#: the budget. TODO(kluster-ops#117): it is an identity rather than a secret
+#: and belongs in `conventions` beside the region, which needs both this sink
+#: retired and a ruling on committing an account identifier to a public
+#: repository.
+OCI_TENANCY_OCID = 'ociTenancyOcid'
+OCI_USER_OCID = 'ociUserOcid'
+OCI_FINGERPRINT = 'ociFingerprint'
+OCI_PRIVATE_KEY = 'ociPrivateKey'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
 #: gateway is not yet on the overlay. Absent — the steady state — every client
@@ -58,12 +66,6 @@ OCI_TENANCY_KEY = 'tenancyOcid'
 #: optional keys, and the other is its mirror image: this one is set only
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
-
-#: The client half of the libvirt session, and the only part of that session
-#: this stack is configured with. Where it lands on the machine running the
-#: program, and the URI that names it there, are derived
-#: (`components/homelab/`).
-LIBVIRT_PRIVATE_KEY = 'libvirtPrivateKey'
 
 #: The export each continuous-integration identity's key material leaves under,
 #: by the roster name of the member that carries it. The names are half of a
@@ -86,20 +88,47 @@ async def main() -> None:
     # the mint that issues that credential (credentials.md §3). A stack whose
     # compartment does not exist yet refuses by naming that command.
     compartment_id = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].require()
-    tenancy_id = pulumi.Config(OCI_NAMESPACE).require_secret(OCI_TENANCY_KEY)
+    tenancy_id = config.require_secret(OCI_TENANCY_OCID)
     talos_version = config.require('talosVersion')
 
-    network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id)
-    image = TalosImage(conventions.CLUSTER_NAME, compartment_id=compartment_id, talos_version=talos_version)
+    # The one provider this program shares, and therefore the one the stack
+    # program builds (rfc-002 §8.1): six components declare against this
+    # account — the network, the balancer, the nodes, the guardrails, the block
+    # volumes and the image import — and a provider built inside any of them
+    # would be reached into by the rest. Its region comes from `conventions`
+    # because it is a permanent property of the account, so what is read here
+    # is exactly the secrets.
+    cloud = oci.Provider(
+        f'{conventions.CLUSTER_NAME}-oci',
+        region=conventions.OCI_TENANCY.region,
+        tenancy_ocid=tenancy_id,
+        user_ocid=config.require_secret(OCI_USER_OCID),
+        fingerprint=config.require_secret(OCI_FINGERPRINT),
+        private_key=config.require_secret(OCI_PRIVATE_KEY),
+    )
+    # Set on each top-level component that declares against the account, and
+    # inherited from there by everything below it: nothing under these names
+    # the provider, and no component takes it as an argument.
+    on_cloud = pulumi.ResourceOptions(providers=[cloud])
+
+    network = CloudNetwork(conventions.CLUSTER_NAME, compartment_id=compartment_id, opts=on_cloud)
+    image = TalosImage(
+        conventions.CLUSTER_NAME,
+        compartment_id=compartment_id,
+        talos_version=talos_version,
+        opts=on_cloud,
+    )
     # The worker's own artefact: the same Talos version, a schematic of its
     # own (x86, and the i915 firmware the GPU cutover wants present from day
     # 0), and a disk image on this machine rather than in a cloud catalogue.
+    # No cloud provider on it: nothing it declares reaches the account.
     worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
 
     load_balancer = NodeLoadBalancer(
         conventions.CLUSTER_NAME,
         compartment_id=compartment_id,
         subnet_id=network.subnet.id,
+        opts=on_cloud,
     )
 
     cluster = TalosCluster(
@@ -120,7 +149,7 @@ async def main() -> None:
         bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN.require_gateway()}/32'},
     )
 
-    placements = async_output(lambda: _placements(compartment_id))
+    placements = async_output(lambda: _placements(compartment_id, cloud))
 
     nodes = CloudNodes(
         conventions.CLUSTER_NAME,
@@ -136,6 +165,7 @@ async def main() -> None:
         placements=placements,
         augmented=conventions.DEDICATED_VIP_NODE,
         load_balancer=load_balancer,
+        opts=on_cloud,
     )
 
     # Machine facts only: the downstream stacks read addresses and ids, never
@@ -154,8 +184,8 @@ async def main() -> None:
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
     _declare_talos_day1(cluster=cluster, nodes=nodes, cluster_endpoint=load_balancer.address)
-    _declare_storage(compartment_id=compartment_id, nodes=nodes)
-    _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
+    _declare_storage(compartment_id=compartment_id, nodes=nodes, on_cloud=on_cloud)
+    _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, on_cloud=on_cloud)
 
     # The two domains that are not the cloud: the host under libvirt, and the
     # gateway through the three doors it is configured by. Both are reached
@@ -163,16 +193,9 @@ async def main() -> None:
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,
-        # Derived, not recorded: the address comes from the overlay roster and
-        # the rest of the URI is a property of the machine running this
-        # program, which is the one thing committed configuration cannot know
-        # (`homelab.connection_uri`). The key is read in the clear rather than
-        # as a secret Output because it is written to a file before any
-        # resource exists — it reaches no resource input, and so no state.
-        connection_uri=homelab.connection_uri(
-            host=str(conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address),
-            private_key=config.require(LIBVIRT_PRIVATE_KEY),
-        ),
+        # No endpoint and no credential: the libvirt session is the host
+        # component's own, so it builds its provider and reads the key that
+        # opens it (rfc-002 §8.1).
         storage_dir=config.require('libvirtStorageDir'),
         bridge=conventions.HOMELAB_BRIDGE,
         vcpus=conventions.HOMELAB_VCPUS,
@@ -191,8 +214,16 @@ def declare_gateway(config: pulumi.Config) -> None:
     credentials, because they authorize three different things and no one of
     them should imply the others.
 
-    Everything read here is a site fact: what the images were built as and what
-    the worker's global address turned out to be. The decisions — the service
+    Two of the three credentials are not read here. The controller's API key
+    and the overlay's administration token each configure a provider and
+    nothing else, so each is read at the line that builds that provider, inside
+    the component that owns the connection (rfc-002 §8.1). The device's own SSH
+    credential is still read here and handed to the estate, because the
+    provider behind it is a dynamic one that carries no configuration yet; §7.4
+    moves that read into the provider's own process.
+
+    What is left is site facts: what the images were built as, and what the
+    worker's global address turned out to be. The decisions — the service
     census and the addresses on it, the firewall census, the overlay roster and
     the rules that confine a run — are code.
 
@@ -233,7 +264,6 @@ def declare_gateway(config: pulumi.Config) -> None:
         # the roster that decides it — which is also why the bootstrap knob
         # moves both doors at once rather than one endpoint being overridable.
         api_url=f'https://{gateway_host}',
-        api_key=config.require_secret('unifiApiKey'),
         site=conventions.UNIFI_SITE,
         # Optional, and absent on the first apply of all: the worker's global
         # address is a SLAAC address formed from the router advertisement of
@@ -248,7 +278,6 @@ def declare_gateway(config: pulumi.Config) -> None:
     )
     network = gateway.declare_zerotier(
         conventions.CLUSTER_NAME,
-        api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
         adguard=[resolver.address for resolver in gw_estate.resolvers()],
     )
@@ -276,7 +305,7 @@ class Storage:
     backup: BackupBucket
 
 
-def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> Storage:
+def _declare_storage(*, compartment_id: str, nodes: CloudNodes, on_cloud: pulumi.ResourceOptions) -> Storage:
     """§1 and §5: the fleet's block volumes and the backup bucket.
 
     One volume per entry of `conventions.NODE_VOLUMES`, attached to the node
@@ -297,10 +326,15 @@ def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> Storage:
             availability_domain=nodes.instances[volume.attached_node].availability_domain,
             instance_id=nodes.instances[volume.attached_node].id,
             size_gb=volume.size_gb,
+            opts=on_cloud,
         )
         for name, volume in sorted(conventions.NODE_VOLUMES.items())
     }
 
+    # The other account, and the one component that touches it: it builds its
+    # own provider and reads its own key pair (rfc-002 §8.1). Its region is a
+    # property of the account rather than a setting, so it comes from
+    # `conventions` like the cloud account's.
     backup = BackupBucket(
         conventions.CLUSTER_NAME,
         region=conventions.B2_ACCOUNT.region,
@@ -322,7 +356,13 @@ def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> Storage:
     return Storage(volumes=volumes, backup=backup)
 
 
-def _declare_guardrails(*, config: pulumi.Config, compartment_id: str, tenancy_id: pulumi.Input[str]) -> Guardrails:
+def _declare_guardrails(
+    *,
+    config: pulumi.Config,
+    compartment_id: str,
+    tenancy_id: pulumi.Input[str],
+    on_cloud: pulumi.ResourceOptions,
+) -> Guardrails:
     """§1: the spend limits.
 
     Compartment quotas that refuse to create anything outside the free
@@ -341,6 +381,7 @@ def _declare_guardrails(*, config: pulumi.Config, compartment_id: str, tenancy_i
         compartment_id=compartment_id,
         compartment_name=compartment.name,
         recipients=_budget_recipients(config),
+        opts=on_cloud,
     )
 
 
@@ -412,7 +453,7 @@ def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes, cluster_end
     return day1
 
 
-async def _placements(compartment_id: str) -> list[tuple[str, str]]:
+async def _placements(compartment_id: str, cloud: oci.Provider) -> list[tuple[str, str]]:
     """(availability domain, fault domain) pairs, in the order nodes take them.
 
     Availability domain first, fault domain only as the tiebreak. An AD is an
@@ -426,7 +467,15 @@ async def _placements(compartment_id: str) -> list[tuple[str, str]]:
     degrades to plain fault-domain spread, which is what this used to do
     unconditionally.
     """
-    domains = await oci.identity.get_availability_domains_output(compartment_id=compartment_id).future()
+    # These two calls are the stack program's own, made outside any component,
+    # so there is no parent to inherit a provider from: they name it (rfc-002
+    # §8.1). With default providers disabled a call that forgot would fail
+    # rather than sign as nobody.
+    signed = pulumi.InvokeOptions(provider=cloud)
+    domains = await oci.identity.get_availability_domains_output(
+        compartment_id=compartment_id,
+        opts=signed,
+    ).future()
     assert domains is not None
     availability = [str(domain.name) for domain in domains.availability_domains]
 
@@ -435,6 +484,7 @@ async def _placements(compartment_id: str) -> list[tuple[str, str]]:
         found = await oci.identity.get_fault_domains_output(
             compartment_id=compartment_id,
             availability_domain=name,
+            opts=signed,
         ).future()
         assert found is not None
         faults.append([str(domain.name) for domain in found.fault_domains])

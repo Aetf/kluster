@@ -90,7 +90,7 @@ import pulumi
 import pulumi_unifi as unifi
 
 from kluster import conventions
-from putils import Component
+from putils import Component, own_provider_opts, with_provider
 
 __all__ = ('STATIC_HOSTS', 'Firewall')
 
@@ -134,6 +134,11 @@ HTTP_MAX_RETRIES = 2
 #: it — a fully-qualified name mapped to one literal address.
 STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
 
+#: Where the controller's API key is read. A key belonging to a dedicated local
+#: administrator on the device, never the SSH credential, and read at the one
+#: line that uses it.
+API_KEY = 'unifiApiKey'
+
 
 class Firewall(Component):
     """The cluster's network and zone, two address groups, ten rules, one forward.
@@ -148,31 +153,37 @@ class Firewall(Component):
         name: str,
         *,
         api_url: str,
-        api_key: pulumi.Input[str],
         site: str,
         worker_gua: pulumi.Input[str] | None,
         peer_port: int,
         static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__(name, opts=opts)
+        # A provider of its own, rather than ambient configuration: this key
+        # authorizes changes to the home's firewall, and the resources it may
+        # reach are exactly the ones below. The key is read here, at the line
+        # that builds the provider (rfc-002 §8.1) — a provider and the secret
+        # that opens it are one thing — and it is built before the component
+        # registers, because a provider reaches a subtree through the options
+        # the component is registered with.
+        provider = unifi.Provider(
+            f'{name}-unifi',
+            api_url=api_url,
+            api_key=pulumi.Config().require_secret(API_KEY),
+            site=site,
+            http_max_retries=HTTP_MAX_RETRIES,
+            opts=own_provider_opts(opts),
+        )
+        super().__init__(name, opts=with_provider(opts, provider))
+        self.provider = provider
         self.site = site
         self.peer_port = peer_port
         hosts = STATIC_HOSTS if static_hosts is None else static_hosts
 
-        # A provider of its own, rather than ambient configuration: this key
-        # authorizes changes to the home's firewall, and the resources it may
-        # reach are exactly the ones below.
-        self.provider = unifi.Provider(
-            f'{name}-unifi',
-            api_url=api_url,
-            api_key=api_key,
-            site=site,
-            http_max_retries=HTTP_MAX_RETRIES,
-            opts=self.child_opts(),
-        )
-        child = self.child_opts(provider=self.provider)
-        invoke = pulumi.InvokeOptions(parent=self, provider=self.provider)
+        child = self.child_opts()
+        # An invoke inherits a provider only through a parent: given one it
+        # takes that parent's, and given neither it takes the default.
+        invoke = pulumi.InvokeOptions(parent=self)
 
         internal = unifi.get_firewall_zone_output(name=ZONE_INTERNAL, site=site, opts=invoke).id
         external = unifi.get_firewall_zone_output(name=ZONE_EXTERNAL, site=site, opts=invoke).id

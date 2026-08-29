@@ -43,6 +43,11 @@ ADGUARD = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
 
+#: Which provider instance each of them was registered against, by name. The
+#: engine hands a mock the reference of the provider that would manage the
+#: resource, which is how a case can ask what a resource authenticates as.
+signed_by: dict[str, str] = {}
+
 
 class Mocks(pulumi.runtime.Mocks):
     """A monitor that answers with the inputs, plus the two computed identifiers."""
@@ -56,6 +61,7 @@ class Mocks(pulumi.runtime.Mocks):
         if args.typ == 'zerotier:index/network:Network':
             outputs['networkId'] = NETWORK_ID
         declared.append((args.typ, args.name, outputs))
+        signed_by[args.name] = args.provider or ''
         return args.name + '_id', outputs
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
@@ -65,6 +71,7 @@ class Mocks(pulumi.runtime.Mocks):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> None:
     """Declare the network once, through the seam the `physical` stack calls."""
+    pulumi.runtime.set_all_config({f'kluster:{zerotier.API_TOKEN}': API_TOKEN})
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
     # A bridged SDK registers its own parameterized package before it may
     # register a resource, and it gates that on a feature flag read out of a
@@ -74,7 +81,6 @@ async def stack() -> None:
     before = asyncio.all_tasks()
     gateway.declare_zerotier(
         NAME,
-        api_token=API_TOKEN,
         network_id=NETWORK_ID,
         adguard=ADGUARD,
     )
@@ -387,3 +393,36 @@ def test_the_central_credential_belongs_to_a_provider_of_its_own() -> None:
 
     assert isinstance(token, dict), 'the token is classified as a secret, so it is never plain text in state'
     assert token['value'] == API_TOKEN
+
+
+##
+## The provider
+##
+
+
+def test_the_administration_token_is_read_where_the_provider_is_built() -> None:
+    """The token configures this provider and nothing else, so nothing else sees it.
+
+    Central mints no credential smaller than the whole account, which is the
+    reason the resources it may reach are exactly the ones this component
+    declares -- and the reason the token is read at the line that builds the
+    provider rather than travelling through a signature that has no other
+    opinion about it (rfc-002 §8.1).
+    """
+    import inspect
+
+    assert 'api_token' not in inspect.signature(zerotier.Network.__init__).parameters
+    assert 'api_token' not in inspect.signature(gateway.declare_zerotier).parameters
+
+
+def test_every_resource_is_signed_by_the_overlays_own_provider() -> None:
+    """Inherited from the component, never re-plumbed onto a child.
+
+    The network, the two generated identities and every member are children of
+    the component that built the provider, so each takes it from its parent's
+    provider map. Nothing below names it.
+    """
+    overlay_resources = [name for typ, name, _ in declared if typ.startswith('zerotier:index/')]
+    assert overlay_resources, 'the fixture declared no overlay resources at all'
+    for name in overlay_resources:
+        assert f'{NAME}-zerotier' in signed_by[name], f'{name} is not signed by the overlay provider'

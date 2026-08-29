@@ -655,22 +655,26 @@ both resolve against the project's own name — so the committed file reads
 `Pulumi.yaml` rather than a second time in the script.
 
 An OCI key is pushed the same way and fills more keys, because an API key
-is five things (§2.1) and a provider recovers none of them: it reads
-`oci:tenancyOcid`, `oci:userOcid`, `oci:fingerprint`, `oci:privateKey` and
-`oci:region`. Those five are the whole of the push. Where the stack may
-act travels with neither the credential nor the configuration: the
-compartment is a boundary this program decides, so it is code
-(`conventions.OCI_TENANCY.compartments`) and the stack reads it there.
+is several things (§2.1) and a provider recovers none of them: it writes
+`ociTenancyOcid`, `ociUserOcid`, `ociFingerprint` and `ociPrivateKey`, bare
+and therefore in the project's own namespace like the account id above.
+Those four are the whole of the push, and all four are config secrets — the
+key, the fingerprint, and the two identifiers naming the tenancy and the
+user it belongs to, which are the class of fact the kit itself keeps as a
+protected attribute (§2.1). The fingerprint is written although §2.1
+declines to store one: the provider takes it as an input rather than
+deriving it, and the command computes it from the key it is pushing in the
+same breath, so the two cannot disagree.
 
-Four of the five are config secrets — the key, and the two identifiers
-naming the tenancy and the user it belongs to, which are the class of fact
-the kit itself keeps as a protected attribute (§2.1). The fingerprint is
-written although §2.1 declines to store one: the provider takes it as an
-input rather than deriving it, and the command computes it from the key it
-is pushing in the same breath, so the two cannot disagree.
-
-The fifth is plain: the region is a constant in `conventions`, which is
-where the compartment beside it lives too.
+Where the key may act travels with neither the credential nor the
+configuration. The region is permanent per tenancy and the compartment is a
+boundary this program decides, so both are code
+(`conventions.OCI_TENANCY`) and the stack reads them there — at the one
+line that builds the cloud provider, beside the four secrets above
+(framework/rfc-002 §8.1). The provider's own `oci:` namespace holds
+nothing: with default providers disabled there is no ambient configuration
+left for it to carry, and the same is true of `b2:`, whose two keys are
+pushed as `b2ApplicationKeyId` and `b2ApplicationKey`.
 
 **The slot map is checked in** (`slots.py`). One row per §3 credential,
 naming the source its value comes from — recovered from escrow, minted by

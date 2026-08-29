@@ -69,7 +69,6 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlencode
 
 import pulumi
@@ -78,9 +77,9 @@ import pulumi_libvirt as libvirt
 from kluster import conventions
 from kluster.components.talos import TalosCluster
 from kluster.lib import workstation
-from putils import Component
+from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('LIBVIRT_USER', 'HomelabHost', 'connection_uri', 'declare', 'slot')
+__all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'declare', 'slot')
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
@@ -160,13 +159,30 @@ KNOWN_HOSTS = 'known_hosts'
 LIBVIRT_ENDPOINT = 'qemu+ssh'
 LIBVIRT_OBJECT = '/system'
 
+#: The client half of the libvirt session, and the only part of that session
+#: stack configuration carries. It is read where the provider is built and
+#: nowhere else (rfc-002 §8.1): where it lands on the machine running the
+#: program, and the URI that names it there, are derived.
+PRIVATE_KEY = 'libvirtPrivateKey'
 
-def slot() -> Path:
-    """`.credentials/libvirt/` in this checkout."""
-    return workstation.directory() / SLOT
+
+def slot(root: Path | None = None) -> Path:
+    """`.credentials/libvirt/` in this checkout.
+
+    Both files in it are **working files, not slots**: a slot is durable and
+    written by a `credentials` command — a kit, a passphrase, a client
+    bundle — while these two are derived from stack configuration by this
+    component on every run, owned by it and disposable. They live under
+    `.credentials/` anyway because that directory is the `0700` boundary, the
+    one answer to "what on this machine is secret", and a second git-ignored
+    directory would be a second boundary to get right. Nothing here is
+    produced by a command, so nothing should go looking for the command that
+    produced it.
+    """
+    return (workstation.directory() if root is None else root / workstation.DIRECTORY) / SLOT
 
 
-def connection_uri(*, host: str, private_key: str, directory: Path | None = None) -> str:
+def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> str:
     """Materialize the SSH transport and return the URI that names it.
 
     The endpoint is **derived, never recorded**. A URI in stack configuration
@@ -182,6 +198,19 @@ def connection_uri(*, host: str, private_key: str, directory: Path | None = None
     -   a `known_hosts` file holding one line — `host` followed by the pinned
         `conventions.HOMELAB_HOST_KEY`. The pin is written against the address
         the URI dials, which is what the verifier matches on.
+
+    **Both paths go into the URI relative to the checkout root** (rfc-002
+    §8.4). The URI is a provider input and therefore lives in state, so an
+    absolute path would put the path one machine happened to have into a value
+    every other machine then diffs against — a diff that can never be resolved
+    on a stack whose merge gate is a clean preview. The provider opens both
+    values without anchoring them, so a relative one resolves against the
+    plugin process's working directory, which Pulumi sets to the project's
+    `main` directory where the project declares one and otherwise to the
+    directory holding `Pulumi.yaml`. This project declares no `main`, so the
+    two coincide and both are the checkout root — **adding a `main` later would
+    move the anchor silently**, which is why the caveat is written here rather
+    than assumed.
 
     What the provider honours here is not libvirt's own remote driver: the
     bridged Terraform provider parses the URI itself and dials over Go's SSH
@@ -204,14 +233,15 @@ def connection_uri(*, host: str, private_key: str, directory: Path | None = None
     unverified first contact over the overlay would hand an interposer a
     root-equivalent libvirt connection.
 
-    `directory` overrides the slot, for tests. It may not contain `$`: the
+    `root` overrides the checkout, for tests. It may not contain `$`: the
     provider expands environment variables in both paths before opening them,
-    so a checkout at such a path would fail deep inside an SSH handshake
-    instead of here.
+    so a `$` anywhere in the path the emitted values are derived from is
+    refused here rather than corrupted deep inside an SSH handshake.
     """
     if not private_key.strip():
         raise ValueError('the libvirt SSH identity is empty, and an unauthenticated session reaches nothing')
-    target = slot() if directory is None else directory
+    checkout = workstation.repo_root() if root is None else root
+    target = slot(root)
     if '$' in str(target):
         raise ValueError(f'{target} contains a "$", which the libvirt provider expands before opening the file')
 
@@ -219,8 +249,8 @@ def connection_uri(*, host: str, private_key: str, directory: Path | None = None
     known_hosts = workstation.write(target / KNOWN_HOSTS, f'{host} {conventions.HOMELAB_HOST_KEY}')
     query = urlencode(
         {
-            'keyfile': str(keyfile),
-            'knownhosts': str(known_hosts),
+            'keyfile': str(keyfile.relative_to(checkout)),
+            'knownhosts': str(known_hosts.relative_to(checkout)),
             'sshauth': 'privkey',
         }
     )
@@ -291,11 +321,16 @@ def import_id(value: pulumi.Input[str]) -> str:
 class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
     """The worker VM, and the Home Assistant domain adopted beside it.
 
+    The libvirt session is this component's own, so the credential that opens
+    it — `libvirtPrivateKey` — is read here, at the line that builds the
+    provider (rfc-002 §8.1), and appears in no signature above or below. The
+    endpoint it dials is derived the same way: the host's address is the one
+    the overlay roster assigns it, and the rest of the URI is a property of the
+    machine running the program (`connection_uri`).
+
     :param cluster: the day-0 chain. The worker's configuration and the
         secrets the seed carries come out of the same place, so the component
         takes the cluster whole rather than a rendered string.
-    :param connection_uri: the libvirt endpoint on the host, an SSH transport
-        reached over the overlay.
     :param storage_dir: the nodatacow subvolume that holds the disk image and
         the seed. The pool that points at it is declared here; the subvolume
         and its `chattr +C` are host preparation (homelab-host.md §4).
@@ -310,7 +345,6 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         name: str,
         *,
         cluster: TalosCluster,
-        connection_uri: pulumi.Input[str],
         storage_dir: pulumi.Input[str],
         bridge: pulumi.Input[str],
         vcpus: int,
@@ -319,13 +353,26 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         haos_domain_uuid: pulumi.Input[str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__(name, opts=opts)
+        # One connection for both domains: they are two definitions on one
+        # host, and the credential that reaches them is the same. It is built
+        # before the component registers, because a provider reaches a subtree
+        # through the options the component is registered with.
+        #
+        # The identity is read in the clear rather than as a secret Output: it
+        # is written to a file before any resource exists, so it reaches no
+        # resource input and therefore no state.
+        provider = libvirt.Provider(
+            f'{name}-libvirt',
+            uri=connection_uri(
+                host=str(conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address),
+                private_key=pulumi.Config().require(PRIVATE_KEY),
+            ),
+            opts=own_provider_opts(opts),
+        )
+        super().__init__(name, opts=with_provider(opts, provider))
+        self.provider = provider
         node = _sole_worker(cluster)
         domain_name = f'{name}-{node}'
-
-        # One connection for both domains: they are two definitions on one
-        # host, and the credential that reaches them is the same.
-        self.provider = libvirt.Provider(f'{name}-libvirt', uri=connection_uri, opts=self.child_opts())
 
         # Names are stated rather than left to Pulumi's auto-naming, because
         # these are not opaque handles: they are what `virsh` lists and what
@@ -337,7 +384,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             target=libvirt.PoolTargetArgs(path=storage_dir),
             # A dir pool's deletion is the directory's deletion, and this
             # directory is the worker's disk.
-            opts=self._opts(protect=True),
+            opts=self.child_opts(protect=True),
         )
 
         self.volume = libvirt.Volume(
@@ -348,7 +395,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             # The bytes the worker boots. No `size` beside it: the provider
             # refuses the pair and takes the volume's capacity from the image.
             source=image_path,
-            opts=self._opts(
+            opts=self.child_opts(
                 protect=True,
                 # Both are facts about the volume's *creation*, and every field
                 # of a libvirt volume replaces the volume, so neither may
@@ -375,7 +422,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             pool=self.pool.name,
             user_data=cluster.machine_configs[node],
             meta_data=seed_metadata(domain_name),
-            opts=self._opts(),
+            opts=self.child_opts(),
         )
 
         self.domain = libvirt.Domain(
@@ -407,7 +454,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             # A domain's name is fixed at definition time and this one is
             # stated, so a replacement — a RAM change, above all — has to
             # undefine the old domain before it defines the new one.
-            opts=self._opts(delete_before_replace=True),
+            opts=self.child_opts(delete_before_replace=True),
         )
 
         # Adoption, not creation (architecture.md §6.8). The import option is
@@ -423,7 +470,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         # domain that was read rather than from this program.
         self.haos = libvirt.Domain(
             f'{name}-haos',
-            opts=self._opts(
+            opts=self.child_opts(
                 protect=True,
                 import_=import_id(haos_domain_uuid),
                 ignore_changes=list(HOST_OWNED),
@@ -432,16 +479,11 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
 
         self.register_outputs({})
 
-    def _opts(self, **kwargs: Any) -> pulumi.ResourceOptions:
-        """Child options that also carry the host's libvirt connection."""
-        return self.child_opts(provider=self.provider, **kwargs)
-
 
 def declare(
     name: str,
     *,
     cluster: TalosCluster,
-    connection_uri: str,
     storage_dir: str,
     bridge: str,
     vcpus: int,
@@ -452,11 +494,11 @@ def declare(
 ) -> None:
     """Declare the worker VM and adopt the Home Assistant domain.
 
-    `connection_uri` is the libvirt endpoint on the host (an SSH transport
-    reached over ZeroTier), `storage_dir` the nodatacow subvolume that holds
-    both the raw disk image and the seed, and `haos_domain_uuid` identifies
-    the domain to adopt — libvirt imports domains by UUID, and the UUID is the
-    one attribute of that domain nothing may change.
+    `storage_dir` is the nodatacow subvolume that holds both the raw disk image
+    and the seed, and `haos_domain_uuid` identifies the domain to adopt —
+    libvirt imports domains by UUID, and the UUID is the one attribute of that
+    domain nothing may change. The endpoint is not among them: the session and
+    the credential that opens it belong to the component (rfc-002 §8.1).
 
     `image_path` is where the Talos `nocloud` image has been decompressed on
     the machine running the program: a path rather than a URL, because the
@@ -470,7 +512,6 @@ def declare(
     _ = HomelabHost(
         name,
         cluster=cluster,
-        connection_uri=connection_uri,
         storage_dir=storage_dir,
         bridge=bridge,
         vcpus=vcpus,

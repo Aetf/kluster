@@ -50,22 +50,46 @@ def typed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def required(name: str) -> dict[str, bool]:
-    """Every config key that stack's program requires, and whether it reads it as a secret.
+    """Every config key that stack's declaration requires, and whether it reads it as a secret.
 
     Parsed rather than imported: importing a stack program drags in the
     provider SDKs, and what this needs to know is a property of the source.
+
+    The stack program is not the whole of the declaration. A credential that
+    exists only to configure a provider is read at the line that builds that
+    provider, which for a provider a single component owns is inside the
+    component (rfc-002 §8.1) -- so the components are searched too. That makes
+    the answer the union over the tree rather than per stack, which is exact
+    enough here because no two stacks name a key the same way and each device
+    row asks only about its own keys.
     """
-    source = (pulumi_config.project_dir() / 'src' / 'kluster' / 'stacks' / f'{name}.py').read_text()
+    root = pulumi_config.project_dir() / 'src' / 'kluster'
+    sources = [root / 'stacks' / f'{name}.py', *sorted((root / 'components').rglob('*.py'))]
     found: dict[str, bool] = {}
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-            continue
-        if not node.func.attr.startswith('require') or not node.args:
-            continue
-        key = node.args[0]
-        if isinstance(key, ast.Constant) and isinstance(key.value, str):
-            found[key.value] = node.func.attr == 'require_secret'
+    for path in sources:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if not node.func.attr.startswith('require') or not node.args:
+                continue
+            key = node.args[0]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                found[key.value] = node.func.attr == 'require_secret'
+            elif isinstance(key, ast.Name):
+                # The key is a module constant, which is how a component names
+                # the one credential it reads. Resolve it in that module.
+                found[_constant(path, key.id)] = node.func.attr == 'require_secret'
     return found
+
+
+def _constant(path: Path, name: str) -> str:
+    """The string a module-level assignment binds `name` to."""
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return str(node.value.value)
+    raise AssertionError(f'{name} is not a string constant of {path}')
 
 
 @pytest.mark.parametrize('member', sorted(devices.DEVICES), ids=sorted(devices.DEVICES))
