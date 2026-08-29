@@ -64,7 +64,7 @@ The isolation is the point. Every network in the UDM's LAN zone reaches
 every other unconditionally (gateway.md §4.1), so a node on the server
 LAN is a machine no policy can be written about; a node on its own VLAN
 is a zone the gateway can police (gateway.md §4.2). Subnet numbering
-follows the estate convention recorded in gateway.md §1.
+follows the site addressing convention recorded in gateway.md §1.
 
 So the host network config (aconfmgr-managed systemd-networkd) gains
 three things, in the same change-set that installs the libvirt

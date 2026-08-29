@@ -1,7 +1,7 @@
 # Gateway (UDM)
 
 The UDM-SE as a system: the home site's router, firewall, ZeroTier
-terminator, and host of the nspawn estate. This document owns *how the
+terminator, and host of the nspawn container services. This document owns *how the
 machine delivers* what the cluster design demands of it; the demands
 themselves live in cluster/ (BGP peering and the `lan` pool —
 architecture.md §3.4; full desired-state absorption — §5.2; ZT
@@ -21,7 +21,7 @@ declarative/physical.md §4.
     `lan` pool** (192.168.71.0/24 + its ULA /64), learned from the
     homelab worker VM at its VLAN-7 address.
 
-    **Estate addressing convention**: every network this box hosts
+    **Site addressing convention**: every network this box hosts
     sits inside 192.168.0.0/16 and takes its **third octet from the
     VLAN id, times ten** — VLAN 7 → 192.168.70.0/24, VLAN 9 → IoT's
     192.168.90.0/24 — with the network's /64 out of the site's ULA
@@ -31,20 +31,34 @@ declarative/physical.md §4.
     is no VLAN and never becomes a network object (§4.1), and
     numbering it next to the VLAN it is announced from keeps the pair
     legible at a glance.
--   **nspawn estate** (units + digest-pinned rootfs pushed by the
-    gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
-    **ZeroTier member container** (§2) as the fourth member. A pin
-    names a published root filesystem **archive**: the runner verifies
-    its digest and decompresses it, the push unpacks it into a
-    per-member directory tree, and the unit boots that tree with
+-   **nspawn container services** (units + digest-pinned rootfs pushed
+    by the gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
+    **ZeroTier member container** (§2) as the fourth. A pin names a
+    published root filesystem **archive**: the runner verifies its
+    digest and decompresses it, the push unpacks it into a per-service
+    directory tree, and the unit boots that tree with
     `systemd-nspawn --directory=`. The tree is derived state the push
     replaces whole and never edits, so nothing worth keeping lives in
-    it — a member's writable state is bind-mounted from `/data`
+    it — a service's writable state is bind-mounted from `/data`
     instead, which is also what makes a rootfs bump a software swap
     rather than a new identity. Decompressing on the runner rather
     than on the device is deliberate: the box's userland is the
     cut-down one a router ships, where `tar` can be relied on and a
     zstd binary cannot.
+
+    **Each unit states its own requirements**, and nothing chooses a
+    start order for it: the three services on the container VLAN bind
+    to that bridge's device unit and come after it, so a container is
+    never started against a bridge that does not exist yet, and the
+    ZeroTier member asserts `/dev/net/tun` rather than depending on it
+    — nothing tags that node in `udev`, so its device unit can be
+    loaded but never activated and a dependency on it would fail the
+    service permanently. The assertion is what turns "the daemon
+    logged that it cannot open the device and went to sleep" into a
+    failed unit with a reason. No unit names another: caddy proxies to
+    the resolvers at request time, not at start time, and the ZeroTier
+    member carries the management session rather than the others'
+    traffic.
 
     **The images are Alpine with s6-overlay, not systemd**, which
     decides what a unit may say. It boots what the image ships at
@@ -58,10 +72,10 @@ declarative/physical.md §4.
     SLAAC token, read by the image's own network setup before the
     resolver it guards may start). Caddy does not: its image asks for
     a DHCP lease, and the lease is where its resolver comes from too,
-    so the address the estate holds for it is the address the design
+    so the address the census holds for it is the address the design
     intends and not one the unit delivers — closing that gap is work
     in the image, which needs the AdGuard pair's network setup plus a
-    resolver that does not depend on this estate. The ZeroTier member
+    resolver that does not depend on these services. The ZeroTier member
     is told nothing at all: it is host-networked, and what it needs of
     its unit is the tunnel device and the state directory that is its
     identity on the overlay.
@@ -95,7 +109,7 @@ design: roster, addressing, routes, flow rules, and cutover.
 
 ### 2.1 Member roster & addressing
 
-The roster is **`conventions.ZT_ROSTER`**: one entry per member,
+The roster is **`conventions.overlay.ROSTER`**: one entry per member,
 carrying the name Central shows, the `role` tag, the member's overlay
 address, and — for a device that minted its own identity — its node id.
 It lives in `conventions` rather than in one stack's data because two
@@ -123,8 +137,8 @@ time: the roster is static code, so a run cannot break what a test did
 not already catch.
 
 **The gateway is absent until the ceremony records it.** Its node id
-does not exist until the ZeroTier daemon — a container of the estate
-this stack delivers — has run once on the device, so §2.5 step 2 reads
+does not exist until the ZeroTier daemon — a container service this
+stack delivers — has run once on the device, so §2.5 step 2 reads
 that id off the device and adds the entry as a commit. Absence is the
 whole of the mechanism: no member is declared for the gateway and no
 `udm.zt` record is published for exactly as long as the entry is
@@ -301,7 +315,7 @@ Run against a scratch ZT network with the same rules and a throwaway
 ### 2.5 First bring-up
 
 Steady state is circular: the gateway is reached over ZT, and the ZT
-daemon on the gateway is a container of the estate that same channel
+daemon on the gateway is a container service that same channel
 delivers. The gateway's ZT identity is circular in the same way — a node
 id is minted by the daemon's first run on a device, so it does not exist
 to be authorized until the delivery has happened.
@@ -322,7 +336,7 @@ carries an entry for it or it does not (§2.1).
 The ceremony, four steps and three applies:
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
-    over the LAN and delivers the estate, the ZT container included.
+    over the LAN and delivers the services, the ZT container included.
     Nothing is declared for the gateway on the overlay. `workerGua`
     is unset here and optional for that reason: the address it
     carries is formed by the worker off this apply's own router
@@ -347,7 +361,7 @@ The ceremony, four steps and three applies:
     they are one step and not two.
 4.  **Unset the knob and apply once more.** Every client is back on the
     overlay address, so this run dials over ZT — which is the
-    verification rather than a formality: it rewrites the estate through
+    verification rather than a formality: it rewrites the services through
     the path that is now load-bearing, and it converges only if that
     path carries the whole of it.
 
@@ -448,18 +462,18 @@ at the registrar.
     member traffic needs no managed routes), hop to the LAN, SSH the
     UDM, restart the unit / rerun on_boot.d. If the host is also down:
     physical presence (LAN).
--   **Firmware update wiped the estate** — trigger: post-update, nspawn
-    units gone. on_boot.d re-materializes the estate autonomously
+-   **Firmware update wiped the services** — trigger: post-update, nspawn
+    units gone. on_boot.d re-materializes them autonomously
     (architecture.md §5.2); verify ZT comes back last (it carries the
     management path). Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (§5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the pull-direction yadm timer), re-run the
-    gw-config provider for the estate, re-authorize the *new* UDM
+    gw-config provider for the services, re-authorize the *new* UDM
     member identity in the roster (identity lives in `/data`, lost with
     the box), re-point the managed routes at it — the §2.5 ceremony
     over again, bootstrap knob and all, since a replacement box is a
-    device with no identity and no estate (personal members' direct
+    device with no identity and no services (personal members' direct
     paths still work throughout).
 
 ## 4. Firewall target state

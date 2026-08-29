@@ -14,7 +14,7 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 > load balancer and nodes (§1) and the Talos day-1 chain (§2) in the
 > `cloud` and `talos` areas of `src/kluster/components/`, the libvirt
 > worker and adopted HAOS domain (§3) in `components/homelab/`, the
-> UDM's estate and firewall (§4) in `components/gateway/` with the
+> UDM's container services and firewall (§4) in `components/gateway/` with the
 > overlay configuration beside it in `components/overlay/`, and the B2
 > bucket (§5) in `components/backup/` — so a run stops at no named gap.
 > Nothing described here has been provisioned: the stack has never been
@@ -251,9 +251,9 @@ a MITM root on the gateway) manages the device's entire desired state — FRR/BG
 output of the libvirt resource: the worker's address is written statically into
 its machine config, and everything that names it — the routing session, the
 peer-port forward, day 1's apid dial — reads that same constant, so no session
-depends on a lease), the nspawn estate
+depends on a lease), the nspawn container services
 (units + digest-pinned rootfs from homelab-containers CI via
-`GwArtifact` (architecture.md §5.2) — including
+`DeviceArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
 `/data`-persisted identity, architecture.md §5.3), on_boot.d,
 caddy, AdGuard static configs, secrets. ZT Central's network config

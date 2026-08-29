@@ -27,7 +27,7 @@ says so.
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate in homelab-containers; digest-pin PR here | gw-config provider push | Reviewed |
 | State-backend pins (FCOS stream handled by Zincati; `postgres:NN` in Butane) | Zincati (periodic window) / renovate on `deploy/state-backend/` | auto / manual re-provision | state-backend.md §4 |
 | Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
-| UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the estate self-heals via on_boot.d, ZT recovery runbook gateway.md §3 |
+| UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, ZT recovery runbook gateway.md §3 |
 
 ## 2. Upgrade runbooks (census)
 
@@ -139,7 +139,7 @@ Owning docs keep the content — the index only locates it.
 | Playbook family | Lives in |
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
-| Gateway (ZT container down, firmware-wiped estate, UDM replacement) | physical/gateway.md §3 |
+| Gateway (ZT container down, firmware-wiped device, UDM replacement) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5 + drill scripts |

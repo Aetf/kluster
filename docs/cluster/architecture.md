@@ -695,13 +695,13 @@ desired-state files idempotently over SSH (`deploy.sh`, `/data` +
 .conf, upload by hand" plan, Pulumi grows a small **dynamic provider that
 drives gw-config**:
 
--   **Resource model**: a `GwFile` (path + content + owner/mode + optional
-    post-apply hook such as `vtysh reload` or a container restart) and, on
-    top of it, typed resources like `GwFrrConfig`. `diff` compares desired
+-   **Resource model**: a `DeviceFile` (path + content + owner/mode +
+    optional post-apply hook such as `vtysh reload` or a container restart).
+    `diff` compares desired
     content against the device over SSH; `create/update` writes to `/data`
     (surviving firmware updates) and runs the hook. This is exactly
     aconfmgr-style convergence, previewable in `pulumi preview`.
-    Bulk artifacts get their own resource, **`GwArtifact`**
+    Bulk artifacts get their own resource, **`DeviceArtifact`**
     (2026-08-24): inputs `{url, sha256, target path, hook}` — state
     carries the URL and digest, **never bytes**; `diff` compares the
     pin against a device-side marker file (`/data/…/<name>.digest`);
@@ -709,7 +709,7 @@ drives gw-config**:
     streams over SSH, writes the marker, runs the hook. Rootfs images
     ride this, keeping preview cheap and state small. Implementation
     rule for both resources: secret-bearing inputs (device secrets in
-    `GwFile` content) are declared secret
+    `DeviceFile` content) are declared secret
     (`Output.secret`/`additional_secret_outputs`) so they never
     render in plain preview or state output.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
@@ -721,7 +721,7 @@ drives gw-config**:
     manual upload.
 -   **Scope — full absorption of the push direction (2026-08-22)**:
     the provider manages *all* desired-state files on the device —
-    FRR/BGP, the nspawn estate (unit files, wants-symlinks, rootfs
+    FRR/BGP, the nspawn container services (unit files, rootfs
     image pushes for AdGuard alice/bob and caddy, images from
     `~/homelab-containers`), the on_boot.d recovery scripts (pushed
     files that execute autonomously at firmware updates — Pulumi need
@@ -770,7 +770,7 @@ already lives:
     management plane. The host keeps its plain ZT membership (direct
     address, useful as a fallback path) and never takes a router role
     — today it has none either; the routes via the UDM are net-new.
--   **Deployment shape**: a fourth member of the existing nspawn estate
+-   **Deployment shape**: a fourth of the device's nspawn services
     (alpine rootfs from homelab-containers CI, unit + config via the
     gw-config provider, on_boot.d recovery like the others), but with
     **host networking** (`VirtualEthernet=no`) — the `zt*` interface
