@@ -17,6 +17,7 @@ them (rfc-002 §10.2).
 from __future__ import annotations
 
 import asyncio
+import re
 from ipaddress import IPv4Address
 from typing import Any, cast
 
@@ -113,6 +114,19 @@ def test_every_member_is_named_identified_and_placed_exactly_once() -> None:
     assert len(set(addresses)) == len(addresses)
 
 
+def test_every_enrolled_node_id_is_ten_hexadecimal_digits() -> None:
+    """The shape a ZeroTier node identifier has, and the only guard on it.
+
+    An enrolled id reaches the roster by being read off a device and typed in
+    — step 2 of the bring-up ceremony does exactly that for the gateway — so a
+    transcription slip is the realistic mistake, and Central answers one with a
+    member that authorizes no device at all.
+    """
+    for entry in conventions.ZT_ROSTER:
+        if isinstance(entry, conventions.EnrolledMember):
+            assert re.fullmatch(r'[0-9a-f]{10}', entry.node_id), entry.name
+
+
 def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
     """An address outside it is not on this network at all.
 
@@ -124,19 +138,21 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
         assert entry.address in conventions.ZT_SUBNET, entry.name
 
 
-def test_the_gateway_is_placed_at_the_address_every_client_dials() -> None:
-    """Three consumers dial `ZT_UDM`, and the roster is where the member is put.
+def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
+    """Two things the gateway's entry must say on the day the ceremony adds it.
 
     The estate's SSH, the controller's API and every managed route's next hop
-    all derive from that constant, so an entry for the gateway at any other
-    address would point all three somewhere the member is not. The entry is
-    absent until the ceremony that reads the minted node id adds it
-    (physical/gateway.md §2.5), which is why this is stated as a conditional
-    rather than as a lookup.
+    all derive from `ZT_UDM`, so an entry at any other address would point all
+    three somewhere the member is not. And the gateway is infrastructure: an
+    entry carrying the permissive default role would put the box every route
+    runs through on the same footing as a phone. The entry is absent until the
+    ceremony reads the minted node id and adds it (physical/gateway.md §2.5),
+    which is why both are stated as conditionals rather than as a lookup.
     """
     gateway_entries = [entry for entry in conventions.ZT_ROSTER if entry.name == conventions.ZT_MEMBER_UDM]
 
     assert all(entry.address == conventions.ZT_UDM for entry in gateway_entries)
+    assert all(entry.role == conventions.ZT_ROLE_INFRA for entry in gateway_entries)
 
 
 def test_the_two_continuous_integration_identities_are_generated_and_confined() -> None:

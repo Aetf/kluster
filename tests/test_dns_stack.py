@@ -155,10 +155,10 @@ def _zt_record(zone: str, member: str) -> dict[str, Any]:
 def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference() -> None:
     """Names and addresses alike come from the roster, which is code.
 
-    The anchors are the only edge where a `physical` output reaches this stack.
-    The `*.zt` block used to be a second one; now a member is a name and an
-    address in the same entry, so this whole block is known while previewing
-    and a `physical` that has never run costs it nothing.
+    The anchors are the only edge where a `physical` output reaches this
+    stack. A member is a name and an address in the same entry, so this whole
+    block is known while previewing, and a `physical` that has never run costs
+    it nothing.
     """
     member = 'Aetf-Arch-Homelab'
 
