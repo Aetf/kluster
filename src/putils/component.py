@@ -18,7 +18,13 @@ from typing import Any, ClassVar, Optional
 import pulumi
 import pulumi.runtime
 
-__all__ = ('Component', 'UnparentedChildError', 'install_parent_backstop')
+__all__ = (
+    'Component',
+    'UnparentedChildError',
+    'install_parent_backstop',
+    'own_provider_opts',
+    'with_provider',
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,36 @@ def install_parent_backstop() -> None:
         return
     _installed_on.add(root)
     pulumi.runtime.register_stack_transformation(_refuse_unparented)
+
+
+def own_provider_opts(opts: Optional[pulumi.ResourceOptions]) -> pulumi.ResourceOptions:
+    """Options for the provider a component builds for itself.
+
+    A component that owns a connection builds its provider *before* its own
+    ``super().__init__``, because a provider is handed to a subtree through the
+    component's own options and those are fixed at registration. So the
+    provider is not the component's child — it is its sibling, and it takes the
+    parent the component was given. Under the parent backstop that is also what
+    makes it legal: a provider built inside an enclosing component with no
+    parent of its own would be refused like any other unparented resource.
+
+    Nothing else of the component's options travels with it: a provider is not
+    protected, replaced or ordered by what the component it serves is.
+    """
+    return pulumi.ResourceOptions(parent=opts.parent if opts is not None else None)
+
+
+def with_provider(opts: Optional[pulumi.ResourceOptions], provider: pulumi.ProviderResource) -> pulumi.ResourceOptions:
+    """A component's own options, carrying `provider` for its whole subtree.
+
+    This is how a provider reaches the resources under a component without any
+    of them naming it (rfc-002 §8.1): a provider in a component's `providers`
+    map is inherited by every child that names the component as its parent, and
+    transitively by their children, with the first match by package name
+    winning. `child_opts(provider=...)` therefore belongs nowhere in a
+    component body — the provider is stated once, where it is built.
+    """
+    return pulumi.ResourceOptions.merge(opts, pulumi.ResourceOptions(providers=[provider]))
 
 
 class Component(pulumi.ComponentResource):

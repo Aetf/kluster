@@ -347,20 +347,24 @@ def test_the_physical_stack_gets_the_signing_configuration_a_provider_needs(
 
     user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
-    # A provider cannot sign with three of the five: the fingerprint is
-    # computed from the key that was pushed, and the region is the estate's.
+    # A provider cannot sign with three of the four: the fingerprint is
+    # computed from the key that was pushed.
     assert runner.config[derived.OCI_TENANCY_KEY] == TENANCY
     assert runner.config[derived.OCI_USER_KEY] == user
     private = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(private)
     assert oci_iam.fingerprint(private) in tenancy.identity.keys[user]
-    assert runner.config[derived.OCI_REGION_KEY] == conventions.OCI_TENANCY.region
-    # And nothing else: the compartment the stack acts in is a convention
-    # rather than a config key, so the delivery does not restate it.
+    # And nothing else. Where the key may act is a convention rather than a
+    # config key -- the region is permanent per tenancy and the compartment is
+    # a boundary this program decides -- so the delivery restates neither.
     assert 'compartmentId' not in runner.config
+    assert not [key for key in runner.config if 'egion' in key]
+    # Nor does any of it land in a provider's own namespace: the stack program
+    # builds that provider from these keys (rfc-002 §8.1).
+    assert not [key for key in runner.config if ':' in key]
 
 
-def test_the_key_is_a_secret_and_the_region_is_not(
+def test_every_part_of_the_signing_configuration_is_a_secret(
     oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:
     slot, runner = physical_stack
@@ -368,13 +372,20 @@ def test_the_key_is_a_secret_and_the_region_is_not(
     _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
     # Which channel each key takes is the assertion, not merely that the value
-    # arrived: four of the five are secrets because the tenancy and user OCIDs
-    # are the class of fact the kit keeps protected, and the region is a
-    # constant of this estate that the committed file may carry in the clear.
+    # arrived. All four go in encrypted: the key obviously, the fingerprint
+    # because it identifies the key, and the tenancy and user OCIDs because
+    # they are the class of fact the kit itself keeps protected. Nothing about
+    # this credential is plain, which is why the plain half is empty rather
+    # than merely small.
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
-    assert derived.OCI_PRIVATE_KEY_KEY in secret
-    assert plain == [derived.OCI_REGION_KEY]
+    assert set(secret) == {
+        derived.OCI_TENANCY_KEY,
+        derived.OCI_USER_KEY,
+        derived.OCI_FINGERPRINT_KEY,
+        derived.OCI_PRIVATE_KEY_KEY,
+    }
+    assert plain == []
 
 
 def test_the_compartment_comes_from_conventions_when_no_flag_names_one(

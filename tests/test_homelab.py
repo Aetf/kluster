@@ -24,8 +24,11 @@ from urllib.parse import parse_qs, urlsplit
 
 import pulumi
 import pulumi.runtime.mocks
+import pulumi.runtime.stack
 import pytest
 import pytest_asyncio
+
+from kluster import conventions
 
 # The mock monitor keeps no record of the options a resource was registered
 # with — `import`, `ignoreChanges` and `deleteBeforeReplace` are exactly what
@@ -50,7 +53,6 @@ HAOS_UUID = '5e10948c-8934-4239-849c-b6b9104bfe3f'
 MACHINE_CONFIG = 'machine: {}\n'
 STORAGE_DIR = '/var/lib/libvirt/kluster'
 BRIDGE = 'kvmbr1'
-URI = 'qemu+ssh://virt@192.0.2.7/system'
 VCPUS = 12
 MEMORY_GIB = 10
 
@@ -88,7 +90,18 @@ class Fake(pulumi.runtime.Mocks):
     definition-only provider does.
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: The type each resource was registered as, and the provider instance
+        #: it was registered against, by name. The engine hands a mock the
+        #: reference of the provider that would manage the resource, which is
+        #: how a case can ask what a declaration authenticates as.
+        self.types: dict[str, str] = {}
+        self.providers: dict[str, str] = {}
+
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
+        self.types[args.name] = args.typ
+        self.providers[args.name] = args.provider or ''
         outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
         if args.typ == 'talos:machine/secrets:Secrets':
             outputs['machineSecrets'] = {
@@ -106,9 +119,20 @@ class Fake(pulumi.runtime.Mocks):
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks() -> None:
+async def setup_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fake:
+    from kluster.components.homelab import PRIVATE_KEY
+    from kluster.lib import workstation
+
     REQUESTS.clear()
-    pulumi.runtime.set_mocks(Fake(), project='kluster', stack='physical', preview=False)
+    # The component materializes the session's credential into the checkout's
+    # `.credentials/`, so every case here is pointed at a checkout of its own:
+    # a suite that wrote into the tree it runs from would leave a key behind
+    # and, worse, overwrite the operator's.
+    monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
+    pulumi.runtime.set_all_config({f'kluster:{PRIVATE_KEY}': IDENTITY})
+    fake = Fake()
+    pulumi.runtime.set_mocks(fake, project='kluster', stack='physical', preview=False)
+    return fake
 
 
 def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
@@ -129,7 +153,6 @@ def build(**kwargs: Any) -> Any:
     from kluster.components.homelab import HomelabHost
 
     kwargs.setdefault('cluster', build_cluster())
-    kwargs.setdefault('connection_uri', URI)
     kwargs.setdefault('storage_dir', STORAGE_DIR)
     kwargs.setdefault('bridge', BRIDGE)
     kwargs.setdefault('vcpus', VCPUS)
@@ -366,12 +389,25 @@ IDENTITY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVA
 
 
 def _dial(tmp_path: Any, host: str = HOST) -> tuple[Any, dict[str, list[str]]]:
-    """The parsed URI and its parameters, for a session materialized in `tmp_path`."""
+    """The parsed URI and its parameters, for a session in a checkout at `tmp_path`."""
     from kluster.components.homelab import connection_uri
 
-    uri = connection_uri(host=host, private_key=IDENTITY, directory=tmp_path)
+    uri = connection_uri(host=host, private_key=IDENTITY, root=tmp_path)
     parts = urlsplit(uri)
     return parts, parse_qs(parts.query)
+
+
+def _opened(tmp_path: Path, value: str) -> Path:
+    """The file a parameter names, as the provider resolves it.
+
+    The values in the URI are relative, and what they are relative to is the
+    plugin process's working directory -- the checkout root. Resolving them the
+    same way here is what makes the assertions about file contents assertions
+    about the file the provider would actually open.
+    """
+    resolved = tmp_path / value
+    assert not Path(value).is_absolute(), f'{value!r} is absolute, and would differ on every machine'
+    return resolved
 
 
 def test_the_endpoint_names_the_service_user_and_the_privileged_daemon(tmp_path: Path) -> None:
@@ -392,7 +428,7 @@ def test_the_identity_is_materialised_where_only_this_machine_can_read_it(tmp_pa
     """
     _, query = _dial(tmp_path)
 
-    keyfile = Path(query['keyfile'][0])
+    keyfile = _opened(tmp_path, query['keyfile'][0])
     assert keyfile.read_text() == IDENTITY
     # The mode matters as much as the content: a private key readable by
     # anything else on the machine is a leaked private key.
@@ -413,7 +449,7 @@ def test_the_pin_is_written_against_the_address_the_session_dials(tmp_path: Path
 
     _, query = _dial(tmp_path)
 
-    assert Path(query['knownhosts'][0]).read_text() == f'{HOST} {HOMELAB_HOST_KEY}\n'
+    assert _opened(tmp_path, query['knownhosts'][0]).read_text() == f'{HOST} {HOMELAB_HOST_KEY}\n'
     assert HOMELAB_HOST_KEY.startswith('ssh-ed25519 ')
 
 
@@ -449,7 +485,7 @@ def test_a_session_with_no_identity_is_refused(tmp_path: Path) -> None:
     from kluster.components.homelab import connection_uri
 
     with pytest.raises(ValueError, match='identity is empty'):
-        _ = connection_uri(host=HOST, private_key='   \n', directory=tmp_path)
+        _ = connection_uri(host=HOST, private_key='   \n', root=tmp_path)
 
 
 def test_a_checkout_the_provider_would_rewrite_the_path_of_is_refused(tmp_path: Path) -> None:
@@ -461,7 +497,7 @@ def test_a_checkout_the_provider_would_rewrite_the_path_of_is_refused(tmp_path: 
     from kluster.components.homelab import connection_uri
 
     with pytest.raises(ValueError, match=r'expands'):
-        _ = connection_uri(host=HOST, private_key=IDENTITY, directory=tmp_path / 'build$one')
+        _ = connection_uri(host=HOST, private_key=IDENTITY, root=tmp_path / 'build$one')
 
 
 def test_the_slot_is_the_checkouts_own_local_directory() -> None:
@@ -530,3 +566,62 @@ def _transformed_disk(selector: str) -> Any:
 
 def _camel(name: str) -> str:
     return re.sub(r'_(.)', lambda match: match.group(1).upper(), name)
+
+
+def test_the_paths_in_the_uri_are_relative_to_the_checkout(tmp_path: Path) -> None:
+    """An absolute path here is a diff that can never be resolved (rfc-002 §8.4).
+
+    The URI is a provider input and therefore lives in state, so an absolute
+    path would record the path one machine happened to have and every other
+    machine would then propose changing it. The provider opens both values
+    without anchoring them, and the anchor it falls back on is the plugin
+    process\'s working directory -- the project root, since this project
+    declares no `main`.
+    """
+    from kluster.components.homelab import KEYFILE, KNOWN_HOSTS, SLOT
+    from kluster.lib import workstation
+
+    _, query = _dial(tmp_path)
+
+    assert query['keyfile'] == [f'{workstation.DIRECTORY}/{SLOT}/{KEYFILE}']
+    assert query['knownhosts'] == [f'{workstation.DIRECTORY}/{SLOT}/{KNOWN_HOSTS}']
+
+
+@pytest.mark.asyncio
+async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_path: Path) -> None:
+    """The key configures this provider and reaches nothing else.
+
+    It is not a parameter of the component and not one of the stack seam
+    either: a credential that exists only to open a connection is read at the
+    line that opens it (rfc-002 §8.1). What the seam still passes is what the
+    host is, not how to reach it.
+    """
+    from kluster.components import homelab
+
+    host = build()
+    uri = cast('str | None', await host.provider.uri.future())
+    assert uri is not None
+    address = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+    assert urlsplit(uri).netloc == f'{homelab.LIBVIRT_USER}@{address}'
+    keyfile: str = parse_qs(urlsplit(uri).query)['keyfile'][0]
+    assert _opened(tmp_path, keyfile).read_text() == IDENTITY
+
+    assert 'private_key' not in inspect.signature(homelab.HomelabHost.__init__).parameters
+    assert 'connection_uri' not in inspect.signature(homelab.declare).parameters
+
+
+@pytest.mark.asyncio
+async def test_every_domain_and_volume_is_signed_by_the_hosts_own_provider(setup_mocks: Fake) -> None:
+    """Inherited from the component, not re-plumbed onto each child.
+
+    The pool, the disk, the seed, the worker domain and the adopted one are all
+    children of the component that built the provider, so each takes it from
+    its parent\'s provider map.
+    """
+    _ = build()
+    await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    libvirt_resources = [name for name, typ in setup_mocks.types.items() if typ.startswith('libvirt:')]
+    assert libvirt_resources, 'the build declared no libvirt resources at all'
+    for name in libvirt_resources:
+        assert f'{CLUSTER}-libvirt' in setup_mocks.providers[name], f'{name} is not signed by the host provider'

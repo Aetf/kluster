@@ -114,7 +114,10 @@ class CloudNetwork(Component):
 
     async def _object_storage_service(self) -> GetServicesServiceResult:
         """The regional Object Storage service entry a service gateway wants."""
-        services = await oci.core.get_services_output().future()
+        # Parented, which is how an invoke inherits a provider: given a parent
+        # it signs with that parent's, and given neither it would fall to the
+        # default one — which this program disables.
+        services = await oci.core.get_services_output(opts=pulumi.InvokeOptions(parent=self)).future()
         assert services is not None
         for service in services.services:
             if 'Object Storage' in service.name:

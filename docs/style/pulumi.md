@@ -26,13 +26,26 @@ business and no key should exist.
 
 **Providers follow the same ownership rule.** A provider that is an
 implementation detail of one component is constructed inside it and not
-visible outside. A provider shared across components is constructed by
-the owner of the connection it represents and passed in. Child
-resources inherit the provider through component `opts` — never
-re-plumbed per resource. Connection state (host, credentials) lives on
-the provider, not on every resource that uses it. Custom providers are
-code of their own kind and live in their own subpackage, apart from the
-declaration logic that uses them.
+visible outside. A provider several components share is constructed by
+the stack program and set on each of them: built inside any one of them
+it would be reached into by the rest. Child resources inherit the
+provider through component `opts` — never re-plumbed per resource; an
+invoke inherits only through a parent, so it names one. Connection state
+(host, credentials) lives on the provider, not on every resource that
+uses it. Custom providers are code of their own kind and live in their
+own subpackage, apart from the declaration logic that uses them.
+
+**Every provider is explicit, and its credential is read at the line
+that builds it** — wherever that line is, and by nothing else. A
+provider and the secret that opens it are one thing, and separating them
+means a reader has to hold two files in their head to answer "what does
+this authenticate as". This is the one category of value a component may
+read out of stack configuration for itself: a credential that configures
+a provider and is read by nothing else. Everything else still arrives as
+a parameter, and no such credential reaches any component's signature.
+A program that follows this rule disables default providers for the
+packages it builds providers for, which turns a forgotten one into an
+error rather than a silent fallback. See framework/rfc-002 §8.
 
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each

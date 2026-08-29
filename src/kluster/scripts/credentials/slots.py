@@ -133,7 +133,7 @@ class PulumiConfig:
     stack: str
     key: str
     #: Plain keys are identifiers the committed file may carry in the clear
-    #: (§4): the region, the account id, the ZeroTier network.
+    #: (§4): the account id, the ZeroTier network.
     secret: bool = True
 
     def __str__(self) -> str:
@@ -602,7 +602,6 @@ ROWS: dict[str, Row] = {
             PulumiConfig(PHYSICAL_STACK, derived.OCI_USER_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_FINGERPRINT_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_PRIVATE_KEY_KEY),
-            PulumiConfig(PHYSICAL_STACK, derived.OCI_REGION_KEY, secret=False),
         ),
         pending=_IN_STACK_CONFIG,
     ),

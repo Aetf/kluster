@@ -99,7 +99,6 @@ def declare_firewall(
     name: str,
     *,
     api_url: str,
-    api_key: pulumi.Input[str],
     site: str,
     worker_gua: pulumi.Input[str] | None,
     peer_port: int,
@@ -121,12 +120,13 @@ def declare_firewall(
     Authentication is an API key belonging to a dedicated local
     administrator — never the SSH credential — and retries are throttled,
     the controller's login rate limit being account-wide rather than
-    per-address.
+    per-address. The key is not an argument: it configures the controller
+    provider and nothing else, so it is read where that provider is built
+    (rfc-002 §8.1).
     """
     return Firewall(
         name,
         api_url=api_url,
-        api_key=api_key,
         site=site,
         worker_gua=worker_gua,
         peer_port=peer_port,
@@ -137,7 +137,6 @@ def declare_firewall(
 def declare_zerotier(
     name: str,
     *,
-    api_token: pulumi.Input[str],
     network_id: str,
     adguard: Sequence[IPv4Address],
     opts: pulumi.ResourceOptions | None = None,
@@ -152,11 +151,12 @@ def declare_zerotier(
     `adguard` names the resolvers, which the flow rules admit a
     continuous-integration member to and nothing else does. `network_id` is a
     plain value rather than an input because it is what the network is adopted
-    by, and an adoption cannot wait on a computation.
+    by, and an adoption cannot wait on a computation. The administration token
+    is not an argument either: it configures the overlay's provider and nothing
+    else, so it is read where that provider is built (rfc-002 §8.1).
     """
     return zerotier_module.Network(
         name,
-        api_token=api_token,
         network_id=network_id,
         adguard=adguard,
         opts=opts,

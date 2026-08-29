@@ -31,12 +31,13 @@ likewise. The prefixes are not restated here — they come from the one bucket
 layout in `conventions`, so the inventory of what is backed up stays derivable
 from the program rather than from a key list.
 
-Not here, deliberately: the **management key** this stack authenticates as,
-which is minted by the `credentials` family from the B2 seed
-(docs/credentials.md §3), and the state-backend appliance's write-only dump
-key, which belongs to a different bucket entirely
-(`kluster-state-backend`) because the dumps must have somewhere to land
-before Pulumi exists.
+The **management key** this component authenticates as is minted by the
+`credentials` family from the B2 seed (docs/credentials.md §3) and read here,
+at the line that builds the provider — this component is the account's only
+consumer, so the connection is its own (rfc-002 §8.1). Not here at all: the
+state-backend appliance's write-only dump key, which belongs to a different
+bucket entirely (`kluster-state-backend`) because the dumps must have
+somewhere to land before Pulumi exists.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ import pulumi
 import pulumi_b2 as b2
 
 from kluster import conventions
-from putils import Component
+from putils import Component, own_provider_opts, with_provider
 
 #: What a backup mover needs, and nothing beyond it. `readFiles` and
 #: `listFiles` are not generosity: restic and barman read their own index
@@ -63,6 +64,18 @@ FORBIDDEN_CAPABILITY = 'deleteFiles'
 #: multipart upload killed mid-flight bills for its parts forever and appears
 #: in no listing. A day is far longer than any mover's retry window.
 UNFINISHED_UPLOAD_DAYS = 1
+
+#: Where the backup account's key pair is read — here, at the line that builds
+#: the provider, and nowhere else (rfc-002 §8.1). Both halves are secrets: the
+#: id is not the key, but it names the one key of that name the account holds,
+#: and the pair is one credential.
+#:
+#: The provider is built inside this component because this component is its
+#: only consumer. If a second one ever declares against the account — a second
+#: bucket, a restore drill with a credential of its own — it moves up to the
+#: stack program, by the same test that puts the cloud provider there.
+APPLICATION_KEY_ID = 'b2ApplicationKeyId'
+APPLICATION_KEY = 'b2ApplicationKey'
 
 
 @dataclass(frozen=True)
@@ -114,8 +127,16 @@ class BackupBucket(Component):
         scopes: Sequence[Scope] = CLUSTER_SCOPES,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__(name, opts=opts)
         _check(scopes)
+        config = pulumi.Config()
+        provider = b2.Provider(
+            f'{name}-b2',
+            application_key_id=config.require_secret(APPLICATION_KEY_ID),
+            application_key=config.require_secret(APPLICATION_KEY),
+            opts=own_provider_opts(opts),
+        )
+        super().__init__(name, opts=with_provider(opts, provider))
+        self.provider = provider
         self.region = region
         self.bucket_name = bucket_name
         self.scopes = tuple(scopes)

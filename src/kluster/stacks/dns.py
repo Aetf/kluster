@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pulumi
+import pulumi_cloudflare as cloudflare
 
 from kluster import conventions
 from kluster.components.dns.adguard import declare_rewrites
@@ -47,10 +48,28 @@ OUTPUT_VIP1_V4 = 'vip1'
 #: Cloudflare dashboard, so they say it in the same words.
 ANCHOR_CLUSTER_COMMENT = 'cluster ingress; every app record is a CNAME here'
 
+#: Where the zones token is read: at the line that builds the provider it
+#: configures, and nowhere else (rfc-002 §8.1). It keeps the provider's own
+#: namespace rather than moving into this project's, because it is exactly a
+#: provider-construction input and this stack's own reorganization is a
+#: separate document's; what changes here is that the value is read explicitly
+#: instead of reaching the provider by ambient configuration.
+CLOUDFLARE_NAMESPACE = 'cloudflare'
+CLOUDFLARE_API_TOKEN = 'apiToken'
+
 
 async def main() -> None:
     config = pulumi.Config()
     account_id = config.require('cloudflareAccountId')
+
+    # One provider for every zone: the token is scoped to the estate's zones
+    # as a set, so a provider built inside one zone's component would be
+    # reached into by the rest (rfc-002 §8.1).
+    zone_provider = cloudflare.Provider(
+        f'{conventions.CLUSTER_NAME}-cloudflare',
+        api_token=pulumi.Config(CLOUDFLARE_NAMESPACE).require_secret(CLOUDFLARE_API_TOKEN),
+    )
+    on_cloudflare = pulumi.ResourceOptions(providers=[zone_provider])
 
     physical = pulumi.StackReference(f'{pulumi.get_organization()}/{pulumi.get_project()}/physical')
     anchors = _anchors(physical)
@@ -72,6 +91,7 @@ async def main() -> None:
                 # so a rebuild moves one record, not one per zone.
                 *(anchors if zone == conventions.ZONE_PRIMARY else ()),
             ],
+            opts=on_cloudflare,
         )
         for zone in conventions.ALL_ZONES
     }

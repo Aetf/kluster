@@ -61,9 +61,10 @@ import pulumi
 import pulumi_zerotier as zerotier
 
 from kluster import conventions
-from putils import Component
+from putils import Component, own_provider_opts, with_provider
 
 __all__ = (
+    'API_TOKEN',
     'MULTICAST_LIMIT',
     'SSH_PORT',
     'UNIFI_API_PORT',
@@ -82,6 +83,11 @@ UNIFI_API_PORT = 443
 #: be at least the size of the roster or local discovery quietly stops finding
 #: the last members to answer, which is a roster invariant the suite holds.
 MULTICAST_LIMIT = 32
+
+#: Where the network-administration token is read: at the line that builds the
+#: provider and nowhere else (rfc-002 §8.1). It reaches no component signature,
+#: this one's included.
+API_TOKEN = 'zerotierApiToken'
 
 
 def roles() -> Mapping[str, int]:
@@ -164,26 +170,30 @@ class Network(Component):
         self,
         name: str,
         *,
-        api_token: pulumi.Input[str],
         network_id: str,
         adguard: Sequence[IPv4Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        super().__init__(name, opts=opts)
-        homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
-
         # A provider of its own: this token administers the whole ZeroTier
         # account, Central minting nothing smaller, so the resources it may
-        # reach are exactly the ones below. It is marked secret here rather
-        # than left to the bridged SDK, which -- unlike the controller's --
-        # does not classify its own credential, and an unclassified provider
-        # setting is written to state in plain text.
-        self.provider = zerotier.Provider(
+        # reach are exactly the ones below — and it is read here, at the line
+        # that builds the provider, rather than threaded in from above. It is
+        # marked secret here rather than left to the bridged SDK, which --
+        # unlike the controller's -- does not classify its own credential, and
+        # an unclassified provider setting is written to state in plain text.
+        #
+        # Built before the component registers, because a provider reaches a
+        # subtree through the options the component is registered with.
+        provider = zerotier.Provider(
             f'{name}-zerotier',
-            zerotier_central_token=pulumi.Output.secret(api_token),
-            opts=self.child_opts(),
+            zerotier_central_token=pulumi.Output.secret(pulumi.Config().require_secret(API_TOKEN)),
+            opts=own_provider_opts(opts),
         )
-        child = self.child_opts(provider=self.provider)
+        super().__init__(name, opts=with_provider(opts, provider))
+        self.provider = provider
+        homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+
+        child = self.child_opts()
 
         # The network predates this program and is addressed by id, so the
         # first deployment adopts it rather than creating a second one that

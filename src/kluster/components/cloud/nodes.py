@@ -246,6 +246,9 @@ class CloudNodes(Component):
         attachments = await oci.core.get_vnic_attachments_output(
             compartment_id=compartment_id,
             instance_id=instance_id,
+            # Parented, which is how an invoke inherits this component's
+            # provider rather than falling to the disabled default one.
+            opts=pulumi.InvokeOptions(parent=self),
         ).future()
         assert attachments is not None
         return attachments.vnic_attachments[0].vnic_id

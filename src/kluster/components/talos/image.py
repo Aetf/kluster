@@ -99,6 +99,11 @@ class TalosArtefact(Component):
             schematic_id=schematic_id,
             platform=self.platform,
             architecture=self.architecture,
+            # Parented like every other invoke here. The factory is not an
+            # account this program authenticates to, so what it inherits is the
+            # image factory's own default provider — the parent carries none
+            # for that package.
+            opts=pulumi.InvokeOptions(parent=self),
         ).future()
         assert urls is not None
         return urls.urls.disk_image

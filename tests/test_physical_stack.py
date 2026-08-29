@@ -75,6 +75,18 @@ GATEWAY_CONFIG = {
     'kluster:zerotierNetworkId': ZT_NETWORK_ID,
 }
 
+#: What the two accounts' providers are built from. Every value is invented;
+#: what the suite is for is that each is read at the line that builds its
+#: provider and that everything below that line inherits the result.
+ACCOUNT_CONFIG = {
+    'kluster:ociTenancyOcid': TENANCY_ID,
+    'kluster:ociUserOcid': 'ocid1.user.oc1..test',
+    'kluster:ociFingerprint': ':'.join(['ab'] * 16),
+    'kluster:ociPrivateKey': '-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----',
+    'kluster:b2ApplicationKeyId': 'a-b2-key-id',
+    'kluster:b2ApplicationKey': 'a-b2-key',
+}
+
 
 class Mocks(pulumi.runtime.Mocks):
     def __init__(self) -> None:
@@ -84,11 +96,22 @@ class Mocks(pulumi.runtime.Mocks):
         #: What each resource was declared with, by name, so a test can ask
         #: what the stack handed a provider rather than only that it made one.
         self.inputs: dict[str, dict[str, Any]] = {}
+        #: The type each resource was registered as, and the provider instance
+        #: it was registered against, both by name. The engine hands a mock the
+        #: reference of the provider that would manage the resource, which is
+        #: how a case can ask what a declaration authenticates as rather than
+        #: only that it happened.
+        self.types: dict[str, str] = {}
+        self.providers: dict[str, str] = {}
+        #: The same for each function call, by token.
+        self.call_providers: dict[str, str] = {}
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         self.registered.add(args.typ)
         outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
         self.inputs[args.name] = dict(cast('dict[str, Any]', args.inputs))
+        self.types[args.name] = args.typ
+        self.providers[args.name] = args.provider or ''
         if args.typ == 'oci:Core/vcn:Vcn':
             outputs['ipv6cidrBlocks'] = ['2603:c020:8000:1200::/56']
         if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
@@ -120,6 +143,7 @@ class Mocks(pulumi.runtime.Mocks):
         return args.name + '_id', outputs
 
     def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        self.call_providers[args.token] = args.provider or ''
         match args.token:
             case 'unifi:index/getFirewallZone:getFirewallZone':
                 name = str(cast('dict[str, Any]', args.args)['name'])
@@ -163,13 +187,12 @@ COMPARTMENT = conventions.Compartment(
 )
 
 
-#: The whole of what the stack reads out of configuration. Site facts the
-#: program cannot derive, plus the OCI provider's own credential namespace —
-#: the tenancy OCID is read from there rather than restated, because the mint
-#: that issues the key writes it beside the key.
+#: The whole of what the stack reads out of configuration: site facts the
+#: program cannot derive, and the secrets that configure the two accounts'
+#: providers. Nothing here names a provider namespace — with every provider
+#: explicit there is nothing left to configure through one (rfc-002 §8.1).
 STACK_CONFIG = {
     'kluster:talosVersion': 'v1.11.0',
-    'oci:tenancyOcid': TENANCY_ID,
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
     # The §3 domain: the credential the host is reached with, where the
     # worker's image and seed are written, and which domain is adopted rather
@@ -177,6 +200,7 @@ STACK_CONFIG = {
     'kluster:libvirtPrivateKey': LIBVIRT_KEY,
     'kluster:libvirtStorageDir': '/var/lib/libvirt/kluster',
     'kluster:haosDomainUuid': '00000000-0000-0000-0000-000000000000',
+    **ACCOUNT_CONFIG,
     **GATEWAY_CONFIG,
 }
 
@@ -188,7 +212,7 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
     # `.credentials/`, so every test here is pointed at a directory of its own:
     # a test suite that wrote into the tree it runs from would leave a key
     # behind and, worse, overwrite the operator's.
-    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / workstation.DIRECTORY)
+    monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
     mocks = Mocks()
     pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
@@ -313,16 +337,18 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     assert parts.netloc == f'{homelab.LIBVIRT_USER}@{address}'
     assert parts.path == '/system'
 
-    # The files the provider opens, in the slot this checkout keeps local
-    # secrets in — and the identity in them is the configured one.
-    slot = tmp_path / workstation.DIRECTORY / homelab.SLOT
+    # The files the provider opens, named relative to the checkout root — an
+    # absolute path here would record the path this machine happened to have
+    # in a resource input, and every other machine would then diff against it
+    # forever (rfc-002 §8.4).
+    slot = f'{workstation.DIRECTORY}/{homelab.SLOT}'
     query = parse_qs(parts.query)
-    assert query['keyfile'] == [str(slot / homelab.KEYFILE)]
-    assert query['knownhosts'] == [str(slot / homelab.KNOWN_HOSTS)]
-    assert (slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
+    assert query['keyfile'] == [f'{slot}/{homelab.KEYFILE}']
+    assert query['knownhosts'] == [f'{slot}/{homelab.KNOWN_HOSTS}']
+    assert (tmp_path / slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
-    assert (slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
+    assert (tmp_path / slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
     # And no key holds any of it: what is configured is the credential alone.
     assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
 
@@ -561,6 +587,7 @@ def declare_storage() -> physical.Storage:
     return physical._declare_storage(  # pyright: ignore[reportPrivateUsage]
         compartment_id=COMPARTMENT.require(),
         nodes=cast('Any', nodes),
+        on_cloud=pulumi.ResourceOptions(),
     )
 
 
@@ -569,6 +596,7 @@ def declare_guardrails() -> Guardrails:
         config=pulumi.Config(),
         compartment_id=COMPARTMENT.require(),
         tenancy_id=TENANCY_ID,
+        on_cloud=pulumi.ResourceOptions(),
     )
 
 
@@ -678,30 +706,50 @@ def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> None:
         declare_guardrails()
 
 
-def test_the_tenancy_is_read_from_the_key_the_mint_writes() -> None:
-    """One value, written by one command and read by one program.
+def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> None:
+    """Four values, written by one command and read at one line.
 
-    The tenancy OCID is not configuration of this program's own: it is part of
-    the signing configuration the credential mint installs. Asserting against
-    the minter's constant is what keeps the reader from drifting onto a key
-    nothing fills.
+    None of them is configuration of this program's own: they are the signing
+    configuration the credential mint installs, and the stack program reads
+    them where it builds the cloud provider. Asserting against the minter's
+    constants is what keeps the reader from drifting onto keys nothing fills.
     """
     from kluster.scripts.credentials import derived
 
-    assert f'{physical.OCI_NAMESPACE}:{physical.OCI_TENANCY_KEY}' == derived.OCI_TENANCY_KEY
+    assert physical.OCI_TENANCY_OCID == derived.OCI_TENANCY_KEY
+    assert physical.OCI_USER_OCID == derived.OCI_USER_KEY
+    assert physical.OCI_FINGERPRINT == derived.OCI_FINGERPRINT_KEY
+    assert physical.OCI_PRIVATE_KEY == derived.OCI_PRIVATE_KEY_KEY
+
+    from kluster.components.backup import APPLICATION_KEY, APPLICATION_KEY_ID
+
+    assert APPLICATION_KEY_ID == derived.B2_KEY_ID_KEY
+    assert APPLICATION_KEY == derived.B2_KEY_KEY
 
 
-#: Every site fact the stack takes as configuration, including the tenancy it
-#: reads out of the OCI provider's own namespace. A first `up` is run against a
-#: half-filled configuration more often than not, so what matters is that each
-#: missing value stops the run by naming itself rather than failing later
-#: inside a provider call.
+def test_no_provider_namespace_is_read_at_all() -> None:
+    """Every key this stack reads is its own (rfc-002 §8.1, §10.3).
+
+    A provider namespace is configuration acting at a distance: the same
+    program run somewhere else declares against a different account, and
+    nothing in the program says so. With every provider built explicitly there
+    is nothing left for one to carry, so the committed file holds none.
+    """
+    namespaces = {key.partition(':')[0] for key in STACK_CONFIG}
+    assert namespaces == {'kluster'}
+
+
+#: Every site fact the stack takes as configuration, and every secret its two
+#: providers are built from. A first `up` is run against a half-filled
+#: configuration more often than not, so what matters is that each missing
+#: value stops the run by naming itself rather than failing later inside a
+#: provider call.
 SITE_FACTS = [
-    'oci:tenancyOcid',
     'kluster:budgetAlertRecipients',
     'kluster:libvirtPrivateKey',
     'kluster:libvirtStorageDir',
     'kluster:haosDomainUuid',
+    *ACCOUNT_CONFIG,
 ]
 
 
@@ -745,3 +793,99 @@ def test_the_provider_sdks_import() -> None:
     assert pulumi_libvirt.Domain
     assert pulumi_unifi.FirewallZonePolicy
     assert pulumi_zerotier.Member
+
+
+def _unwrapped(value: Any) -> Any:
+    """One provider input, as the engine received it.
+
+    A secret input reaches the monitor as Pulumi's own marked mapping rather
+    than as the value, so a case that wants the value has to look inside it --
+    and the marking is itself the property worth seeing.
+    """
+    assert isinstance(value, dict), f'{value!r} is not a marked secret'
+    return cast('dict[str, Any]', value)['value']
+
+
+#: Which provider each of the stack's own resource families must be signed by,
+#: by the prefix of the type token the family carries. The device-file
+#: resources are the one family with no entry: their provider carries nothing
+#: and travels as an object rather than through resource options (rfc-002
+#: §8.3), and the Talos chain is the other -- it authenticates to no account,
+#: so it keeps the package's own default provider.
+SIGNED_BY = {
+    'oci:': f'{conventions.CLUSTER_NAME}-oci',
+    'b2:': f'{conventions.CLUSTER_NAME}-b2',
+    'unifi:': f'{conventions.CLUSTER_NAME}-unifi',
+    'zerotier:': f'{conventions.CLUSTER_NAME}-zerotier',
+    'libvirt:': f'{conventions.CLUSTER_NAME}-libvirt',
+}
+
+
+@pytest.mark.asyncio
+async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Mocks) -> None:
+    """The whole point of the slice, as one assertion over the whole program.
+
+    Every resource in the stack authenticates through a provider some component
+    built explicitly, and no resource names one: each inherits it from its
+    parent, transitively, because a provider set on a component is the default
+    for its subtree. A resource that lost its parent would inherit the stack's
+    providers instead -- which, with default providers disabled, is nothing at
+    all.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    checked = 0
+    for name, typ in setup.types.items():
+        # A provider resource's own type token is `pulumi:providers:<package>`,
+        # so it never matches a package prefix and never checks itself.
+        for prefix, provider in SIGNED_BY.items():
+            if not typ.startswith(prefix):
+                continue
+            assert provider in setup.providers[name], f'{name} ({typ}) is not signed by {provider}'
+            checked += 1
+    # A run that declared nothing would pass the loop above vacuously.
+    assert checked >= len(SIGNED_BY)
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Mocks) -> None:
+    """One account, six components, one provider -- built where they meet.
+
+    A provider built inside any one of them would be reached into by the other
+    five, which is the test rfc-002 §8.1 gives for what the stack program owns.
+    Its region is not configuration: it is a permanent property of the account
+    and lives in `conventions`, so the line that builds it reads exactly the
+    secrets.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    built = setup.inputs[f'{conventions.CLUSTER_NAME}-oci']
+    assert built['region'] == conventions.OCI_TENANCY.region
+    # The three secrets arrive wrapped: the engine sees a marked value, which
+    # is what keeps a signing key out of a preview and out of a log.
+    assert _unwrapped(built['tenancyOcid']) == TENANCY_ID
+    assert _unwrapped(built['userOcid']) == ACCOUNT_CONFIG['kluster:ociUserOcid']
+    assert _unwrapped(built['privateKey']) == ACCOUNT_CONFIG['kluster:ociPrivateKey']
+
+    signed = {name for name, typ in setup.types.items() if typ.startswith('oci:')}
+    assert len({setup.providers[name] for name in signed}) == 1, 'the cloud account has more than one provider'
+
+
+@pytest.mark.asyncio
+async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Mocks) -> None:
+    """A stack program's own invoke has no parent to inherit from.
+
+    Both regional lookups are made outside any component, so nothing carries a
+    provider to them: they name it. With default providers disabled an invoke
+    that forgot would fail rather than sign as nobody.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    for token in (
+        'oci:Identity/getAvailabilityDomains:getAvailabilityDomains',
+        'oci:Identity/getFaultDomains:getFaultDomains',
+    ):
+        assert f'{conventions.CLUSTER_NAME}-oci' in setup.call_providers[token], f'{token} signed as nobody'

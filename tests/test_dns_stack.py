@@ -19,6 +19,7 @@ LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VIP1_ADDRESS = '203.0.113.20'
 ACCOUNT_ID = 'cf-account'
+API_TOKEN = 'a-zones-token'
 
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
@@ -27,11 +28,17 @@ RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 #: Every resource the program declared: (type, logical name, inputs).
 declared: list[tuple[str, str, dict[str, Any]]] = []
 
+#: Which provider instance each of them was registered against, by name. The
+#: engine hands a mock the reference of the provider that would manage the
+#: resource, which is how a case can ask what a declaration authenticates as.
+signed_by: dict[str, str] = {}
+
 
 class Mocks(pulumi.runtime.Mocks):
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
         outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
         declared.append((args.typ, args.name, outputs))
+        signed_by[args.name] = args.provider or ''
         if args.typ == 'pulumi:pulumi:StackReference':
             outputs['outputs'] = {
                 'cluster_endpoint': LB_ADDRESS,
@@ -46,7 +53,14 @@ class Mocks(pulumi.runtime.Mocks):
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> None:
-    pulumi.runtime.set_all_config({'kluster:cloudflareAccountId': ACCOUNT_ID})
+    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
+
+    pulumi.runtime.set_all_config(
+        {
+            'kluster:cloudflareAccountId': ACCOUNT_ID,
+            f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': API_TOKEN,
+        }
+    )
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='dns', preview=False)
     from kluster.stacks import dns
 
@@ -210,3 +224,33 @@ def test_no_rewrite_is_declared_while_no_app_declares_a_route() -> None:
     which is the state it is in today.
     """
     assert not _all('pulumi-python:dynamic:Resource')
+
+
+def test_every_zone_and_record_is_signed_by_one_explicit_provider() -> None:
+    """The zones token is one credential over a set of zones, so one provider.
+
+    A provider built inside a zone component would be reached into by the
+    other zones, which is the test rfc-002 §8.1 gives for what a stack program
+    owns. Every record and every DNSSEC state below inherits it through its
+    zone, and none of them names it.
+    """
+    zone_provider = f'{conventions.CLUSTER_NAME}-cloudflare'
+    signed = [name for typ, name, _ in declared if typ.startswith('cloudflare:index/')]
+    assert signed, 'the program declared no Cloudflare resources at all'
+    for name in signed:
+        assert zone_provider in signed_by[name], f'{name} is not signed by the zones provider'
+
+
+def test_the_zones_token_is_read_where_that_provider_is_built() -> None:
+    """The credential and the provider it opens are one thing, at one line.
+
+    It keeps the provider's own configuration namespace rather than moving
+    into this project's: it is exactly a provider-construction input, and this
+    stack's own reorganization belongs to a document of its own. What changed
+    is that nothing reads it ambiently any more.
+    """
+    from kluster.stacks import dns
+
+    built = next(inputs for typ, _, inputs in declared if typ == 'pulumi:providers:cloudflare')
+    assert built['apiToken']['value'] == API_TOKEN
+    assert dns.CLOUDFLARE_NAMESPACE == 'cloudflare'
