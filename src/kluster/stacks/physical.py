@@ -44,6 +44,7 @@ from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 from kluster.components.cloud.storage import NodeVolume
 from kluster.components.overlay import Overlay
+from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.lib import config as lib_config
@@ -299,7 +300,21 @@ def declare_gateway(config: pulumi.Config) -> None:
     overlay = Overlay(
         conventions.CLUSTER_NAME,
         network_id=config.require('zerotierNetworkId'),
-        resolvers=[service.address for service in conventions.gateway.RESOLVERS],
+        # Composed here rather than inside the component, because what a run
+        # may reach is a fact about how continuous integration gets to this
+        # site rather than one about the network (rfc-002 §6).
+        #
+        # A run reaches the two resolvers at their LAN addresses on the
+        # container VLAN, not at overlay addresses, because they have none:
+        # they are containers on the device, not members of the overlay. The
+        # packets are routed by the gateway, and a routed packet still carries
+        # the destination it had before the forward, so the rule matches the
+        # LAN address.
+        flow_rules=flow_rules(
+            gateway_overlay_address=conventions.overlay.UDM,
+            homelab_overlay_address=conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address,
+            resolver_site_addresses=[service.address for service in conventions.gateway.RESOLVERS],
+        ),
     )
     # The key material of the two identities generated above, which is how a
     # continuous-integration job joins the overlay at all: the value is the

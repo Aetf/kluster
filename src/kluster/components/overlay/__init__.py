@@ -2,8 +2,14 @@
 
 The overlay is how the home site is reached from anywhere that is not the home
 site — by a person on a phone, and by a continuous-integration job that has to
-configure the gateway itself. Three things are declared here, and each answers a
-different question (gateway.md §2):
+configure the gateway itself. It is a network several machines belong to rather
+than a fact about any one of them, so it is declared beside the gateway and not
+under it (rfc-002 §6). The gateway is one member, and the two components meet
+only in `conventions`, where the roster says which address the gateway answers
+at.
+
+Three things are declared here, and each answers a different question
+(gateway.md §2):
 
 -   **Membership** — who is authorized, at what address, carrying which role
     tag. Membership is the authentication boundary for traffic the gateway's
@@ -14,18 +20,23 @@ different question (gateway.md §2):
     decision into authorized members.
 -   **The managed routes** — which of the home's subnets the overlay carries,
     all of them through the gateway's own member, which is the one machine that
-    was already routing them.
--   **The flow rules** — what a member may do once admitted. Two of the members
-    are continuous-integration identities, and the rules confine each of them
-    to exactly the four destinations its work needs, so that a leaked join
-    credential does not buy general access to the LAN.
+    was already routing them. A route is `{target, via}` on the network and
+    nothing more: `via` names a member, and that member forwards only because
+    forwarding is configured on the device itself. That is why the gateway's
+    routing configuration is a file in `DeviceServices` and only the route
+    table is here — two systems being told two different things
+    (gateway.md §2.2).
+-   **The flow rules** — what a member may do once admitted. They arrive as a
+    parameter, because what confines a run is a fact about how continuous
+    integration reaches this site rather than about the network, and this
+    component declares no policy (`flow_rules.py`).
 
 **The roster is the whole of admission.** A member is authorized because it has
 an entry, and the entry carries the node id that says which device it is — so
 there is nothing to cross-check and no way for the role tag's permissive default
 to reach anything undeclared. The gateway is the one member the roster can be
 missing, because a ZeroTier identity is minted by the daemon's first run and
-that daemon is a container this program delivers; while the entry is absent no
+that daemon is a container the gateway delivers; while the entry is absent no
 member is declared for it, and the ceremony that reads the minted id adds the
 entry as a commit (physical/gateway.md §2.5).
 
@@ -37,14 +48,6 @@ job-level concurrency group named after it (gateway.md §2.6). Their key materia
 is generated in state rather than pre-authorized by hand, which is what keeps
 the network-administration token out of every environment that joins.
 
-**The rules are written in positive matches only.** The engine evaluates every
-packet independently at both ends and keeps no connection state, so each allowed
-flow is declared twice — once outbound, once as its own return leg — and a
-negated matcher is avoided because negation over an unknown tag or an absent
-address family inverts missing information rather than the intended condition
-(ZeroTierOne #2200). The stock base filter is the one exception; it predates the
-quirk and is left as the engine ships it.
-
 **The overlay is IPv4-only.** No member carries a v6 assignment and no v6 route
 is managed, which is what makes the confinement rules complete: a continuous-
 integration member with a v6 address would have its own neighbour discovery
@@ -54,38 +57,13 @@ over v6 that it cannot reach over v4.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from ipaddress import IPv4Address
-from typing import final
-
 import pulumi
 import pulumi_zerotier as zerotier
 
 from kluster import conventions
-from kluster.lib import templates
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = (
-    'API_TOKEN',
-    'MULTICAST_LIMIT',
-    'SSH_PORT',
-    'UNIFI_API_PORT',
-    'Overlay',
-    'flow_rules',
-    'roles',
-)
-
-#: The package `importlib.resources` resolves this module's `templates/`
-#: directory against, so the rules program travels with the code that renders
-#: it (rfc-002 §9.1).
-_PACKAGE = 'kluster.components.overlay'
-
-#: The gateway's own management ports, as reached over the overlay: the shell
-#: the desired-state push writes through, and the controller API the firewall
-#: resources call. Both terminate on the gateway itself.
-SSH_PORT = 22
-UNIFI_API_PORT = 443
+__all__ = ('API_TOKEN', 'MULTICAST_LIMIT', 'Overlay')
 
 #: The largest number of recipients a multicast or broadcast reaches. It has to
 #: be at least the size of the roster or local discovery quietly stops finding
@@ -98,84 +76,14 @@ MULTICAST_LIMIT = 32
 API_TOKEN = 'zerotierApiToken'
 
 
-def roles() -> Mapping[str, int]:
-    """The role enumeration as the rules language spells it."""
-    return {role.name.lower(): role.value for role in conventions.overlay.Role}
-
-
-@final
-@dataclass(frozen=True)
-class _Target:
-    """One destination continuous integration may reach, and why it may."""
-
-    destination: str
-    port: int
-    why: str
-
-
-@final
-@dataclass(frozen=True)
-class _FlowRulesParams:
-    """What `flow-rules.zt.j2` reads."""
-
-    cluster: str
-    tag_role_id: int
-    role_personal: int
-    role_ci: int
-    roles: Mapping[str, int]
-    targets: tuple[_Target, ...]
-
-
-def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, resolvers: Sequence[IPv4Address]) -> str:
-    """The network's rules: a base filter, the confinement, and a fallthrough.
-
-    `homelab` is the homelab host's own overlay address rather than a LAN one:
-    the libvirt session a run opens reaches it member to member, needing no
-    managed route. The resolvers, by contrast, are named by their LAN addresses,
-    because traffic to them is routed by the gateway and a routed packet still
-    carries the destination it had before the forward.
-
-    The final `accept` is what leaves personal devices with the reachability
-    they would have sitting on the LAN, local discovery included: every rule
-    above it matches a tagged continuous-integration endpoint and nothing else.
-    """
-    return templates.render(
-        _PACKAGE,
-        'templates/flow-rules.zt.j2',
-        _FlowRulesParams(
-            cluster=conventions.CLUSTER_NAME,
-            tag_role_id=conventions.overlay.TAG_ROLE_ID,
-            role_personal=conventions.overlay.Role.PERSONAL,
-            role_ci=conventions.overlay.Role.CI,
-            roles=roles(),
-            targets=(
-                _Target(f'{udm}/32', SSH_PORT, 'the gateway, for the desired-state push'),
-                _Target(
-                    f'{udm}/32',
-                    UNIFI_API_PORT,
-                    'the controller API on the gateway, for the firewall resources',
-                ),
-                *(
-                    _Target(
-                        f'{address}/32',
-                        conventions.gateway.ADGUARD_API_PORT,
-                        'a resolver, for the split-horizon rewrites',
-                    )
-                    for address in resolvers
-                ),
-                _Target(f'{homelab}/32', SSH_PORT, 'the homelab host, for the libvirt session'),
-            ),
-        ),
-    )
-
-
 class Overlay(Component):
     """The overlay's configuration and its whole membership.
 
     `network_id` is a plain value rather than an input because it is what the
     network is adopted by, and an adoption cannot wait on a computation.
-    `resolvers` are the container-VLAN addresses the flow rules admit a
-    continuous-integration member to, and nothing else does.
+    `flow_rules` is the rule program the network carries, composed by the
+    caller: what a member may do once admitted is not this component's
+    decision (rfc-002 §6).
     """
 
     def __init__(
@@ -183,7 +91,7 @@ class Overlay(Component):
         name: str,
         *,
         network_id: str,
-        resolvers: Sequence[IPv4Address],
+        flow_rules: str,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         # A provider of its own: this token administers the whole ZeroTier
@@ -203,7 +111,6 @@ class Overlay(Component):
         )
         super().__init__(name, opts=with_provider(opts, provider))
         self.provider = provider
-        homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
 
         child = self.child_opts()
 
@@ -222,11 +129,15 @@ class Overlay(Component):
             # single-family and the confinement rules complete.
             assign_ipv4s=[zerotier.NetworkAssignIpv4Args(zerotier=True)],
             assign_ipv6s=[zerotier.NetworkAssignIpv6Args(zerotier=False, rfc4193=False, sixplane=False)],
+            # Every route is next-hopped through the gateway's member, which is
+            # the only member with forwarding configured. The controller hands
+            # the whole table to every member as it joins, so this is what the
+            # whole network learns, not what any one member asked for.
             routes=[
                 zerotier.NetworkRouteArgs(target=str(route), via=str(conventions.overlay.UDM))
                 for route in conventions.overlay.MANAGED_ROUTES
             ],
-            flow_rules=flow_rules(udm=conventions.overlay.UDM, homelab=homelab, resolvers=resolvers),
+            flow_rules=flow_rules,
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id)),
         )
 
