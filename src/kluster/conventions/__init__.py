@@ -12,12 +12,20 @@ are stack outputs — and per-app values, which live with their app.
 
 One module per domain, and values that are only correct together are one
 structure rather than a flat namespace, so using one without its siblings does
-not parse (rfc-002 §10.1). This module re-exports the whole surface: a reader
+not parse (rfc-002 §10.1). Most of the surface is re-exported here, so a reader
 says `conventions.X` and does not have to know which domain owns `X`.
+
+**Two domains are read qualified instead**: `conventions.gateway` and
+`conventions.overlay`. Their names used to carry a `GW_`/`ZT_` prefix so that a
+flat namespace could hold them, and the prefix is what the module path now says
+(rfc-002 §3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES`.
+It is also the distinction the naming rules care about most: which network a
+name belongs to is never a thing to guess.
 """
 
 from __future__ import annotations
 
+from kluster.conventions import gateway, overlay
 from kluster.conventions.backup import (
     BACKUP_VERSION_RETENTION_DAYS,
     BUCKET_BACKUP,
@@ -79,20 +87,6 @@ from kluster.conventions.dns import (
     ZONE_PRIMARY,
     ZT_LABEL,
 )
-from kluster.conventions.gateway import (
-    ADGUARD_API_PORT,
-    GW_DATA_ROOT,
-    GW_ON_BOOT_D,
-    GW_SERVICES,
-    GW_SSH_USER,
-    UNIFI_NETWORK_CLUSTER,
-    UNIFI_SITE,
-    UNIFI_ZONE_CLUSTER,
-    VHOST_CONTROLLER,
-    BridgedService,
-    ContainerService,
-    HostNetworkService,
-)
 from kluster.conventions.homelab import (
     HOMELAB_BRIDGE,
     HOMELAB_HOST_KEY,
@@ -102,25 +96,6 @@ from kluster.conventions.homelab import (
     HOMELAB_VCPUS,
 )
 from kluster.conventions.identity import CLUSTER_NAME, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
-from kluster.conventions.overlay import (
-    ZT_CI_DNS,
-    ZT_CI_MEMBERS,
-    ZT_CI_PHYSICAL,
-    ZT_MANAGED_ROUTES,
-    ZT_MEMBER_HOMELAB,
-    ZT_MEMBER_UDM,
-    ZT_ROLE_CI,
-    ZT_ROLE_INFRA,
-    ZT_ROLE_PERSONAL,
-    ZT_ROSTER,
-    ZT_SUBNET,
-    ZT_TAG_ROLE_ID,
-    ZT_UDM,
-    EnrolledMember,
-    GeneratedMember,
-    RosterEntry,
-    zt_member,
-)
 from kluster.conventions.providers import (
     B2_ACCOUNT,
     OCI_SEED_USER_EMAIL,
@@ -145,7 +120,6 @@ from kluster.conventions.site import (
 )
 
 __all__ = (
-    'ADGUARD_API_PORT',
     'ALL_NODES',
     'ALL_ZONES',
     'ANCHOR_CLUSTER',
@@ -168,10 +142,6 @@ __all__ = (
     'GATEWAY_LAN',
     'GATEWAY_MEDIA',
     'GATEWAY_NAMESPACE',
-    'GW_DATA_ROOT',
-    'GW_ON_BOOT_D',
-    'GW_SERVICES',
-    'GW_SSH_USER',
     'HOMELAB_BRIDGE',
     'HOMELAB_HOST_KEY',
     'HOMELAB_MEMORY_GIB',
@@ -212,47 +182,25 @@ __all__ = (
     'STATE_BACKEND',
     'STATE_DUMP_PREFIX',
     'UDM_ASN',
-    'UNIFI_NETWORK_CLUSTER',
-    'UNIFI_SITE',
-    'UNIFI_ZONE_CLUSTER',
     'VCN_CIDR',
     'VCN_SUBNET_CIDR',
-    'VHOST_CONTROLLER',
     'ZONE_FAMILY',
     'ZONE_MIRRORS',
     'ZONE_PRIMARY',
-    'ZT_CI_DNS',
-    'ZT_CI_MEMBERS',
-    'ZT_CI_PHYSICAL',
     'ZT_LABEL',
-    'ZT_MANAGED_ROUTES',
-    'ZT_MEMBER_HOMELAB',
-    'ZT_MEMBER_UDM',
-    'ZT_ROLE_CI',
-    'ZT_ROLE_INFRA',
-    'ZT_ROLE_PERSONAL',
-    'ZT_ROSTER',
-    'ZT_SUBNET',
-    'ZT_TAG_ROLE_ID',
-    'ZT_UDM',
     'AddressPool',
     'B2Account',
-    'BridgedService',
     'Compartment',
     'CompartmentMissing',
-    'ContainerService',
-    'EnrolledMember',
     'FollowsDedicatedVip',
-    'GeneratedMember',
-    'HostNetworkService',
     'NodeVolume',
     'OciTenancy',
     'RetentionClass',
-    'RosterEntry',
     'SiteNetwork',
     'Vip',
     'barman_repo_path',
+    'gateway',
+    'overlay',
     'ula_subnet',
     'volsync_repo_path',
-    'zt_member',
 )

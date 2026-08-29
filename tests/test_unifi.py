@@ -102,8 +102,8 @@ async def settled() -> None:
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
-def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.Firewall:
-    return unifi.Firewall(
+def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.SiteFirewall:
+    return unifi.SiteFirewall(
         NAME,
         api_url=API_URL,
         site=SITE,
@@ -174,7 +174,7 @@ async def test_the_cluster_vlan_is_a_network_object_the_gateway_terminates() -> 
     """
     firewall = build()
 
-    assert await firewall.network.name.future() == conventions.UNIFI_NETWORK_CLUSTER
+    assert await firewall.network.name.future() == conventions.gateway.UNIFI_NETWORK_CLUSTER
     assert await firewall.network.vlan_id.future() == conventions.CLUSTER_VLAN.vlan_id
     # The controller spells the addressing as its own interface address plus
     # the prefix, so this field carries the gateway and the subnet at once.
@@ -218,7 +218,7 @@ async def test_the_cluster_sits_alone_in_a_zone_this_program_creates() -> None:
     """
     firewall = build()
 
-    assert await firewall.zone.name.future() == conventions.UNIFI_ZONE_CLUSTER
+    assert await firewall.zone.name.future() == conventions.gateway.UNIFI_ZONE_CLUSTER
     assert await firewall.network.firewall_zone_id.future() == f'{NAME}-zone_id'
     assert await firewall.zone.networks.future() is None
 
@@ -580,17 +580,15 @@ async def test_static_host_entries_are_empty_by_design_and_typed_when_present() 
 
 
 @pytest.mark.asyncio
-async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
-    """The seam the `physical` stack calls, exercised through its own front door.
+async def test_the_peer_port_reaches_both_halves_of_the_one_flow() -> None:
+    """The port arrives as stack configuration rather than as a constant.
 
-    The port arrives as stack configuration rather than as a constant: it is
-    inherited from the deployment this cluster replaces, so the program reads
-    it instead of choosing it. A seam that dropped it would leave two rules
-    admitting a port nobody listens on.
+    It is inherited from the deployment this cluster replaces, so the program
+    reads it instead of choosing it — and it names two rules, the v6 pinhole
+    and the v4 forward, which are one flow. A component that carried it into
+    only one of them would publish half a service.
     """
-    from kluster.components import gateway
-
-    firewall = gateway.declare_firewall(
+    firewall = unifi.SiteFirewall(
         NAME,
         api_url=API_URL,
         site=SITE,
@@ -624,7 +622,7 @@ async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
 
     firewall = build()
     assert await firewall.provider.api_key.future() == API_KEY
-    assert 'api_key' not in inspect.signature(unifi.Firewall.__init__).parameters
+    assert 'api_key' not in inspect.signature(unifi.SiteFirewall.__init__).parameters
 
 
 @pytest.mark.asyncio

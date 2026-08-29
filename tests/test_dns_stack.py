@@ -182,8 +182,8 @@ def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference() -> No
         if name.endswith(f'.{conventions.ZT_LABEL}-a')
     }
 
-    assert published == {zt_label(entry.name) for entry in conventions.ZT_ROSTER}
-    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == str(conventions.zt_member(member).address)
+    assert published == {zt_label(entry.name) for entry in conventions.overlay.ROSTER}
+    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == str(conventions.overlay.member(member).address)
 
 
 def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
@@ -191,7 +191,7 @@ def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
     # resolves in all of it, and the family zones carry none of it.
     for zone in conventions.ALL_ZONES:
         names = {record['name'] for record in _records_of(zone).values()}
-        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.ZT_ROSTER}
+        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.overlay.ROSTER}
 
         assert (expected <= names) is (zone in conventions.PUBLIC_ALL), zone
         assert (expected & names == set()) is (zone not in conventions.PUBLIC_ALL), zone

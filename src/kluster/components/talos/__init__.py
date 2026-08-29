@@ -15,7 +15,7 @@ fact about a running machine rather than a decision this program makes.
 
 Splitting them is not an aesthetic choice. An OCI instance's `user_data` *is*
 its machine configuration, so a configuration naming something the cloud only
-assigns to the finished instance — the augmented node's secondary private IP —
+assigns to the finished instance — the dedicated VIP's secondary private IP —
 would wait on the instance that is waiting on it. Day 1 carries those
 addresses instead, over apid, on top of the configuration the machine booted.
 
@@ -194,7 +194,7 @@ def local_path_patch(root: str = conventions.LOCAL_PATH_ROOT) -> dict[str, Any]:
 def secondary_address_patch(address: str) -> dict[str, Any]:
     """Put an extra address on the node's physical interface.
 
-    OCI hands the augmented node a secondary private IP on its VNIC but does
+    OCI hands the node a secondary private IP on its VNIC but does
     not configure the guest, so without this the dedicated VIP is an address
     the machine never answers for (architecture.md §3.2). It is added as a
     host route (/32) on purpose: the subnet route already arrives over DHCP,
@@ -511,7 +511,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         for the nodes where that differs from the address above. A node with
         no entry is dialled at its own address.
     :param secondary_addresses: node name to an extra address to put on its
-        interface (the augmented node's dedicated VIP).
+        interface (the node's dedicated VIP).
     """
 
     def __init__(
@@ -544,7 +544,7 @@ class TalosDay1(Component, pulumi_type='kluster:physical:TalosDay1'):
         self._endpoints = {node: (endpoints or {}).get(node, self._addresses[node]) for node in cluster.roles}
 
         # What is applied is the booted configuration plus whatever only exists
-        # now: the augmented node's secondary private IP.
+        # now: the secondary private IP behind the dedicated VIP.
         self.configurations = {
             node: cluster.configuration(node, secondary_address=self._secondary_addresses.get(node))
             for node in cluster.roles

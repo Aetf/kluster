@@ -29,6 +29,7 @@ from kluster import conventions
 from kluster.components import homelab
 from kluster.components.cloud import nodes
 from kluster.components.cloud.guardrails import Guardrails
+from kluster.components.gateway import Rootfs
 from kluster.lib import workstation
 from kluster.stacks import physical
 
@@ -54,9 +55,13 @@ TALOSCONFIG = 'context: kluster\n'
 #: path — so its shape only has to be something no test could mistake for real.
 LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 
-#: What the gateway's three channels read out of stack configuration: the site
-#: facts the program cannot derive. Every value here is invented; what the test
-#: is for is that the keys line up and the values reach the right resource.
+#: A hex SHA-256 digest, as an image pin carries one. Nothing here checks the
+#: bytes behind it; the shape is what the reader is checked against.
+DIGEST = 'f' * 64
+
+#: What the gateway reads out of stack configuration: the site facts the
+#: program cannot derive. Every value here is invented; what the test is for is
+#: that the keys line up and the values reach the right resource.
 GATEWAY_CONFIG = {
     'kluster:gatewayHostKey': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample',
     'kluster:gatewayPrivateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n',
@@ -65,7 +70,7 @@ GATEWAY_CONFIG = {
     'kluster:gatewayRootfs': json.dumps(
         {
             service.name: {'url': f'https://example.invalid/{service.name}.raw', 'sha256': 'f' * 64}
-            for service in conventions.GW_SERVICES
+            for service in conventions.gateway.SERVICES
         }
     ),
     'kluster:unifiApiKey': 'a-controller-key',
@@ -249,15 +254,15 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
 
     The gateway's overlay address is handed out by this program's own ZeroTier
     roster, so every client of the gateway reads it from the same constant:
-    the estate's SSH host, the controller's API endpoint, and the next hop of
-    every managed route. A value typed in beside the API key would be a second
+    the shell the desired state travels over, the controller's API endpoint,
+    and the next hop of every managed route. A value typed in beside the API key would be a second
     copy of that, free to disagree with the roster that decides it.
     """
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-unifi']['apiUrl'] == f'https://{conventions.ZT_UDM}'
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['host'] == str(conventions.ZT_UDM)
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-unifi']['apiUrl'] == f'https://{conventions.overlay.UDM}'
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host'] == str(conventions.overlay.UDM)
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
@@ -281,7 +286,7 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    name = conventions.CLUSTER_NAME
+    name = f'{conventions.CLUSTER_NAME}-firewall'
     zone = f'{name}-zone_id'
     internal = 'zone-Internal'
 
@@ -326,7 +331,7 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     a URI typed into the stack would be wrong for one of them and stale for
     both.
     """
-    address = str(conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address)
+    address = str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address)
 
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
@@ -357,8 +362,8 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
 async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Mocks) -> None:
     """First bring-up dials the device over the LAN, on both channels.
 
-    The overlay address answers only once the estate's ZeroTier container is on
-    the device, and the estate is what this run delivers. Where the device
+    The overlay address answers only once the overlay daemon's container is on
+    the device, and that container is what this run delivers. Where the device
     answers is the whole of what the knob decides, and it decides it for both
     providers that reach the gateway — the desired-state push over SSH and the
     controller's API — because they are the same box behind two ports, and an
@@ -369,12 +374,12 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['host'] == BOOTSTRAP_HOST
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-unifi']['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host'] == BOOTSTRAP_HOST
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-unifi']['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
     # Nothing else about the channels moves — the pin in particular is a bare
     # key with no host name in front of it, so it matches the device at either
-    # address (`test_gw_provider`).
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['port'] == 22
+    # address (`test_device_files`).
+    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['port'] == 22
 
 
 @pytest.mark.asyncio
@@ -394,13 +399,13 @@ async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(se
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    assert f'{conventions.CLUSTER_NAME}-peer-v6' not in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' not in setup.inputs
     # Nothing else waits with it. The v4 half names the node address the
     # address plan states rather than one a booted machine reports, and the
     # rest of the census never named the worker at all.
-    assert f'{conventions.CLUSTER_NAME}-peer-v4' in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-cluster-egress' in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-network' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-firewall-cluster-egress' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-firewall-network' in setup.inputs
 
 
 @pytest.mark.asyncio
@@ -414,7 +419,7 @@ async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup:
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    destination = setup.inputs[f'{conventions.CLUSTER_NAME}-peer-v6']['destination']
+    destination = setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-peer-v6']['destination']
     assert destination['ips'] == [WORKER_GUA]
     # A number over the wire arrives as one, whatever configuration spelled it.
     assert int(destination['port']) == int(GATEWAY_CONFIG['kluster:qbittorrentPeerPort'])
@@ -501,7 +506,7 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
     }
     # Every continuous-integration member the roster carries gets an export:
     # one added without one would join no job, having no secret to be pushed.
-    assert set(physical.CI_IDENTITY_OUTPUTS) == set(conventions.ZT_CI_MEMBERS)
+    assert set(physical.CI_IDENTITY_OUTPUTS) == set(conventions.overlay.CI_MEMBERS)
     assert contracted >= set(physical.CI_IDENTITY_OUTPUTS.values())
     assert contracted <= set(exported)
 
@@ -763,10 +768,10 @@ async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> 
 
 
 @pytest.mark.asyncio
-async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need() -> None:
-    """The gateway's three channels, exercised without the rest of the stack.
+async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> None:
+    """The gateway and the overlay, exercised without the rest of the stack.
 
-    `main` reaches it now, but a failure there names the whole program; this
+    `main` reaches them now, but a failure there names the whole program; this
     isolates the arm whose wiring is entirely configuration — every key, and
     which of them is a secret — so a missing one is reported against the
     gateway rather than against a run of everything.
@@ -774,6 +779,37 @@ async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need()
     config = pulumi.Config()
     physical.declare_gateway(config)
     await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+
+def test_an_image_pin_is_checked_where_it_crosses_into_the_program() -> None:
+    """A digest is a site fact: whatever the build produced.
+
+    It is checked as it is read, so a truncated paste is a named configuration
+    error rather than a push that reaches the device and is refused there. The
+    set is checked both ways too, because the device runs the census and
+    nothing else: a service with no pin would be a container that never starts,
+    and a pin for a service nobody declares would be a payload pushed for no
+    reason at all.
+    """
+    url = 'https://example.invalid/caddy.tar.zst'
+    complete = {
+        service.name: {'url': f'https://example.invalid/{service.name}.tar.zst', 'sha256': DIGEST.upper()}
+        for service in conventions.gateway.SERVICES
+    }
+
+    pins = physical._rootfs_pins(complete)  # pyright: ignore[reportPrivateUsage]
+    assert pins['caddy'] == Rootfs(url='https://example.invalid/caddy.tar.zst', sha256=DIGEST)
+
+    with pytest.raises(ValueError, match='is not a hex sha256 digest'):
+        physical._rootfs_pins({**complete, 'caddy': {'url': url, 'sha256': 'abc'}})  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ValueError, match='carries no url'):
+        physical._rootfs_pins({**complete, 'caddy': {'sha256': DIGEST}})  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(TypeError, match='must be a mapping'):
+        physical._rootfs_pins(['caddy'])  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ValueError, match='pins no image for zerotier'):
+        physical._rootfs_pins({name: entry for name, entry in complete.items() if name != 'zerotier'})  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ValueError, match='thermostat, which the device does not run'):
+        physical._rootfs_pins({**complete, 'thermostat': {'url': url, 'sha256': DIGEST}})  # pyright: ignore[reportPrivateUsage]
 
 
 def test_the_provider_sdks_import() -> None:
@@ -815,7 +851,7 @@ def _unwrapped(value: Any) -> Any:
 SIGNED_BY = {
     'oci:': f'{conventions.CLUSTER_NAME}-oci',
     'b2:': f'{conventions.CLUSTER_NAME}-b2',
-    'unifi:': f'{conventions.CLUSTER_NAME}-unifi',
+    'unifi:': f'{conventions.CLUSTER_NAME}-firewall-unifi',
     'zerotier:': f'{conventions.CLUSTER_NAME}-zerotier',
     'libvirt:': f'{conventions.CLUSTER_NAME}-libvirt',
 }

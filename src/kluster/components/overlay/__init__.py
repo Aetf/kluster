@@ -9,7 +9,7 @@ different question (gateway.md §2):
     tag. Membership is the authentication boundary for traffic the gateway's
     own firewall never classifies, so it is not bookkeeping: it is the
     admission decision. *Who* may be on the network is not decided here — the
-    roster is `conventions.ZT_ROSTER`, because the `dns` stack publishes the
+    roster is `conventions.overlay.ROSTER`, because the `dns` stack publishes the
     `*.zt` host block from the same table — and this module is what turns that
     decision into authorized members.
 -   **The managed routes** — which of the home's subnets the overlay carries,
@@ -71,7 +71,7 @@ __all__ = (
     'MULTICAST_LIMIT',
     'SSH_PORT',
     'UNIFI_API_PORT',
-    'Network',
+    'Overlay',
     'flow_rules',
     'roles',
 )
@@ -100,11 +100,7 @@ API_TOKEN = 'zerotierApiToken'
 
 def roles() -> Mapping[str, int]:
     """The role enumeration as the rules language spells it."""
-    return {
-        'personal': conventions.ZT_ROLE_PERSONAL,
-        'infra': conventions.ZT_ROLE_INFRA,
-        'ci': conventions.ZT_ROLE_CI,
-    }
+    return {role.name.lower(): role.value for role in conventions.overlay.Role}
 
 
 @final
@@ -130,7 +126,7 @@ class _FlowRulesParams:
     targets: tuple[_Target, ...]
 
 
-def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4Address]) -> str:
+def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, resolvers: Sequence[IPv4Address]) -> str:
     """The network's rules: a base filter, the confinement, and a fallthrough.
 
     `homelab` is the homelab host's own overlay address rather than a LAN one:
@@ -148,9 +144,9 @@ def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4
         'templates/flow-rules.zt.j2',
         _FlowRulesParams(
             cluster=conventions.CLUSTER_NAME,
-            tag_role_id=conventions.ZT_TAG_ROLE_ID,
-            role_personal=conventions.ZT_ROLE_PERSONAL,
-            role_ci=conventions.ZT_ROLE_CI,
+            tag_role_id=conventions.overlay.TAG_ROLE_ID,
+            role_personal=conventions.overlay.Role.PERSONAL,
+            role_ci=conventions.overlay.Role.CI,
             roles=roles(),
             targets=(
                 _Target(f'{udm}/32', SSH_PORT, 'the gateway, for the desired-state push'),
@@ -162,10 +158,10 @@ def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4
                 *(
                     _Target(
                         f'{address}/32',
-                        conventions.ADGUARD_API_PORT,
+                        conventions.gateway.ADGUARD_API_PORT,
                         'a resolver, for the split-horizon rewrites',
                     )
-                    for address in adguard
+                    for address in resolvers
                 ),
                 _Target(f'{homelab}/32', SSH_PORT, 'the homelab host, for the libvirt session'),
             ),
@@ -173,15 +169,21 @@ def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4
     )
 
 
-class Network(Component):
-    """The overlay's configuration and its whole membership."""
+class Overlay(Component):
+    """The overlay's configuration and its whole membership.
+
+    `network_id` is a plain value rather than an input because it is what the
+    network is adopted by, and an adoption cannot wait on a computation.
+    `resolvers` are the container-VLAN addresses the flow rules admit a
+    continuous-integration member to, and nothing else does.
+    """
 
     def __init__(
         self,
         name: str,
         *,
         network_id: str,
-        adguard: Sequence[IPv4Address],
+        resolvers: Sequence[IPv4Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         # A provider of its own: this token administers the whole ZeroTier
@@ -201,7 +203,7 @@ class Network(Component):
         )
         super().__init__(name, opts=with_provider(opts, provider))
         self.provider = provider
-        homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+        homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
 
         child = self.child_opts()
 
@@ -221,10 +223,10 @@ class Network(Component):
             assign_ipv4s=[zerotier.NetworkAssignIpv4Args(zerotier=True)],
             assign_ipv6s=[zerotier.NetworkAssignIpv6Args(zerotier=False, rfc4193=False, sixplane=False)],
             routes=[
-                zerotier.NetworkRouteArgs(target=str(route), via=str(conventions.ZT_UDM))
-                for route in conventions.ZT_MANAGED_ROUTES
+                zerotier.NetworkRouteArgs(target=str(route), via=str(conventions.overlay.UDM))
+                for route in conventions.overlay.MANAGED_ROUTES
             ],
-            flow_rules=flow_rules(udm=conventions.ZT_UDM, homelab=homelab, adguard=adguard),
+            flow_rules=flow_rules(udm=conventions.overlay.UDM, homelab=homelab, resolvers=resolvers),
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id)),
         )
 
@@ -232,25 +234,27 @@ class Network(Component):
         # node it authorizes has an identifier.
         self.identities = {
             entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
-            for entry in conventions.ZT_ROSTER
-            if isinstance(entry, conventions.GeneratedMember)
+            for entry in conventions.overlay.ROSTER
+            if isinstance(entry, conventions.overlay.GeneratedMember)
         }
 
         # One member per entry, and no entry is skipped: a device with no
         # identity to authorize has no entry either, which is the state the
         # gateway is in until the ceremony records the id its daemon minted.
-        self.members = {entry.name: self._declare(name, entry, child) for entry in conventions.ZT_ROSTER}
+        self.members = {entry.name: self._declare(name, entry, child) for entry in conventions.overlay.ROSTER}
 
         self.register_outputs({})
 
     def _declare(
         self,
         name: str,
-        entry: conventions.RosterEntry,
+        entry: conventions.overlay.RosterEntry,
         opts: pulumi.ResourceOptions,
     ) -> zerotier.Member:
         node_id: pulumi.Input[str] = (
-            self.identities[entry.name].identity_id if isinstance(entry, conventions.GeneratedMember) else entry.node_id
+            self.identities[entry.name].identity_id
+            if isinstance(entry, conventions.overlay.GeneratedMember)
+            else entry.node_id
         )
         return zerotier.Member(
             f'{name}-member-{entry.name}',
@@ -265,6 +269,6 @@ class Network(Component):
             # it would not move with it.
             no_auto_assign_ips=True,
             ip_assignments=[str(entry.address)],
-            tags=[[conventions.ZT_TAG_ROLE_ID, entry.role]],
+            tags=[[conventions.overlay.TAG_ROLE_ID, entry.role]],
             opts=opts,
         )

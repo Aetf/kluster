@@ -1,21 +1,21 @@
 """The gw-config dynamic provider: desired-state files on the gateway device.
 
-The device has no API for what matters on it -- routing, the container estate,
+The device has no API for what matters on it -- routing, the container services,
 the scripts that re-establish both after a firmware update -- but it has a proven
 convention: files under `/data`, written idempotently, with a command run
 afterwards to make whatever reads them notice. This module turns that convention
 into two Pulumi resources (architecture.md §5.2):
 
--   `GwFile` is a file: path, content, ownership, mode, and an optional hook. Its
-    content lives in state, because a configuration file is small and its diff is
-    the reason to have a preview at all.
--   `GwArtifact` is a payload too big for state: a URL, the digest that pins it,
-    and where it lands. The bytes are fetched on the runner, checked against the
-    pin, and streamed to the device; what state carries is the pin, and what the
-    device carries is a marker file beside the payload naming the digest it
-    holds. A preview compares two hashes, never megabytes. An artifact may also
-    name a directory to `extract` into, for the payloads that are root
-    filesystem archives rather than single files.
+-   `DeviceFile` is a file: path, content, ownership, mode, and an optional
+    hook. Its content lives in state, because a configuration file is small
+    and its diff is the reason to have a preview at all.
+-   `DeviceArtifact` is a payload too big for state: a URL, the digest that
+    pins it, and where it lands. The bytes are fetched on the runner, checked
+    against the pin, and streamed to the device; what state carries is the pin,
+    and what the device carries is a marker file beside the payload naming the
+    digest it holds. A preview compares two hashes, never megabytes. An
+    artifact may also name a directory to `extract` into, for the payloads that
+    are root filesystem archives rather than single files.
 
 **An extracted artifact owns two things on the device**: the archive at
 `target`, and the tree unpacked from it. The tree is derived state -- the push
@@ -27,7 +27,7 @@ behind until the *next* push clears it, because at the moment of the swap the
 container is still running on it and has not yet been restarted.
 
 **The digest pins the artifact as published, not the bytes on the wire.** The
-estate's root filesystems are published compressed; the runner verifies the
+gateway's container root filesystems are published compressed; the runner verifies the
 downloaded bytes against the pin, decompresses them, and pushes the plain
 archive, because the device cannot be assumed to have a decompressor while `tar`
 is the floor every such system clears. So the chain is: the pin verifies
@@ -71,7 +71,7 @@ operations being idempotent by construction.
 An extracted artifact adds two steps inside that order: the tree is replaced
 after the archive lands and *before* the hook, and the marker beside the tree is
 written in that same window. That is what lets a hook notice the tree changed --
-the gateway estate's hook is a script that restarts a container only when a file
+the gateway's hook is a script that restarts a container only when a file
 it reads has changed, and a marker written after the hook would be a change the
 hook could never see. The marker beside the archive stays last, because it is
 the claim that the whole sequence succeeded.
@@ -79,7 +79,8 @@ the claim that the whole sequence succeeded.
 Secret-bearing inputs are declared secret: the client private key always, and a
 file's content on request (`secret=True`), for the files that carry device
 credentials. Content is not secret by default, because a secret input renders as
-a hash in a preview and most of this estate is configuration one wants to read.
+a hash in a preview and most of what a device holds is configuration one wants
+to read.
 The pinned host key is deliberately *not* among them -- it is a public key, and a
 reviewable pin is worth more than a redacted one.
 
@@ -122,10 +123,10 @@ __all__ = (
     'Connection',
     'DigestMismatch',
     'ExtractFailed',
-    'GwArtifact',
-    'GwArtifactProvider',
-    'GwFile',
-    'GwFileProvider',
+    'DeviceArtifact',
+    'DeviceArtifactProvider',
+    'DeviceFile',
+    'DeviceFileProvider',
     'HookFailed',
     'fetch',
     'gone',
@@ -140,7 +141,7 @@ __all__ = (
 #: Where the device answers and as whom the session authenticates. These are
 #: declared inputs rather than a resource identity: a change to one dials the new
 #: address and writes the same file there, and does *not* delete anything at the
-#: old one. The estate has exactly one device, pinned by its host key rather than
+#: old one. A session names exactly one device, pinned by its host key rather than
 #: by its address, so an address that moved -- the LAN dial of a first bring-up,
 #: physical/gateway.md §2.5 -- is the same box, and a replacement's delete would
 #: remove the file its own create had just written. A device genuinely swapped
@@ -153,10 +154,10 @@ ADDRESS = ('host', 'port', 'username')
 #: module docstring on why "no change" would be a trap.
 CREDENTIALS = ('private_key', 'host_key')
 
-#: What a `GwFile` declares beyond its own path.
+#: What a `DeviceFile` declares beyond its own path.
 FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
 
-#: The same for a `GwArtifact`. The digest is the payload's identity and the URL
+#: The same for a `DeviceArtifact`. The digest is the payload's identity and the URL
 #: is only where the bytes were found, but both are declared, so moving a release
 #: to another mirror is a diff a reviewer sees.
 ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
@@ -165,7 +166,7 @@ ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRE
 FETCH_TIMEOUT = 300
 
 #: The mode a digest marker is written with. The marker is the provider's own
-#: bookkeeping rather than part of the estate, so it does not inherit the
+#: bookkeeping rather than part of the desired state, so it does not inherit the
 #: payload's ownership.
 MARKER_MODE = '0644'
 
@@ -320,7 +321,7 @@ def marker_path(target: str) -> str:
 
     A tree gets one of these too, beside it rather than inside it: a file the
     push wrote into the tree would be a file inside the container's root
-    filesystem, and the tree is the image, not the estate's bookkeeping.
+    filesystem, and the tree is the image, not the push's bookkeeping.
     """
     return f'{target}.digest'
 
@@ -383,7 +384,7 @@ def replacements(olds: Mapping[str, Any], news: Mapping[str, Any], location: str
 
     Where the file sits on the device, and nothing else: that is the only change
     the device cannot converge in place, because the bytes have to appear under
-    the new path and go from the old one. Everything else about a `GwFile` --
+    the new path and go from the old one. Everything else about a `DeviceFile` --
     where the device answers included -- is a value the next apply writes.
 
     A property that is still unknown cannot have been shown to differ, so it is
@@ -437,7 +438,7 @@ def gone() -> dynamic.ReadResult:
 
 
 @final
-class GwFileProvider(dynamic.ResourceProvider):
+class DeviceFileProvider(dynamic.ResourceProvider):
     """One desired-state file on the device: write it, then make it take effect."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
@@ -515,7 +516,7 @@ class GwFileProvider(dynamic.ResourceProvider):
 
 
 @final
-class GwArtifactProvider(dynamic.ResourceProvider):
+class DeviceArtifactProvider(dynamic.ResourceProvider):
     """A digest-pinned payload on the device, tracked by a marker file."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
@@ -569,7 +570,7 @@ class GwArtifactProvider(dynamic.ResourceProvider):
             await transport.write(target, data, mode=str(props['mode']), owner=_owner(props))
             if tree:
                 await self._unpack(transport, target, tree)
-                # Before the hook, because the hook is what notices: the estate's
+                # Before the hook, because the hook is what notices: the
                 # hook restarts a container when a file it reads has changed, and
                 # this marker is that file.
                 await _mark(transport, tree, digest)
@@ -611,7 +612,7 @@ class GwArtifactProvider(dynamic.ResourceProvider):
                 return gone()
             claimed = marker.decode(errors='replace').strip()
             if tree and not await _tree_holds(transport, tree, claimed):
-                # The archive alone is not the resource: what the estate runs is
+                # The archive alone is not the resource: what the device runs is
                 # the tree, and a tree someone removed is a resource to create.
                 return gone()
             outs = {
@@ -635,7 +636,7 @@ class GwArtifactProvider(dynamic.ResourceProvider):
 
 
 @final
-class GwFile(dynamic.Resource, module='gateway', name='File'):
+class DeviceFile(dynamic.Resource, module='device', name='File'):
     """A file the device must have, and what to run once it has it."""
 
     path: pulumi.Output[str]
@@ -665,7 +666,7 @@ class GwFile(dynamic.Resource, module='gateway', name='File'):
         marks the content a credential, for the files that carry one.
         """
         super().__init__(
-            GwFileProvider(),
+            DeviceFileProvider(),
             name,
             {
                 **connection.props(),
@@ -683,7 +684,7 @@ class GwFile(dynamic.Resource, module='gateway', name='File'):
 
 
 @final
-class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
+class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
     """A digest-pinned payload -- a container root filesystem, a release tarball."""
 
     url: pulumi.Output[str]
@@ -722,7 +723,7 @@ class GwArtifact(dynamic.Resource, module='gateway', name='Artifact'):
         at the old path would be an orphan nothing declares.
         """
         super().__init__(
-            GwArtifactProvider(),
+            DeviceArtifactProvider(),
             name,
             {
                 **connection.props(),

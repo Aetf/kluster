@@ -77,8 +77,8 @@ def test_every_member_of_the_overlay_roster_is_published() -> None:
     """
     published = {record.label for record in _zt()}
 
-    assert published == {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}' for entry in conventions.ZT_ROSTER}
-    assert len(_zt()) == len(conventions.ZT_ROSTER)
+    assert published == {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}' for entry in conventions.overlay.ROSTER}
+    assert len(_zt()) == len(conventions.overlay.ROSTER)
 
 
 def test_the_retired_members_are_published_by_nobody() -> None:
@@ -88,7 +88,7 @@ def test_the_retired_members_are_published_by_nobody() -> None:
     the estate was reconciled against Central, all for the same reason: the
     overlay no longer knows them.
     """
-    members = {entry.name for entry in conventions.ZT_ROSTER}
+    members = {entry.name for entry in conventions.overlay.ROSTER}
 
     assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro', 'Aetf-Laptop'}
 
@@ -104,8 +104,8 @@ def test_the_gateway_has_no_record_for_as_long_as_it_has_no_roster_entry() -> No
     """
     labels = {record.label for record in _zt()}
 
-    assert (f'{conventions.ZT_MEMBER_UDM}.{conventions.ZT_LABEL}' in labels) == (
-        conventions.ZT_MEMBER_UDM in {entry.name for entry in conventions.ZT_ROSTER}
+    assert (f'{conventions.overlay.MEMBER_UDM}.{conventions.ZT_LABEL}' in labels) == (
+        conventions.overlay.MEMBER_UDM in {entry.name for entry in conventions.overlay.ROSTER}
     )
 
 
@@ -116,7 +116,7 @@ def test_a_members_record_carries_the_address_its_roster_entry_holds() -> None:
 
     record = next(record for record in _zt() if record.label == f'{zt_label(member)}.{conventions.ZT_LABEL}')
 
-    assert record.content == str(conventions.zt_member(member).address)
+    assert record.content == str(conventions.overlay.member(member).address)
     assert record.ttl == conventions.ANCHOR_TTL
 
 
@@ -154,7 +154,7 @@ def test_zerotier_labels_are_dns_labels() -> None:
     # members on the roster today carry both.
     assert zt_label('S26 Ultra') == 's26-ultra'
     assert zt_label('Pixel 7 Pro') == 'pixel-7-pro'
-    for entry in conventions.ZT_ROSTER:
+    for entry in conventions.overlay.ROSTER:
         label = zt_label(entry.name)
         assert label == label.lower()
         assert ' ' not in label

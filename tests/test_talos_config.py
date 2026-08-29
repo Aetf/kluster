@@ -112,7 +112,7 @@ def test_local_path_has_a_directory_to_hand_out() -> None:
     assert 'rshared' in mounts[0]['options']
 
 
-def test_the_augmented_node_answers_for_its_second_address() -> None:
+def test_the_node_holding_the_dedicated_vip_answers_for_its_second_address() -> None:
     # OCI assigns the secondary private IP to the VNIC and leaves the guest
     # alone; unconfigured, the dedicated VIP reaches nothing.
     interfaces = merged('machine', secondary_address='10.20.0.42')['network']['interfaces']

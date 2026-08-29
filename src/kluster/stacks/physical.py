@@ -29,15 +29,24 @@ import pulumi
 import pulumi_oci as oci
 
 from kluster import conventions
-from kluster.components import gateway, homelab
+from kluster.components import homelab
+from kluster.components.gateway import (
+    CaddyService,
+    Gateway,
+    OverlayDaemon,
+    ResolverService,
+    Rootfs,
+    RoutingSession,
+)
 from kluster.components.backup import BackupBucket
 from kluster.components.cloud import CloudNetwork
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 from kluster.components.cloud.storage import NodeVolume
-from kluster.components.gateway import estate as gw_estate
+from kluster.components.overlay import Overlay
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
+from kluster.lib import config as lib_config
 from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
@@ -62,10 +71,14 @@ OCI_PRIVATE_KEY = 'ociPrivateKey'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
 #: gateway is not yet on the overlay. Absent — the steady state — every client
-#: of the gateway derives its address from `conventions.ZT_UDM`. One of two
+#: of the gateway derives its address from `conventions.overlay.UDM`. One of two
 #: optional keys, and the other is its mirror image: this one is set only
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
+
+#: Which build each container service on the gateway runs. A site fact rather
+#: than a convention: a digest is whatever the build produced.
+GATEWAY_ROOTFS = 'gatewayRootfs'
 
 #: The export each continuous-integration identity's key material leaves under,
 #: by the roster name of the member that carries it. The names are half of a
@@ -163,7 +176,7 @@ async def main() -> None:
         memory_gb=conventions.NODE_MEMORY_GB,
         boot_volume_gb=conventions.NODE_BOOT_VOLUME_GB,
         placements=placements,
-        augmented=conventions.DEDICATED_VIP_NODE,
+        dedicated_vip_node=conventions.DEDICATED_VIP_NODE,
         load_balancer=load_balancer,
         opts=on_cloud,
     )
@@ -188,8 +201,8 @@ async def main() -> None:
     _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, on_cloud=on_cloud)
 
     # The two domains that are not the cloud: the host under libvirt, and the
-    # gateway through the three doors it is configured by. Both are reached
-    # over the overlay, whose roster is code (`conventions.ZT_ROSTER`).
+    # gateway with the overlay it belongs to. Both are reached over the
+    # overlay, whose roster is code (`conventions.overlay.ROSTER`).
     homelab.declare(
         conventions.CLUSTER_NAME,
         cluster=cluster,
@@ -207,20 +220,23 @@ async def main() -> None:
 
 
 def declare_gateway(config: pulumi.Config) -> None:
-    """§4: the gateway, through the three doors it is configured by.
+    """§4: the gateway and the overlay it is the site's member of.
 
-    The device's own desired state over SSH, the controller's firewall over its
-    API, and the overlay's configuration over ZeroTier Central's — three
-    credentials, because they authorize three different things and no one of
-    them should imply the others.
+    Two top-level components, because the overlay is a network several machines
+    belong to and the gateway is one of them: what may join and what the rules
+    are is not the gateway's business (rfc-002 §6). Three credentials between
+    them, authorizing three different things — the device's own desired state
+    over SSH, the controller's firewall over its API, the overlay's
+    configuration over ZeroTier Central's — and no one of them implies the
+    others.
 
-    Two of the three credentials are not read here. The controller's API key
-    and the overlay's administration token each configure a provider and
-    nothing else, so each is read at the line that builds that provider, inside
-    the component that owns the connection (rfc-002 §8.1). The device's own SSH
-    credential is still read here and handed to the estate, because the
-    provider behind it is a dynamic one that carries no configuration yet; §7.4
-    moves that read into the provider's own process.
+    Two of the three are not read here. The controller's API key and the
+    overlay's administration token each configure a provider and nothing else,
+    so each is read at the line that builds that provider, inside the component
+    that owns the connection (rfc-002 §8.1). The device's own SSH credential is
+    still read here and handed down, because the provider behind it is a
+    dynamic one that carries no configuration yet; §7.4 moves that read into
+    the provider's own process.
 
     What is left is site facts: what the images were built as, and what the
     worker's global address turned out to be. The decisions — the service
@@ -228,43 +244,47 @@ def declare_gateway(config: pulumi.Config) -> None:
     the rules that confine a run — are code.
 
     **`gatewayBootstrapHost` is the first-bring-up knob**, and it answers one
-    question: where does the device answer today. Both providers that reach it
-    dial that address instead of the overlay one — the estate over SSH and the
-    controller over its API — because the daemon that answers at
-    `conventions.ZT_UDM` is a container of the estate this run is delivering,
-    so until the delivery has happened the overlay address answers nothing.
-    Absent, which is the steady state, both derive from `ZT_UDM`. Whether the
-    gateway is a member at all is a separate question with a separate answer:
-    the roster carries an entry for it or it does not, and the ceremony that
-    gets from one to the other is physical/gateway.md §2.5.
-
-    The pinned host key is not affected either way: it is stored as a bare
-    `ssh-ed25519 <blob>` line with no host name in front of it, so it matches
-    the device at whichever address the session dials (`providers/device_files/ssh.py`).
+    question: where does the device answer today. Both doors dial that address
+    instead of the overlay one, because the daemon that answers at
+    `conventions.overlay.UDM` is one of the container services this run is
+    delivering, so until the delivery has happened the overlay address answers
+    nothing. Absent, which is the steady state, both derive from the roster's
+    address for the gateway. Whether the gateway is a member at all is a
+    separate question with a separate answer: the roster carries an entry for
+    it or it does not, and the ceremony that gets from one to the other is
+    physical/gateway.md §2.5.
     """
-    gateway_host = config.get(GATEWAY_BOOTSTRAP_HOST) or str(conventions.ZT_UDM)
+    gateway_host = config.get(GATEWAY_BOOTSTRAP_HOST) or str(conventions.overlay.UDM)
+    pins = _rootfs_pins(config.require_object(GATEWAY_ROOTFS))
 
-    gateway.declare_estate(
+    Gateway(
         conventions.CLUSTER_NAME,
         host=gateway_host,
         host_key=config.require_secret('gatewayHostKey'),
         private_key=config.require_secret('gatewayPrivateKey'),
-        bgp_neighbour=conventions.HOMELAB_NODE_IPV4,
-        bgp_password=config.require_secret('gatewayBgpPassword'),
-        acme_token=config.require_secret('gatewayAcmeToken'),
-        rootfs=gw_estate.parse_rootfs(config.require_object('gatewayRootfs')),
-    )
-    gateway.declare_firewall(
-        conventions.CLUSTER_NAME,
-        # The same address the estate's SSH goes to, for the same reason: the
-        # controller answers on the gateway's own overlay address, which this
-        # program assigns in the ZeroTier roster above and therefore already
-        # knows (physical/gateway.md §2.3). Recording it beside the API key
-        # would be a second copy of a stated constant, free to disagree with
-        # the roster that decides it — which is also why the bootstrap knob
-        # moves both doors at once rather than one endpoint being overridable.
-        api_url=f'https://{gateway_host}',
-        site=conventions.UNIFI_SITE,
+        # One declaration per census entry, each holding the entry itself: the
+        # gateway knows what a service's image is pinned at and what secret it
+        # reads, and `conventions` knows the rest (rfc-002 §5.3).
+        caddy=CaddyService(
+            service=conventions.gateway.CADDY,
+            pin=pins[conventions.gateway.CADDY.name],
+            # The gateway buys its own certificates with this, and nothing else
+            # on the device reads it: its TLS has to keep renewing while the
+            # cluster — and the cluster's issuer — is down.
+            acme_token=config.require_secret('gatewayAcmeToken'),
+        ),
+        resolvers=tuple(
+            ResolverService(service=service, pin=pins[service.name]) for service in conventions.gateway.RESOLVERS
+        ),
+        overlay_daemon=OverlayDaemon(
+            service=conventions.gateway.OVERLAY,
+            pin=pins[conventions.gateway.OVERLAY.name],
+        ),
+        routing=RoutingSession(
+            neighbour=conventions.HOMELAB_NODE_IPV4,
+            password=config.require_secret('gatewayBgpPassword'),
+        ),
+        site=conventions.gateway.UNIFI_SITE,
         # Optional, and absent on the first apply of all: the worker's global
         # address is a SLAAC address formed from the router advertisement of
         # the VLAN this same call declares, so it comes into being one boot
@@ -276,10 +296,10 @@ def declare_gateway(config: pulumi.Config) -> None:
         worker_gua=config.get('workerGua'),
         peer_port=config.require_int('qbittorrentPeerPort'),
     )
-    network = gateway.declare_zerotier(
+    overlay = Overlay(
         conventions.CLUSTER_NAME,
         network_id=config.require('zerotierNetworkId'),
-        adguard=[resolver.address for resolver in gw_estate.resolvers()],
+        resolvers=[service.address for service in conventions.gateway.RESOLVERS],
     )
     # The key material of the two identities generated above, which is how a
     # continuous-integration job joins the overlay at all: the value is the
@@ -289,7 +309,40 @@ def declare_gateway(config: pulumi.Config) -> None:
     # into a deployment log, and it is read back out of state — with
     # `--show-secrets` — by `credentials derived sync`.
     for member, output in CI_IDENTITY_OUTPUTS.items():
-        pulumi.export(output, pulumi.Output.secret(network.identities[member].private_key))
+        pulumi.export(output, pulumi.Output.secret(overlay.identities[member].private_key))
+
+
+def _rootfs_pins(raw: object) -> dict[str, Rootfs]:
+    """The root filesystem each container service runs, as `gatewayRootfs` has it.
+
+    One entry per service, each a URL and the digest that pins it. A digest is
+    whatever the build produced, which is why this is configuration and not a
+    convention; everything about it is checked here rather than at apply time,
+    so a truncated paste or a service nobody declares is a configuration error
+    with a name on it instead of a push that reaches the device and refuses
+    there.
+    """
+    pins: dict[str, Rootfs] = {}
+    for service, value in lib_config.mapping(raw, f'the {GATEWAY_ROOTFS} configuration').items():
+        what = f'the image pin for {service}'
+        entry = lib_config.mapping(value, what)
+        digest = lib_config.text(entry, 'sha256', what)
+        if len(digest) != _SHA256_LENGTH:
+            raise ValueError(f'{what} is not a hex sha256 digest')
+        pins[service] = Rootfs(url=lib_config.text(entry, 'url', what), sha256=digest.lower())
+
+    declared = {service.name for service in conventions.gateway.SERVICES}
+    missing = sorted(declared - set(pins))
+    if missing:
+        raise ValueError(f'{GATEWAY_ROOTFS} pins no image for {", ".join(missing)}')
+    unknown = sorted(set(pins) - declared)
+    if unknown:
+        raise ValueError(f'{GATEWAY_ROOTFS} pins an image for {", ".join(unknown)}, which the device does not run')
+    return pins
+
+
+#: The length of a hex-encoded SHA-256 digest.
+_SHA256_LENGTH = 64
 
 
 @dataclass(frozen=True)

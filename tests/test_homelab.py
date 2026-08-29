@@ -605,7 +605,7 @@ async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_pa
     host = build()
     uri = cast('str | None', await host.provider.uri.future())
     assert uri is not None
-    address = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+    address = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
     assert urlsplit(uri).netloc == f'{homelab.LIBVIRT_USER}@{address}'
     keyfile: str = parse_qs(urlsplit(uri).query)['keyfile'][0]
     assert _opened(tmp_path, keyfile).read_text() == IDENTITY

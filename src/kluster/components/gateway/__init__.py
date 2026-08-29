@@ -1,163 +1,119 @@
-"""The gateway: the UDM's own desired state, and the two services around it.
+"""The gateway: the home site's router, and everything it must be told.
 
-Everything the home site's router must be told, declared from the `physical`
-stack (physical.md §4). Three channels, because the gateway is configured
-through three different doors and each needs its own credential:
+Declared from the `physical` stack (physical.md §4). The device is configured
+through two doors, and `Gateway` owns both because each needs its own
+credential and neither implies the other:
 
 -   **The device itself**, over SSH. There is no API for most of what matters
-    here — routing, the nspawn estate, the scripts that re-establish both
+    here — routing, the container services, the script that re-establishes both
     after a firmware update — but there is a proven convention: desired-state
-    files under `/data`, written idempotently. That becomes a dynamic
-    provider whose `diff` reads the device and whose `create`/`update` writes
-    and then runs a hook. Bulk artifacts (container root filesystems built by
-    CI) travel as a URL and a digest, never as bytes in state, so a preview
-    stays cheap.
+    files under `/data`, written idempotently. That is
+    `kluster.providers.device_files`, a dynamic provider whose `diff` reads the
+    device and whose `create`/`update` writes and then runs a hook. Bulk
+    artifacts (container root filesystems built by CI) travel as a URL and a
+    digest, never as bytes in state, so a preview stays cheap. `Gateway` opens
+    that session and hands it down; nothing below reads a credential for it.
 -   **The UniFi controller**, over its API, for the firewall. Those resources
     live in this stack and not beside the applications whose traffic they
     admit — the one deliberate exception to co-location, because a gateway
     credential must not be handed to the environment that deploys
-    applications.
--   **ZeroTier Central**, over its API, for the network the gateway is a
-    member and router of: which subnets it routes, who may join, and the flow
-    rules that confine the two continuous-integration identities to the four
-    destinations they need. Membership is the authentication boundary for
-    traffic the gateway's own firewall never classifies, so those rules are
-    the only policing layer that traffic meets.
+    applications. The key configures the controller provider and nothing else,
+    so it is read where that provider is built (rfc-002 §8.1).
 
-The first channel is a custom provider of its own,
-`kluster.providers.device_files`, which is where the session and its pinned
-host key are described.
-
-The three functions below are the whole surface the `physical` stack uses. Each
-takes the site facts its channel needs and nothing else, so what a channel can
-touch is visible from its signature.
+**The overlay is not under here** (rfc-002 §6). The gateway is a member of the
+overlay with routes that bridge it to the site, which is a fact about the
+gateway; the overlay's own configuration — who may join, what the rules are —
+is not the gateway's business and does not go through it. The two meet only in
+`conventions`: the roster says which address the gateway answers at, and both
+read it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from ipaddress import IPv4Address
+from collections.abc import Sequence
 
 import pulumi
 
 from kluster import conventions
-from kluster.components import overlay as zerotier_module
-from kluster.components.gateway import estate as estate_module
-from kluster.components.gateway.unifi import Firewall
+from kluster.components.gateway.container import CaddyService, OverlayDaemon, ResolverService, Rootfs
+from kluster.components.gateway.services import DeviceServices, RoutingSession
+from kluster.components.gateway.unifi import SiteFirewall
 from kluster.providers.device_files.provider import Connection
+from putils import Component
 
-__all__ = ('declare_estate', 'declare_firewall', 'declare_zerotier')
-
-
-def declare_estate(
-    name: str,
-    *,
-    host: str,
-    host_key: pulumi.Input[str],
-    private_key: pulumi.Input[str],
-    bgp_neighbour: IPv4Address,
-    bgp_password: pulumi.Input[str],
-    acme_token: pulumi.Input[str],
-    rootfs: Mapping[str, estate_module.Rootfs],
-    opts: pulumi.ResourceOptions | None = None,
-) -> estate_module.Estate:
-    """Declare the device's desired state: routing, the estate, the scripts.
-
-    `host_key` is the pinned SSH host key and `private_key` the client
-    credential; `bgp_neighbour` is the worker VM's address, which the routing
-    daemon's configuration names. That address is a constant rather than
-    another resource's output on purpose — the session must not depend on a
-    lease.
-
-    The two secrets are device secrets, delivered as files beside the estate and
-    read by nothing else: `bgp_password` authenticates the routing session, and
-    `acme_token` buys the gateway the certificates for its own vhosts — a
-    credential separate from the cluster's issuer, because the gateway's TLS has
-    to keep renewing while the cluster is down.
-
-    `rootfs` is the estate's one site fact: which build each container runs. It
-    is configuration rather than a constant, a digest being whatever the build
-    produced; the members themselves and the addresses the bridged ones hold
-    are the service census in `conventions`.
-    """
-    return estate_module.Estate(
-        name,
-        connection=Connection(
-            host=host,
-            private_key=private_key,
-            host_key=host_key,
-            username=conventions.GW_SSH_USER,
-        ),
-        containers=estate_module.census(rootfs=rootfs, acme_token=acme_token),
-        bgp_neighbour=bgp_neighbour,
-        bgp_password=bgp_password,
-        opts=opts,
-    )
+#: The declaration types the stack program builds a `Gateway` out of are
+#: re-exported here, so that wiring the gateway is one import.
+__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
 
 
-def declare_firewall(
-    name: str,
-    *,
-    api_url: str,
-    site: str,
-    worker_gua: pulumi.Input[str] | None,
-    peer_port: int,
-    opts: pulumi.ResourceOptions | None = None,
-) -> Firewall:
-    """Declare the controller-side firewall census.
+class Gateway(Component):
+    """The device and its controller: the two doors, and what is behind each."""
 
-    `worker_gua` is the worker VM's global IPv6 address: the one rule that
-    cannot be written against a stable object, because the zone-policy API
-    matches literal addresses and the site's delegated prefix rotates. `None`
-    is the state before the worker has one — the address is formed by SLAAC
-    off the very network this census declares — and it means the pinhole is
-    not declared at all, leaving the worker's IPv6 outbound-only.
-    `peer_port` is the bulk-transfer application's inbound peer port, which
-    the pinhole and the one port forward both name — a number inherited from
-    the deployment this cluster replaces rather than chosen here, so it is
-    read from configuration rather than fixed in code.
+    def __init__(
+        self,
+        name: str,
+        *,
+        host: str,
+        host_key: pulumi.Input[str],
+        private_key: pulumi.Input[str],
+        caddy: CaddyService,
+        resolvers: Sequence[ResolverService],
+        overlay_daemon: OverlayDaemon,
+        routing: RoutingSession,
+        site: str,
+        worker_gua: pulumi.Input[str] | None,
+        peer_port: int,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        """Declare the gateway.
 
-    Authentication is an API key belonging to a dedicated local
-    administrator — never the SSH credential — and retries are throttled,
-    the controller's login rate limit being account-wide rather than
-    per-address. The key is not an argument: it configures the controller
-    provider and nothing else, so it is read where that provider is built
-    (rfc-002 §8.1).
-    """
-    return Firewall(
-        name,
-        api_url=api_url,
-        site=site,
-        worker_gua=worker_gua,
-        peer_port=peer_port,
-        opts=opts,
-    )
+        `host` is where the device answers today, and both doors dial it: the
+        shell the desired state travels over and the controller API the
+        firewall resources call terminate on the same box. During a first
+        bring-up that is a LAN address, because the daemon answering at the
+        gateway's overlay address is one of the services this run is delivering
+        (physical/gateway.md §2.5).
 
+        `host_key` is the pinned SSH host key and `private_key` the client
+        credential. The pinned key is stored as a bare `ssh-ed25519 <blob>` line
+        with no host name in front of it, so it matches the device at whichever
+        address the session dials.
 
-def declare_zerotier(
-    name: str,
-    *,
-    network_id: str,
-    adguard: Sequence[IPv4Address],
-    opts: pulumi.ResourceOptions | None = None,
-) -> zerotier_module.Network:
-    """Declare the ZeroTier network: routes, roster, flow rules.
+        `worker_gua` is the worker VM's global IPv6 address: the one firewall
+        rule that cannot be written against a stable object, because the
+        zone-policy API matches literal addresses and the site's delegated
+        prefix rotates. `None` is the state before the worker has one — the
+        address is formed by SLAAC off the very network the firewall census
+        declares — and it means the pinhole is not declared at all, leaving the
+        worker's IPv6 outbound-only.
+        """
+        super().__init__(name, opts=opts)
 
-    The network already exists and is addressed by id; what is declared is its
-    configuration and its membership. The roster is the census — a member
-    whose role is not declared cannot exist in the desired state, which
-    matters because the default role is the permissive one.
+        self.services = DeviceServices(
+            f'{name}-services',
+            connection=Connection(
+                host=host,
+                private_key=private_key,
+                host_key=host_key,
+                username=conventions.gateway.SSH_USER,
+            ),
+            caddy=caddy,
+            resolvers=resolvers,
+            overlay_daemon=overlay_daemon,
+            routing=routing,
+            opts=self.child_opts(),
+        )
+        self.firewall = SiteFirewall(
+            f'{name}-firewall',
+            # The same address the shell goes to, for the same reason: the
+            # controller answers on the gateway itself. Recording it separately
+            # would be a second copy of one fact, free to disagree with the
+            # first.
+            api_url=f'https://{host}',
+            site=site,
+            worker_gua=worker_gua,
+            peer_port=peer_port,
+            opts=self.child_opts(),
+        )
 
-    `adguard` names the resolvers, which the flow rules admit a
-    continuous-integration member to and nothing else does. `network_id` is a
-    plain value rather than an input because it is what the network is adopted
-    by, and an adoption cannot wait on a computation. The administration token
-    is not an argument either: it configures the overlay's provider and nothing
-    else, so it is read where that provider is built (rfc-002 §8.1).
-    """
-    return zerotier_module.Network(
-        name,
-        network_id=network_id,
-        adguard=adguard,
-        opts=opts,
-    )
+        self.register_outputs({})

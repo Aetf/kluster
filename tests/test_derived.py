@@ -31,7 +31,6 @@ from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
 from compartments import with_compartment
 from kluster import conventions
-from kluster.components.gateway import estate as gw_estate
 from kluster.scripts.credentials import (
     b2,
     cloudflare,
@@ -202,9 +201,9 @@ def _gateway_live(api: FakeApi) -> list[str]:
 
 
 def _vhost_zone(name: str) -> str:
-    """The zone a vhost name is served under, as `conventions` spells the estate's."""
+    """The zone a vhost name is served under, as `conventions` spells the zones."""
     matches = [zone for zone in conventions.ALL_ZONES if name == zone or name.endswith(f'.{zone}')]
-    assert len(matches) == 1, f'{name} is served under {len(matches)} zones this estate declares'
+    assert len(matches) == 1, f'{name} is served under {len(matches)} zones this program declares'
     return matches[0]
 
 
@@ -214,7 +213,7 @@ def test_the_token_scope_is_the_zone_set_the_gateway_vhosts_need() -> None:
     # `credentials --help`. This is what holds the two equal: a vhost moved to
     # another zone fails here rather than at a renewal on the device months
     # later, and a zone left in the set after its last vhost leaves fails too.
-    vhosts = [conventions.VHOST_CONTROLLER, *(instance.vhost for instance in gw_estate.resolvers())]
+    vhosts = [conventions.gateway.VHOST_CONTROLLER, *(service.vhost for service in conventions.gateway.RESOLVERS)]
     served = {_vhost_zone(name) for name in vhosts if name is not None}
 
     assert served == set(derived.GATEWAY_ACME_ZONES)
