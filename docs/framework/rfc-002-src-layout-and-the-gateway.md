@@ -681,36 +681,67 @@ That is the whole of the connection story: **the credential lives in stack
 configuration and nowhere else.** It is not on a resource, not in a pickle, and
 not passed between components. Rotating it is an edit to configuration.
 
-**Two explicit inputs make the consequences visible**, because with an inert
-pickle nothing else would be:
+**The provider makes its own consequences visible, in `check`.** With an inert
+pickle nothing else would be, and the mechanism for it is the one hook that runs
+before every diff: `check` receives the resource's inputs and returns the inputs
+the engine will store and compare, so a provider may **add** properties there.
+Two are added, and neither is declared by any caller (E8):
 
-*   **`session`** — the endpoint, plus a short digest of the credential,
-    computed in the program from the same configuration the provider reads. A
-    rotation or an address move changes it, and the preview *says so*:
-    `~ session: "host-1#9d6fb67570c1" => "host-2#4b1c…"`. It is deliberately
-    published in the clear: a truncated digest of a credential is not the
-    credential, and a value derived from a secret is otherwise redacted, which
-    would leave the diff saying only that something opaque changed (E3).
+*   **`session`** — the endpoint, plus a short digest of the credential, both
+    taken from the values `configure` put on the provider. A rotation or an
+    address move changes it and the preview says exactly what happened:
+    `~ session: "host-1#9d6fb67570c1" => "host-1#bab3d6bf12a7"` (E10).
 *   **`provider_version`** — a constant in the provider module, bumped by hand
     when its behavior changes. This is not ceremony: a provider class imported
     from a module is pickled **by reference**, so editing the body of `create`
     changes not one byte of state and produces no diff at all, leaving the old
-    outputs in place (E1). The version input is the documented answer, and it
-    works: bumping it renders as `~ provider_version: "1" => "2"` (E5).
+    outputs in place (E1). Injected the same way, bumping it renders as
+    `~ provider_version: "1" => "2"` (E10).
 
-Both are ordinary declared inputs, attached by the base class that
-`DeviceFile` and `DeviceArtifact` share, so no call site can forget them and the
-two resources cannot spell them differently. The alternative channel — having
-`create` return the fingerprint as a provider output — was measured and does
-work for reporting (E4), but an output cannot drive a diff of a *desired* state,
-so it cannot carry the rotation.
+**The program therefore never touches the credential at all.** It declares the
+path, the content and the mode; the session, its fingerprint and the version are
+the provider's business, computed in the provider's process from the
+configuration only the provider reads. That is the whole gain over declaring
+them program-side: one less place the secret is handled, one less derivation to
+keep in step, and a resource whose declaration says only what the *caller*
+meant.
 
-**What this costs, stated plainly.** The program reads the credential too, to
-fingerprint it; it simply never stores it anywhere. And with `__getstate__`
-empty, the provider's attributes do not exist until `configure` has run — safe
-because the plugin calls `configure` immediately after deserializing and before
-any operation (E2), and worth a comment at the top of the class so nobody
-"fixes" it by adding a default.
+Three facts about the mechanism the implementation has to respect, each of them
+a way to get this wrong:
+
+*   **`diff`'s two bags are not symmetrical.** `olds` is the stored **output**
+    bag — it carries whatever `create` or `update` returned — while `news` is
+    the **checked input** bag. A provider that compares every key sees each
+    create-time output as a difference and reports a change on every single run;
+    the comparison is over the checked-input keys (E7, where exactly that
+    mistake produced a spurious update).
+*   **`check` does not run on refresh.** A refresh calls `configure`, `read` and
+    `diff` only, so the values compared there are the ones already in state
+    (E10).
+*   **The injected value lands in state in the clear.** A property the provider
+    synthesizes carries no secret marking, however secret the configuration it
+    came from — so the digest is plaintext in state and in previews. That is the
+    intended outcome, and it is the same declassification as before rather than
+    a new one: a truncated digest of a credential is not the credential, and a
+    redacted value would make the diff illegible. What changes is where the
+    decision sits — inside the provider, where it is a line of code and a
+    comment, rather than in the program as an `unsecret` call (E10).
+
+**What this costs.** With `__getstate__` empty, the provider's attributes do not
+exist until `configure` has run — safe because the plugin calls `configure`
+immediately after deserializing and before any operation (E2), and worth a
+comment at the top of the class so nobody "fixes" it by adding a default.
+
+**Alternatives measured and not taken.** Deriving the fingerprint in the program
+and passing it as an ordinary input works, and was the previous design here: it
+costs a program-side read of the credential and an explicit `unsecret`, because
+a value derived from a secret `Output` is otherwise redacted, and the diff
+then says only that something opaque changed (E3). Returning the fingerprint from
+`create` as a provider *output* also works for the record — outputs beyond the
+declared inputs do become resource properties (E4), and `update` returning them
+keeps that record current (E9) — but an output alone cannot carry a rotation
+into a preview, because the comparison the engine renders is against the checked
+*inputs*. `check` is what puts the value on the side of that comparison.
 
 **The rule in §8 acquires a third reading, and this is it.** For an ordinary
 provider, a provider-only credential is read at the line that builds the
@@ -744,9 +775,12 @@ carried here until that page is written.
 | **E1** | What lands in `__provider`? | A class imported from a module is pickled **by reference**: 42 bytes naming the module and the class. Instance attributes *are* serialized, in the clear inside the secret property. Class attributes are not. A class defined in the entrypoint module is pickled **by value** — 856 bytes carrying its code objects and source path — so where the class lives decides which rule applies. |
 | **E1** | What changes it? | Editing a method body of a module-level provider: **no change, no diff, no update**, and stale outputs stay. Changing an instance attribute: an update, rendered as `~ __provider: [secret] => [secret]`. Moving the class to another module changes it, the module name being part of the pickle. |
 | **E2** | Is `configure` real? | Yes. Called in the provider process, once per process, before the first operation. `req.config` keys carry the project as their namespace, and **secrets arrive decrypted** — the plugin unwraps them and tells the engine it does not accept secret values. |
-| **E3** | Does a stateless provider work? | Yes. With attributes unset in the program and `__getstate__` returning `{}`, every operation ran correctly after deserialization, and `__provider` was 55 bytes and constant across a rotation. |
-| **E4** | Do provider outputs become properties? | Yes — values returned by `create` beyond the declared inputs appear as resource properties. They cannot appear in a preview diff, being computed at create time. |
-| **E5** | Does a version input force updates? | Yes: `~ provider_version: "1" => "2"`, which is the answer to E1's blindness. |
+| **E3** | Does a stateless provider work? | Yes. With attributes unset in the program and `__getstate__` returning `{}`, every operation ran correctly after deserialization, and `__provider` was 47–55 bytes and constant across a rotation. |
+| **E4** | Do provider outputs become properties? | Yes — values returned by `create` beyond the declared inputs appear as resource properties. They cannot by themselves carry a change into a preview, which compares against the checked inputs. |
+| **E7** | What do `check` and `diff` receive? | `check` gets the stored **input** bag as `olds` and the program's raw inputs as `news`. `diff` gets the stored **output** bag as `olds` and the **checked** input bag as `news`. The asymmetry is a trap: comparing every key reports a change on every run, because create-time outputs are in `olds` and never in `news`. |
+| **E8** | Can `check` add properties? | Yes. Properties added to the returned inputs are stored as inputs, reach `create`, and take part in the engine's comparison. `check` runs once per process before the first operation, in both preview and update. |
+| **E9** | Does `update` return properties? | Yes — its outs replace the stored output bag, so a record of which session last wrote the resource stays current. |
+| **E10** | Does the injected design work end to end? | Yes. A rotation with **no program-side involvement** renders `~ session: "host-1#9d6fb67570c1" => "host-1#bab3d6bf12a7"`; a version bump renders `~ provider_version: "1" => "2"`; an unchanged run reports `unchanged`; a refresh calls `configure`, `read` and `diff` but **not** `check`. The injected value is stored in plaintext — a provider-synthesized property carries no secret marking. |
 | **E6** | Can an operation reach another resource's state? | No. Each method receives the property bag of the resource being provisioned; there is no engine handle and no lookup call. |
 
 One earlier claim in this document was **wrong and is corrected here**: `refresh`
@@ -1386,8 +1420,8 @@ the stack performs today:
 | `unifiApiKey` | inside `Gateway`, at the line that builds the controller provider |
 | `zerotierApiToken` | inside `Overlay`, at the line that builds its provider |
 | `libvirtPrivateKey` | inside `HomelabHost`, at the line that builds its provider (§8.4) |
-| `gatewayPrivateKey` | by the device-files provider, in `configure`; and by the program to derive the session fingerprint (§7.4) |
-| `gatewayBootstrapHost` | the same two places — it is where that provider dials |
+| `gatewayPrivateKey` | by the device-files provider alone, in `configure` (§7.4) |
+| `gatewayBootstrapHost` | the same place — it is where that provider dials |
 | `gatewayRootfs` | four `image:` pins (§11.1) |
 | the cloud region and tenancy | `conventions.providers` (§10.3) |
 | `b2Region` | `conventions.providers` |
@@ -1686,9 +1720,9 @@ reads, then the text, then the structure that consumes both.
 8.  **The overlay leaves the gateway** (§6): `components/overlay/`, the rule
     composition as a pure function, the stack program composing it.
 9.  **The device-file provider** (§7.4): the provider made stateless, the
-    connection moved into `configure`, and the two explicit inputs — the session
-    fingerprint and the version — that make a rotation and a code change
-    visible.
+    connection moved into `configure`, and the two properties `check` injects —
+    the session fingerprint and the version — that make a rotation and a code
+    change visible without the program touching either.
 10. **The stack program** (§11, §12), then the caddy certificate (§9.3).
 11. **The home-automation domain's declaration is deleted** (§13): the import,
     its ignore list, the configuration key and the ratchet test that guarded
