@@ -73,13 +73,6 @@ GATEWAY_CONFIG = {
     'kluster:qbittorrentPeerPort': '51413',
     'kluster:zerotierApiToken': 'a-central-token',
     'kluster:zerotierNetworkId': ZT_NETWORK_ID,
-    'kluster:zerotierMembers': json.dumps(
-        {
-            entry.name: {'id': f'{index:010x}'} | ({} if entry.address else {'address': f'10.144.200.{index}'})
-            for index, entry in enumerate(conventions.ZT_ROSTER)
-            if not entry.generated
-        }
-    ),
 }
 
 
@@ -300,16 +293,16 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     setup: Mocks,
     tmp_path: Path,
 ) -> None:
-    """The libvirt endpoint is derived from the census and the checkout.
+    """The libvirt endpoint is derived from the roster and the checkout.
 
     Nothing about this URI can be recorded in committed configuration. The
-    address belongs to the overlay census the same run authorizes, and the two
-    paths in it exist only on the machine running the program — a workstation
-    on one run and a continuous-integration runner on the next — so a URI typed
-    into the stack would be wrong for one of them and stale for both.
+    address belongs to the overlay roster the same run authorizes the host on,
+    and the two paths in it exist only on the machine running the program — a
+    workstation on one run and a continuous-integration runner on the next — so
+    a URI typed into the stack would be wrong for one of them and stale for
+    both.
     """
-    configured = cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers']))
-    address = cast('str', configured[conventions.ZT_MEMBER_HOMELAB]['address'])
+    address = str(conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address)
 
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
@@ -339,11 +332,11 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     """First bring-up dials the device over the LAN, on both channels.
 
     The overlay address answers only once the estate's ZeroTier container is on
-    the device, and the estate is what this run delivers. While the knob is set
-    it therefore replaces the dial address for both providers that reach the
-    gateway — the desired-state push over SSH and the controller's API — because
-    they are the same box behind two ports, and an override that moved one of
-    them would leave the run half able to reach it.
+    the device, and the estate is what this run delivers. Where the device
+    answers is the whole of what the knob decides, and it decides it for both
+    providers that reach the gateway — the desired-state push over SSH and the
+    controller's API — because they are the same box behind two ports, and an
+    override that moved one of them would leave the run half able to reach it.
     """
     pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_HOST})
 
@@ -356,58 +349,6 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     # key with no host name in front of it, so it matches the device at either
     # address (`test_gw_provider`).
     assert setup.inputs[f'{conventions.CLUSTER_NAME}-frr']['port'] == 22
-
-
-@pytest.mark.asyncio
-async def test_first_bring_up_runs_before_the_gateway_has_an_identity_to_authorize(setup: Mocks) -> None:
-    """The nested egg: the id is minted by the container this run delivers.
-
-    A ZeroTier node id comes into being when the daemon first runs on a device,
-    and the daemon reaches the gateway as part of the estate. So the first apply
-    of all is asked to run with no `zerotierMembers` entry for it, which is a
-    refusal in the steady state and permitted only while the bootstrap knob is
-    set. Nothing else about the overlay changes: the network, the routes and
-    every other member are declared as usual.
-    """
-    members = {
-        name: entry
-        for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
-        if name != conventions.ZT_MEMBER_UDM
-    }
-    pulumi.runtime.set_all_config(
-        dict(STACK_CONFIG)
-        | {
-            f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_HOST,
-            'kluster:zerotierMembers': json.dumps(members),
-        }
-    )
-
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
-
-    assert f'{conventions.CLUSTER_NAME}-member-{conventions.ZT_MEMBER_UDM}' not in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-member-haos' in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-network' in setup.inputs
-
-
-@pytest.mark.asyncio
-async def test_the_roster_gap_is_refused_once_the_gateway_is_on_the_overlay() -> None:
-    """Unsetting the knob is what makes the census complete again.
-
-    The relaxation belongs to the bring-up and to nothing else: with no knob
-    set, a missing gateway id is the hole in the census it has always been, and
-    it stops the run by naming the entry rather than declaring an overlay the
-    gateway is not on.
-    """
-    members = {
-        name: entry
-        for name, entry in cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers'])).items()
-        if name != conventions.ZT_MEMBER_UDM
-    }
-    pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {'kluster:zerotierMembers': json.dumps(members)})
-
-    with pytest.raises(ValueError, match=f'no configured node id for {conventions.ZT_MEMBER_UDM}'):
-        await physical.main()
 
 
 @pytest.mark.asyncio
@@ -498,38 +439,6 @@ async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
         cast('pulumi.Output[str]', exported[dns.OUTPUT_CLUSTER_V6]),
     )
     assert [await address.future() for address in addresses] == [LB_ADDRESS, LB_ADDRESS_V6]
-
-
-@pytest.mark.asyncio
-async def test_the_overlay_addresses_are_exported_for_the_records_dns_publishes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """What crosses to `dns` is the half of the roster this program is told.
-
-    `dns` publishes a `*.zt` host record per member and takes the member names
-    from the roster as code, so the export carries addresses alone — and only
-    those ZeroTier Central assigned. The members whose address this repository
-    decides are absent by construction: they are conventions both stacks read
-    from the same module, and exporting them would be a second copy free to
-    disagree. The gateway is one of them, which is why the block `dns`
-    declares does not wait on the identity this stack's own run mints.
-    """
-    from kluster.stacks import dns
-
-    exported: dict[str, object] = {}
-
-    def record(name: str, value: object) -> None:
-        exported[name] = value
-
-    monkeypatch.setattr(physical.pulumi, 'export', record)
-
-    await physical.main()
-
-    configured = cast('dict[str, Any]', json.loads(GATEWAY_CONFIG['kluster:zerotierMembers']))
-    assert exported[dns.OUTPUT_ZT_ADDRESSES] == {
-        name: entry['address'] for name, entry in configured.items() if 'address' in entry
-    }
-    assert conventions.ZT_MEMBER_UDM not in cast('dict[str, str]', exported[dns.OUTPUT_ZT_ADDRESSES])
 
 
 @pytest.mark.asyncio
@@ -815,7 +724,7 @@ async def test_the_gateway_arm_reads_the_configuration_its_three_channels_need()
     gateway rather than against a run of everything.
     """
     config = pulumi.Config()
-    physical.declare_gateway(config, physical.read_overlay(config))
+    physical.declare_gateway(config)
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 

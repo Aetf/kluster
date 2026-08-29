@@ -139,7 +139,6 @@ def declare_zerotier(
     *,
     api_token: pulumi.Input[str],
     network_id: str,
-    members: Mapping[str, zerotier_module.Enrolled],
     adguard: Sequence[IPv4Address],
     opts: pulumi.ResourceOptions | None = None,
 ) -> zerotier_module.Network:
@@ -150,17 +149,15 @@ def declare_zerotier(
     whose role is not declared cannot exist in the desired state, which
     matters because the default role is the permissive one.
 
-    `members` carries the node identifiers, and the addresses of the devices
-    that predate this program; `adguard` names the resolvers, which the flow
-    rules admit a continuous-integration member to and nothing else does.
-    `network_id` is a plain value rather than an input because it is what the
-    network is adopted by, and an adoption cannot wait on a computation.
+    `adguard` names the resolvers, which the flow rules admit a
+    continuous-integration member to and nothing else does. `network_id` is a
+    plain value rather than an input because it is what the network is adopted
+    by, and an adoption cannot wait on a computation.
     """
     return zerotier_module.Network(
         name,
         api_token=api_token,
         network_id=network_id,
-        members=members,
         adguard=adguard,
         opts=opts,
     )

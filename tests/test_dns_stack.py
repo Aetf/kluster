@@ -9,7 +9,6 @@ import asyncio
 from typing import Any, cast
 
 import pulumi
-import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -20,12 +19,6 @@ LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VIP1_ADDRESS = '203.0.113.20'
 ACCOUNT_ID = 'cf-account'
-
-#: The overlay half of the physical stack's exports, in shape only: an address
-#: for each member whose address that stack is told rather than decides.
-ZT_ADDRESSES = {
-    entry.name: f'10.144.99.{index}' for index, entry in enumerate(conventions.ZT_ROSTER) if entry.address is None
-}
 
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
@@ -44,7 +37,6 @@ class Mocks(pulumi.runtime.Mocks):
                 'cluster_endpoint': LB_ADDRESS,
                 'cluster_endpoint_v6': LB_ADDRESS_V6,
                 'vip1': VIP1_ADDRESS,
-                'zerotier_addresses': dict(ZT_ADDRESSES),
             }
         return args.name + '_id', outputs
 
@@ -160,12 +152,13 @@ def _zt_record(zone: str, member: str) -> dict[str, Any]:
     return _records_of(zone)[f'{zone}-{zt_label(member)}.{conventions.ZT_LABEL}-a']
 
 
-def test_the_overlay_block_is_the_roster_and_carries_the_addresses_physical_published() -> None:
-    """The `*.zt` names come from the roster, their addresses from the export.
+def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference() -> None:
+    """Names and addresses alike come from the roster, which is code.
 
-    This is the second edge where a `physical` output reaches DNS, and the one
-    that decides how many records exist: the roster is code, so the record set
-    is known while previewing, and only the contents wait on the other stack.
+    The anchors are the only edge where a `physical` output reaches this stack.
+    The `*.zt` block used to be a second one; now a member is a name and an
+    address in the same entry, so this whole block is known while previewing
+    and a `physical` that has never run costs it nothing.
     """
     member = 'Aetf-Arch-Homelab'
 
@@ -176,11 +169,7 @@ def test_the_overlay_block_is_the_roster_and_carries_the_addresses_physical_publ
     }
 
     assert published == {zt_label(entry.name) for entry in conventions.ZT_ROSTER}
-    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == ZT_ADDRESSES[member]
-    # The gateway's own address is a convention shared as code, so it crosses
-    # no reference at all — and is published even during the bring-up in which
-    # the member it names does not exist yet.
-    assert _zt_record(conventions.ZONE_PRIMARY, 'udm')['content'] == str(conventions.ZT_UDM)
+    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == str(conventions.zt_member(member).address)
 
 
 def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
@@ -212,40 +201,6 @@ def test_no_record_still_points_at_the_retired_host() -> None:
     contents = {str(inputs.get('content')) for inputs in _all(RECORD).values()}
 
     assert not any('141.212.111.192' in content for content in contents)
-
-
-def test_a_member_missing_from_a_map_that_exists_is_named() -> None:
-    """A partial export is a roster entry configured without an address.
-
-    `str(None)` is a valid record content as far as this program is concerned,
-    so without the guard that entry reaches Cloudflare as the literal `None`
-    and comes back as a rejected record — a failure named after the record
-    instead of after the configuration that is short a value.
-    """
-    from kluster.stacks import dns
-
-    member = 'Aetf-Arch-Homelab'
-    published = {name: address for name, address in ZT_ADDRESSES.items() if name != member}
-
-    with pytest.raises(ValueError, match=member) as absent:
-        _ = dns._member_address(published, member)  # pyright: ignore[reportPrivateUsage]
-
-    # And the export it should have come from, so the reader knows which stack
-    # owes the value rather than only that one is missing.
-    assert dns.OUTPUT_ZT_ADDRESSES in str(absent.value)
-
-
-def test_no_map_at_all_is_not_that_mistake() -> None:
-    """An unapplied `physical` exports nothing, and that is a state, not a bug.
-
-    Declaring the block against it is what lets the two stacks be brought up in
-    the order the migration prescribes, so the guard above must not fire here —
-    `tests/test_dns_unapplied.py` is the same property seen from the program.
-    """
-    from kluster.stacks import dns
-
-    assert dns._member_address(None, 'Aetf-Arch-Homelab') == str(None)  # pyright: ignore[reportPrivateUsage]
-    assert dns._member_address({}, 'Aetf-Arch-Homelab') == str(None)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_no_rewrite_is_declared_while_no_app_declares_a_route() -> None:

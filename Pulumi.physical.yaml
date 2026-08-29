@@ -37,16 +37,3 @@ config:
     }
   kluster-py:gatewayAcmeToken:
     secure: v1:KlvldEZM7HYUinCo:IQIPROFu/59AEb2CFy7dYsJlQW5haxYJF0Dau5INfxDj0Qkm/3LDkX2pK/i5iAh8hTka4lw4abIKnn7inrpkre2haUJH
-  kluster-py:zerotierMembers: |-
-    {
-      "Aetf-Arch-Homelab": {"id": "c3755c24d1", "address": "10.144.180.10"},
-      "Aetf-Arch-VPS": {"id": "fb6c235c67", "address": "10.144.160.212"},
-      "haos": {"id": "788d26ad08", "address": "10.144.84.129"},
-      "Aetf-Arch-XPS": {"id": "0d83052605", "address": "10.144.175.24"},
-      "Aetf-Win-XPS": {"id": "02af51aec9", "address": "10.144.188.195"},
-      "Aetf-Handheld": {"id": "d57f65f742", "address": "10.144.117.120"},
-      "PC-Homelab": {"id": "3383aa0836", "address": "10.144.147.56"},
-      "OnePlus6T": {"id": "ecd8be1a4e", "address": "10.144.164.143"},
-      "Pixel 7 Pro": {"id": "f80515f135", "address": "10.144.0.120"},
-      "S26 Ultra": {"id": "1aaec45044", "address": "10.144.92.151"}
-    }

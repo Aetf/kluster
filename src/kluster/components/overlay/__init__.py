@@ -20,14 +20,14 @@ different question (gateway.md §2):
     to exactly the four destinations its work needs, so that a leaked join
     credential does not buy general access to the LAN.
 
-**Admission is checked in both directions.** A name in configuration that the
-roster does not carry is refused, and a roster entry with nothing configured for
-it is refused as well: both are the same mistake seen from opposite sides, and
-the first of them is what keeps the role tag's permissive default out of reach
-of anything undeclared. The single exception is a device whose identity does not
-exist yet, because a ZeroTier identity is minted by the daemon's first run: a
-caller that is delivering that daemon says so by name (`parse_members`,
-`unminted`), and that member is left out of the desired state until it has been.
+**The roster is the whole of admission.** A member is authorized because it has
+an entry, and the entry carries the node id that says which device it is — so
+there is nothing to cross-check and no way for the role tag's permissive default
+to reach anything undeclared. The gateway is the one member the roster can be
+missing, because a ZeroTier identity is minted by the daemon's first run and
+that daemon is a container this program delivers; while the entry is absent no
+member is declared for it, and the ceremony that reads the minted id adds the
+entry as a commit (physical/gateway.md §2.5).
 
 **Two continuous-integration identities, not one.** ZeroTier maps a node to one
 endpoint at a time, so an identity live in two jobs at once flaps; there is one
@@ -54,26 +54,21 @@ over v6 that it cannot reach over v4.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from ipaddress import IPv4Address
-from typing import final
 
 import pulumi
 import pulumi_zerotier as zerotier
 
 from kluster import conventions
-from kluster.components.gateway import facts
 from putils import Component
 
 __all__ = (
     'MULTICAST_LIMIT',
     'SSH_PORT',
     'UNIFI_API_PORT',
-    'Enrolled',
     'Network',
     'flow_rules',
-    'parse_members',
     'roles',
 )
 
@@ -85,8 +80,7 @@ UNIFI_API_PORT = 443
 
 #: The largest number of recipients a multicast or broadcast reaches. It has to
 #: be at least the size of the roster or local discovery quietly stops finding
-#: the last members to answer; the check below is why roster growth cannot
-#: break it silently.
+#: the last members to answer, which is a roster invariant the suite holds.
 MULTICAST_LIMIT = 32
 
 
@@ -97,66 +91,6 @@ def roles() -> Mapping[str, int]:
         'infra': conventions.ZT_ROLE_INFRA,
         'ci': conventions.ZT_ROLE_CI,
     }
-
-
-@final
-@dataclass(frozen=True)
-class Enrolled:
-    """The facts about an existing member that this program cannot derive.
-
-    A node identifier is minted by the device when ZeroTier first runs on it,
-    and the addresses of members that predate this program are already written
-    into whatever names them. Both are read from stack configuration; the role
-    is not, because the role is a decision.
-    """
-
-    node_id: str
-    address: IPv4Address | None = None
-
-
-def parse_members(raw: object, *, unminted: Collection[str] = ()) -> dict[str, Enrolled]:
-    """Read the configured member facts, and refuse anything the roster omits.
-
-    Both directions are checked here rather than at the resource, because both
-    are the same mistake seen from opposite sides: a member configured but not
-    rostered would be authorized without a declared role, and a member rostered
-    but not configured would be a hole in the census that nothing else notices.
-
-    `unminted` names entries whose node identifier does not exist yet, and it
-    relaxes the second check for those names only. A ZeroTier identity comes
-    into being when the daemon first runs on a device, so a device this program
-    is *delivering* the daemon to has nothing to configure until the delivery
-    has happened; naming it here is how a caller says so, and saying so is a
-    deliberate act rather than the default. A name given here that turns out to
-    be configured after all is read like any other — the relaxation is
-    permission to be absent, not a refusal to look.
-    """
-    entries = facts.mapping(raw, 'the ZeroTier member configuration')
-
-    rostered = {entry.name: entry for entry in conventions.ZT_ROSTER}
-    unknown = sorted(set(entries) - set(rostered))
-    if unknown:
-        raise ValueError(f'{", ".join(unknown)} is not on the ZeroTier roster, so it cannot be authorized')
-    generated = sorted(name for name in entries if rostered[name].generated)
-    if generated:
-        raise ValueError(f'{", ".join(generated)} has a generated identity, so it takes no configured node id')
-    expected = [entry.name for entry in conventions.ZT_ROSTER if not entry.generated]
-    missing = [name for name in expected if name not in entries and name not in unminted]
-    if missing:
-        raise ValueError(f'the ZeroTier roster has no configured node id for {", ".join(missing)}')
-
-    return {name: _member(name, rostered[name], entries[name]) for name in expected if name in entries}
-
-
-def _member(name: str, entry: conventions.ZtMember, raw: object) -> Enrolled:
-    what = f'the ZeroTier facts for {name}'
-    configured = facts.mapping(raw, what)
-    node_id = facts.text(configured, 'id', what)
-    if entry.address is not None:
-        if 'address' in configured:
-            raise ValueError(f"{name}'s address is a convention of this program and is not configured")
-        return Enrolled(node_id=node_id)
-    return Enrolled(node_id=node_id, address=IPv4Address(facts.text(configured, 'address', what)))
 
 
 def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4Address]) -> str:
@@ -232,18 +166,11 @@ class Network(Component):
         *,
         api_token: pulumi.Input[str],
         network_id: str,
-        members: Mapping[str, Enrolled],
         adguard: Sequence[IPv4Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
-        if len(conventions.ZT_ROSTER) > MULTICAST_LIMIT:
-            raise ValueError(
-                f'the roster has {len(conventions.ZT_ROSTER)} members but multicast reaches {MULTICAST_LIMIT}; '
-                'local discovery would stop finding the difference'
-            )
-        homelab = members[conventions.ZT_MEMBER_HOMELAB].address
-        assert homelab is not None, "the homelab host's overlay address is configured, not conventional"
+        homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
 
         # A provider of its own: this token administers the whole ZeroTier
         # account, Central minting nothing smaller, so the resources it may
@@ -286,34 +213,25 @@ class Network(Component):
         self.identities = {
             entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
             for entry in conventions.ZT_ROSTER
-            if entry.generated
+            if isinstance(entry, conventions.GeneratedMember)
         }
 
-        # A member the mapping does not carry has no identity to authorize yet
-        # (`parse_members`, `unminted`), so it is left out of the desired state
-        # rather than declared against a placeholder. Whether that absence is
-        # allowed at all was decided before the mapping got here; what is left
-        # here is only what to do about it.
-        self.members = {
-            entry.name: self._declare(name, entry, members, child)
-            for entry in conventions.ZT_ROSTER
-            if entry.generated or entry.name in members
-        }
+        # One member per entry, and no entry is skipped: a device with no
+        # identity to authorize has no entry either, which is the state the
+        # gateway is in until the ceremony records the id its daemon minted.
+        self.members = {entry.name: self._declare(name, entry, child) for entry in conventions.ZT_ROSTER}
 
         self.register_outputs({})
 
     def _declare(
         self,
         name: str,
-        entry: conventions.ZtMember,
-        members: Mapping[str, Enrolled],
+        entry: conventions.RosterEntry,
         opts: pulumi.ResourceOptions,
     ) -> zerotier.Member:
         node_id: pulumi.Input[str] = (
-            self.identities[entry.name].identity_id if entry.generated else members[entry.name].node_id
+            self.identities[entry.name].identity_id if isinstance(entry, conventions.GeneratedMember) else entry.node_id
         )
-        address = entry.address if entry.address is not None else members[entry.name].address
-        assert address is not None, 'every roster entry is placed, either by convention or by configuration'
         return zerotier.Member(
             f'{name}-member-{entry.name}',
             network_id=self.network.network_id,
@@ -326,7 +244,7 @@ class Network(Component):
             # from the pool would move, and the rules and the records that name
             # it would not move with it.
             no_auto_assign_ips=True,
-            ip_assignments=[str(address)],
+            ip_assignments=[str(entry.address)],
             tags=[[conventions.ZT_TAG_ROLE_ID, entry.role]],
             opts=opts,
         )

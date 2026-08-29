@@ -25,9 +25,7 @@ with it (migration.md Wave F).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
-
-import pulumi
+from collections.abc import Mapping, Sequence
 
 from kluster import conventions
 from kluster.components.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
@@ -61,26 +59,21 @@ def zt_label(member: str) -> str:
     return '-'.join(member.lower().split())
 
 
-def zt_records(address: Callable[[str], pulumi.Input[str]]) -> tuple[Record, ...]:
+def zt_records() -> tuple[Record, ...]:
     """The ZeroTier host block (dns.md §2): one A record per rostered member.
 
     The census is `conventions.ZT_ROSTER`, the same table the `physical` stack
-    admits members by. Publishing is therefore not a second list that can fall
-    behind the first: a device joins the overlay and gets its name under `*.zt`
-    by the same declaration, and a device that leaves loses both.
-
-    `address` is asked only for the members whose overlay address ZeroTier
-    Central assigned -- a fact about a device that existed before this program,
-    which reaches this stack as a `physical` output. The addresses this
-    repository decides (the gateway's, and the two continuous-integration
-    identities') are read off the roster entry instead, which is why the
-    gateway's own `udm.zt` is a literal here and does not wait on the identity
-    that is minted the first time its daemon runs.
+    declares the membership from, and the address is the roster entry's own —
+    so this block reaches no other stack. Publishing is therefore not a second
+    list that can fall behind the first: a device joins the overlay and gets
+    its name under `*.zt` by the same declaration, and a device that leaves
+    loses both. The gateway is the one member the roster may not carry yet, and
+    it has no record here for exactly as long.
     """
     return tuple(
         a(
             f'{zt_label(entry.name)}.{conventions.ZT_LABEL}',
-            str(entry.address) if entry.address is not None else address(entry.name),
+            str(entry.address),
             ttl=conventions.ANCHOR_TTL,
             comment='ZeroTier member',
         )
