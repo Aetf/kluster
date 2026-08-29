@@ -112,14 +112,18 @@ four forbidden edges:
 1.  **`kluster.scripts` imports neither `kluster.stacks` nor
     `kluster.components` nor `kluster.providers`.** A script is a program of its
     own; it shares `lib` and `conventions` with the declarations and nothing
-    else.
+    else. (**New rule.** The canon names scripts as a kind of code without
+    saying what they may reach.)
 2.  **`kluster.providers` does not import `kluster.conventions`.** A provider is
     generic code for a class of system; the estate's decisions are its callers'.
     (**New rule.** The canon says custom providers live apart from the
     declaration logic that uses them; this states what "apart" forbids.)
-3.  **`putils` imports no `kluster` package at all.**
+3.  **`putils` imports no `kluster` package at all.** Not a new rule so much as
+    what `putils` is: the framework of rfc-001, which knows no estate.
 4.  **Nothing imports `kluster.stacks`** except `kluster.main`, which dispatches
-    them.
+    them. (**New rule**, though it follows from the canon's definition of a
+    stack program as wiring: something another module imports for its contents
+    is a component, whatever directory it sits in.)
 
 Component areas may import each other — `homelab` names `talos`'s cluster type
 in its signature — and that stays legal; a contract making the areas independent
@@ -171,14 +175,18 @@ address is on. Three adjectives, used everywhere and nowhere else:
     named as such because three of them hold an address there and the fourth
     deliberately does not.
 
-The device itself keeps the four names the design uses, each for its own role,
-because they are not synonyms: **the gateway** (the role, and the component),
-**the device** (the target of a provider), **the box** (its userland and
-hardware), **the UDM** (the appliance in networking context).
+The machine at the middle of all this keeps three names, each for a role the
+others do not fill: **the gateway** (what it does for the site, and the name of
+the component), **the device** (what a provider writes to, and the thing that
+has a userland, a host key and a firmware update), and **the UDM** (the
+appliance, where the sentence is about hardware or the controller that ships
+with it).
 
 "Estate" survives in one meaning only — the DNS records that belong to no
-application, which is what the `dns` package already calls them. It never again
-names the container services, the address plan, or the operator's credentials.
+application, which is what the `dns` package already calls them. Whether even
+that one survives is the `dns` document's to decide; this one only stops adding
+to the pile. It never again names the container services, the address plan, or
+the operator's credentials.
 
 --------------------------------------------------------------------------------
 
@@ -231,8 +239,13 @@ restarted. `DeviceServices` renders the recovery script from its children rather
 than from a separate census, so the script's restart stamps cannot name a file
 no resource declares.
 
-**The census is typed parameters, not a mapping.** `DeviceServices` takes the
-four services by name and shape:
+**The services are declared as typed parameters, not as a mapping.** Two words,
+kept apart for the rest of this document: the **census** is the table in
+`conventions` — one `ContainerService` entry per service, holding the facts more
+than one stack has to agree on (§7.1); a **declaration** is what
+`DeviceServices` takes, one per census entry, naming that entry plus what only
+the gateway knows about it, which is its image pin and its secrets. The two are
+one-to-one, and "census" never means the constructor side:
 
 ```python
 DeviceServices(
@@ -248,11 +261,10 @@ DeviceServices(
 A fifth member is a change to this signature, not a key in a mapping that a
 loop may or may not look up. What each service *is* — where it keeps state,
 which device nodes it needs, which environment its image reads — is a fact about
-its image and lives in its own `dataclass`, beside the component that renders
-its unit. What is cross-stack — the service names, their container-VLAN
-addresses, their vhosts, the resolver API port — is `conventions` (§7.1). The
-image pins arrive as configuration, validated by name at the stack boundary
-(§8), because a digest is whatever the build produced.
+its image, so it lives in that service's own declaration type beside the
+component that renders its unit. The image pins arrive as configuration,
+validated by name at the stack boundary (§8), because a digest is whatever the
+build produced.
 
 This retires `conventions.GW_ESTATE`, `estate.census`, and the three runtime
 cross-checks that stood in for a type: a pin with no member, a member with no
@@ -269,8 +281,17 @@ start order:
 *   a service on the container VLAN adds `BindsTo=` and `After=` the bridge's
     device unit, so a container cannot be started against a bridge that does not
     exist yet — today that race is absorbed by `Restart=always`, which is a
-    retry loop standing in for a dependency;
-*   the overlay member adds the same pair for the tunnel device it opens.
+    retry loop standing in for a dependency.
+
+The overlay member gets **no** device dependency, and the reason is recorded
+here so that nobody adds one later. What it needs is `/dev/net/tun`, a
+miscellaneous character device that the device's stock rules do not tag for
+systemd: the matching device unit is loaded but never becomes active, so binding
+to it would leave the unit unable to start at all rather than correctly ordered.
+Expressing that dependency would mean shipping a rule to the device to tag the
+node, which is a mechanism this program does not have, and this document does
+not propose one. The interface the daemon itself creates is not a candidate
+either — a unit cannot wait on a device its own service brings into being.
 
 There are **no mutual dependencies between the four services**, and the units
 say so by declaring none. The caddy instance proxies to the resolvers at request
@@ -290,8 +311,8 @@ zone, the policy census, the port forward, the static host entries. Three
 changes follow from elsewhere in this document:
 
 *   the IoT VLAN's unique-local prefix stops being a literal declared beside the
-    rules and comes from the site network it belongs to (§7.1), which is the
-    fifth place that prefix is currently spelled;
+    rules and is derived from the site network it belongs to (§7.1); it is the
+    one spelling of the site prefix that lives outside `conventions` today;
 *   the cluster subnet string is derived from the same structure rather than
     assembled from two constants at module scope;
 *   the peer port is a convention rather than a configuration key (§8).
@@ -304,12 +325,13 @@ as a parameter.
 
 The composition lives in `components/gateway/flow_rules.py`, beside the
 `Gateway` that has the facts. The reason is that the confinement is not a fact
-about ZeroTier: it is a fact about how continuous integration reaches this
-site, and it names two destinations the overlay knows nothing about — the
-homelab host's libvirt session, and the resolvers.
+about ZeroTier: it is a fact about how continuous integration reaches this site.
+Its destinations say so. One is a member of the overlay, at its overlay address,
+opened on the one port a libvirt session needs — a fact about what a run does,
+not about who is on the network. The other two are not members at all.
 
-The resolvers are the interesting half, and the comment at the composition site
-says it plainly rather than by implication:
+Those two are the interesting half, and the comment at the composition site says
+why plainly rather than by implication:
 
 > A run reaches the two resolvers at their **LAN** addresses on the container
 > VLAN, not at overlay addresses, because they have none — they are containers
@@ -352,23 +374,38 @@ needs a mechanism:
 1.  **A rotated credential or a moved address must be a change.** Calling a
     rotation "no change" because the file on the device is already right leaves
     the superseded key in state, and a delete months later would authenticate
-    with a key that no longer opens the door. The provider's `diff` therefore
-    compares the serialized provider between old and new alongside the declared
-    inputs. This is sound because the SDK pickles providers deterministically —
-    it sorts dictionary items precisely so that an unchanged provider serializes
-    to an unchanged string — and because the diff already receives both
-    property bags. A serialized provider that is still unknown during a preview
-    is handled by the same unknown check the inputs already go through.
+    with a key that no longer opens the door.
+
+    The obvious mechanism is to compare the serialized provider, which the
+    engine hands to `diff` in both property bags. It is rejected. The SDK
+    pickles the provider *class by value*, so editing any line of provider code
+    — or bumping the SDK, the pickling library, or Python — changes the
+    serialization and would diff every resource under that provider at once.
+    Those updates would rewrite bytes the device already has, which is harmless,
+    but a wave of them is dishonest and would train a reader to skim past the
+    one diff that matters.
+
+    Instead, each resource declares one input that the provider derives from its
+    session: a readable endpoint (`user@host:port`) and a short digest over the
+    two credentials. A move or a rotation changes it and is therefore a diff; a
+    change to provider code does not, exactly as today. It is one small property
+    instead of five, it says which session wrote the file, and it carries no
+    secret.
 2.  **The pinned host key must stay reviewable.** It is a public key, and a pin
     a reader can check beats a pin the engine redacts; today it is a plain input
     for that reason, and inside the provider it would be part of an opaque
-    secret. So `Gateway` registers the endpoint and the pinned key as its own
-    component outputs. The fact is then stated once, at the component that owns
-    the session, instead of on each of a dozen resources — which is a better
-    answer to "what does this deployment trust" than the current repetition.
+    secret. So `Gateway` registers it as one of its own component outputs. The
+    pin is then stated once, at the component that owns the session, instead of
+    on each of a dozen resources — which is a better answer to "what does this
+    deployment trust" than the current repetition. The endpoint half stays
+    visible per resource, through the session input above.
 
-The resource identifier stops being built from the property bag and is built
-from the session the provider holds, which is where that information now is.
+The resource identifier becomes the path on the device alone, a provider
+instance now standing for exactly one device. It is minted at create, never
+re-derived afterward, and never a replace trigger: only the path is a
+replacement, as today. That is what keeps the first-bring-up knob safe — moving
+the session from the device's LAN address to its overlay one (gateway.md §2.5)
+stays an update to the same resources, and never a delete and a create.
 
 ### 5.3 The providers' package
 
@@ -482,18 +519,25 @@ The structures that matter most:
 ```python
 @dataclass(frozen=True)
 class SiteNetwork:
-    """One subnet the gateway serves, in both families, with its own leg on it."""
+    # One subnet the gateway serves, and the gateway's own leg on it.
     name: str
     v4: IPv4Network
-    v6: IPv6Network
     vlan_id: int | None = None          # None: the untagged LAN
     gateway_v4: IPv4Address | None = None
+
+    @property
+    def v6(self) -> IPv6Network:
+        # Numbered out of SITE_ULA after the v4 subnet's third octet,
+        # spelled as those same digits. The rule, not a second literal.
+        ...
 ```
 
 A site network's IPv6 prefix is numbered after the third octet of its IPv4
-subnet — that is the site's addressing rule — so declaring the two apart is
-declaring half a decision. Today the IoT VLAN's prefix is written out by hand in
-`gateway/unifi.py`, four hundred lines from its IPv4 sibling.
+subnet, spelled as those same digits — that is the site's addressing rule, so
+the prefix is *derived* rather than declared beside the subnet and a pair that
+disagrees cannot be written. Today the rule is applied by hand at six spellings
+of the site prefix: five in `conventions.py`, and the IoT VLAN's in
+`gateway/unifi.py`, a different file from the IPv4 sibling it must agree with.
 
 The same treatment gives the `lan` pool its address groups and its fixed VIPs in
 one object, and the gateway its service census:
@@ -645,6 +689,14 @@ NODE_VOLUMES: Mapping[str, NodeVolume] = {...}
 DEDICATED_VIP_NODE = ...
 ```
 
+The type does not carry the table's invariants, so they are checked the way the
+roster is checked (§7.2): every `node` names a node the fleet declares, every
+`mount` is unique, and **no node carries two volumes** — which is the placement rule
+below, enforced rather than merely written down. A volume attached to a node
+that does not exist, a mount claimed twice, and a second volume landing on an
+occupied node are then all refusals with a name on them rather than an apply
+that half works.
+
 The three readers are the three layers the volume passes through, and naming it
 once is what keeps them consistent:
 
@@ -711,12 +763,16 @@ today:
 Five of those are judgment calls rather than applications of an existing ruling,
 and each has a precedent in the repository:
 
-*   **The container-VLAN addresses.** Nothing outside this program assigns them:
-    the program injects each address into its own container's environment, and
-    three declarations must agree on it — the caddy site that proxies the
-    instance, the initial state that tells it where to listen, and the flow rule
-    that admits a run to it. That is the same argument that already put the
-    resolver API port in `conventions`.
+*   **The container-VLAN addresses.** Nothing outside this program assigns them.
+    For the two resolvers the program injects the address into the container's
+    own environment, and three declarations must then agree on it: the caddy
+    site that proxies the instance, the initial state that tells it where to
+    listen, and the flow rule that admits a run to it. The caddy service is
+    different and is a decision all the same — its image takes a lease, so its
+    entry is the address the design *intends* it to hold, which is the one a
+    resolver rewrite has to name. Either way the value is this repository's, and
+    it is the same argument that already put the resolver API port in
+    `conventions`.
 *   **The gateway's pinned host key.** The homelab host's pinned key is already
     a constant in code, with the reason written beside it: a public key is not a
     secret, and a pin typed in beside the client credential could be replaced by
@@ -776,14 +832,24 @@ owns only the fact that the domain exists.
 **Declared and owned:** `name`, `description`, `autostart`, `running`, `vcpu`,
 `memory`.
 
-Those are the facts an operator would state about this VM, and the first four
-are updatable in place — "the home's automation comes back after a host reboot"
-is exactly the kind of promise a declaration should hold. `vcpu` and `memory`
-replace the domain rather than updating it, and the domain is protected, so a
-drift there becomes a refusal until someone reconciles it; that is the intended
-behavior for a machine nothing may recreate. The slice that lands this reads the
-live values off the host and declares those, because declaring anything else
-would propose a replacement on the first apply.
+Those are the facts an operator would state about this VM, and they fall into
+two groups by what the provider does with a change to them:
+
+*   `autostart` and `running` **update in place**. They carry the promise worth
+    holding — "the home's automation comes back after a host reboot" — and
+    holding it costs nothing.
+*   `name`, `description`, `vcpu` and `memory` **replace the domain**. In the
+    pinned provider chain every one of those four is marked as forcing a new
+    resource, `description` included. The domain is protected, so a drift in any
+    of them is a refusal until someone reconciles it, never a replacement. That
+    is the intended behavior for a machine nothing may recreate, and it is the
+    whole of what owning them buys: a drift that is reported rather than
+    ignored.
+
+Because four of the six can only ever refuse, the slice that lands this reads
+the live values off the host and declares those. Declaring anything else would
+propose a replacement on the first apply, which `protect` would then refuse for
+as long as the declaration stood.
 
 **Still ignored, in three groups, each with its reason:**
 
@@ -807,10 +873,13 @@ a change — is kept, with its assertion widened from "every field is ignored" t
 The shared test machinery is settled elsewhere; this section says only what the
 work described here leaves for it.
 
-*   **The gateway's suite splits by component**: the services and their
-    containers, the overlay, the site firewall, the flow-rule composition, and
-    the device-file provider each get a file, replacing one file that covers
-    four subjects.
+*   **The gateway's suite re-splits along the new component boundaries.** It is
+    four files today — the estate, the provider, the controller resources, the
+    overlay — and stays about that many, but the cuts move: the services and
+    their containers, the overlay, the site firewall, the flow-rule composition,
+    and the device-file provider. The overlay's file is the one that visibly
+    separates, because §4.5 makes its two subjects — the network's own
+    declaration, and the rule program composed outside it — two components.
 *   **The rendered-text cases survive unchanged.** The render functions keep
     their names and signatures across the move to templates (§6.2), so the
     cases that assert on fragments of a unit file, a routing
