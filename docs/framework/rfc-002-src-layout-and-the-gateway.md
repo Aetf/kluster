@@ -181,6 +181,10 @@ address is on. Three adjectives, used everywhere and nowhere else:
     named as such because three of them hold an address there and the fourth
     deliberately does not.
 
+One word this document borrows rather than coins: libvirt calls a virtual
+machine a **domain**, and §13 uses it in that sense only. Nothing else here is a
+domain — an area of `components/` is an area, and a DNS name is a name.
+
 The machine at the middle of all this keeps three names, each for a role the
 others do not fill: **the gateway** (what it does for the site, and the name of
 the component), **the device** (what a provider writes to, and the thing that
@@ -362,12 +366,18 @@ one-to-one, and "census" never means the constructor side:
 ```python
 DeviceServices(
     name,
-    caddy=CaddyService(pin=..., acme_token=...),
-    resolvers=(ResolverService(name='alice', pin=...), ResolverService(name='bob', pin=...)),
-    overlay_member=OverlayService(pin=...),
+    caddy=CaddyService(service=conventions.gateway.CADDY, pin=..., acme_token=...),
+    resolvers=tuple(ResolverService(service=entry, pin=...) for entry in conventions.gateway.RESOLVERS),
+    overlay_daemon=OverlayDaemon(service=conventions.gateway.OVERLAY, pin=...),
     routing=RoutingSession(neighbour=..., password=...),
 )
 ```
+
+Each declaration **holds its census entry rather than naming it**. That is what
+makes the binding a reference the type checker follows instead of a string
+looked up at runtime, and it is why a resolver cannot be declared against a
+service that has no address: `ResolverService` takes a `BridgedService`, and the
+overlay daemon takes the host-networked one (§10.1).
 
 A fifth member is a change to this signature, not a key in a mapping that a loop
 may or may not look up. What each service *is* — where it keeps state, which
@@ -377,11 +387,15 @@ that renders its unit. The image pins arrive as configuration, one key per
 service, through the same mechanism that pins container images and charts
 (§11.1).
 
+The parameter is `overlay_daemon` rather than `overlay_member`, because
+`OverlayMember` is a roster entry (§10.2) and this is the container that runs
+the daemon. One term, one concept.
+
 This retires `conventions.GW_ESTATE`, `estate.census`, and the three runtime
-cross-checks that stood in for a type: a pin with no member, a member with no
-pin, and a member with no address all become impossible to write. It also
-retires the function the one-idiom rule was raised against — the census built
-one list three ways, and a signature builds none.
+cross-checks that stood in for a type: a pin with no service, a service with no
+pin, and a resolver bound to something that has no address all become
+impossible to write. It also retires the function the one-idiom rule was raised
+against — the census built one list three ways, and a signature builds none.
 
 ### 5.4 `SiteFirewall`
 
@@ -419,7 +433,12 @@ composed by a pure function in `components/overlay/flow_rules.py` that takes the
 facts and returns text:
 
 ```python
-def flow_rules(*, gateway: IPv4Address, homelab: IPv4Address, resolvers: Sequence[IPv4Address]) -> str: ...
+def flow_rules(
+    *,
+    gateway_overlay_address: IPv4Address,
+    homelab_overlay_address: IPv4Address,
+    resolver_site_addresses: Sequence[IPv4Address],
+) -> str: ...
 ```
 
 The stack program calls it and passes the result. The reason the composition is
@@ -461,23 +480,28 @@ and referred to afterward.
 *   **The Command provider** (`local.Command`, `remote.Command`,
     `remote.CopyToRemote`). Pulumi's guidance: use it when you need to *run a
     command as part of provisioning* rather than model a resource with a
-    lifecycle. Its decisive limitation is that it implements neither `diff` nor
-    `read`: the engine diffs the declared inputs against state and nothing else,
-    so a file edited on the device is invisible to `preview` and to `refresh`.
-    `remote.CopyToRemote`'s `triggers` only ever *replace*.
+    lifecycle. It does implement `diff` and `read` — its framework serves both —
+    but only over its own inputs and state: `diff` compares the declared command
+    and triggers, and `read` hands back the state it already has. **Neither ever
+    looks at the target.** So a file edited on the device is invisible, and
+    "make the device match this content" is not a thing the resource can mean.
+    `Command.triggers` cause an update when an update command is given;
+    `CopyToRemote.triggers` always replace.
 *   **A dynamic provider.** Pulumi's criteria: no existing provider covers the
     resource, the logic is specific to a single program, and it need not be
     shared across languages or teams. Limitations, all of which apply here:
-    Python and TypeScript only; `read` is documented as non-functional, so
-    `pulumi import` and `get` are unavailable; `refresh` and `destroy` need
-    `--run-program` because the implementation lives in the program; every
-    resource stores a serialized copy of the provider in state, always marked
-    secret; all dynamic resources share one type token, which makes policy
-    packs identify them by property; and — the one that shapes §7.4 — **a
+    Python and TypeScript only; `pulumi import` and `get` are unavailable;
+    `refresh` and `destroy` need `--run-program`, because the implementation
+    lives in the program (`destroy` since Pulumi 3.160.0, `up --refresh` since
+    3.169.0); every resource stores a serialized copy of the provider in state,
+    marked secret since 3.75.0; the package half of the type token is always
+    `pulumi-python`, so a policy pack selecting on package cannot tell one
+    dynamic resource kind from another — the `module`/`name` halves are the
+    program's, and this repository already sets them
+    (`pulumi-python:dynamic/gateway:File`); and — the one that shapes §7.4 — **a
     dynamic provider cannot be passed through `opts.provider` and does not
     inherit down a component tree.** Provider options are matched by the package
-    name in the resource's type token, and a dynamic resource's package is
-    `pulumi-python`, which no provider resource can be.
+    name in the type token, and no provider resource can be `pulumi-python`.
 *   **A full provider** (bridged or native). Gains everything the dynamic one
     lacks: `import`, `read`, cross-language use, ordinary provider inheritance,
     no per-resource blob. Costs a second language and a release pipeline in a
@@ -486,11 +510,12 @@ and referred to afterward.
 ### 7.2 The device files: a dynamic provider
 
 **Recommendation: keep it, deliberately.** The property that decides it is drift
-detection. What makes this convergence rather than record-keeping is that `diff`
-opens a session and compares the device's bytes with the declared ones, so a
-file someone edited on the box appears in `pulumi preview` without a refresh. The
-Command provider cannot express that at all; a full provider could, at the cost
-of a Go codebase to maintain for one device.
+detection against the device. What makes this convergence rather than
+record-keeping is that `diff` opens a session and compares the device's bytes
+with the declared ones, so a file someone edited on the box appears in
+`pulumi preview` without a refresh. The Command provider's `diff` never looks at
+the target, so it cannot express that; a full provider could, at the cost of a
+Go codebase to maintain for one device.
 
 Pulumi's three criteria are met exactly: no provider covers this, the logic is
 specific to this program, and nothing else will ever consume it. The costs are
@@ -499,9 +524,11 @@ accepted with their consequences named:
 *   **No `pulumi import`.** Nothing here needs it: the resources are created by
     this program, and a device that already has the files converges to the same
     content on the first apply rather than needing adoption.
-*   **`read` is implemented but is not the drift mechanism.** `diff` is. A
-    `refresh` that needs the provider must be run with `--run-program`, which is
-    a note for the operations documentation rather than a design constraint.
+*   **`read` is real but is not the primary mechanism.** Since Pulumi 3.216.0 a
+    refresh calls `read` and feeds its returned inputs into the diff, so the
+    implementation here is live rather than dead code. `diff` remains what a
+    preview uses, which is why drift shows up without asking for a refresh. Both
+    paths need `--run-program`.
 *   **A serialized provider per resource.** Roughly a dozen resources on one
     device; the state cost is noise.
 
@@ -541,16 +568,24 @@ connection properties are inputs on every file and artifact resource. They move
 onto the provider instance:
 
 ```python
-self.device = DeviceFileProvider(session=DeviceSession(host=..., host_key=..., private_key=...))
+# in the stack program, where every other credential is read:
+session = DeviceSession(host=..., host_key=..., private_key=config.require_secret('gatewayPrivateKey'))
+gateway = Gateway(name, session=session, ...)
+
+# inside Gateway:
+self.device = DeviceFileProvider(session=session)
 ```
 
-`Gateway` constructs it once and hands the same instance to each `Container` and
-to the two files it declares itself. That is as close to inheritance as the
-mechanism allows: a dynamic provider cannot travel through `opts.provider`
+The split is deliberate, and it is what keeps §8.1 free of an exception: the
+**stack program** builds the session, because that is where credentials are
+read; the **component** wraps it in the provider, because that is what owns the
+connection. `Gateway` then hands the same provider instance to each `Container`
+and to the two files it declares itself. That is as close to inheritance as the
+mechanism allows — a dynamic provider cannot travel through `opts.provider`
 (§7.1), so it travels as an ordinary Python object down the same tree the
 components already form. Pulumi serializes it into each resource's `__provider`
-property and marks that secret by default, so the credential is better protected
-there than as an input.
+property and marks that secret, so the credential is better protected there than
+as an input.
 
 Two properties the current design relies on have to survive that move:
 
@@ -559,20 +594,19 @@ Two properties the current design relies on have to survive that move:
     the superseded key in state, and a delete months later would authenticate
     with a key that no longer opens the door.
 
-    The obvious mechanism is to compare the serialized provider, which the
-    engine hands to `diff` in both property bags. It is rejected: the SDK pickles
-    the provider *class by value*, so editing any line of provider code — or
-    bumping the SDK, the pickling library, or Python — changes the serialization
-    and would diff every resource under that provider at once. Those updates
-    would rewrite bytes the device already has, which is harmless, but a wave of
-    them would train a reader to skim past the one diff that matters.
+    The serialized provider does move when the session does — the pickle is
+    the *instance*, and the class travels by reference, so provider-code edits
+    leave it unchanged — which makes comparing it technically sufficient. It is
+    still not what this design does, for a reason that is about the reader
+    rather than about correctness: `__provider` is a secret base64 blob, so a
+    preview would report "one opaque property changed" and no human could tell a
+    key rotation from an address move from a bumped dependency.
 
     Instead, each resource declares one input the provider derives from its
     session: a readable endpoint (`user@host:port`) and a short digest over the
-    two credentials. A move or a rotation changes it and is therefore a diff; a
-    change to provider code does not, exactly as today. It is one small property
-    instead of five, it says which session wrote the file, and it carries no
-    secret.
+    two credentials. The diff then *says* what happened. It is one small
+    property instead of five, it names the session that wrote the file, and it
+    carries no secret.
 2.  **The pinned host key must stay reviewable.** It is a public key, and a pin
     a reader can check beats a pin the engine redacts. It becomes a convention
     rather than a configuration secret (§11), which is where the homelab host's
@@ -608,36 +642,50 @@ declarations.
 
 ### 8.1 The rule
 
-**Every provider this program uses is explicit, constructed where its
-credentials are read, and set on the top-level component that needs it. Nothing
-below that ever names it again.** This is Pulumi's documented mechanism and the
-legacy repository's convention: a provider set on a component resource becomes
-the default for its whole subtree, transitively, because each child inherits its
-parent's provider map and the first match by package name wins. So a `Gateway`
-built with a controller provider gives it to `SiteFirewall`'s zone, network,
-policies and port forward without any of them mentioning it.
+**Every provider this program uses is explicit, built in the stack program where
+its credentials are read, and set on the top-level component that needs it.
+Nothing below that ever names it again.** This is Pulumi's documented mechanism
+and the legacy repository's convention: a provider set on a component resource
+becomes the default for its whole subtree, transitively, because each child
+inherits its parent's provider map and the first match by package name wins. So
+a `Gateway` built with a controller provider gives it to `SiteFirewall`'s zone,
+network, policies and port forward without any of them mentioning it.
+
+**New rule**, and worth naming as one, because it refines a style rule rather
+than applying it. The style rules say a provider that is an implementation
+detail of one component is constructed *inside* it; that is what
+`SiteFirewall`, `Overlay` and `HomelabHost` each do today. This document moves
+every construction into the stack program instead, on the grounds that the thing
+a provider is built from is a credential, credentials are stack configuration,
+and a program with all its configuration reads in one file is one a reader can
+audit. The cost is that a component no longer carries its own provider, and the
+compensation is that it no longer carries the credential either. The alternative
+reading — each top-level component reads the one credential that configures its
+own provider, and the stack program reads none of them — is coherent, is closer
+to the style rule as written, and is the question to settle when approving this
+section.
 
 Three consequences:
 
 *   **`child_opts(provider=...)` disappears from component bodies.** Today
     `SiteFirewall` and `Overlay` re-plumb their provider into every child's
     options. After this, the provider arrives on the component and inheritance
-    does the rest. Invoke options still take one explicitly — an invoke is not a
-    resource and inherits nothing.
+    does the rest. An invoke needs `InvokeOptions(parent=...)` to inherit —
+    given a parent it takes that parent's provider, and given neither it takes
+    the default one.
 *   **The ambient namespaces retire.** `oci:` and `b2:` configure default
     providers today, which is configuration acting at a distance: the same
     program run with a different ambient environment declares against a
     different account. `pulumi:disable-default-providers`, listing the packages
     this program uses, turns "somebody forgot the provider" from a silent
-    fallback into an error. Dynamic resources are unaffected — they carry their
-    provider instance directly (§7.4) — which is why the setting lists packages
-    rather than `*`.
+    fallback into an error. It lists them rather than saying `*` because
+    dynamic resources *depend* on the `pulumi-python` default provider: `*`
+    would disable the one default provider this program still needs.
 *   **A credential that exists only to configure a provider is read where that
-    provider is constructed.** It is an implementation detail of that provider
-    instance, not a fact any component needs, so it stops being a constructor
-    parameter threaded through components. This is a deliberate refinement of
-    the layering rule, and the test still holds: no *parent* has an opinion
-    about it, so it is not a parameter.
+    provider is built, and reaches no component.** It is an implementation
+    detail of that provider instance, not a fact any component needs, so it
+    stops being a constructor parameter threaded through components. The test
+    still holds: no *parent* has an opinion about it, so it is not a parameter.
 
 ### 8.2 Every provider this stack uses
 
@@ -648,7 +696,7 @@ Three consequences:
 | `unifi` | the stack program | `Gateway`, which passes it to `SiteFirewall` | `unifiApiKey`, read there |
 | `zerotier` | the stack program | `Overlay` | `zerotierApiToken`, read there |
 | `libvirt` | the stack program | `HomelabHost` | `libvirtPrivateKey`, read there (§8.3) |
-| `device_files` | `Gateway` | its own children, as an object (§7.4) | `gatewayPrivateKey`, read by the stack program and passed in |
+| `device_files` | `Gateway`, from a session the stack program built | its own children, as an object (§7.4) | `gatewayPrivateKey`, read by the stack program into that session |
 
 The OCI row is the one that changes most. Its region and tenancy come from
 `conventions` (§10.3) and its credential from configuration, both read at the
@@ -657,18 +705,12 @@ also settles a question that has been open: there is no pin-equal test between
 `conventions` and the `oci:` namespace, because there is no second copy left to
 disagree.
 
-The `device_files` row is the exception that proves the rule, and §7.4 says why:
-the mechanism cannot carry a dynamic provider through resource options, so the
-"set on" column means an object passed down the same tree.
-
-Because the gateway's session credential is read by the stack program while the
-provider is built by `Gateway`, that one is passed in rather than read in place.
-The alternative — `Gateway` reading `gatewayPrivateKey` itself — keeps the
-credential nearer its provider but puts a configuration read inside a component
-for a value the component otherwise has no opinion about. Both readings of the
-rule are defensible; this document picks the one that keeps every configuration
-read in the stack program, so a reader finds the whole configuration surface in
-one file.
+The `device_files` row differs in *mechanism* but not in rule: §7.4 splits it so
+that the stack program still reads the credential — into a `DeviceSession` — and
+the component still owns the connection, by wrapping that session in the
+provider. Only the propagation differs, because the mechanism cannot carry a
+dynamic provider through resource options, so the "set on" column means an
+object passed down the same tree.
 
 ### 8.3 The libvirt transport's absolute paths
 
@@ -698,14 +740,21 @@ through to. So the choice is within `qemu+ssh`:
 | `libssh` / `libssh2` | — | Not implemented |
 
 **Recommendation: relative paths, resolved against the checkout root.** The
-provider expands environment variables in both values and then opens them
-without anchoring them anywhere, so a relative value resolves against the plugin
-process's working directory — which Pulumi sets to the project directory, the
-one holding `Pulumi.yaml`, and that is the same directory this repository
-already calls the checkout root. Pulumi's own documentation prescribes exactly
-this for exactly this symptom: a path in a resource property should be relative
-to the working directory, or running the project on two machines produces
-diffs.
+provider expands environment variables in both values — and, for the identity
+only, a leading `~/` — then opens them without anchoring them anywhere, so a
+relative value resolves against the plugin process's working directory. Pulumi
+sets that to the project's `main` directory when the project declares one, and
+otherwise to the directory holding `Pulumi.yaml`. This project declares no
+`main`, so the two coincide and both are the checkout root — but the caveat
+belongs in the comment beside the code, because adding a `main` later would move
+the anchor silently. Pulumi's own documentation prescribes exactly this for
+exactly this symptom: a path in a resource property should be relative to the
+working directory, or running the project on two machines produces diffs.
+
+The hazard, if the URI is wrong rather than merely non-portable, is worse than a
+diff: a provider that cannot reach the host reads every domain as absent and
+clears its id, which for a protected, adopted domain is the worst-shaped failure
+in this stack.
 
 Three things stay as they are, and each has a reason:
 
@@ -793,9 +842,10 @@ that the component and its rendered files move together.
 | `homelab.disk_tuning_xslt` | `homelab/templates/disk-tuning.xslt` (verbatim) |
 | `image._schematic_document` | `talos/templates/schematic.yaml.j2` |
 
-The Python functions keep their names and signatures and become one line each,
-so the shell quoting, the ordering guarantees and the rendered text all stay
-under test exactly as they are. The one verbatim file in the table is what the
+The Python functions keep their names and signatures — in the renamed modules
+of §3.1, so `estate.unit_file` is `services.unit_file` — and become one line
+each, so the shell quoting, the ordering guarantees and the rendered text all
+stay under test exactly as they are. The one verbatim file in the table is what the
 suffix rule is for: it carries XSLT braces and needs no parameters.
 
 ### 9.3 The gateway's own certificate
@@ -882,16 +932,27 @@ one object, and the gateway its service census:
 
 ```python
 @dataclass(frozen=True)
-class ContainerService:
-    # One service the device runs: what it is called, where it sits, what it serves.
+class BridgedService:
+    # A service on the container VLAN: it has an address, and may serve a name.
     name: str
-    address: IPv4Address | None         # None: the host's own network namespace
+    address: IPv4Address
     vhost: str | None = None
+
+@dataclass(frozen=True)
+class HostNetworkService:
+    # A service in the host's own network namespace: no address of its own,
+    # and therefore nothing the gateway can proxy to.
+    name: str
+
+ContainerService = BridgedService | HostNetworkService
 ```
 
-The last field carries a comment pointing at dns.md §4, for why a name the
-gateway serves is a name in the public zone that public resolvers do not answer
-for.
+Two shapes rather than one with optional fields, for the same reason the roster
+has two (§10.2): a service with no address that nonetheless serves a public
+name is a combination the gateway could not honor — there would be nothing to proxy to —
+and this way it cannot be written. The `vhost` field carries a comment pointing
+at dns.md §4, for why a name the gateway serves is a name in the public zone
+that public resolvers do not answer for.
 
 ### 10.2 The overlay roster carries identities
 
@@ -1110,8 +1171,8 @@ the stack performs today:
 | `unifiApiKey` | the line that builds the controller provider |
 | `zerotierApiToken` | the line that builds the overlay provider |
 | `libvirtPrivateKey` | the line that builds the libvirt provider (§8.3) |
-| `gatewayPrivateKey` | the line that builds the device-file provider |
-| `gatewayBootstrapHost` | the same line — it is where that provider dials |
+| `gatewayPrivateKey` | stack program, into the `DeviceSession` it passes to `Gateway` (§7.4) |
+| `gatewayBootstrapHost` | the same session — it is where that provider dials |
 | `gatewayRootfs` | four `image:` pins (§11.1) |
 | `oci:region`, `oci:tenancyOcid` | `conventions.providers` (§10.3) |
 | `b2Region` | `conventions.providers` |
@@ -1195,12 +1256,14 @@ Three properties, and each replaces something the current shape gets wrong:
     one instance before the other is a thing this shape permits and a single
     shared pin forbids.
 
-The digest is the half renovate cannot compute. A custom manager can bump the
-release, but the matching digest comes from the build, so these pins stay
-manual — the same status the repository already gives a pin whose upstream is
-not a version stream, and stated in the renovate configuration for the same
-reason. If those images ever gain proper registry tags, they become ordinary
-`image:` pins and renovate takes them over with no change here.
+Renovate does not read these keys, and it does not read the `chart:` and
+`image:` keys either. The renovate configuration in this repository carries a
+custom manager for the Talos version and none for the version namespaces, so
+every pin in them is manual today. Making the namespaces renovate-managed is a custom
+manager per namespace, and worth doing; it is not something this change gets for
+free. For these four pins it would be a partial win in any case: a manager can
+bump the release, but the matching digest comes from the build, so the pair
+still moves by hand until the images gain proper registry tags.
 
 --------------------------------------------------------------------------------
 
@@ -1229,67 +1292,119 @@ reading in one place.
 
 ## 13. The adopted HAOS domain
 
+*Libvirt calls a virtual machine a **domain**, and this section uses the word in
+that sense only.*
+
 Today every input the libvirt provider accepts for a domain is ignored, so
 Pulumi owns one fact: that a domain with this UUID exists. That fails the
 question adoption has to answer — **if somebody deletes the domain outside this
-program, can an apply put it back?** With everything ignored, no: the next apply
-would define a domain with no disks, no firmware, no network and no console,
-which is not the home's automation, it is an empty machine wearing its name. And
-if it cannot be recreated, adoption is buying nothing at all.
+program, can an apply put it back?** As things stand, no. And if it cannot, the
+adoption is buying nothing.
 
-So the end state declares enough to **re-define the domain around the disk
-images that survived it**:
+The honest answer is more complicated than the previous revision of this
+document claimed, because it depends on what the provider can express about
+*this* domain. What follows is measured against the live definition and the
+pinned provider, and then the choice is put to the operator.
 
-| Declared | Why it must be |
-| --- | --- |
-| `name`, `description` | What `virsh` lists; the domain's label |
-| `vcpu`, `memory` | Its sizing |
-| `machine`, `arch`, `type`, `cpu` | A UEFI guest does not boot on a machine type it was not installed for |
-| `firmware`, `nvram` | The variable store holds its boot entries; a recreation without it does not boot |
-| `disks` | By host path. These *are* the home's automation |
-| `networkInterfaces` | Bridge **and MAC**: a new MAC is a new identity to every lease and every peer |
-| `consoles`, `graphics`, `video` | How a machine that fails before its own logging says why |
-| `autostart`, `running` | It comes back after a host reboot |
+### 13.1 What the provider can and cannot say about this machine
 
-**Ignored, and each for a reason that is not "we did not get to it":**
+**What the provider can own, and reads back, so declaring it costs no diff on
+adoption:** `name`,
+`description`, `vcpu`, `memory`, `firmware`, `nvram`, `cpu`, `arch`, `machine`,
+`autostart`, `running`, the disks, and the network interface. Two details decide
+whether that is true in practice:
 
-*   `cloudinit`, `coreosIgnition`, `kernel`, `initrd`, `cmdlines`, `fwCfgName`,
-    `bootDevices`, `filesystems`, `tpm`, `qemuAgent` — mechanisms this domain
-    does not use. A declaration of "none" and an absence are the same thing
-    here, and the shorter one is the absence.
-*   `emulator` — the host's path to its QEMU binary, which moves when the host
-    updates its packages. Pinning it would make a host upgrade a diff.
-*   `metadata`, `xml` — the provider's own bookkeeping and its escape hatch;
-    neither describes the machine.
+*   **Disks must be declared by `volume_id`, not by `file`.** The provider reads
+    a file-backed disk back by looking its path up in a storage pool and
+    reporting the volume it found; a declaration written as a file path would
+    diff against that on the first refresh, and the field forces replacement. It
+    also means the disks can only be declared **once a pool covers the directory
+    they live in** — the lookup errors on a path in no pool.
+*   **`machine` is the canonical string the host reports** — `pc-q35-8.1`, not
+    the family name `q35`. Declaring the family would diff forever.
 
-**What recreation restores, stated honestly: the definition, not the data.** An
-apply after an accidental `virsh undefine` gets back a domain that boots the
-same disk images with the same identity on the same bridge. It does not restore
-the contents of those disks — if the disk images are gone too, what brings the
-home's automation back is its own backup regime, and no amount of declaring in
-this program changes that. The value of the declaration is precisely the part
-that *is* reproducible: the definition nobody wrote down anywhere else.
+**Expressible only through the XSLT escape hatch:** the passthrough hardware.
+The provider has no `hostdev` input at all, and this domain has three: two PCI
+functions bound to vfio, and one USB device. They exist in the definition or the
+machine is not the same machine.
 
-Two facts about the provider shape all of this, and they are why the section is
-not simply "declare everything":
+**Not expressible at all:**
 
-*   **Almost every field replaces the domain**, `name` and `description`
-    included; only `autostart` and `running` update in place. Combined with
-    `protect=True`, that means a drift in any declared field is a *refusal until
-    someone reconciles it*, never a silent replacement of a machine that must
-    not be recreated. That is the intended behavior, and it is what "owned"
-    buys: the drift is reported rather than ignored.
-*   **The declaration has to start from the live domain.** The slice that lands
-    this reads the domain's current definition off the host and writes those
-    values down. Declaring anything else would propose a replacement on the
-    first apply, which `protect` would refuse for as long as the declaration
-    stood.
+*   **The TPM.** The provider has a `tpm` block, but it never populates it on
+    read, so a declared one is a permanent diff. This domain has an emulated
+    TPM whose state lives in a directory on the host — and that state is
+    identity-bearing: it is what the guest's disk encryption and attestation are
+    tied to.
+*   **Secure boot.** A definition the provider generates asks for a firmware
+    loader with `secure="no"` and emits no `<smm>` element, so the loader this
+    domain actually boots is not what a recreation would produce.
+
+**Which owned fields refuse, and which quietly do nothing**, is the correction
+that matters most to the previous revision, which claimed everything but two
+fields would refuse:
+
+*   `name`, `description`, `vcpu` and `memory` force replacement. Under
+    `protect=True` a drift in them is a **refusal until someone reconciles it**,
+    which is the intended behavior.
+*   `machine`, `arch`, `emulator`, `video`, the network interfaces, boot
+    devices, `kernel`, `initrd`, the agent flag and `metadata` are **not**
+    replacement-forcing, and the provider's update path does not apply them
+    either. Drift there is a **silent no-op**: Pulumi reports the update, the
+    host keeps what it had. Declaring them is worth doing for what it documents
+    and for what a recreation emits, but it must not be sold as enforcement.
+*   `consoles`, `graphics` and `video` are never read back at all. This domain
+    is headless — a virtio console and no graphics — so there is nothing to gain
+    by declaring them and a permanent diff to lose.
+
+### 13.2 Three ways to make adoption mean something
+
+The choice is the operator's; this section states the options and recommends
+one.
+
+**(a) Partial declaration, hardware through XSLT.** Declare the owned set,
+and carry the passthrough devices in the `xml.xslt` transform the provider
+already accepts. Recreation is an ordinary apply: the provider defines most of
+the machine and the transform supplies the rest. The TPM and secure boot are
+still absent, so what comes back boots differently from what was lost.
+
+**(b) The definition as a checked-in artifact.** Keep the provider's ownership
+to the lifecycle it actually enforces — `autostart`, `running`, `protect` — and
+keep the full domain XML in the repository as a file, maintained beside the
+code and rendered by the same mechanism as everything else (§9.1). Recreation is
+a documented `virsh define` of that file. Pulumi is then not the thing that
+recreates the machine, and the artifact says so plainly instead of implying
+otherwise.
+
+**(c) (a) plus the rest of the XML, which is what I recommend.** The transform
+is not limited to the passthrough devices: it can inject the TPM block and the
+secure-boot
+loader as well, because it rewrites the definition the provider is about to
+hand to libvirt. Then the declared fields carry what the provider can enforce,
+one XSLT file carries everything it cannot model, and recreation is again an
+ordinary apply — with a definition that matches the live machine in the ways
+that matter.
+
+Its cost is a second source of truth: an XSLT fragment that has to stay equal to
+the parts of the live definition nobody else is tracking. Two things keep that
+honest, and both belong in the slice that lands it: the fragment is **generated
+from the live `dumpxml`** rather than written by hand, and it is **proven by
+defining a scratch copy of the domain from it** before it is trusted — never
+against the running one.
+
+**What none of the three restores is the data.** An apply after an accidental
+removal gets back a domain that boots the same disk images with the same
+identity on the same bridge. If the disk images themselves are gone, what brings
+the home's automation back is its own backup regime, and no amount of declaring
+in this program changes that. The value here is precisely the part that *is*
+reproducible: a definition that otherwise exists in exactly one place, on the
+host, and would be reconstructed from memory at the worst possible moment.
 
 The ratchet that exists today — every input the provider accepts is accounted
 for, so a provider release that grows a field fails a test instead of silently
 proposing a change to a running Home Assistant — is kept, with its assertion
 widened from "every field is ignored" to "every field is either declared or
-ignored".
+ignored", and with the fields that are declared-but-unenforced named in the test
+so the distinction of §13.1 cannot quietly rot.
 
 --------------------------------------------------------------------------------
 
@@ -1309,8 +1424,9 @@ work described here leaves for it.
     configuration or the recovery script keep asserting on what they assert on
     now. That is the point of keeping the functions.
 *   **Three census tests become type-level and disappear**: a pin with no
-    member, a member with no pin, a member with no address (§5.3). What replaces
-    them is the version mechanism's own missing-key error.
+    service, a service with no pin, and a resolver bound to a service that has
+    no address (§5.3). What replaces them is the version mechanism's own
+    missing-key error.
 *   **The roster gains an invariants test** — unique names, unique node ids,
     unique addresses inside the overlay subnet, the gateway at the address
     clients dial, the roster within the multicast limit — which is what is left
@@ -1353,9 +1469,9 @@ reads, then the text, then the structure that consumes both.
     composition as a pure function, the stack program composing it.
 8.  **The device-file provider** (§7.4): the connection onto the provider
     instance, the derived session input, the pin as a component output.
-9.  **The stack program** (§11, §12), then **the adopted domain** (§13) and the
-    caddy certificate (§9.3) — the last two touch live systems and are worth
-    landing alone.
+9.  **The stack program** (§11, §12), then the caddy certificate (§9.3), then
+    **the adopted domain** (§13) — the last two touch live systems and are worth
+    landing alone, and the domain cannot start until §13.2 has been ruled on.
 
 Slices 1 to 3 are mechanical and reviewable by diff; 4 to 9 each rewrite their
 own tests. None of them is a migration: the `physical` stack has no state, so
