@@ -81,7 +81,7 @@ def build(placements: list[tuple[str, str]] | None = None) -> Any:
         memory_gb=8,
         boot_volume_gb=50,
         placements=PLACEMENTS if placements is None else placements,
-        augmented='cp1',
+        dedicated_vip_node='cp1',
         load_balancer=load_balancer,
     )
 

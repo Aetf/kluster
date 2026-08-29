@@ -91,7 +91,7 @@ def test_the_overlay_block_is_the_whole_roster_and_waits_on_no_other_stack() -> 
     """
     names = _record_names()
 
-    for entry in conventions.ZT_ROSTER:
+    for entry in conventions.overlay.ROSTER:
         assert f'{conventions.ZONE_PRIMARY}-{zt_label(entry.name)}.{conventions.ZT_LABEL}-a' in names, entry.name
 
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Managed by the {{ cluster }} physical stack. Local edits are overwritten.
 #
-# Re-establishes the container estate and the routing configuration from the
+# Re-establishes the container services and the routing configuration from the
 # desired state under {{ data_root }}. Runs at boot, when nothing else is present, and
 # again after every deployment, so the recovery path is never the untested one.
 set -eu
@@ -11,28 +11,31 @@ SYSTEMD=/etc/systemd/system
 STATE={{ state_dir }}
 DECLARED="{{ units | map(attribute='name') | join(' ') }}"
 
-stamp_inputs() {
+# The stamped set: every file that defines a service. The content stamp below
+# is a checksum over exactly these, which is how a restart is decided without
+# asking the service anything about itself.
+stamped_set() {
     case "$1" in
 {%- for unit in units %}
-        {{ unit.name }}) inputs="{{ unit.inputs | join(' ') }}" ;;
+        {{ unit.name }}) stamped="{{ unit.stamped | join(' ') }}" ;;
 {%- endfor %}
-        *) inputs="" ;;
+        *) stamped="" ;;
     esac
-    echo "$inputs"
+    echo "$stamped"
 }
 
-# Place a container's own configuration where nothing put one. Whatever is
+# Place a service's own configuration where nothing put one. Whatever is
 # already there belongs to the software that wrote it -- the resolvers' rewrites
 # arrive through their API and land in this very file -- so an existing file is
 # never touched.
-seed_state() {
+install_initial_state() {
     source=""
     destination=""
     case "$1" in
-{%- for unit in units if unit.seed %}
-        {{ unit.name }}) source={{ unit.seed.source }}; destination={{ unit.seed.destination }} ;;
+{%- for unit in units if unit.initial_state %}
+        {{ unit.name }}) source={{ unit.initial_state.source }}; destination={{ unit.initial_state.destination }} ;;
 {%- else %}
-        # no member of this estate owns its own configuration
+        # no service on this device owns its own configuration
 {%- endfor %}
     esac
     [ -n "$destination" ] || return 0
@@ -47,9 +50,9 @@ seed_state() {
 install -d "$SYSTEMD" "$STATE"
 
 # What is declared *and* has landed. A deployment writes this script before the
-# files it describes, so a member whose unit or root filesystem tree is still
-# missing is a member this run has nothing to do about -- not an error, and not
-# a reason to leave the rest unconverged.
+# files it describes, so a service whose unit or root filesystem tree is still
+# missing is one this run has nothing to do about -- not an error, and not a
+# reason to leave the rest unconverged.
 READY=""
 for unit in $DECLARED; do
     [ -e "$UNITS/$unit" ] || continue
@@ -59,7 +62,7 @@ for unit in $DECLARED; do
     READY="$READY $unit"
 done
 
-# Retire what is not declared at all. Only this estate's own units are
+# Retire what is not declared at all. Only this program's own units are
 # candidates: the device has plenty of others and none of them are ours.
 for live in "$SYSTEMD/{{ unit_prefix }}"*.service; do
     [ -e "$live" ] || continue
@@ -81,13 +84,13 @@ fi
 
 systemctl daemon-reload
 
-# Start what changed, in an order that leaves the member carrying this session
+# Start what changed, in an order that leaves the service carrying this session
 # for last.
 for unit in $READY; do
     systemctl enable "$unit" >/dev/null 2>&1 || true
-    seed_state "$unit"
+    install_initial_state "$unit"
     stamp="$STATE/$unit.stamp"
-    want=$(cat $(stamp_inputs "$unit") 2>/dev/null | cksum)
+    want=$(cat $(stamped_set "$unit") 2>/dev/null | cksum)
     have=$(cat "$stamp" 2>/dev/null || echo none)
     if [ "$want" = "$have" ] && systemctl is-active --quiet "$unit"; then
         continue

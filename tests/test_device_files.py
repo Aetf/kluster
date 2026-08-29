@@ -257,7 +257,7 @@ def test_a_created_file_lands_before_the_hook_that_makes_it_take_effect(device: 
     """Write, then notify. A hook that ran first would act on the old file."""
     props = file_props()
 
-    result = provider.GwFileProvider().create(props)
+    result = provider.DeviceFileProvider().create(props)
 
     assert device.files[CONFIG_PATH] == Entry(data=CONFIG.encode(), mode='0644', owner='root', group='root')
     assert device.log == [f'write {CONFIG_PATH}', f'run {HOOK}']
@@ -266,7 +266,7 @@ def test_a_created_file_lands_before_the_hook_that_makes_it_take_effect(device: 
 
 def test_a_created_file_carries_the_declared_credentials_to_the_session(device: Device) -> None:
     """The pin and the client key are resource inputs, not runner ambient state."""
-    _ = provider.GwFileProvider().create(file_props())
+    _ = provider.DeviceFileProvider().create(file_props())
 
     assert device.devices == [
         ssh.Device(host=HOST, username='root', private_key=PRIVATE_KEY, host_key=HOST_KEY, port=22)
@@ -279,7 +279,7 @@ def test_a_file_edited_on_the_device_is_a_change_without_anyone_asking_for_a_ref
     converged(device, props)
     device.files[CONFIG_PATH].data = b'router bgp 65001\n'
 
-    result = provider.GwFileProvider().diff('id', props, props)
+    result = provider.DeviceFileProvider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -288,7 +288,7 @@ def test_a_device_that_already_agrees_is_no_change(device: Device) -> None:
     props = file_props()
     converged(device, props)
 
-    result = provider.GwFileProvider().diff('id', props, props)
+    result = provider.DeviceFileProvider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -296,7 +296,7 @@ def test_a_device_that_already_agrees_is_no_change(device: Device) -> None:
 def test_a_file_someone_deleted_on_the_device_is_a_change(device: Device) -> None:
     props = file_props()
 
-    result = provider.GwFileProvider().diff('id', props, props)
+    result = provider.DeviceFileProvider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -307,7 +307,7 @@ def test_the_same_mode_written_two_ways_is_not_drift(device: Device) -> None:
     converged(device, props)
     device.files[CONFIG_PATH].mode = '644'
 
-    result = provider.GwFileProvider().diff('id', props, props)
+    result = provider.DeviceFileProvider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -317,7 +317,7 @@ def test_ownership_the_device_does_not_have_is_drift(device: Device) -> None:
     converged(device, props)
     device.files[CONFIG_PATH].group = 'staff'
 
-    result = provider.GwFileProvider().diff('id', props, props)
+    result = provider.DeviceFileProvider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -326,7 +326,7 @@ def test_moving_a_file_replaces_it_and_the_new_path_exists_before_the_old_one_go
     olds = file_props()
     news = file_props(path='/data/frr/frr.conf.new')
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.replaces == ['path']
     assert result.delete_before_replace is False
@@ -346,13 +346,13 @@ def test_a_moved_dial_address_rewrites_the_file_and_deletes_nothing(device: Devi
     olds = file_props()
     news = file_props(host='gateway.invalid')
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.replaces == []
     assert result.changes is True
     assert device.sessions == 0
 
-    artifact = provider.GwArtifactProvider().diff('id', artifact_props(), artifact_props(host='gateway.invalid'))
+    artifact = provider.DeviceArtifactProvider().diff('id', artifact_props(), artifact_props(host='gateway.invalid'))
     assert artifact.replaces == []
     assert artifact.changes is True
 
@@ -362,7 +362,7 @@ def test_a_rotated_credential_is_a_change_so_state_stops_naming_the_retired_key(
     olds = file_props()
     news = file_props(private_key=private_key())
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.changes is True
     assert result.replaces == []
@@ -373,7 +373,7 @@ def test_a_declared_change_needs_no_look_at_the_device(device: Device) -> None:
     olds = file_props()
     news = file_props(content='router bgp 65001\n')
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.changes is True
     assert device.sessions == 0
@@ -384,7 +384,7 @@ def test_an_input_that_is_still_unknown_is_an_unknown_diff_and_touches_nothing(d
     olds = file_props()
     news = file_props(hook=rpc.UNKNOWN)
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.changes is None
     assert device.sessions == 0
@@ -395,7 +395,7 @@ def test_an_unknown_path_is_never_read_as_a_replacement(device: Device) -> None:
     olds = file_props()
     news = file_props(path=rpc.UNKNOWN)
 
-    result = provider.GwFileProvider().diff('id', olds, news)
+    result = provider.DeviceFileProvider().diff('id', olds, news)
 
     assert result.replaces in (None, [])
     assert result.changes is None
@@ -405,13 +405,13 @@ def test_a_hook_that_refuses_fails_the_apply(device: Device) -> None:
     device.hook_status = 3
 
     with pytest.raises(provider.HookFailed) as raised:
-        _ = provider.GwFileProvider().create(file_props())
+        _ = provider.DeviceFileProvider().create(file_props())
 
     assert 'exited 3' in str(raised.value)
 
 
 def test_a_file_with_no_hook_is_written_and_nothing_else_happens(device: Device) -> None:
-    _ = provider.GwFileProvider().create(file_props(hook=None))
+    _ = provider.DeviceFileProvider().create(file_props(hook=None))
 
     assert device.commands == []
     assert CONFIG_PATH in device.files
@@ -423,7 +423,7 @@ def test_deleting_a_file_tells_the_device_it_is_gone(device: Device) -> None:
     converged(device, props)
     device.log.clear()
 
-    provider.GwFileProvider().delete('id', props)
+    provider.DeviceFileProvider().delete('id', props)
 
     assert CONFIG_PATH not in device.files
     assert device.log == [f'remove {CONFIG_PATH}', f'run {HOOK}']
@@ -434,7 +434,7 @@ def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(
     converged(device, props)
     device.files[CONFIG_PATH].data = b'router bgp 65001\n'
 
-    result = provider.GwFileProvider().read('id', props)
+    result = provider.DeviceFileProvider().read('id', props)
 
     assert result.outs is not None
     assert result.outs['content'] == 'router bgp 65001\n'
@@ -443,7 +443,7 @@ def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(
 
 def test_reading_a_file_someone_deleted_drops_the_identifier(device: Device) -> None:
     """A dropped identifier is how the next up learns to create the file again."""
-    result = provider.GwFileProvider().read('id', file_props())
+    result = provider.DeviceFileProvider().read('id', file_props())
 
     assert result.id is None
     # An empty bag, not `None`: the dynamic-provider host writes its own key
@@ -453,30 +453,30 @@ def test_reading_a_file_someone_deleted_drops_the_identifier(device: Device) -> 
 
 
 def test_two_reads_of_an_absent_file_do_not_share_one_bag(device: Device) -> None:
-    first = provider.GwFileProvider().read('id', file_props())
+    first = provider.DeviceFileProvider().read('id', file_props())
     assert first.outs is not None
     first.outs['__provider'] = 'whatever the host writes here'
 
-    second = provider.GwFileProvider().read('id', file_props())
+    second = provider.DeviceFileProvider().read('id', file_props())
 
     assert second.outs == {}
 
 
 def test_a_relative_path_is_refused_before_anything_is_written() -> None:
-    result = provider.GwFileProvider().check({}, file_props(path='data/frr/frr.conf'))
+    result = provider.DeviceFileProvider().check({}, file_props(path='data/frr/frr.conf'))
 
     assert [failure.property for failure in result.failures] == ['path']
 
 
 def test_a_mode_that_is_not_octal_is_refused() -> None:
-    result = provider.GwFileProvider().check({}, file_props(mode='rw-r--r--'))
+    result = provider.DeviceFileProvider().check({}, file_props(mode='rw-r--r--'))
 
     assert [failure.property for failure in result.failures] == ['mode']
 
 
 def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
     """A preview placeholder is not a validation failure."""
-    result = provider.GwFileProvider().check({}, file_props(path=rpc.UNKNOWN))
+    result = provider.DeviceFileProvider().check({}, file_props(path=rpc.UNKNOWN))
 
     assert result.failures == []
 
@@ -492,7 +492,7 @@ def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
 ) -> None:
     """The marker is a claim, so it is made only once the claim is true."""
     assert downloads
-    result = provider.GwArtifactProvider().create(artifact_props())
+    result = provider.DeviceArtifactProvider().create(artifact_props())
 
     assert device.log == [
         f'write {ROOTFS_TARGET}',
@@ -512,7 +512,7 @@ def test_bytes_that_do_not_match_their_pin_never_reach_the_device(
     downloads[ROOTFS_URL] = b'something else entirely'
 
     with pytest.raises(provider.DigestMismatch) as raised:
-        _ = provider.GwArtifactProvider().create(artifact_props())
+        _ = provider.DeviceArtifactProvider().create(artifact_props())
 
     assert ROOTFS_SHA256 in str(raised.value)
     assert device.sessions == 0
@@ -524,7 +524,7 @@ def test_a_marker_naming_the_pinned_digest_is_no_change(device: Device) -> None:
     props = artifact_props()
     landed(device, props)
 
-    result = provider.GwArtifactProvider().diff('id', props, props)
+    result = provider.DeviceArtifactProvider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -534,7 +534,7 @@ def test_a_marker_naming_other_bytes_is_a_change(device: Device) -> None:
     landed(device, props)
     device.files[provider.marker_path(ROOTFS_TARGET)].data = b'0' * 64 + b'\n'
 
-    result = provider.GwArtifactProvider().diff('id', props, props)
+    result = provider.DeviceArtifactProvider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -545,7 +545,7 @@ def test_a_payload_with_no_marker_beside_it_is_a_change(device: Device) -> None:
     landed(device, props)
     del device.files[provider.marker_path(ROOTFS_TARGET)]
 
-    result = provider.GwArtifactProvider().diff('id', props, props)
+    result = provider.DeviceArtifactProvider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -554,7 +554,7 @@ def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device)
     olds = artifact_props()
     news = artifact_props(sha256='b' * 64)
 
-    result = provider.GwArtifactProvider().diff('id', olds, news)
+    result = provider.DeviceArtifactProvider().diff('id', olds, news)
 
     assert result.changes is True
     assert device.sessions == 0
@@ -564,7 +564,7 @@ def test_reading_an_artifact_reports_the_digest_the_device_claims(device: Device
     props = artifact_props()
     landed(device, props, payload=b'a different release')
 
-    result = provider.GwArtifactProvider().read('id', props)
+    result = provider.DeviceArtifactProvider().read('id', props)
 
     assert result.outs is not None
     assert result.outs['sha256'] == hashlib.sha256(b'a different release').hexdigest()
@@ -575,7 +575,7 @@ def test_reading_an_artifact_with_no_marker_drops_the_identifier(device: Device)
     landed(device, props)
     del device.files[provider.marker_path(ROOTFS_TARGET)]
 
-    result = provider.GwArtifactProvider().read('id', props)
+    result = provider.DeviceArtifactProvider().read('id', props)
 
     assert result.id is None
 
@@ -585,7 +585,7 @@ def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
     landed(device, props)
     device.log.clear()
 
-    provider.GwArtifactProvider().delete('id', props)
+    provider.DeviceArtifactProvider().delete('id', props)
 
     assert device.files == {}
     assert device.log == [
@@ -596,13 +596,13 @@ def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
 
 
 def test_a_digest_that_is_not_a_sha256_is_refused() -> None:
-    result = provider.GwArtifactProvider().check({}, artifact_props(sha256='deadbeef'))
+    result = provider.DeviceArtifactProvider().check({}, artifact_props(sha256='deadbeef'))
 
     assert [failure.property for failure in result.failures] == ['sha256']
 
 
 def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
-    result = provider.GwArtifactProvider().check({}, unpacking_props(extract='estate/roots/adguard'))
+    result = provider.DeviceArtifactProvider().check({}, unpacking_props(extract='estate/roots/adguard'))
 
     assert [failure.property for failure in result.failures] == ['extract']
 
@@ -626,7 +626,7 @@ def test_the_pin_is_checked_against_what_was_published_and_the_device_gets_the_a
     """
     assert downloads[ROOTFS_ZST_URL] != ROOTFS, 'the published artifact is the compressed one'
 
-    _ = provider.GwArtifactProvider().create(unpacking_props())
+    _ = provider.DeviceArtifactProvider().create(unpacking_props())
 
     assert device.files[ROOTFS_TARGET].data == ROOTFS
     assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
@@ -641,7 +641,7 @@ def test_compressed_bytes_that_do_not_match_their_pin_are_never_decompressed(
     downloads[ROOTFS_ZST_URL] = zstandard.ZstdCompressor().compress(b'a substituted release')
 
     with pytest.raises(provider.DigestMismatch):
-        _ = provider.GwArtifactProvider().create(unpacking_props())
+        _ = provider.DeviceArtifactProvider().create(unpacking_props())
 
     assert device.sessions == 0
 
@@ -650,7 +650,7 @@ def test_an_uncompressed_payload_is_pushed_as_it_arrived(device: Device, downloa
     """A publisher that stops compressing does not turn a working pin into a
     corrupt one: what the device must receive is a plain archive either way."""
     assert downloads
-    _ = provider.GwArtifactProvider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
+    _ = provider.DeviceArtifactProvider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
 
     assert device.files[ROOTFS_TARGET].data == ROOTFS
 
@@ -667,7 +667,7 @@ def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
     run yet. Clearing them is the next push's first act.
     """
     assert downloads
-    _ = provider.GwArtifactProvider().create(unpacking_props())
+    _ = provider.DeviceArtifactProvider().create(unpacking_props())
 
     unpack = next(command for command in device.commands if 'tar -xf' in command)
     staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
@@ -691,7 +691,7 @@ def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
     stays last, because it is the claim that the whole sequence succeeded.
     """
     assert downloads
-    _ = provider.GwArtifactProvider().create(unpacking_props())
+    _ = provider.DeviceArtifactProvider().create(unpacking_props())
 
     assert device.log == [
         f'write {ROOTFS_TARGET}',
@@ -712,7 +712,7 @@ def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
     device.refuse = ('tar -xf',)
 
     with pytest.raises(provider.ExtractFailed):
-        _ = provider.GwArtifactProvider().create(unpacking_props())
+        _ = provider.DeviceArtifactProvider().create(unpacking_props())
 
     assert provider.marker_path(ROOTFS_TREE) not in device.files
     assert provider.marker_path(ROOTFS_TARGET) not in device.files
@@ -725,7 +725,7 @@ def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(de
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     del device.files[ROOTFS_TREE]
 
-    assert provider.GwArtifactProvider().diff('id', props, props).changes is True
+    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is True
 
 
 def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
@@ -733,14 +733,14 @@ def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
 
-    assert provider.GwArtifactProvider().diff('id', props, props).changes is True
+    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is True
 
 
 def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device) -> None:
     props = unpacking_props()
     landed(device, props, digest=ROOTFS_ZST_SHA256)
 
-    assert provider.GwArtifactProvider().diff('id', props, props).changes is False
+    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is False
 
 
 def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
@@ -749,7 +749,7 @@ def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Dev
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     del device.files[ROOTFS_TREE]
 
-    assert provider.GwArtifactProvider().read('id', props).id is None
+    assert provider.DeviceArtifactProvider().read('id', props).id is None
 
 
 def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
@@ -759,7 +759,7 @@ def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(d
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     device.log.clear()
 
-    provider.GwArtifactProvider().delete('id', props)
+    provider.DeviceArtifactProvider().delete('id', props)
 
     assert device.log == [
         f'remove {provider.marker_path(ROOTFS_TARGET)}',
@@ -835,8 +835,8 @@ async def stack() -> None:
     connection = provider.Connection(host=HOST, private_key=PRIVATE_KEY, host_key=HOST_KEY)
 
     before = asyncio.all_tasks()
-    _ = provider.GwFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
-    _ = provider.GwArtifact(
+    _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
+    _ = provider.DeviceArtifact(
         'adguard-rootfs',
         connection=connection,
         url=ROOTFS_ZST_URL,
@@ -860,7 +860,7 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     first `pulumi up`."""
     typ, inputs = registered('frr')
 
-    assert typ == 'pulumi-python:dynamic/gateway:File'
+    assert typ == 'pulumi-python:dynamic/device:File'
     assert inputs['host'] == HOST
     assert inputs['host_key'] == HOST_KEY
     assert inputs['path'] == CONFIG_PATH
@@ -871,7 +871,7 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
 def test_a_declared_artifact_carries_its_pin_and_never_its_bytes() -> None:
     typ, inputs = registered('adguard-rootfs')
 
-    assert typ == 'pulumi-python:dynamic/gateway:Artifact'
+    assert typ == 'pulumi-python:dynamic/device:Artifact'
     assert inputs['url'] == ROOTFS_ZST_URL
     assert inputs['sha256'] == ROOTFS_ZST_SHA256
     assert inputs['target'] == ROOTFS_TARGET

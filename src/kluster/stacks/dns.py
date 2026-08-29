@@ -17,7 +17,7 @@ written down: the addresses in them are machine facts the `physical` stack
 hands out, so they come across the StackReference, and they are the only thing
 that does. The ZeroTier host block is built here too but reaches no other
 stack — it is one record per member of the overlay roster
-(`conventions.ZT_ROSTER`), at the address that roster gives the member.
+(`conventions.overlay.ROSTER`), at the address that roster gives the member.
 Anchors are the one place an IP literal is allowed, the overlay block
 excepted: private addresses under `*.zt` are an existing deliberate practice
 (dns.md §2).

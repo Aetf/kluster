@@ -151,13 +151,15 @@ class CloudNodes(Component):
         memory_gb: float,
         boot_volume_gb: int,
         placements: pulumi.Input[Sequence[tuple[str, str]]],
-        augmented: str,
+        dedicated_vip_node: str,
         load_balancer: NodeLoadBalancer,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
-        if augmented not in machine_configs:
-            raise ValueError(f'augmented node {augmented!r} is not among {sorted(machine_configs)}')
+        if dedicated_vip_node not in machine_configs:
+            raise ValueError(
+                f'the dedicated VIP is declared on {dedicated_vip_node!r}, which is not among {sorted(machine_configs)}'
+            )
 
         self._placements = placements
         self.instances: dict[str, oci.core.Instance] = {}
@@ -196,14 +198,18 @@ class CloudNodes(Component):
                 opts=self.child_opts(),
             )
 
-        self.augmented = self.instances[augmented]
+        # The one node the dedicated VIP is mapped onto. That is one
+        # capability of that node and not a bundle: which node the block
+        # volumes follow is a separate decision that happens to name the same
+        # machine today (rfc-002 §10.5).
+        self.dedicated_vip = self.instances[dedicated_vip_node]
 
         # The dedicated VIP: a reserved address, so a node rebuild does not
         # change it, 1:1-NAT'd onto a secondary private IP that a LoadBalancer
         # Service can claim and an egress policy can source from.
         self.secondary_ip = oci.core.PrivateIp(
             f'{name}-vip1-private',
-            vnic_id=async_output(self._augmented_vnic_id),
+            vnic_id=async_output(self._dedicated_vip_vnic_id),
             display_name=f'{name}-vip1',
             opts=self.child_opts(),
         )
@@ -236,13 +242,13 @@ class CloudNodes(Component):
         placements = await resolve(self._placements)
         return str(placements[position % len(placements)][half])
 
-    async def _augmented_vnic_id(self) -> str:
-        """The primary VNIC of the augmented node.
+    async def _dedicated_vip_vnic_id(self) -> str:
+        """The primary VNIC of the node that holds the dedicated VIP.
 
         Instances expose their attachments rather than their VNICs, so the id
         is read back through the attachment list.
         """
-        instance_id, compartment_id = await resolve(self.augmented.id, self.augmented.compartment_id)
+        instance_id, compartment_id = await resolve(self.dedicated_vip.id, self.dedicated_vip.compartment_id)
         attachments = await oci.core.get_vnic_attachments_output(
             compartment_id=compartment_id,
             instance_id=instance_id,

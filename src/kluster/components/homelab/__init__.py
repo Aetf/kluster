@@ -359,7 +359,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         provider = libvirt.Provider(
             f'{name}-libvirt',
             uri=connection_uri(
-                host=str(conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address),
+                host=str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address),
                 private_key=pulumi.Config().require(PRIVATE_KEY),
             ),
             opts=own_provider_opts(opts),

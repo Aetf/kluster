@@ -27,8 +27,7 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.components import gateway
-from kluster.components import overlay as zerotier
+from kluster.components import overlay as overlay_module
 
 NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'
@@ -37,8 +36,9 @@ API_TOKEN = 'a-central-token'
 #: The homelab host's overlay address, as the flow-rule cases name it.
 #: `flow_rules` is a pure function of what it is handed, so those cases keep a
 #: literal; that the roster is what hands it over is a case of its own.
-HOMELAB_ZT = IPv4Address('10.144.180.10')
-ADGUARD = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
+HOMELAB_OVERLAY = IPv4Address('10.144.180.10')
+#: The resolvers' container-VLAN addresses, likewise as literals.
+RESOLVERS = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -70,8 +70,8 @@ class Mocks(pulumi.runtime.Mocks):
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> None:
-    """Declare the network once, through the seam the `physical` stack calls."""
-    pulumi.runtime.set_all_config({f'kluster:{zerotier.API_TOKEN}': API_TOKEN})
+    """Declare the network once, the way the `physical` stack does."""
+    pulumi.runtime.set_all_config({f'kluster:{overlay_module.API_TOKEN}': API_TOKEN})
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
     # A bridged SDK registers its own parameterized package before it may
     # register a resource, and it gates that on a feature flag read out of a
@@ -79,10 +79,10 @@ async def stack() -> None:
     _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
 
     before = asyncio.all_tasks()
-    gateway.declare_zerotier(
+    overlay_module.Overlay(
         NAME,
         network_id=NETWORK_ID,
-        adguard=ADGUARD,
+        resolvers=RESOLVERS,
     )
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
     _ = await asyncio.gather(*pending)
@@ -94,7 +94,7 @@ def registered(name: str) -> dict[str, Any]:
 
 
 def rules() -> str:
-    return zerotier.flow_rules(udm=conventions.ZT_UDM, homelab=HOMELAB_ZT, adguard=ADGUARD)
+    return overlay_module.flow_rules(udm=conventions.overlay.UDM, homelab=HOMELAB_OVERLAY, resolvers=RESOLVERS)
 
 
 ##
@@ -111,9 +111,11 @@ def test_every_member_is_named_identified_and_placed_exactly_once() -> None:
     a flow rule and a DNS record naming a machine that is not the one the
     reader meant.
     """
-    names = [entry.name for entry in conventions.ZT_ROSTER]
-    node_ids = [entry.node_id for entry in conventions.ZT_ROSTER if isinstance(entry, conventions.EnrolledMember)]
-    addresses = [entry.address for entry in conventions.ZT_ROSTER]
+    names = [entry.name for entry in conventions.overlay.ROSTER]
+    node_ids = [
+        entry.node_id for entry in conventions.overlay.ROSTER if isinstance(entry, conventions.overlay.EnrolledMember)
+    ]
+    addresses = [entry.address for entry in conventions.overlay.ROSTER]
 
     assert len(set(names)) == len(names)
     assert len(set(node_ids)) == len(node_ids)
@@ -128,8 +130,8 @@ def test_every_enrolled_node_id_is_ten_hexadecimal_digits() -> None:
     transcription slip is the realistic mistake, and Central answers one with a
     member that authorizes no device at all.
     """
-    for entry in conventions.ZT_ROSTER:
-        if isinstance(entry, conventions.EnrolledMember):
+    for entry in conventions.overlay.ROSTER:
+        if isinstance(entry, conventions.overlay.EnrolledMember):
             assert re.fullmatch(r'[0-9a-f]{10}', entry.node_id), entry.name
 
 
@@ -140,8 +142,8 @@ def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
     numbered outside it is one Central would reject — and, before that, one the
     confinement rules would name to no effect.
     """
-    for entry in conventions.ZT_ROSTER:
-        assert entry.address in conventions.ZT_SUBNET, entry.name
+    for entry in conventions.overlay.ROSTER:
+        assert entry.address in conventions.overlay.SUBNET, entry.name
 
 
 def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials() -> None:
@@ -155,10 +157,10 @@ def test_the_gateway_entry_is_infrastructure_at_the_address_every_client_dials()
     ceremony reads the minted node id and adds it (physical/gateway.md §2.5),
     which is why both are stated as conditionals rather than as a lookup.
     """
-    gateway_entries = [entry for entry in conventions.ZT_ROSTER if entry.name == conventions.ZT_MEMBER_UDM]
+    gateway_entries = [entry for entry in conventions.overlay.ROSTER if entry.name == conventions.overlay.MEMBER_UDM]
 
-    assert all(entry.address == conventions.ZT_UDM for entry in gateway_entries)
-    assert all(entry.role == conventions.ZT_ROLE_INFRA for entry in gateway_entries)
+    assert all(entry.address == conventions.overlay.UDM for entry in gateway_entries)
+    assert all(entry.role == conventions.overlay.Role.INFRA for entry in gateway_entries)
 
 
 def test_the_two_continuous_integration_identities_are_generated_and_confined() -> None:
@@ -168,13 +170,15 @@ def test_the_two_continuous_integration_identities_are_generated_and_confined() 
     one endpoint at a time; sharing a tag with anything else would hand that
     thing the same four destinations.
     """
-    generated = [entry for entry in conventions.ZT_ROSTER if isinstance(entry, conventions.GeneratedMember)]
+    generated = [
+        entry for entry in conventions.overlay.ROSTER if isinstance(entry, conventions.overlay.GeneratedMember)
+    ]
 
-    assert [entry.name for entry in generated] == list(conventions.ZT_CI_MEMBERS)
-    assert {entry.address for entry in generated} == {conventions.ZT_CI_PHYSICAL, conventions.ZT_CI_DNS}
-    assert all(entry.role == conventions.ZT_ROLE_CI for entry in generated)
-    assert [entry.name for entry in conventions.ZT_ROSTER if entry.role == conventions.ZT_ROLE_CI] == list(
-        conventions.ZT_CI_MEMBERS
+    assert [entry.name for entry in generated] == list(conventions.overlay.CI_MEMBERS)
+    assert {entry.address for entry in generated} == {conventions.overlay.CI_PHYSICAL, conventions.overlay.CI_DNS}
+    assert all(entry.role == conventions.overlay.Role.CI for entry in generated)
+    assert [entry.name for entry in conventions.overlay.ROSTER if entry.role == conventions.overlay.Role.CI] == list(
+        conventions.overlay.CI_MEMBERS
     )
 
 
@@ -184,7 +188,7 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
     The limit is a declared field rather than a default, so the constraint is
     on the record; this is the half that notices when the roster grows past it.
     """
-    assert len(conventions.ZT_ROSTER) <= zerotier.MULTICAST_LIMIT
+    assert len(conventions.overlay.ROSTER) <= overlay_module.MULTICAST_LIMIT
 
 
 ##
@@ -200,13 +204,13 @@ def test_a_run_reaches_four_destinations_and_each_of_them_in_both_directions() -
     missing rule.
     """
     rendered = rules()
-    ci = conventions.ZT_ROLE_CI
+    ci = conventions.overlay.Role.CI
     expected = [
-        (f'{conventions.ZT_UDM}/32', zerotier.SSH_PORT),
-        (f'{conventions.ZT_UDM}/32', zerotier.UNIFI_API_PORT),
-        (f'{ADGUARD[0]}/32', conventions.ADGUARD_API_PORT),
-        (f'{ADGUARD[1]}/32', conventions.ADGUARD_API_PORT),
-        (f'{HOMELAB_ZT}/32', zerotier.SSH_PORT),
+        (f'{conventions.overlay.UDM}/32', overlay_module.SSH_PORT),
+        (f'{conventions.overlay.UDM}/32', overlay_module.UNIFI_API_PORT),
+        (f'{RESOLVERS[0]}/32', conventions.gateway.ADGUARD_API_PORT),
+        (f'{RESOLVERS[1]}/32', conventions.gateway.ADGUARD_API_PORT),
+        (f'{HOMELAB_OVERLAY}/32', overlay_module.SSH_PORT),
     ]
     for destination, port in expected:
         assert f'accept tseq role {ci} and ipdest {destination} and dport {port};' in rendered
@@ -227,7 +231,7 @@ def test_a_run_may_reach_nothing_else_and_nothing_may_reach_a_run() -> None:
     from any member of the network.
     """
     rendered = rules()
-    ci = conventions.ZT_ROLE_CI
+    ci = conventions.overlay.Role.CI
     lines = [line for line in rendered.splitlines() if line and not line.startswith('#')]
 
     assert f'drop tseq role {ci};' in lines
@@ -267,9 +271,9 @@ def test_personal_members_are_untouched_by_every_rule_above_the_fallthrough() ->
     decisions = [line for line in body.splitlines() if line.startswith(('accept', 'drop')) and line != 'accept;']
 
     assert decisions, 'the confinement declared something'
-    assert all(f'role {conventions.ZT_ROLE_CI}' in line for line in decisions)
-    assert f'default {conventions.ZT_ROLE_PERSONAL}' in rendered
-    assert f'  id {conventions.ZT_TAG_ROLE_ID}' in rendered
+    assert all(f'role {conventions.overlay.Role.CI}' in line for line in decisions)
+    assert f'default {conventions.overlay.Role.PERSONAL}' in rendered
+    assert f'  id {conventions.overlay.TAG_ROLE_ID}' in rendered
 
 
 ##
@@ -286,11 +290,11 @@ def test_the_network_is_adopted_and_carries_every_managed_route() -> None:
     """
     network = registered(f'{NAME}-network')
 
-    assert [route['target'] for route in network['routes']] == [str(net) for net in conventions.ZT_MANAGED_ROUTES]
-    assert {route['via'] for route in network['routes']} == {str(conventions.ZT_UDM)}
+    assert [route['target'] for route in network['routes']] == [str(net) for net in conventions.overlay.MANAGED_ROUTES]
+    assert {route['via'] for route in network['routes']} == {str(conventions.overlay.UDM)}
     assert network['private'] is True
     assert network['enableBroadcast'] is True
-    assert network['multicastLimit'] == zerotier.MULTICAST_LIMIT
+    assert network['multicastLimit'] == overlay_module.MULTICAST_LIMIT
 
 
 def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
@@ -302,14 +306,14 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     so renumbering either one is a visible edit here as well as in
     `conventions`.
     """
-    targets = [str(net) for net in conventions.ZT_MANAGED_ROUTES]
+    targets = [str(net) for net in conventions.overlay.MANAGED_ROUTES]
 
     assert '192.168.70.0/24' in targets, 'the cluster VLAN'
     assert '192.168.71.0/24' in targets, 'the `lan` pool'
     # The pool is not a subnet anything is attached to: it is carried because
     # the gateway learns host routes into it over BGP.
-    assert conventions.LAN_POOL.v4 in conventions.ZT_MANAGED_ROUTES
-    assert conventions.CLUSTER_VLAN.v4 in conventions.ZT_MANAGED_ROUTES
+    assert conventions.LAN_POOL.v4 in conventions.overlay.MANAGED_ROUTES
+    assert conventions.CLUSTER_VLAN.v4 in conventions.overlay.MANAGED_ROUTES
 
 
 def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted() -> None:
@@ -324,8 +328,8 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
     """
     declared_members = {name for typ, name, _ in declared if typ == 'zerotier:index/member:Member'}
 
-    assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.ZT_ROSTER}
-    assert {route['via'] for route in registered(f'{NAME}-network')['routes']} == {str(conventions.ZT_UDM)}
+    assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.overlay.ROSTER}
+    assert {route['via'] for route in registered(f'{NAME}-network')['routes']} == {str(conventions.overlay.UDM)}
 
 
 def test_the_libvirt_flow_rule_names_the_address_the_roster_places_the_host_at() -> None:
@@ -336,11 +340,12 @@ def test_the_libvirt_flow_rule_names_the_address_the_roster_places_the_host_at()
     a second statement of that address, anywhere, would be free to disagree
     with the one the packets are actually matched against.
     """
-    homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+    homelab = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
     rendered = cast('str', registered(f'{NAME}-network')['flowRules'])
 
     assert (
-        f'accept tseq role {conventions.ZT_ROLE_CI} and ipdest {homelab}/32 and dport {zerotier.SSH_PORT};' in rendered
+        f'accept tseq role {conventions.overlay.Role.CI} and ipdest {homelab}/32 and dport {overlay_module.SSH_PORT};'
+        in rendered
     )
 
 
@@ -355,7 +360,7 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
     assert network['assignIpv6s'] == [{'rfc4193': False, 'sixplane': False, 'zerotier': False}]
 
     members = [inputs for typ, _, inputs in declared if typ == 'zerotier:index/member:Member']
-    assert len(members) == len(conventions.ZT_ROSTER)
+    assert len(members) == len(conventions.overlay.ROSTER)
     for member in members:
         assert member['noAutoAssignIps'] is True
         assert member['authorized'] is True
@@ -368,16 +373,16 @@ def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_i
     A member declared without one would inherit the permissive default, which
     is exactly the hole the roster exists to close.
     """
-    for entry in conventions.ZT_ROSTER:
+    for entry in conventions.overlay.ROSTER:
         member = registered(f'{NAME}-member-{entry.name}')
-        assert member['tags'] == [[conventions.ZT_TAG_ROLE_ID, entry.role]], entry.name
+        assert member['tags'] == [[conventions.overlay.TAG_ROLE_ID, entry.role]], entry.name
         assert member['name'] == entry.name
 
     assert registered(f'{NAME}-member-ci-physical')['memberId'] == f'{NAME}-identity-ci-physical-node'
     # An enrolled member carries the id its own device minted, straight off the
     # roster entry: there is nowhere else it could come from.
-    haos = conventions.zt_member('haos')
-    assert isinstance(haos, conventions.EnrolledMember)
+    haos = conventions.overlay.member('haos')
+    assert isinstance(haos, conventions.overlay.EnrolledMember)
     assert registered(f'{NAME}-member-haos')['memberId'] == haos.node_id
     assert registered(f'{NAME}-member-haos')['ipAssignments'] == [str(haos.address)]
 
@@ -411,8 +416,7 @@ def test_the_administration_token_is_read_where_the_provider_is_built() -> None:
     """
     import inspect
 
-    assert 'api_token' not in inspect.signature(zerotier.Network.__init__).parameters
-    assert 'api_token' not in inspect.signature(gateway.declare_zerotier).parameters
+    assert 'api_token' not in inspect.signature(overlay_module.Overlay.__init__).parameters
 
 
 def test_every_resource_is_signed_by_the_overlays_own_provider() -> None:

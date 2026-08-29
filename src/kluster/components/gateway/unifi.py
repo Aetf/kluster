@@ -92,7 +92,7 @@ import pulumi_unifi as unifi
 from kluster import conventions
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('STATIC_HOSTS', 'Firewall')
+__all__ = ('STATIC_HOSTS', 'SiteFirewall')
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -140,12 +140,16 @@ STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
 API_KEY = 'unifiApiKey'
 
 
-class Firewall(Component):
+class SiteFirewall(Component):
     """The cluster's network and zone, two address groups, ten rules, one forward.
 
     Nine rules while `worker_gua` is absent: the pinhole is one of the ten and
     the only conditional one, naming an address nothing here declares, so it is
     declared only once there is one.
+
+    Every policy carries the cluster's name in the name the controller shows,
+    because the audience for that string is a person looking at the console
+    rather than anything in this program.
     """
 
     def __init__(
@@ -197,7 +201,7 @@ class Firewall(Component):
         # fight over it.
         self.zone = unifi.FirewallZone(
             f'{name}-zone',
-            name=conventions.UNIFI_ZONE_CLUSTER,
+            name=conventions.gateway.UNIFI_ZONE_CLUSTER,
             site=site,
             opts=child,
         )
@@ -210,7 +214,7 @@ class Firewall(Component):
         # this network advertises.
         self.network = unifi.Network(
             f'{name}-network',
-            name=conventions.UNIFI_NETWORK_CLUSTER,
+            name=conventions.gateway.UNIFI_NETWORK_CLUSTER,
             purpose=NETWORK_PURPOSE,
             subnet=CLUSTER_SUBNET,
             vlan_id=conventions.CLUSTER_VLAN.vlan_id,
@@ -247,7 +251,7 @@ class Firewall(Component):
         # drop names the whole pool through its group.
         self.iot_media_v4 = unifi.FirewallZonePolicy(
             f'{name}-iot-media-v4',
-            name=f'{name} IoT to media VIP (v4)',
+            name=f'{conventions.CLUSTER_NAME} IoT to media VIP (v4)',
             description='IoT VLAN may reach the media gateway VIP on HTTPS.',
             action='ALLOW',
             ip_version='IPV4',
@@ -266,7 +270,7 @@ class Firewall(Component):
         )
         self.iot_media_v6 = unifi.FirewallZonePolicy(
             f'{name}-iot-media-v6',
-            name=f'{name} IoT to media VIP (v6)',
+            name=f'{conventions.CLUSTER_NAME} IoT to media VIP (v6)',
             description='IoT VLAN may reach the media gateway VIP on HTTPS.',
             action='ALLOW',
             ip_version='IPV6',
@@ -283,7 +287,7 @@ class Firewall(Component):
         )
         self.iot_pool_v4 = unifi.FirewallZonePolicy(
             f'{name}-iot-pool-v4',
-            name=f'{name} IoT to lan pool (v4)',
+            name=f'{conventions.CLUSTER_NAME} IoT to lan pool (v4)',
             description='IoT VLAN may not reach the rest of the cluster pool.',
             action='BLOCK',
             ip_version='IPV4',
@@ -295,7 +299,7 @@ class Firewall(Component):
         )
         self.iot_pool_v6 = unifi.FirewallZonePolicy(
             f'{name}-iot-pool-v6',
-            name=f'{name} IoT to lan pool (v6)',
+            name=f'{conventions.CLUSTER_NAME} IoT to lan pool (v6)',
             description='IoT VLAN may not reach the rest of the cluster pool.',
             action='BLOCK',
             ip_version='IPV6',
@@ -334,7 +338,7 @@ class Firewall(Component):
         # dual-stack and nothing here distinguishes them.
         self.cluster_egress = unifi.FirewallZonePolicy(
             f'{name}-cluster-egress',
-            name=f'{name} cluster nodes outbound',
+            name=f'{conventions.CLUSTER_NAME} cluster nodes outbound',
             description='Cluster nodes may reach the internet; their control plane is off-site.',
             action='ALLOW',
             ip_version='BOTH',
@@ -361,7 +365,7 @@ class Firewall(Component):
         # protocol, for the same reason the egress is.
         self.cluster_internal = unifi.FirewallZonePolicy(
             f'{name}-cluster-internal',
-            name=f'{name} cluster nodes to internal',
+            name=f'{conventions.CLUSTER_NAME} cluster nodes to internal',
             description='Cluster workloads may reach home services; the recorded dependencies run this way.',
             action='ALLOW',
             ip_version='BOTH',
@@ -389,7 +393,7 @@ class Firewall(Component):
         # literal subnet and a literal belongs to one family.
         self.iot_cluster_v4 = unifi.FirewallZonePolicy(
             f'{name}-iot-cluster-v4',
-            name=f'{name} IoT to cluster nodes (v4)',
+            name=f'{conventions.CLUSTER_NAME} IoT to cluster nodes (v4)',
             description='IoT VLAN may not reach the cluster node subnet.',
             action='BLOCK',
             ip_version='IPV4',
@@ -401,7 +405,7 @@ class Firewall(Component):
         )
         self.iot_cluster_v6 = unifi.FirewallZonePolicy(
             f'{name}-iot-cluster-v6',
-            name=f'{name} IoT to cluster nodes (v6)',
+            name=f'{conventions.CLUSTER_NAME} IoT to cluster nodes (v6)',
             description='IoT VLAN may not reach the cluster node subnet.',
             action='BLOCK',
             ip_version='IPV6',
@@ -418,7 +422,7 @@ class Firewall(Component):
         # the move changes is that the openness is now declared.
         self.internal_cluster = unifi.FirewallZonePolicy(
             f'{name}-internal-cluster',
-            name=f'{name} internal to cluster nodes',
+            name=f'{conventions.CLUSTER_NAME} internal to cluster nodes',
             description='Trusted home VLANs may reach the cluster nodes directly.',
             action='ALLOW',
             ip_version='BOTH',
@@ -464,7 +468,7 @@ class Firewall(Component):
         if worker_gua is not None:
             self.peer_v6 = unifi.FirewallZonePolicy(
                 f'{name}-peer-v6',
-                name=f'{name} inbound peer port (v6)',
+                name=f'{conventions.CLUSTER_NAME} inbound peer port (v6)',
                 description='Inbound peer traffic to the worker VM on the bulk-transfer port.',
                 action='ALLOW',
                 ip_version='IPV6',
@@ -499,7 +503,7 @@ class Firewall(Component):
         # observed off a booted machine.
         self.peer_v4 = unifi.PortForward(
             f'{name}-peer-v4',
-            name=f'{name} inbound peer port (v4)',
+            name=f'{conventions.CLUSTER_NAME} inbound peer port (v4)',
             port_forward_interface='wan',
             protocol='tcp_udp',
             src_ip='any',

@@ -384,7 +384,7 @@ async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake
 
 
 @pytest.mark.asyncio
-async def test_only_the_augmented_node_is_configured_twice(fake: Fake) -> None:
+async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake: Fake) -> None:
     # Every other node is applied the very configuration it booted, rather than
     # a second rendering of it that happens to come out the same.
     cluster = build_cluster()

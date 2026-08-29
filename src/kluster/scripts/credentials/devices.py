@@ -179,7 +179,7 @@ DEVICES: dict[str, Device] = {
                 '  Then open that account → Create API Key. The key is shown once,\n'
                 '  and re-running this command with a fresh one is the whole of a\n'
                 '  rotation — delete the superseded key on the same page.\n'
-                f'  The controller answers over ZeroTier at https://{conventions.ZT_UDM},\n'
+                f'  The controller answers over ZeroTier at https://{conventions.overlay.UDM},\n'
                 '  which the stack derives from that same constant — the address is\n'
                 '  not recorded here, so there is no second copy of it to disagree\n'
                 '  (physical/gateway.md §2.3).'

@@ -62,7 +62,7 @@ def zt_label(member: str) -> str:
 def zt_records() -> tuple[Record, ...]:
     """The ZeroTier host block (dns.md §2): one A record per rostered member.
 
-    The census is `conventions.ZT_ROSTER`, the same table the `physical` stack
+    The census is `conventions.overlay.ROSTER`, the same table the `physical` stack
     declares the membership from, and the address is the roster entry's own —
     so this block reaches no other stack. Publishing is therefore not a second
     list that can fall behind the first: a device joins the overlay and gets
@@ -77,7 +77,7 @@ def zt_records() -> tuple[Record, ...]:
             ttl=conventions.ANCHOR_TTL,
             comment='ZeroTier member',
         )
-        for entry in conventions.ZT_ROSTER
+        for entry in conventions.overlay.ROSTER
     )
 
 

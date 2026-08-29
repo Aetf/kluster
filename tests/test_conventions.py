@@ -74,8 +74,8 @@ def test_every_bridged_service_sits_on_the_container_vlan() -> None:
     An address outside the subnet would be configured onto the interface and
     reach nothing, and the resolvers are what every lease on the LAN points at.
     """
-    for service in conventions.GW_SERVICES:
-        if isinstance(service, conventions.BridgedService):
+    for service in conventions.gateway.SERVICES:
+        if isinstance(service, conventions.gateway.BridgedService):
             assert service.address in conventions.CONTAINER_VLAN.v4
 
 
