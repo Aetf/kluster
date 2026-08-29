@@ -43,17 +43,23 @@ from putils import Component
 A1_CORES_PER_AD = 2
 A1_MEMORY_GB_PER_AD = 16
 
-#: Per AD. A node's boot volume is 50 GB and the augmented node additionally
-#: carries the 50 GB cache volume; the remainder is room to restore a volume
-#: beside the one it replaces.
-BLOCK_STORAGE_GB_PER_AD = 150
+#: Per AD. A node's boot volume is 50 GB and a node may carry one attached
+#: volume, the largest of which is 110 GB (`conventions.NODE_VOLUMES`); the
+#: remainder is room to restore such a volume beside the one it replaces. A
+#: bound that fitted only today's smaller volume would refuse to create the
+#: larger one at all.
+BLOCK_STORAGE_GB_PER_AD = 270
 
 #: The free allowance is five volume backups, and nothing in the design takes
 #: them — durability is backup/restore through the object store (storage.md §5).
 VOLUME_BACKUPS = 5
 
-#: Regional. The chunk store holds ~110 GB today (storage.md §6); the rest is
-#: growth before someone has to think about it again.
+#: Regional. The estate declares no bucket in this compartment — its one
+#: object bucket is on the other provider on purpose (storage.md §4) — so this
+#: caps what the tenancy stores here on the estate's behalf. It is not zeroed
+#: the way the compute families are: a custom image import is not clearly
+#: outside this family, and a quota that refused the machine image would
+#: refuse the fleet.
 OBJECT_STORAGE_GB = 250
 
 #: A month's spend the design already accepts: the A1 fleet under the
