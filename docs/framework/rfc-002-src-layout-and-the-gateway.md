@@ -49,7 +49,7 @@ reached in; nothing else here describes a transition.
 
 | Kind | Home | What it is |
 | --- | --- | --- |
-| Stack programs | `kluster/stacks/` | Wiring. Reads configuration, builds providers and top-level components, exports outputs, declares no resource of its own. |
+| Stack programs | `kluster/stacks/` | Wiring. Reads the configuration no single component owns, builds the shared providers and the top-level components, exports outputs, declares no resource of its own. |
 | Components | `kluster/components/<area>/` | Every reusable unit of resources, down to leaf resources. |
 | Custom providers | `kluster/providers/<name>/` | The code that talks to a system Pulumi has no provider for (§7). |
 | Scripts | `kluster/scripts/<name>/` | Console entry points declared in `pyproject.toml`. |
@@ -237,19 +237,30 @@ configuration is given an initial state, but only where it has none; and a
 service is restarted **only if a file that defines it changed**.
 
 That last point is the load-bearing one, and it is why the health of a service
-is decided by *files* rather than by a probe. The script keeps a stamp beside
-each service's state: a checksum over the unit, the digest marker of the root
-filesystem tree, and every configuration file the container mounts. Unchanged
+is decided by *files* rather than by a probe, through one named thing.
+
+**The content stamp** is a file beside each service's state holding a checksum
+over everything that defines that service: its unit, the digest marker of its
+root filesystem tree, and every configuration file it mounts. The set of paths
+the checksum covers is the service's **stamped set**; the stamp is the record of
+what was last pushed, and comparing the two is how the script tells intended
+content from pushed content without reading the device's mind. An unchanged
 stamp plus an active unit means nothing to do. There is no health check on the
 inside and no monitor: `Restart=always` in the unit is what handles a service
 that dies, and systemd is the thing that notices. The script decides only
 whether the *definition* moved.
 
-The digest marker rather than the tree itself, because walking a root filesystem
-to learn it has not changed costs more than the restart it would save. The
-marker beside the *tree* rather than beside the archive, because the archive's
-marker is written after the hook has already run — a service that waited for it
-would learn about a new root filesystem one deployment late.
+The stamped set names the root filesystem's **digest marker** rather than the
+tree itself, because walking a root filesystem to learn it has not changed costs
+more than the restart it would save. The marker beside the *tree* rather than
+beside the archive, because the archive's marker is written after the hook has
+already run — a service that waited for it would learn about a new root
+filesystem one deployment late.
+
+Two files, two jobs, and they are not the same thing: a **digest marker** is
+written by the push and records which published artifact a payload came from; a
+**content stamp** is written by the recovery script and records what that script
+last acted on. The first is an input to the second.
 
 ### 4.3 What the units express
 
@@ -262,15 +273,47 @@ no start order:
     not exist yet. Today that race is absorbed by `Restart=always`, which is a
     retry loop standing in for a dependency.
 
-The overlay member gets **no** device dependency, and the reason is recorded
-here so that nobody adds one later. What it needs is `/dev/net/tun`, a
-miscellaneous character device that the device's stock rules do not tag for
-systemd: the matching device unit is loaded but never becomes active, so binding
-to it would leave the unit unable to start at all rather than correctly ordered.
-Expressing that dependency would mean shipping a rule to the device to tag the
-node, which is a mechanism this program does not have, and this document does
-not propose one. The interface the daemon itself creates is not a candidate
-either — a unit cannot wait on a device its own service brings into being.
+The asymmetry between those two is the whole of the next paragraph: a bridge is
+a network device, and **systemd creates device units only for kernel devices
+tagged `systemd` in the `udev` database — by default all block and network
+devices
+"and a few others"**. So `br5` has a real device unit to bind to, and
+`/dev/net/tun` does not.
+
+The overlay daemon therefore gets **no** device dependency, but it does get a
+cheaper guard, and the reasoning is recorded so that nobody re-opens it blind.
+
+*   **There is no boot race to fix on this hardware.** The gateway's kernel
+    builds TUN in rather than as a module, and its device nodes are materialized
+    by `devtmpfs` before PID 1 exists. `/dev/net/tun` is therefore present
+    before anything this design starts, and the recovery script runs late.
+*   **A dependency without a `udev` rule would break the service outright.**
+    Because nothing tags the node, `dev-net-tun.device` is loaded but inactive
+    and cannot be started — systemd never activates a device unit itself,
+    `udev` does. `Requires=` or `BindsTo=` against it is therefore unsatisfiable, and
+    would turn a working service into a permanently failed one. The rule and the
+    dependency are a matched pair that ship together or not at all.
+*   **The rule would need its own recovery.** A firmware update preserves the
+    persistent data directory and the systemd unit directory; `/etc/udev` is on
+    no such list. The rule would have to be reinstalled from the same recovery
+    script whose reliability it was meant to improve.
+*   **What is actually missing is fail-fast, not ordering** — and that has a
+    one-line answer. If the node were ever absent (a future firmware, a kernel
+    change, a context where it is not passed through), the daemon does not
+    crash: it logs that it cannot open the device and sleeps, so the unit stays
+    *active* while the member is offline. `AssertPathExists=/dev/net/tun` on the
+    unit converts that silence into a failed unit with a reason, costs no new
+    mechanism, and needs nothing on the device. **That is what the units carry.**
+
+The established practice on these boxes is worth knowing here, because it sets
+the bar: the community recipe runs the daemon under `podman run
+--device=/dev/net/tun --net=host`, launched from a numbered script in the same
+persistent boot directory this design uses, with no systemd unit at all and
+therefore no ordering, no assertion, and no restart policy. Running it under a
+unit is already more structure than the norm.
+
+The interface the daemon itself creates is not a candidate either: a unit cannot
+wait on a device its own service brings into being.
 
 There are **no mutual dependencies between the four services**, and the units
 say so by declaring none. The caddy instance proxies to the resolvers at request
@@ -295,7 +338,7 @@ rather than of the declaration:
     where the comment explains it.
 3.  **An apply that dies there fails its own resource**, and the retry finds the
     work already done — because every step the script takes is idempotent and
-    the stamp for that service has not been written yet.
+    the content stamp for that service has not been written yet.
 
 During a first bring-up there is no overlay yet: the container that will carry
 it is the thing being delivered. The session runs over the device's LAN address
@@ -348,10 +391,9 @@ to it and nothing that belongs to a sibling:
     holds none, because the software behind it rewrites the file afterward.
 
 A `Container` also exposes the two facts its parent needs and nothing else: the
-unit name, and the paths whose contents decide whether the unit must be
-restarted (§4.2). `DeviceServices` renders the recovery script from its children
-rather than from a separate table, so the script's stamps cannot name a file no
-resource declares.
+unit name, and its **stamped set** — the paths the content stamp covers (§4.2).
+`DeviceServices` renders the recovery script from its children rather than from
+a separate table, so a stamped set cannot name a file no resource declares.
 
 ### 5.3 How the containers are organized
 
@@ -427,6 +469,45 @@ configuration, and the container that runs the overlay daemon — stays in
 `DeviceServices`, because those are files on the device. The two components
 therefore meet only in `conventions`: the roster says which address the gateway
 answers at, and both read it.
+
+### 6.1 What a managed route is, and what it is not
+
+The overlay's routes are the reason this component exists at all, and the
+mechanism behind them is easy to assume wrongly. Stated once, because the
+component's shape follows from it:
+
+*   **There is no router object.** ZeroTier's model is an emulated switch. A
+    route is `{target, via}` on the *network*, and `via` is nothing but an
+    address belonging to some member. That member forwards only because someone
+    enabled forwarding on it; ZeroTier does not make it a router and has no
+    concept of one. This is why the gateway's routing configuration lives in
+    `DeviceServices` (§5) and only the route table lives here — they are two
+    different systems being told two different things.
+*   **Routes reach every member, not the ones that need them.** The controller
+    hands the whole network configuration, routes included, to each member as it
+    joins or refreshes. Adding a managed route adds it to every joined device.
+*   **Each member installs them into its own operating system**, gated by a
+    client-side setting — `allowManaged`, on by default for private ranges;
+    `allowGlobal` and `allowDefault`, both off. So a remote laptop routes the
+    home subnets into its overlay interface because its own client put them
+    there, not because anything server-side steered it.
+*   **A member that is physically on one of those subnets does not refuse the
+    route.** This is the part worth writing down, because the intuitive answer
+    is wrong: the client installs the overlapping route anyway and arranges to
+    *lose*, giving it a high metric, so the kernel prefers the directly connected
+    path. On BSD-derived systems the add simply fails against the existing
+    route, to the same effect. Only the default route is ever overridden, and
+    only under `allowDefault`, by splitting it into two halves that win on
+    prefix length.
+*   **The return path is not part of this at all.** A managed route fixes one
+    direction. Replies come back only because the gateway is the LAN's default
+    gateway — which it is here — or would otherwise need a static route on
+    whatever is, or masquerading.
+
+The durable home for this is the gateway design document's overlay section
+rather than a framework document; it is stated here because the component
+boundary above was drawn from it, and the design document is not this change's
+to edit.
 
 **`Overlay` declares no policy.** The flow-rule program arrives as a parameter,
 composed by a pure function in `components/overlay/flow_rules.py` that takes the
@@ -562,30 +643,40 @@ assumed into a dynamic provider by precedent.
 
 ### 7.4 Connection state, and what a diff must still catch
 
-Pulumi's own guidance is that passing credentials as resource inputs is an
-antipattern — they belong to the provider, out of band. Today all five
-connection properties are inputs on every file and artifact resource. They move
-onto the provider instance:
+**A native provider has a resource; a dynamic one does not.** That difference is
+the whole of this subsection, so it is worth stating exactly. When a program
+builds a `kubernetes.Provider`, that provider *is* a resource: it appears in
+state with its configuration as properties, and changing the cluster it points
+at is a diff on a named object that a preview shows. Pulumi state is part of the
+actuated state, and the connection is part of what state records.
+
+A dynamic provider has no such object. `pulumi.dynamic.ResourceProvider` is a
+plain Python class, not a `ProviderResource`; there is nothing to register and
+nothing for `opts.provider` to point at (§7.1). What Pulumi does instead is
+serialize the provider *instance* into a reserved property on **each resource it
+manages**, `__provider`, and mark it secret. So the connection has no
+representation of its own in state: it has N hidden, unreadable copies.
+
+Everything below follows from that. Pulumi's own guidance is that passing
+credentials as resource inputs is an antipattern — they belong to the provider,
+out of band. Today all five connection properties are inputs on every file and
+artifact resource. They move onto the provider instance:
 
 ```python
-# in the stack program, where every other credential is read:
-session = DeviceSession(host=..., host_key=..., private_key=config.require_secret('gatewayPrivateKey'))
-gateway = Gateway(name, session=session, ...)
-
-# inside Gateway:
-self.device = DeviceFileProvider(session=session)
+# inside Gateway, which owns the connection and therefore reads its credential:
+self.session = DeviceSession(
+    host=..., host_key=conventions.gateway.HOST_KEY,
+    private_key=pulumi.Config().require_secret('gatewayPrivateKey'),
+)
+self.device = DeviceFileProvider(session=self.session)
 ```
 
-The split is deliberate, and it is what keeps §8.1 free of an exception: the
-**stack program** builds the session, because that is where credentials are
-read; the **component** wraps it in the provider, because that is what owns the
-connection. `Gateway` then hands the same provider instance to each `Container`
-and to the two files it declares itself. That is as close to inheritance as the
-mechanism allows — a dynamic provider cannot travel through `opts.provider`
-(§7.1), so it travels as an ordinary Python object down the same tree the
-components already form. Pulumi serializes it into each resource's `__provider`
-property and marks that secret, so the credential is better protected there than
-as an input.
+`Gateway` then hands that provider instance to each `Container` and to the two
+files it declares itself. That is as close to inheritance as the mechanism
+allows — a dynamic provider cannot travel through `opts.provider` (§7.1), so it
+travels as an ordinary Python object down the same tree the components already
+form. Pulumi serializes it into each resource's `__provider` property and marks
+that secret, so the credential is better protected there than as an input.
 
 Two properties the current design relies on have to survive that move:
 
@@ -613,6 +704,36 @@ Two properties the current design relies on have to survive that move:
     pinned key already lives, and `Gateway` registers it as one of its own
     component outputs so the value a deployment trusts is stated once rather
     than on a dozen resources.
+
+**How the data flows, concretely.** The provider instance is built first, inside
+`Gateway`, and passed to each resource's constructor as its first argument —
+which is how a dynamic resource takes a provider anyway. The session input is
+then derived, not declared: `DeviceFile` and `DeviceArtifact` share a base class
+whose `__init__` reads `provider.session`, computes the endpoint-and-digest
+value, and puts it in the property bag before handing it to
+`dynamic.Resource.__init__`. **A caller therefore declares nothing about the
+session** — it passes the provider, as it must anyway, and the derived property
+appears. That is the recommendation: one place computes it, no call site can
+forget it, and the two resource classes cannot disagree about how it is spelled.
+
+**The alternative considered: making the session a resource of its own.** A
+`DeviceSession` dynamic resource — no-op create and update, inputs limited to
+the endpoint and the credential digest, never the secret — would be the dynamic
+analog of a provider resource: one named object in state that says which session
+is current, which the file resources depend on and take their session input
+from. It is an appealing shape, and it is rejected for a specific reason rather
+than on taste.
+
+It does not achieve what it appears to achieve. The hope is one diff per
+rotation instead of N, but the N cannot be avoided: each file resource's stored
+`__provider` is what a later *delete* is executed with, so a rotation that did
+not update every resource would leave each of them holding a superseded key, and
+the destroy months later would authenticate with a key that no longer opens the
+door. Every resource must therefore be updated on a rotation whatever the shape,
+so the session resource adds a diff rather than replacing N of them — an extra
+object that actuates nothing, in exchange for a label. If a future reader wants
+the connection to have a name in state, the honest way to get it is the
+component output of point 2 above, which costs no resource at all.
 
 The resource identifier becomes the path on the device alone, a provider
 instance now standing for exactly one device. It is minted at create, never
@@ -642,75 +763,97 @@ declarations.
 
 ### 8.1 The rule
 
-**Every provider this program uses is explicit, built in the stack program where
-its credentials are read, and set on the top-level component that needs it.
-Nothing below that ever names it again.** This is Pulumi's documented mechanism
-and the legacy repository's convention: a provider set on a component resource
-becomes the default for its whole subtree, transitively, because each child
-inherits its parent's provider map and the first match by package name wins. So
-a `Gateway` built with a controller provider gives it to `SiteFirewall`'s zone,
-network, policies and port forward without any of them mentioning it.
+**Every provider this program uses is explicit, and the credential that
+configures it is read at the line that builds it — wherever that line is.** That
+is the whole rule, and it is the only part that is not negotiable: a provider
+and the secret that opens it are one thing, and separating them means a reader
+has to hold two files in their head to answer "what does this authenticate as".
 
-**New rule**, and worth naming as one, because it refines a style rule rather
-than applying it. The style rules say a provider that is an implementation
-detail of one component is constructed *inside* it; that is what
-`SiteFirewall`, `Overlay` and `HomelabHost` each do today. This document moves
-every construction into the stack program instead, on the grounds that the thing
-a provider is built from is a credential, credentials are stack configuration,
-and a program with all its configuration reads in one file is one a reader can
-audit. The cost is that a component no longer carries its own provider, and the
-compensation is that it no longer carries the credential either. The alternative
-reading — each top-level component reads the one credential that configures its
-own provider, and the stack program reads none of them — is coherent, is closer
-to the style rule as written, and is the question to settle when approving this
-section.
+*Where* that line sits follows from which component the connection belongs to:
 
-Three consequences:
+*   **A provider that is one component's implementation detail is built inside
+    that component**, which reads its own credential from stack configuration
+    there. The controller API and the login on the device belong to `Gateway`;
+    the
+    overlay's administration token belongs to `Overlay`; the libvirt session
+    belongs to `HomelabHost`; the backup account belongs to `BackupBucket`,
+    which is the only thing that touches it.
+*   **A provider several components share is built by the stack program** and
+    set on each of them. The cloud provider is the case: the network, the nodes,
+    the guardrails, the block volumes and the image import are five components
+    against one account, and a provider built inside any one of them would be
+    reached into by the rest.
 
-*   **`child_opts(provider=...)` disappears from component bodies.** Today
-    `SiteFirewall` and `Overlay` re-plumb their provider into every child's
-    options. After this, the provider arrives on the component and inheritance
-    does the rest. An invoke needs `InvokeOptions(parent=...)` to inherit —
-    given a parent it takes that parent's provider, and given neither it takes
-    the default one.
-*   **The ambient namespaces retire.** `oci:` and `b2:` configure default
-    providers today, which is configuration acting at a distance: the same
+Reading configuration inside a component is a deliberate use of a mechanism
+built for it. Stack configuration is a global, and globals are to be used
+carefully — but encapsulating a component's implementation detail is exactly
+what this one is for, and the alternative is threading a secret through a
+constructor that has no other opinion about it. The trade is the familiar one
+between a global and a parameter, and it is made here in favor of the global for
+this one category of value: **credentials that configure a provider and are read
+by nothing else.** Everything else a component needs still arrives as a
+parameter.
+
+**New rule**, extending rather than contradicting the style rules. They already
+say that a provider which is an implementation detail of one component is
+constructed inside it and that a shared one is constructed by the owner of the
+connection; what is new is (a) that the credential is read at the same place
+rather than passed in, and (b) that "the owner of the connection" for a provider
+with several consumers is the stack program.
+
+Four consequences:
+
+*   **Parent-ship is unaffected.** Which component is whose parent is a
+    statement about the architecture, and it does not move because a provider
+    does. `SiteFirewall` stays a child of `Gateway` whoever built the controller
+    provider; the overlay stays a top-level component beside it (§6).
+*   **`child_opts(provider=...)` disappears from component bodies.** A provider
+    set on a component — whether it was built inside it or handed to it —
+    becomes the default for its whole subtree, transitively, because each child
+    inherits its parent's provider map and the first match by package name wins.
+    So the controller provider reaches `SiteFirewall`'s zone, network, policies
+    and port forward without any of them naming it. An invoke needs
+    `InvokeOptions(parent=...)` to inherit — given a parent it takes that
+    parent's provider, and given neither it takes the default one.
+*   **The ambient namespaces retire.** The cloud and backup providers are
+    configured by ambient namespaces today, which is configuration acting at a distance: the same
     program run with a different ambient environment declares against a
     different account. `pulumi:disable-default-providers`, listing the packages
     this program uses, turns "somebody forgot the provider" from a silent
     fallback into an error. It lists them rather than saying `*` because
     dynamic resources *depend* on the `pulumi-python` default provider: `*`
     would disable the one default provider this program still needs.
-*   **A credential that exists only to configure a provider is read where that
-    provider is built, and reaches no component.** It is an implementation
-    detail of that provider instance, not a fact any component needs, so it
-    stops being a constructor parameter threaded through components. The test
-    still holds: no *parent* has an opinion about it, so it is not a parameter.
+*   **A credential that configures a provider reaches no component's
+    signature.** Not the component that builds the provider — it reads it — and
+    not any component below.
 
 ### 8.2 Every provider this stack uses
 
-| Provider | Built by | Set on | Credential |
+| Provider | Built by | Reaches | Credential, read at that line |
 | --- | --- | --- | --- |
-| `oci` | the stack program | the cloud, Talos-image and node-volume components | `oci:userOcid`, `oci:fingerprint`, `oci:privateKey`, read there |
-| `b2` | the stack program | `BackupBucket` | the B2 key pair, read there |
-| `unifi` | the stack program | `Gateway`, which passes it to `SiteFirewall` | `unifiApiKey`, read there |
-| `zerotier` | the stack program | `Overlay` | `zerotierApiToken`, read there |
-| `libvirt` | the stack program | `HomelabHost` | `libvirtPrivateKey`, read there (§8.3) |
-| `device_files` | `Gateway`, from a session the stack program built | its own children, as an object (§7.4) | `gatewayPrivateKey`, read by the stack program into that session |
+| cloud | the stack program | set on the cloud, Talos-image and node-volume components | the account's user, fingerprint and private key |
+| controller | `Gateway` | set on its `SiteFirewall` child | the controller API key |
+| device files | `Gateway` | its own children, as an object (§7.4) | the device's SSH private key |
+| overlay | `Overlay` | its own children, by inheritance | the network administration token |
+| libvirt | `HomelabHost` | its own children, by inheritance | the host's SSH private key (§8.3) |
+| backup | `BackupBucket` | its own children, by inheritance | the backup account's key pair |
 
-The OCI row is the one that changes most. Its region and tenancy come from
-`conventions` (§10.3) and its credential from configuration, both read at the
-one line that builds the provider; the components below take neither. The row
-also settles a question that has been open: there is no pin-equal test between
-`conventions` and the `oci:` namespace, because there is no second copy left to
-disagree.
+Only the first is shared, and that is what puts it in the stack program: five
+components declare against that one account. Its region and tenancy come from
+`conventions` (§10.3) rather than from configuration, so the line that builds it
+reads exactly the three values that are secret. Everything below it takes
+neither the provider nor the credential.
 
-The `device_files` row differs in *mechanism* but not in rule: §7.4 splits it so
-that the stack program still reads the credential — into a `DeviceSession` — and
-the component still owns the connection, by wrapping that session in the
-provider. Only the propagation differs, because the mechanism cannot carry a
-dynamic provider through resource options, so the "set on" column means an
-object passed down the same tree.
+The backup row is a judgment worth stating: the backup account has exactly one
+consumer today, so its provider is built inside that consumer. If a second
+component ever declares against B2 — a second bucket, a restore drill's own
+credential — it moves up to the stack program by the same test that put the
+cloud provider there.
+
+The device-files row differs in *mechanism* but not in rule: `Gateway` reads the
+key and builds the session and the provider together, and the "reaches" column
+means an object passed down the same tree, because the mechanism cannot carry a
+dynamic provider through resource options (§7.1).
 
 ### 8.3 The libvirt transport's absolute paths
 
@@ -755,6 +898,25 @@ The hazard, if the URI is wrong rather than merely non-portable, is worse than a
 diff: a provider that cannot reach the host reads every domain as absent and
 clears its id, which for a protected, adopted domain is the worst-shaped failure
 in this stack.
+
+**Which directory, and what that directory means.** The two files land in
+`.credentials/libvirt/`, where they are today, and the relative value in the URI
+is therefore `.credentials/libvirt/identity`. That is a decision worth writing
+down rather than inheriting, because it puts two different kinds of thing in one
+directory:
+
+*   a **slot** is durable and written by the credentials command — a kit, a
+    passphrase, a client bundle — put there once and read by later runs;
+*   a **working file** is derived, written by the stack program from stack
+    configuration on every run, owned by the program and disposable.
+
+The libvirt identity and its `known_hosts` are the second kind. They stay in
+`.credentials/` anyway because that directory exists for one reason — it is the
+`0700` boundary, the single answer to "what on this machine is secret" — and a
+second git-ignored directory would mean a second boundary to establish and get
+right. The distinction is recorded in the code beside both writers, so a reader
+does not conclude that everything under `.credentials/` is a slot, and so nobody
+later "cleans up" a working file expecting a command to have put it there.
 
 Three things stay as they are, and each has a reason:
 
@@ -1005,10 +1167,10 @@ runtime refusal in `parse_members`.
 
 ### 10.3 Provider account facts
 
-The OCI region and tenancy are claimed twice today — `conventions.OCI_REGION`
-and the `oci:` configuration namespace — and `b2Region` sits in stack
-configuration with an argument ("an account property, permanent") that is the
-argument for `conventions`.
+The cloud region and tenancy are claimed twice today — once in `conventions`,
+once in the provider's ambient configuration namespace — and the backup
+account's region sits in stack configuration with an argument ("an account
+property, permanent") that is the argument for `conventions`.
 
 With every provider explicit (§8), the question answers itself: the facts that
 identify an account are conventions, the secrets that authenticate to it are
@@ -1027,14 +1189,15 @@ class B2Account:
     region: str
 ```
 
-The `oci:` and `b2:` namespaces retire entirely — not "retire as readers", but
-stop existing: with default providers disabled there is nothing left to
-configure through them. The identity-domain endpoint and name that used to sit
-beside these are gone too, for a different reason: they were read only to
-declare the chunk store's user, and the chunk store is deleted (§10.5). The
-credentials scripts keep their own copy of those two facts, which is where they
-belong — they are how a mint talks to the domain, not how this stack declares
-anything.
+Both providers' ambient namespaces retire entirely — not "retire as readers",
+but stop existing: with default providers disabled there is nothing left to
+configure through them, and what remains in stack configuration is three secrets
+for one account and two for the other, read where each provider is built (§8.2).
+The identity-domain endpoint and name that used to sit beside these are gone
+too, for a different reason: they were read only to declare the chunk store's
+user, and the chunk store is deleted (§10.5). The credentials scripts keep their
+own copy of those two facts, which is where they belong — they are how a mint
+talks to the domain, not how this stack declares anything.
 
 ### 10.4 `facts.py` folds into configuration reading
 
@@ -1166,15 +1329,15 @@ the stack performs today:
 | `workerGua` | stack program — observed off a booted machine |
 | `gatewayBgpPassword` | stack program — a file's content, not a provider's |
 | `gatewayAcmeToken` | stack program — likewise; it configures caddy |
-| `oci:userOcid`, `oci:fingerprint`, `oci:privateKey` | the line that builds the OCI provider |
-| the B2 key pair | the line that builds the B2 provider |
-| `unifiApiKey` | the line that builds the controller provider |
-| `zerotierApiToken` | the line that builds the overlay provider |
-| `libvirtPrivateKey` | the line that builds the libvirt provider (§8.3) |
-| `gatewayPrivateKey` | stack program, into the `DeviceSession` it passes to `Gateway` (§7.4) |
-| `gatewayBootstrapHost` | the same session — it is where that provider dials |
+| the cloud account's user, fingerprint and private key | the stack program, at the line that builds the shared cloud provider |
+| the backup account's key pair | inside `BackupBucket`, at the line that builds its provider |
+| `unifiApiKey` | inside `Gateway`, at the line that builds the controller provider |
+| `zerotierApiToken` | inside `Overlay`, at the line that builds its provider |
+| `libvirtPrivateKey` | inside `HomelabHost`, at the line that builds its provider (§8.3) |
+| `gatewayPrivateKey` | inside `Gateway`, at the line that builds the device session (§7.4) |
+| `gatewayBootstrapHost` | the same line — it is where that session dials |
 | `gatewayRootfs` | four `image:` pins (§11.1) |
-| `oci:region`, `oci:tenancyOcid` | `conventions.providers` (§10.3) |
+| the cloud region and tenancy | `conventions.providers` (§10.3) |
 | `b2Region` | `conventions.providers` |
 | `ociIdentityDomainUrl`, `ociIdentityDomainName` | gone with `ChunkStore` (§10.5) |
 | `zerotierMembers` | `conventions.overlay.ROSTER` (§10.2) |
@@ -1221,49 +1384,131 @@ What is left in stack configuration is credentials, values that rotate, values
 observed off running machines, version pins, and the one ceremony knob — which
 is the definition the style rules give.
 
-### 11.1 Image pins share the versions mechanism
+### 11.1 Version pins, and one namespace for them
 
-The four root filesystems are pinned exactly the way container images and Helm
-charts are pinned, because that is what they are: a build someone else produced,
-selected by version. The repository already has that mechanism — a `versions`
-object over the `image:` and `chart:` configuration namespaces, where
-`versions.chart['cert-manager']` reads `chart:cert-manager` and splits a
-`repository:version` pair. The root filesystems join it as `image:` entries, one
-key per service:
+The four root filesystems are pinned the way container images and Helm charts
+are pinned, because that is what they are: a build someone else produced,
+selected by version. The repository has that mechanism already — a `versions`
+object over configuration namespaces, one accessor per kind. Three things change
+about it here, and the first two are cheap because **nothing uses it yet**: the
+`image:` and `chart:` namespaces have no committed value in any stack, since the
+stacks that would carry them are unwritten. Renaming them today costs a rename
+in one module and one caller.
+
+**One namespace, `versions:`, with the kind in the key.** Today's `image:` and
+`chart:` are two namespaces for one concept, and a third kind is arriving, and a
+fourth already exists in the wrong place. So:
 
 ```yaml
-image:gateway-caddy: rootfs-1:e154a141364c60cc…
-image:gateway-adguard-alice: rootfs-1:051ab35069306138…
-image:gateway-adguard-bob: rootfs-1:051ab35069306138…
-image:gateway-overlay: rootfs-1:ba74ae49ae729e79…
+versions:talos: v1.13.9
+versions:chart-cert-manager: https://charts.jetstack.io:v1.19.1
+versions:image-adguard: docker.io/adguard/adguardhome:v0.107.68
+versions:rootfs-gateway-caddy: rootfs-1:e154a141364c60cc…
 ```
 
-Three properties, and each replaces something the current shape gets wrong:
+`lib/versions.py` exposes one typed accessor per kind — `versions.talos`,
+`versions.chart[...]`, `versions.image[...]`, `versions.rootfs[...]` — each
+returning a parsed value rather than a string, and each refusing a missing key
+by name. The kind prefix is what lets a single renovate manager per kind match
+its own entries and nothing else.
 
-*   **The configuration value is a string, not a structure.** Today it is a JSON
-    object of objects, parsed by hand. A version pin is a scalar in every other
-    place this repository pins one, and the parse function goes away with the
-    structure.
-*   **The URL is not configuration.** Which repository publishes the artifacts,
-    and how a release names them, is a decision — so it is a `conventions` rule
-    the component applies to the release name, not four URLs an operator
-    maintains. What remains configured is the release and the digest, which are
-    the two things a build produced.
+**A third kind rather than reusing `image:`.** "Image" in this repository means
+a container image, and these are not that: they are root filesystem archives
+consumed by `systemd-nspawn`, published as release assets, and pushed to a
+device that cannot pull from a registry. Calling them images would make the one
+word mean two things, which is the rule this document has been applying
+throughout. `rootfs-` says what they are.
+
+**`talosVersion` joins them.** It is a version pin sitting among unrelated stack
+settings today, with its own renovate manager pointing at its own key. Under
+`versions:talos` it is beside its siblings and inside whatever manager covers
+the namespace.
+
+Three properties of the rootfs entries, each replacing something the current
+shape gets wrong:
+
+*   **The value is a string, not a structure.** Today it is a JSON object of
+    objects, parsed by hand. A version pin is a scalar in every other place this
+    repository pins one, and the parse function goes away with the structure.
+*   **The URL stays out of configuration.** Which repository publishes the
+    artifacts, and how a release names them, is a decision, so it is a rule in
+    `conventions` applied to the release name rather than four URLs an operator
+    maintains. Moving publication elsewhere is then a reviewed edit to that rule
+    — which is the right weight for a change of that kind, and it is also a
+    question that dissolves entirely if the artifacts become registry images
+    (below), because then the reference *is* the pin.
 *   **Four keys, not one.** The fact that there are four services lives in the
     component signature (§5.3); the configuration is four independent pins. The
     two resolvers normally carry the same value, and two keys is exactly what
-    lets one of them move first — a rollout that proves a new resolver image on
-    one instance before the other is a thing this shape permits and a single
-    shared pin forbids.
+    lets one of them move first — proving a new resolver image on one instance
+    before the other is a rollout this shape permits and a single shared pin
+    forbids.
 
-Renovate does not read these keys, and it does not read the `chart:` and
-`image:` keys either. The renovate configuration in this repository carries a
-custom manager for the Talos version and none for the version namespaces, so
-every pin in them is manual today. Making the namespaces renovate-managed is a custom
-manager per namespace, and worth doing; it is not something this change gets for
-free. For these four pins it would be a partial win in any case: a manager can
-bump the release, but the matching digest comes from the build, so the pair
-still moves by hand until the images gain proper registry tags.
+**Where the keys live, given five stacks.** Version pins would otherwise scatter
+across five stack configuration files, and Pulumi has no include or import
+between them. It does have the thing that actually solves it: **project-level
+configuration** — a `config:` block in `Pulumi.yaml` whose values apply to every
+stack, with a stack's own file overriding a key it repeats. The `versions:`
+namespace goes there, so one block holds every pin in the repository and a stack
+overrides one only when it deliberately runs a different version from the rest.
+`lib/versions.py` reads it the same way from any stack, unchanged.
+
+Two limits of that mechanism, neither of which bites here: `pulumi config set`
+cannot write project-level values, so these are hand-edited YAML — which is what
+a renovate-maintained pin wants anyway — and a key in someone else's namespace
+may not declare a type or a default, only a value.
+
+Pulumi ESC was the alternative and is unavailable: an environment can only be
+imported by a stack whose state lives in Pulumi Cloud, and this project's state
+is in a self-managed backend. Project-level configuration costs nothing and is
+already in the file that exists.
+
+**What renovate can and cannot do with these.** It reads none of the keys today
+— the configuration has a custom manager for the Talos version alone, and its
+"in-cluster" rule names two stack files that do not exist yet — so a manager per
+kind is required work either way. The interesting question is what shape of
+artifact makes those managers possible:
+
+*   **A registry image** is the easy case: one data source bumps the tag and the
+    digest together, in the documented `tag@sha256:…` form, and the digest costs
+    a request against the registry rather than a download.
+*   **A release tag plus an asset checksum** — today's root filesystems — is
+    *not* the dead end it looks like. Renovate has a data source built for
+    exactly it, which resolves a release asset's own sha256 by fetching the
+    release's checksum manifest. But it constrains publication in four ways: the
+    tag and the checksum must be in **one file**, the asset's **filename must
+    contain the version**, the hash must be raw sha256 or sha512, and the
+    release should carry a small `SHA256SUMS` asset — without one, renovate
+    downloads assets until a hash matches, which for a root filesystem tarball
+    is an expensive way to learn a number. Note also that the *ordinary*
+    releases data source will not do this: its digest is the release's commit,
+    not an asset's hash.
+*   **A commit hash** works through the git-refs data source, with the branch
+    named in the manager's template and the hash captured as the digest. Its
+    limit is that a bare hash with no accompanying human-readable ref is not
+    updatable at all — renovate needs the branch or tag beside it — and it
+    cannot know whether a build for the new commit actually produced an
+    artifact.
+
+So the publication format is the lever, and it sits in the repository that
+builds these images rather than in this one. **Recommendation: publish the root
+filesystems as ordinary registry images**, pinned here as a tag and a digest.
+Then they stop being a third kind: the pin is an image reference, renovate's own
+container data source maintains it, both halves move together, and the `rootfs-`
+prefix retires into `image-`. The consuming side changes little — the runner
+pulls and exports a root filesystem instead of downloading a release asset, and
+the device still receives a plain archive it can unpack.
+
+If that move is not made, the fallback is **not** a change of format but three
+constraints on the current one: put the release and its checksum on one line of
+one file, name the asset after the version, and publish a `SHA256SUMS` beside
+it. That is enough for renovate to maintain both halves, and it is a smaller ask
+of the build than a registry is. Either way the `rootfs-` kind of §11.1 stands
+until the publication changes; what this section rules out is leaving the pins
+unmaintainable and calling it inevitable.
+
+Specifying that is in this document's scope; doing it is the image repository's
+work, and the two are sequenced in §15.
 
 --------------------------------------------------------------------------------
 
@@ -1356,55 +1601,83 @@ fields would refuse:
     is headless — a virtio console and no graphics — so there is nothing to gain
     by declaring them and a permanent diff to lose.
 
-### 13.2 Three ways to make adoption mean something
+### 13.2 What each option detects, enforces and recreates
 
-The choice is the operator's; this section states the options and recommends
-one.
+The question that decides this is drift, so the three options are compared on it
+directly. The short answer to "does (c) have no drift detection, and is the
+on-host XML still a source of truth that can change silently?" is **yes, for
+exactly the parts the transform supplies.**
 
-**(a) Partial declaration, hardware through XSLT.** Declare the owned set,
-and carry the passthrough devices in the `xml.xslt` transform the provider
-already accepts. Recreation is an ordinary apply: the provider defines most of
-the machine and the transform supplies the rest. The TPM and secure boot are
-still absent, so what comes back boots differently from what was lost.
+| | Detects drift in | Enforces | Recreates |
+| --- | --- | --- | --- |
+| **(a)** partial declaration + transform for passthrough | the read-back fields only | 4 fields refuse; the rest silently no-op | most of the machine, without the TPM or secure boot |
+| **(b)** full XML in the repository | nothing, through Pulumi | lifecycle only, plus `protect` | the machine exactly — the file *is* the definition |
+| **(c)** (a) plus TPM and loader in the transform | the read-back fields only — **not** anything the transform injects | same as (a) | the machine, if the transform is faithful |
 
-**(b) The definition as a checked-in artifact.** Keep the provider's ownership
-to the lifecycle it actually enforces — `autostart`, `running`, `protect` — and
-keep the full domain XML in the repository as a file, maintained beside the
-code and rendered by the same mechanism as everything else (§9.1). Recreation is
-a documented `virsh define` of that file. Pulumi is then not the thing that
-recreates the machine, and the artifact says so plainly instead of implying
-otherwise.
+The row that matters is the middle column of (c). The provider has no `hostdev`
+input, never populates `tpm` on read, and generates its own loader element — so
+the very parts the transform exists to supply are parts the provider cannot read
+back. Nothing compares them against the host, ever. Generating the fragment from
+a live `dumpxml` and proving it by defining a scratch domain is a **one-time
+adoption safeguard**: it establishes that the transform was faithful on the day
+it was written, and says nothing on any day after. If someone adds a USB device
+to the running machine, (c) is silent, exactly as (b) is.
 
-**(c) (a) plus the rest of the XML, which is what I recommend.** The transform
-is not limited to the passthrough devices: it can inject the TPM block and the
-secure-boot
-loader as well, because it rewrites the definition the provider is about to
-hand to libvirt. Then the declared fields carry what the provider can enforce,
-one XSLT file carries everything it cannot model, and recreation is again an
-ordinary apply — with a definition that matches the live machine in the ways
-that matter.
+So (c)'s advantage over (b) is narrower than it looked, and it is worth naming
+precisely: recreation is an ordinary `pulumi up` rather than a documented manual
+step, and the dozen read-back fields appear in previews. Its costs are a second
+source of truth for the injected parts, a transform to maintain, and an
+enforcement story that is mostly silent no-ops.
 
-Its cost is a second source of truth: an XSLT fragment that has to stay equal to
-the parts of the live definition nobody else is tracking. Two things keep that
-honest, and both belong in the slice that lands it: the fragment is **generated
-from the live `dumpxml`** rather than written by hand, and it is **proven by
-defining a scratch copy of the domain from it** before it is trusted — never
-against the running one.
+**(b) has a property neither of the others has: a complete artifact.** The
+checked-in XML covers the whole definition, including everything the provider
+cannot express — which makes `virsh dumpxml` against it a *complete* drift
+check, not a partial one. That check is a scheduled drill or a test rather than
+a preview, but it is the only option here whose coverage is total, and managing
+a full domain definition as a file is already known to be practical from
+managing this one under `yadm`.
 
-**What none of the three restores is the data.** An apply after an accidental
-removal gets back a domain that boots the same disk images with the same
-identity on the same bridge. If the disk images themselves are gone, what brings
-the home's automation back is its own backup regime, and no amount of declaring
-in this program changes that. The value here is precisely the part that *is*
-reproducible: a definition that otherwise exists in exactly one place, on the
-host, and would be reconstructed from memory at the worst possible moment.
+**Recommendation, revised: (b), plus the drill.** Concretely:
+
+*   the full domain XML lives in the repository, rendered by the same file
+    mechanism as everything else (§9.1);
+*   Pulumi owns the domain's **lifecycle** — that it exists, `autostart`,
+    `running` — and `protect`, which are the fields it can actually enforce;
+*   a **drift drill** diffs `virsh dumpxml` against the file, on the schedule
+    the other drills run on. It is the drift detection, and it covers
+    everything;
+*   recreation is a documented `virsh define` of that file, followed by an apply
+    that reasserts the lifecycle.
+
+One practical caveat, and it is the reason the drill needs a slice of its own
+rather than a line: libvirt rewrites what it is given — it fills in PCI
+addresses, aliases and defaults — so a naive diff between the file and
+`dumpxml` is noisy. The drill compares the definition as libvirt reports it,
+against a file kept in that same form, and the slice that lands it settles
+whether the stored artifact is the raw `dumpxml` or a normalized subset.
+
+This overrules §13.1's framing that more declaration is better. What the
+provider can enforce here is four fields; what it can *report* is a dozen; what
+the machine actually is, is a hundred lines of XML. The option that treats the
+XML as the artifact tells the truth about that, and the option that spreads it
+across a declaration and a transform does not.
+
+**What none of the three restores is the data.** An apply, or a `virsh define`,
+after an accidental removal gets back a domain that boots the same disk images
+with the same identity on the same bridge. If the disk images themselves are
+gone, what brings the home's automation back is its own backup regime, and no
+amount of declaring in this program changes that. The value here is precisely
+the part that *is* reproducible: a definition that otherwise exists in exactly
+one place, on the host, and would be reconstructed from memory at the worst
+possible moment.
 
 The ratchet that exists today — every input the provider accepts is accounted
 for, so a provider release that grows a field fails a test instead of silently
-proposing a change to a running Home Assistant — is kept, with its assertion
-widened from "every field is ignored" to "every field is either declared or
-ignored", and with the fields that are declared-but-unenforced named in the test
-so the distinction of §13.1 cannot quietly rot.
+proposing a change to a running Home Assistant — is kept, and under the
+recommendation it barely changes: the lifecycle fields are declared and
+everything else stays ignored, so the assertion becomes "every field is either
+declared or ignored" with a short declared set. What is new beside it is the
+drill, which is where the coverage actually comes from.
 
 --------------------------------------------------------------------------------
 
@@ -1431,10 +1704,11 @@ work described here leaves for it.
     unique addresses inside the overlay subnet, the gateway at the address
     clients dial, the roster within the multicast limit — which is what is left
     of `parse_members`.
-*   **The adopted domain's ratchet widens.** Today one test asserts that every
-    input the libvirt provider accepts is ignored; it becomes an assertion that
-    every input is either declared or ignored, which is what makes §13 checkable
-    rather than aspirational.
+*   **The adopted domain gains a drill, and keeps its ratchet.** The ratchet's
+    assertion widens from "every input is ignored" to "every input is either
+    declared or ignored". The drift check itself is not a test but a drill that
+    diffs the host's definition against the checked-in artifact (§13.2), which
+    is where the coverage comes from.
 *   **Several assertions on stack configuration keys retire** with the keys
     (§11), and the site-fact refusal tests shrink to the keys that remain.
 
