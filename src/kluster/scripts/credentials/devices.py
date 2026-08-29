@@ -197,8 +197,8 @@ DEVICES: dict[str, Device] = {
                 '  admin account is the API credential, and both instances carry\n'
                 '  the same one — a rewrite is written to alice and bob directly,\n'
                 '  with a single login (declarative/dns.md §3).\n'
-                "  That account is part of each instance's static configuration,\n"
-                '  which the gw-config estate declares and pushes (physical/\n'
+                "  That account is part of each instance's initial configuration,\n"
+                '  which the gw-config device services declare and push (physical/\n'
                 '  gateway.md §1). Changing it is a change there; this command\n'
                 '  delivers whatever that configuration now says.'
             ),
@@ -215,7 +215,7 @@ DEVICES: dict[str, Device] = {
             holds='the Central API token and the id of the network it administers',
             console=(
                 'my.zerotier.com → Account → API Access Tokens → New Token, named\n'
-                '  for this estate. Central publishes no token API, so its web\n'
+                '  for this overlay. Central publishes no token API, so its web\n'
                 '  console is the only thing that can make one and nothing here can\n'
                 '  mint a successor: re-running this command with a token created\n'
                 '  there is the whole of a rotation, and the superseded token is\n'
@@ -226,11 +226,11 @@ DEVICES: dict[str, Device] = {
                 '  stack that uses it rather than kept anywhere else.\n'
                 "  The network id below is not a secret: it is on that network's\n"
                 '  page in the same console, and the stack needs it to know which\n'
-                "  of the account's networks is the estate's."
+                "  of the account's networks is this site's overlay."
             ),
             fields=(
                 Field('api-token', 'zerotierApiToken', 'the token the console showed once'),
-                Field('network-id', 'zerotierNetworkId', "the estate network's id", secret=False),
+                Field('network-id', 'zerotierNetworkId', "the overlay network's id", secret=False),
             ),
         ),
     )

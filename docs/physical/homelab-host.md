@@ -71,7 +71,7 @@ three things, in the same change-set that installs the libvirt
 resources (§4):
 
 -   a tagged VLAN interface named **`kluster`** (VLAN id 7 on the
-    physical NIC; netdevs carry semantic names in this estate, as the
+    physical NIC; netdevs carry semantic names on this site, as the
     IoT VLAN's `iot` does). The path carries it: the host reaches the
     UDM's port 8 through an unmanaged rack switch, the port's profile
     allows all tagged VLANs with the server LAN as its native network,

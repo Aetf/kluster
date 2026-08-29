@@ -67,8 +67,8 @@ HOOK = "vtysh -c 'configure terminal'"
 ROOTFS_URL = 'https://example.invalid/rootfs/adguard-1.2.3.tar'
 ROOTFS = b'a root filesystem, in miniature'
 ROOTFS_SHA256 = hashlib.sha256(ROOTFS).hexdigest()
-ROOTFS_TARGET = '/data/estate/images/adguard.tar'
-ROOTFS_TREE = '/data/estate/roots/adguard'
+ROOTFS_TARGET = '/data/services/images/adguard.tar'
+ROOTFS_TREE = '/data/services/roots/adguard'
 
 #: The same payload as it is actually published: a zstd-compressed archive. The
 #: pin is the digest of *these* bytes, which is the whole point of the test that
@@ -215,7 +215,7 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
 
 
 def unpacking_props(**overrides: Any) -> dict[str, Any]:
-    """An artifact as the estate declares one: a published archive and a tree."""
+    """An artifact as a container service declares one: an archive and a tree."""
     return artifact_props(url=ROOTFS_ZST_URL, sha256=ROOTFS_ZST_SHA256, extract=ROOTFS_TREE) | overrides
 
 
@@ -339,8 +339,8 @@ def test_a_moved_dial_address_rewrites_the_file_and_deletes_nothing(device: Devi
     A first bring-up dials the gateway over the LAN and every later run dials it
     over the overlay (physical/gateway.md §2.5), and both reach the same box. A
     replacement would therefore write the file at the new address and then delete
-    it at the old one — the same file, on the same device — leaving the estate
-    gone at the end of a run that reported success. It is an ordinary declared
+    it at the old one — the same file, on the same device — leaving the device
+    without it at the end of a run that reported success. It is an ordinary declared
     change instead: the same bytes are written again, through the new address.
     """
     olds = file_props()
@@ -602,7 +602,7 @@ def test_a_digest_that_is_not_a_sha256_is_refused() -> None:
 
 
 def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
-    result = provider.DeviceArtifactProvider().check({}, unpacking_props(extract='estate/roots/adguard'))
+    result = provider.DeviceArtifactProvider().check({}, unpacking_props(extract='services/roots/adguard'))
 
     assert [failure.property for failure in result.failures] == ['extract']
 
@@ -720,7 +720,7 @@ def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
 
 
 def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(device: Device) -> None:
-    """What the estate runs is the tree; the archive is only how it got there."""
+    """What the device runs is the tree; the archive is only how it got there."""
     props = unpacking_props()
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     del device.files[ROOTFS_TREE]
@@ -826,7 +826,7 @@ class Mocks(pulumi.runtime.Mocks):
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> None:
-    """Declare one of each resource, the way the gateway estate will.
+    """Declare one of each resource, the way the gateway's services do.
 
     The same drain as the other declaration suites: a declaration schedules a
     registration task, and only the tasks this module added may be awaited.
