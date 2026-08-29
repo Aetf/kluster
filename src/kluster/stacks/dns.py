@@ -145,7 +145,7 @@ def _zt_block(physical: pulumi.StackReference) -> Sequence[Record]:
 
     The split across the reference is the point. *Which* records exist is code
     — the roster is a convention both stacks read (`conventions.ZT_ROSTER`),
-    shared as a module like every other one (framework/pulumi.md §3.1) — and
+    shared as a module like every other one (declarative/README.md §2) — and
     only the contents are machine facts. So this block is declared without
     awaiting anything, and a member's address arriving late reaches the record
     unresolved exactly as an anchor's does; `dns` previews the same names

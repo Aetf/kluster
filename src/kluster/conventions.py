@@ -1,6 +1,6 @@
 """Cluster-wide conventions: the names, labels, and addresses every stack agrees on.
 
-Conventions are code, not stack outputs (framework/pulumi.md §3.1): a
+Conventions are code, not stack outputs (declarative/README.md §2): a
 cross-stack-referenced singleton gets an explicit name from this module with
 autonaming disabled, so `apps` can address a `k8s-base` gateway (or a
 `physical` bucket layout) without a StackReference. StackReferences carry only

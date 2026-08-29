@@ -1,4 +1,4 @@
-"""The stacks of one project (docs/framework/pulumi.md §3).
+"""The stacks of one project (docs/declarative/README.md §1).
 
 `physical` exists before the Kubernetes API does; `dns` owns zones, the estate
 records that belong to no app, and the split-horizon rewrites; `k8s-base` owns

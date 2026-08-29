@@ -4,8 +4,7 @@ How the physical layer is declared — providers, resource graph, and
 bootstrap order for everything that must exist before the k8s API does.
 The *why* of the architecture lives in
 [cluster/architecture.md](../cluster/architecture.md); this document is
-the *how* for the `physical` stack of
-[framework/pulumi.md](../framework/pulumi.md) §3.
+the *how* for the `physical` stack of [README.md](README.md) §1.
 
 > **Status**: designed 2026-08-22; provider choices verified against
 > current releases (pulumiverse-talos 0.8.1 wrapping the official
@@ -34,10 +33,11 @@ dependency of Pulumi itself — hand-created, documented in
 API (that's `k8s-base`/`apps`).
 
 Stack outputs (the machine facts other stacks may reference,
-pulumi.md §3.1): `kubeconfig`, `talosconfig`, per-node public/private
-IPs, both of the NLB's public addresses (IPv4 and IPv6 — the cluster
-anchor in `dns` carries an A and an AAAA), the dedicated-VIP addresses
-(reserved public + secondary private), and bucket names/endpoints.
+[README.md](README.md) §2): `kubeconfig`, `talosconfig`, per-node
+public/private IPs, both of the NLB's public addresses (IPv4 and IPv6 —
+the cluster anchor in `dns` carries an A and an AAAA), the
+dedicated-VIP addresses (reserved public + secondary private), and
+bucket names/endpoints.
 
 ## 1. OCI (pulumi-oci)
 
