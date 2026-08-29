@@ -138,9 +138,14 @@ covers one milestone's worth of change, so problems surface while
 they are cheap. Any other major structural change runs the same
 RFC-first sequence (rfc-002 is the shape), and an RFC names the
 design documents its content must land in once built, if any. An
-issue that needs an operator ruling carries the `decision` label the
-moment it is filed —
-the label is how the operator finds what waits on them.
+issue that needs an operator ruling carries a `decision/*` label from
+the moment it is filed, and the label is a three-state machine:
+`decision/pending` awaits the operator's review; `decision/responded`
+means the operator replied and the agent investigates or revises the
+proposal per the reply (then sets `decision/pending` again);
+`decision/lgtm` means the latest decision in the issue is approved
+and clear to build. The dispatcher sweeps `decision/responded` and
+`decision/lgtm` whenever idle — they are the queue of what can move.
 
 ### How progress is reported
 
