@@ -68,6 +68,36 @@ use `self.child_opts()`. Extra options pass through
 (`self.child_opts(protect=True, depends_on=[other])`), and an explicit
 `ResourceOptions` can be merged in via `self.child_opts(opts=...)`.
 
+#### The parent backstop
+
+Forgetting it is not an error to Pulumi. The resource lands on the stack
+rather than on the component, inherits the stack's providers rather than the
+component's, and whatever goes wrong afterward complains about a provider
+rather than about a parent. So the framework refuses it, in the one way a
+framework can: `install_parent_backstop()` registers a stack transformation
+that fails any resource registered while a component is under construction
+whose options name no parent, naming both the resource and the component.
+
+It refuses rather than repairs because the SDK rejects a transformation that
+changes a resource's parent — the parent is what decides which
+transformations run in the first place. rfc-002 §8.2 has the reasoning.
+
+Two consequences worth knowing:
+
+-   **The scope is `super().__init__()` … `register_outputs()`**, which is why
+    every component ends its constructor with the latter. A component is
+    pushed onto the scope after its own registration, so a top-level component
+    needs no parent of its own while a nested one does; a component that never
+    calls `register_outputs` stays on the scope and the next unparented
+    resource is refused in its name instead of its own.
+-   **Nothing is exempt** — a provider built inside a component is a child of
+    it like everything else. Resources declared outside any component, which is
+    what a stack program does, pass untouched.
+
+`kluster.main` installs it once, before any stack program runs; a resource
+carries only the transformations that existed when its parent was built, so
+the call has to come first.
+
 ### 1.4 Cookbook
 
 Small self-contained recipes for common situations. All of them assume the
