@@ -53,7 +53,7 @@ resort, object storage used directly where an app supports it.
 | `local-path` + VolSync | same local-path, plus a per-PVC restic schedule to the backup bucket | RWO, node-pinned; **movable via restore** | stateful apps without built-in replication; any volume that plausibly moves | bulk media (NAS's job) |
 | ~~`longhorn`~~ (deferred, §3.2) | Longhorn v1 engine | RWO | — not in the initial build — | — |
 | NAS (NFS PV / NodePV) | Existing NAS exports | RWO/RWX, homelab pool only | bulk media, large read-mostly sets | cloud-pool workloads; databases |
-| Cloud block volume | OCI block volume on a cloud node (200 GB boot+block free) | RWO, node-pinned | hath cache, cloud-pool local-path backing | homelab-pool workloads |
+| Cloud block volume | OCI block volume on a cloud node, one per node (`conventions.NODE_VOLUMES`) | RWO, node-pinned | preserved cloud-pool datasets: the hath cache, the syncthing replica | homelab-pool workloads; anything a node may have to lose |
 | Object storage (direct) | S3-compatible bucket (§4) | app-native | apps with first-class S3 support; all backups | POSIX pretenders |
 | JuiceFS (quarantined, no CSI — §6) | object storage + per-app metadata, mounted in-pod | RWX | last resort only, one app at a time | everything else; it is not selectable by `storageClassName` |
 
@@ -189,20 +189,17 @@ storage.
 **Decision (2026-08-21, re-affirmed with verified numbers 2026-08-22)**:
 **Backblaze B2 as the backup bucket**, now with a stronger case than when
 chosen: since 2026-05-01 *every* API class is free, which is exactly the
-dimension restic-style churn and JuiceFS chunk traffic stress. R2 Standard
-is the named alternate if B2's 3×-stored egress allowance ever bites.
+dimension restic-style churn stresses. R2 Standard is the named alternate
+if B2's 3×-stored egress allowance ever bites.
 
-**Placement rule added (2026-08-22)**: the **backup** bucket must not
-live with the provider whose loss it insures — OCI tenancy termination is
-an enumerated risk (nodes.md §3.1), so cluster backups stay on B2
-regardless of where the cloud pool lands. The **JuiceFS chunk bucket**
-(§6) is different: it backs a *replica* whose other full copy is the
-homelab NAS, so provider-loss is survivable — with the cloud site on
-OCI (nodes.md §3.1), its chunks live on same-region OCI Object Storage:
-zero egress + LAN-class latency on cache misses, ~$2.6/mo at 110 GB
-(minus 10 GB free). (On the Vultr fallback the bucket reverts to B2 —
-free ops, 3×-stored egress covers read traffic with a warm cache.) Buckets, keys, and
-lifecycle rules are Pulumi-managed like everything else.
+**Placement rule (2026-08-22)**: the **backup** bucket must not live
+with the provider whose loss it insures — OCI tenancy termination is an
+enumerated risk (nodes.md §3.1), so cluster backups stay on B2
+regardless of where the cloud pool lands. It is also the estate's only
+object bucket: the second one this rule used to distinguish itself from
+was the JuiceFS chunk bucket, and that filesystem is gone (§6). The
+bucket, its keys and its lifecycle rules are Pulumi-managed like
+everything else.
 
 **Backup-integrity rules (2026-08-23)** — backups are the actual HA
 mechanism (§5), so backup *deletability* is a first-class threat
@@ -280,60 +277,43 @@ A workload may use it only if all of:
     blast radius; no shared mega-filesystem like the legacy cluster), with
     automatic metadata backup to the object bucket enabled.
 
-**Decision (2026-08-21, census revised 2026-08-22)**: the census is
-**one** — the VPS-side syncthing replica (+ its dav share), which
-qualifies under all three clauses (below). Everything else: immich media
-on NAS, hath cache on a cloud block volume, qbittorrent on the
-home side, backups to object storage directly. **The CSI driver is still
-not installed** — the one qualifying workload mounts in-pod (sidecar),
-which is also what keeps its blast radius per-app.
+**Decision (2026-08-29): the census is zero.** No workload in the design
+uses JuiceFS, so the policy above is a gate with nothing behind it and
+the CSI driver stays uninstalled. Everything else: immich media on NAS,
+the hath cache and the syncthing replica on cloud block volumes,
+qbittorrent on the home side, backups to object storage directly.
 
-The last two *actual* JuiceFS users in the legacy cluster are the
-VPS-side syncthing (5 Ti PVC, **~110 GB really used**) and the dav/webdav
-share over the same data — running without visible trouble today, but
-note both mount pods sit on the *same node as the Redis metadata server*,
-which is exactly why they dodge root cause (a).
+The last candidate was the cloud-side syncthing replica (+ its dav
+share, ~110 GB of the legacy cluster's 5 Ti PVC). **The replica stays
+cloud-side**: its roles are an always-reachable public sync anchor for
+roaming clients and an independent second-site copy of the data, and
+pulling it home would collapse both copies into one site *and* route
+every roaming client's sync through VIP→KubeSpan→homelab. What changed
+is its backing store, because ~110 GB does not fit a boot disk:
 
-**Disposition (2026-08-22): the cloud-side replica stays cloud-side.**
-Its role is (1) an always-reachable public sync anchor for roaming
-clients and (2) an **independent second-site copy** of the data — the
-homelab already has the full `syncthing-nas` replica, so pulling the VPS
-instance home would collapse both copies into one site *and* route every
-roaming client's sync through VIP→KubeSpan→homelab, manufacturing
-cross-site traffic for no gain. What changes is only the backing store,
-because ~110 GB doesn't fit a small instance disk:
+-   **A plain OCI block volume, at the same price.** At OCI's Lower Cost
+    tier the volume is $0.0255/GB-month — the same per-GB rate as
+    Object Storage — so JuiceFS on OCI and a block volume cost the same
+    within cents at this size, and the block volume removes the whole
+    filesystem: no sidecar RAM, no metadata store, no cache tuning, and
+    ordinary PVC semantics. (An earlier rejection of a block volume
+    priced it at $0.10/GB, which is not OCI's rate.) The dataset is
+    **preserved, not backed up** (§3.3): every syncthing client holds a
+    subset and the homelab `syncthing-nas` instance holds the full set,
+    so recovery is a reseed over the syncthing protocol.
+-   **The volume reaches the cluster without a vendor component in it.**
+    The `physical` stack attaches it (`conventions.NODE_VOLUMES`), the
+    machine configuration mounts it, and the cluster sees a `local`
+    PersistentVolume with node affinity — the same path the hath cache
+    takes. No OCI CSI driver, no cloud controller.
+-   **If it ever outgrows one volume**, JuiceFS reopens as a question,
+    and on B2 rather than OCI: B2 is ~3.7× cheaper per GB stored and
+    free on every API class, which is the dimension chunk traffic
+    stresses. That would need the delete-capable bucket key the
+    backup-integrity rules otherwise forbid, so it is a decision to
+    take deliberately rather than a fallback to slide into.
 
--   **Preferred: per-app JuiceFS with node-local metadata** — its own
-    filesystem on an object bucket chosen by the §4 placement rule
-    (same-region OCI Object Storage; B2 on the Vultr fallback — §4),
-    metadata in **SQLite on node-local storage — local-path on the
-    node's boot volume** (2026-08-24; deliberately *not* the
-    augmented node's block volume, which is hath's and protected),
-    mounted in-pod (sidecar), automatic metadata backup to the
-    bucket. The metadata volume is `backup=None` on record: the
-    JuiceFS auto metadata dump to its own bucket is the recovery
-    path, and the ultimate fallback is reseeding the whole replica
-    over the syncthing protocol. The local chunk cache rides the
-    boot volume too, size-capped. This kills
-    root cause (a) *by construction* (no metadata hop ever crosses the
-    WAN), and root cause (b) is answered by **honest sizing, not hope**:
-    the sidecar gets real requests/limits of **0.5–1 GiB** (legacy mount
-    pods idle at ~130 Mi, but that idle figure is exactly what starved
-    them under load) — this number is in the cloud node's RAM budget
-    (nodes.md §4.4), not discovered in an incident. Satisfies every
-    clause of the quarantine policy above — the census becomes exactly
-    **one**, and the CSI driver stays uninstalled.
--   **Alternative: s3ql** — an honest fit here since its single-mounter
-    limitation is precisely the deployment shape (one syncthing writer).
-    Kept as the named fallback rather than preferred: same FUSE-in-pod
-    mechanics but a much smaller community/maintenance base than JuiceFS,
-    for no capability we need.
--   **Rejected**: a provider block volume (~$11+/mo at $0.10/GB for data
-    whose durability already comes from replication + B2); moving the
-    replica to the homelab pool behind the internet VIP (see above — one
-    site, more cross-site traffic).
-
-The dav share serves the same dataset and follows the same mount.
+The dav share serves the same dataset and follows the same volume.
 
 **Lifting the quarantine: the criterion is not on file.** Containment
 has two levers and only one of them has a written test. *Admitting

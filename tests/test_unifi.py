@@ -167,13 +167,13 @@ async def test_the_cluster_vlan_is_a_network_object_the_gateway_terminates() -> 
     firewall = build()
 
     assert await firewall.network.name.future() == conventions.UNIFI_NETWORK_CLUSTER
-    assert await firewall.network.vlan_id.future() == conventions.CLUSTER_VLAN_ID
+    assert await firewall.network.vlan_id.future() == conventions.CLUSTER_VLAN.vlan_id
     # The controller spells the addressing as its own interface address plus
     # the prefix, so this field carries the gateway and the subnet at once.
     subnet = await firewall.network.subnet.future()
     assert subnet is not None
-    assert IPv4Interface(subnet).ip == conventions.CLUSTER_VLAN_GATEWAY_V4
-    assert IPv4Interface(subnet).network == conventions.CLUSTER_VLAN_V4
+    assert IPv4Interface(subnet).ip == conventions.CLUSTER_VLAN.require_gateway()
+    assert IPv4Interface(subnet).network == conventions.CLUSTER_VLAN.v4
     # `vlan-only` would describe a VLAN the gateway does not terminate, which
     # is a VLAN with no default route, no BGP peer and no zone.
     assert await firewall.network.purpose.future() == 'corporate'
@@ -293,8 +293,8 @@ async def test_the_iot_vlan_is_carved_out_of_the_way_into_the_cluster() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_cluster_v4, 'IPV4', str(conventions.VLAN_IOT)),
-        (firewall.iot_cluster_v6, 'IPV6', str(unifi.VLAN_IOT_V6)),
+        (firewall.iot_cluster_v4, 'IPV4', str(conventions.IOT_VLAN.v4)),
+        (firewall.iot_cluster_v6, 'IPV6', str(conventions.IOT_VLAN.v6)),
     )
     for policy, version, expected in families:
         assert await policy.action.future() == 'BLOCK'
@@ -347,12 +347,12 @@ async def test_the_pool_is_named_by_group_and_the_groups_are_single_family() -> 
     firewall = build()
 
     assert await firewall.pool_v4.type.future() == 'address-group'
-    assert await firewall.pool_v4.members.future() == [str(conventions.LAN_POOL_V4)]
-    assert await firewall.pool_v4.name.future() == conventions.UNIFI_GROUP_LAN_POOL_V4
+    assert await firewall.pool_v4.members.future() == [str(conventions.LAN_POOL.v4)]
+    assert await firewall.pool_v4.name.future() == conventions.LAN_POOL.group_v4
 
     assert await firewall.pool_v6.type.future() == 'ipv6-address-group'
-    assert await firewall.pool_v6.members.future() == [str(conventions.LAN_POOL_V6)]
-    assert await firewall.pool_v6.name.future() == conventions.UNIFI_GROUP_LAN_POOL_V6
+    assert await firewall.pool_v6.members.future() == [str(conventions.LAN_POOL.v6)]
+    assert await firewall.pool_v6.name.future() == conventions.LAN_POOL.group_v6
 
     for policy in (firewall.iot_pool_v4, firewall.iot_pool_v6):
         destination = await policy.destination.future()
@@ -375,8 +375,8 @@ async def test_only_the_media_vip_is_reachable_from_the_iot_vlan() -> None:
     firewall = build()
 
     for policy, vip in (
-        (firewall.iot_media_v4, conventions.VIP_MEDIA_V4),
-        (firewall.iot_media_v6, conventions.VIP_MEDIA_V6),
+        (firewall.iot_media_v4, conventions.LAN_POOL.media_vip.v4),
+        (firewall.iot_media_v6, conventions.LAN_POOL.media_vip.v6),
     ):
         assert await policy.action.future() == 'ALLOW'
         destination = await policy.destination.future()
@@ -400,38 +400,17 @@ async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
     firewall = build()
 
     families = (
-        (firewall.iot_media_v4, str(conventions.VLAN_IOT)),
-        (firewall.iot_pool_v4, str(conventions.VLAN_IOT)),
-        (firewall.iot_media_v6, str(unifi.VLAN_IOT_V6)),
-        (firewall.iot_pool_v6, str(unifi.VLAN_IOT_V6)),
+        (firewall.iot_media_v4, str(conventions.IOT_VLAN.v4)),
+        (firewall.iot_pool_v4, str(conventions.IOT_VLAN.v4)),
+        (firewall.iot_media_v6, str(conventions.IOT_VLAN.v6)),
+        (firewall.iot_pool_v6, str(conventions.IOT_VLAN.v6)),
     )
     for policy, expected in families:
         source = await policy.source.future()
         assert source is not None
         assert source.ips == [expected]
 
-    assert str(unifi.VLAN_IOT_V6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
-
-
-def test_every_unique_local_prefix_is_numbered_after_its_own_third_octet() -> None:
-    """One scheme, so a renumbering that moves only one family is visible here.
-
-    Each /64 at the site carries the third octet of its IPv4 subnet as the
-    digits of its last group. Nothing derives one from the other — they are
-    two literals — which is exactly why the relation is worth asserting: the
-    failure it guards against is a v4 subnet moved and its v6 left behind,
-    which produces rules that match half a network.
-    """
-    pairs = (
-        (conventions.CLUSTER_VLAN_V4, conventions.CLUSTER_VLAN_V6),
-        (conventions.LAN_POOL_V4, conventions.LAN_POOL_V6),
-        (conventions.VLAN_IOT, unifi.VLAN_IOT_V6),
-    )
-    for v4, v6 in pairs:
-        octet = str(v4).split('.')[2]
-        assert str(v6).endswith(f':{octet}::/64'), f'{v6} does not follow {v4}'
-        assert v6.subnet_of(conventions.SITE_ULA)
-        assert v6.prefixlen == 64
+    assert str(conventions.IOT_VLAN.v6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
 
 
 @pytest.mark.asyncio

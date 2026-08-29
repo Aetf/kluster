@@ -306,10 +306,10 @@ def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
     route = Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd'))
 
     assert rewrites([route]) == (
-        Rewrite(domain='photos.ucw.phd', answer=str(conventions.VIP_LAN_V4)),
-        Rewrite(domain='photos.ucw.phd', answer=str(conventions.VIP_LAN_V6)),
-        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.VIP_LAN_V4)),
-        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.VIP_LAN_V6)),
+        Rewrite(domain='photos.ucw.phd', answer=str(conventions.LAN_POOL.default_vip.v4)),
+        Rewrite(domain='photos.ucw.phd', answer=str(conventions.LAN_POOL.default_vip.v6)),
+        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.LAN_POOL.default_vip.v4)),
+        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.LAN_POOL.default_vip.v6)),
     )
 
 
@@ -321,7 +321,7 @@ def test_both_families_are_rewritten() -> None:
     """
     answers = {entry.answer for entry in rewrites([Route(host='tube', exposure=Exposure.SPLIT, zones=('ucw.phd',))])}
 
-    assert answers == {str(conventions.VIP_LAN_V4), str(conventions.VIP_LAN_V6)}
+    assert answers == {str(conventions.LAN_POOL.default_vip.v4), str(conventions.LAN_POOL.default_vip.v6)}
 
 
 def test_an_iot_route_is_answered_by_the_media_vip() -> None:
@@ -329,8 +329,8 @@ def test_an_iot_route_is_answered_by_the_media_vip() -> None:
     route = Route(host='tube', exposure=Exposure.IOT, zones=('ucw.phd',))
 
     assert {entry.answer for entry in rewrites([route])} == {
-        str(conventions.VIP_MEDIA_V4),
-        str(conventions.VIP_MEDIA_V6),
+        str(conventions.LAN_POOL.media_vip.v4),
+        str(conventions.LAN_POOL.media_vip.v6),
     }
 
 

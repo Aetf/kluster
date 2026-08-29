@@ -409,12 +409,12 @@ def test_the_pin_is_written_against_the_address_the_session_dials(tmp_path: Path
     URI dials is written in front of the blob here, at the moment the endpoint
     that decides it is derived.
     """
-    from kluster.components.homelab import HOST_KEY
+    from kluster.conventions import HOMELAB_HOST_KEY
 
     _, query = _dial(tmp_path)
 
-    assert Path(query['knownhosts'][0]).read_text() == f'{HOST} {HOST_KEY}\n'
-    assert HOST_KEY.startswith('ssh-ed25519 ')
+    assert Path(query['knownhosts'][0]).read_text() == f'{HOST} {HOMELAB_HOST_KEY}\n'
+    assert HOMELAB_HOST_KEY.startswith('ssh-ed25519 ')
 
 
 def test_host_key_verification_is_not_switched_off(tmp_path: Path) -> None:

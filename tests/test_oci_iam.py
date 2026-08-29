@@ -25,6 +25,7 @@ from memory_kit import MemoryKit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from compartments import with_compartment
 from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
@@ -793,12 +794,8 @@ def unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
     produced it — creation, adoption by name, the announce — which exist for
     the next consumer whose entry carries no OCID yet.
     """
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.PHYSICAL,
-        conventions.Compartment(consumer=intended.consumer, name=intended.name),
-    )
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
+    with_compartment(monkeypatch, conventions.Compartment(consumer=intended.consumer, name=intended.name))
 
 
 def _compartments(tenancy: Tenancy) -> list[str]:
@@ -812,7 +809,7 @@ def _policy(tenancy: Tenancy, name: str) -> list[str]:
 def test_a_mint_creates_the_compartment_conventions_names_for_the_consumer(
     seeded: KdbxStore, tenancy: Tenancy, unrecorded: None
 ) -> None:
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
 
     _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
 
@@ -835,7 +832,7 @@ def test_the_ocid_of_a_new_compartment_is_announced_as_the_line_to_commit(
     # learns it says so rather than leaving it in a console it created.
     created = next(iter(tenancy.identity.compartments.values()))
     assert created.id in caplog.text
-    assert 'conventions.OCI_COMPARTMENTS' in caplog.text
+    assert 'conventions.OCI_TENANCY.compartments' in caplog.text
 
 
 def test_a_compartment_that_is_already_there_is_adopted_by_name(
@@ -855,7 +852,7 @@ def test_a_compartment_that_is_already_there_is_adopted_by_name(
 
 
 def test_a_compartment_being_deleted_is_not_adopted(seeded: KdbxStore, tenancy: Tenancy, unrecorded: None) -> None:
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
     going = _named('compartment', intended.name)
     going.lifecycle_state = 'DELETED'
     tenancy.identity.compartments[going.id] = going
@@ -873,9 +870,8 @@ def test_a_recorded_compartment_is_used_rather_than_re_created(
 ) -> None:
     recorded = _named('compartment', 'kluster')
     tenancy.identity.compartments[recorded.id] = recorded
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.STATE_BACKEND,
+    with_compartment(
+        monkeypatch,
         conventions.Compartment(consumer=conventions.STATE_BACKEND, name=recorded.name, ocid=recorded.id),
     )
 
@@ -889,9 +885,8 @@ def test_a_recorded_compartment_is_used_rather_than_re_created(
 def test_a_recorded_compartment_the_tenancy_does_not_have_is_refused(
     seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.STATE_BACKEND,
+    with_compartment(
+        monkeypatch,
         conventions.Compartment(consumer=conventions.STATE_BACKEND, name='kluster', ocid='ocid1.compartment.oc1..gone'),
     )
 
@@ -908,9 +903,8 @@ def test_a_compartment_whose_ocid_disagrees_with_the_mapping_is_refused(
 ) -> None:
     live = _named('compartment', 'kluster')
     tenancy.identity.compartments[live.id] = live
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.STATE_BACKEND,
+    with_compartment(
+        monkeypatch,
         conventions.Compartment(consumer=conventions.STATE_BACKEND, name=live.name, ocid='ocid1.compartment.oc1..old'),
     )
 

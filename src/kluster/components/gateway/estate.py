@@ -110,8 +110,8 @@ __all__ = (
     'image_path',
     'net_setup_environment',
     'on_boot_script',
-    'parse_addresses',
     'parse_rootfs',
+    'resolvers',
     'root_path',
     'unit_file',
     'unit_name',
@@ -180,13 +180,6 @@ MAX_PREFIXES = 64
 #: the LAN's name service must not fail with any single one of them.
 ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.com/dns-query')
 
-#: The public names the gateway serves for itself, as labels in the primary
-#: zone. They are the gateway's own vhosts — the controller console and both
-#: resolver interfaces — and it issues their certificates itself, because its
-#: TLS has to keep renewing while the cluster is down (gateway.md §1).
-VHOST_CONTROLLER = f'unifi.{conventions.ZONE_PRIMARY}'
-VHOST_ADGUARD = {'adguard-alice': f'alice.{conventions.ZONE_PRIMARY}', 'adguard-bob': f'bob.{conventions.ZONE_PRIMARY}'}
-
 #: The resolvers' own working directory, bind-mounted from the device so that a
 #: digest bump replaces the software and keeps the configuration; and the name
 #: the estate delivers its seed under, which is deliberately not the name the
@@ -220,11 +213,10 @@ CADDY_CONFIG = f'{CADDY_CONFIG_HOME}/caddy/Caddyfile'
 #: A device secret of its own, read by nothing else on the box.
 CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'
 
-#: The one estate member that runs in the host's own network namespace: its
-#: interface has to land there for the gateway to route through it
-#: (architecture.md §5.3). Which member it is also decides the order the
-#: recovery script works in, since restarting it can sever the session that
-#: asked for the restart.
+#: The member that carries the overlay, which the census declares as the one
+#: service in the host's own network namespace. It is named here as well
+#: because the unit needs a device node and a state directory, and those are
+#: properties of this daemon rather than of any service's placement.
 HOST_NETWORK_MEMBER = 'zerotier'
 
 #: The device node the ZeroTier daemon needs, and the state directory whose
@@ -374,8 +366,8 @@ def frr_config(
     password: str,
     local_asn: int = conventions.UDM_ASN,
     peer_asn: int = conventions.CLUSTER_ASN,
-    pool_v4: IPv4Network = conventions.LAN_POOL_V4,
-    pool_v6: IPv6Network = conventions.LAN_POOL_V6,
+    pool_v4: IPv4Network = conventions.LAN_POOL.v4,
+    pool_v6: IPv6Network = conventions.LAN_POOL.v6,
 ) -> str:
     """The routing daemon's configuration, rendered from the peer's address.
 
@@ -533,13 +525,13 @@ def net_setup_environment(address: IPv4Address) -> dict[str, str]:
     legible as one host.
     """
     return {
-        ENV_IPV4_CIDR: f'{address}/{conventions.VLAN_CONTAINER.prefixlen}',
-        ENV_IPV4_GATEWAY: str(_container_gateway()),
+        ENV_IPV4_CIDR: f'{address}/{conventions.CONTAINER_VLAN.v4.prefixlen}',
+        ENV_IPV4_GATEWAY: str(conventions.CONTAINER_VLAN.require_gateway()),
         ENV_IPV6_TOKEN: f'::{address}',
     }
 
 
-def caddyfile(*, adguard: Mapping[str, IPv4Address]) -> str:
+def caddyfile() -> str:
     """The gateway's own vhosts, with certificates it issues for itself.
 
     Each name is served over TLS the gateway obtains through a DNS-01 challenge
@@ -555,7 +547,7 @@ def caddyfile(*, adguard: Mapping[str, IPv4Address]) -> str:
     blocks = [
         '\n'.join(
             (
-                f'{VHOST_CONTROLLER} {{',
+                f'{conventions.VHOST_CONTROLLER} {{',
                 '\ttls {',
                 f'\t\tdns cloudflare {{file.{CADDY_TOKEN_PATH}}}',
                 '\t}',
@@ -571,15 +563,15 @@ def caddyfile(*, adguard: Mapping[str, IPv4Address]) -> str:
     blocks.extend(
         '\n'.join(
             (
-                f'{VHOST_ADGUARD[instance]} {{',
+                f'{instance.vhost} {{',
                 '\ttls {',
                 f'\t\tdns cloudflare {{file.{CADDY_TOKEN_PATH}}}',
                 '\t}',
-                f'\treverse_proxy http://{address}:{conventions.ADGUARD_API_PORT}',
+                f'\treverse_proxy http://{instance.address}:{conventions.ADGUARD_API_PORT}',
                 '}',
             )
         )
-        for instance, address in sorted(adguard.items())
+        for instance in resolvers()
     )
     return '\n\n'.join(blocks) + '\n'
 
@@ -788,11 +780,6 @@ def _startup_order(containers: Sequence[Container]) -> tuple[Container, ...]:
     )
 
 
-def _container_gateway() -> IPv4Address:
-    """The container VLAN's own router, which is this device: the first address."""
-    return next(conventions.VLAN_CONTAINER.hosts())
-
-
 # ---------------------------------------------------------------------------
 # The census
 # ---------------------------------------------------------------------------
@@ -817,48 +804,52 @@ def parse_rootfs(raw: object) -> dict[str, Rootfs]:
     return pins
 
 
-def parse_addresses(raw: object) -> dict[str, IPv4Address]:
-    """Read the bridged members' addresses from stack configuration."""
-    entries = facts.mapping(raw, 'the estate address configuration')
-    return {member: IPv4Address(facts.text(entries, member, f'the address of {member}')) for member in entries}
-
-
 #: The length of a hex-encoded SHA-256 digest.
 _SHA256_LENGTH = 64
 
 
-def census(
-    *,
-    rootfs: Mapping[str, Rootfs],
-    addresses: Mapping[str, IPv4Address],
-    acme_token: pulumi.Input[str],
-) -> tuple[Container, ...]:
-    """The estate as the design has it: four members, one of them host-networked.
+def resolvers() -> tuple[conventions.BridgedService, ...]:
+    """The estate's resolver instances, in name order.
 
-    `rootfs` pins each member's image and `addresses` places the bridged ones on
-    the container VLAN. Both are site facts rather than conventions — an image
-    digest is whatever the build produced, and the resolvers' addresses are
-    already written into every lease on the LAN — so they arrive as stack
-    configuration and are checked here against the census the design names.
+    A bridged service that serves a public name is what an AdGuard instance is
+    here: the name proxied to it is its administration interface, and the port
+    behind that name is the resolver's API.
     """
-    missing = [name for name in conventions.GW_ESTATE if name not in rootfs]
+    return tuple(
+        sorted(
+            (
+                service
+                for service in conventions.GW_SERVICES
+                if isinstance(service, conventions.BridgedService) and service.vhost is not None
+            ),
+            key=lambda service: service.name,
+        )
+    )
+
+
+def census(*, rootfs: Mapping[str, Rootfs], acme_token: pulumi.Input[str]) -> tuple[Container, ...]:
+    """The estate as the design has it: the service census, made runnable.
+
+    `conventions.GW_SERVICES` decides which members exist and where the bridged
+    ones sit; what arrives here is `rootfs`, which pins each member's image. A
+    digest is whatever the build produced, so it is a site fact rather than a
+    convention, and it is checked against the census by name.
+    """
+    services = {service.name: service for service in conventions.GW_SERVICES}
+    missing = [name for name in services if name not in rootfs]
     if missing:
         raise ValueError(f'the estate has no image pinned for {", ".join(missing)}')
-    unknown = sorted(set(rootfs) - set(conventions.GW_ESTATE))
+    unknown = sorted(set(rootfs) - set(services))
     if unknown:
         raise ValueError(f'{", ".join(unknown)} is not a member of the estate')
 
-    bridged = [name for name in conventions.GW_ESTATE if name != HOST_NETWORK_MEMBER]
-    unplaced = [name for name in bridged if name not in addresses]
-    if unplaced:
-        raise ValueError(f'the estate has no address for {", ".join(unplaced)}')
-
-    adguard = {name: addresses[name] for name in VHOST_ADGUARD}
+    caddy = services['caddy']
+    assert isinstance(caddy, conventions.BridgedService), 'the proxy serves from an address on the container VLAN'
     containers = [
         Container(
-            name='caddy',
-            rootfs=rootfs['caddy'],
-            address=addresses['caddy'],
+            name=caddy.name,
+            rootfs=rootfs[caddy.name],
+            address=caddy.address,
             state=CADDY_STATE,
             # Where the server looks, rather than where a reader might assume it
             # does. Its address is *not* here: this image asks for a lease
@@ -876,22 +867,22 @@ def census(
                 'HOME': CADDY_STATE,
             },
             files=(
-                Dropin(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile(adguard=adguard)),
+                Dropin(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile()),
                 Dropin(name='cloudflare.token', target=CADDY_TOKEN_PATH, content=acme_token, secret=True),
             ),
         )
     ]
     containers.extend(
         Container(
-            name=instance,
-            rootfs=rootfs[instance],
-            address=addresses[instance],
+            name=instance.name,
+            rootfs=rootfs[instance.name],
+            address=instance.address,
             state=ADGUARD_STATE,
             # The address, delivered where the image reads it: its `net-setup`
             # service configures the interface out of PID 1's environment before
             # the resolver it guards is allowed to start, so a resolver never
             # comes up on an address the LAN was not told about.
-            environment=net_setup_environment(addresses[instance]),
+            environment=net_setup_environment(instance.address),
             files=(
                 # Read-only beside the installation rather than in the working
                 # directory: the working directory is where the live
@@ -900,7 +891,7 @@ def census(
                 Dropin(
                     name=ADGUARD_SEED,
                     target=f'{ADGUARD_INSTALL}/{ADGUARD_SEED}',
-                    content=adguard_seed(addresses[instance]),
+                    content=adguard_seed(instance.address),
                 ),
             ),
             # The live configuration is the instance's own: it rewrites the
@@ -911,7 +902,7 @@ def census(
             # lands at exactly the path the instance is started with.
             seed=Seed(source=ADGUARD_SEED, into='AdGuardHome.yaml'),
         )
-        for instance in sorted(VHOST_ADGUARD)
+        for instance in resolvers()
     )
     containers.append(
         # Nothing is injected into this one: the daemon is started with its

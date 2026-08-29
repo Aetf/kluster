@@ -6,11 +6,12 @@ machines terminate public traffic. They are spread across availability
 domains before fault domains, so
 losing one takes neither quorum nor ingress with it.
 
-One of the three is **augmented** — it additionally carries a block volume, a
-secondary private IP, and the reserved public IP that OCI 1:1-NATs onto it.
-Nothing about the node is workload-specific: it is simply the node with extra
-storage and networking, and the dedicated-VIP workload finds it through
-scheduling constraints declared beside the workload (architecture.md §3.2).
+One of the three additionally carries the **dedicated VIP**: a secondary
+private IP and the reserved public IP that OCI 1:1-NATs onto it. Nothing about
+the node is workload-specific, and a workload that needs the address finds the
+node through scheduling constraints declared beside the workload
+(architecture.md §3.2). Block volumes are a separate capability, attached per
+entry of the fleet's volume table (`storage`).
 
 Listeners are not a fixed list. The management ports live here because they
 belong to the cluster rather than to any service; a service's listener is
@@ -136,7 +137,7 @@ class NodeLoadBalancer(Component):
 
 
 class CloudNodes(Component):
-    """The three A1 nodes, their NLB, and the augmented node's extra address."""
+    """The three A1 nodes, their NLB, and the dedicated VIP one of them holds."""
 
     def __init__(
         self,

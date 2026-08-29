@@ -64,5 +64,5 @@ def test_a_rewrite_carries_the_vip_its_route_implies() -> None:
     inputs = next(inputs for _, name, inputs in declared if name == 'alice-lan-photos.ucw.phd-v4')
 
     assert inputs['domain'] == 'photos.ucw.phd'
-    assert inputs['answer'] == str(conventions.VIP_LAN_V4)
+    assert inputs['answer'] == str(conventions.LAN_POOL.default_vip.v4)
     assert inputs['endpoint'] == ENDPOINTS[0]

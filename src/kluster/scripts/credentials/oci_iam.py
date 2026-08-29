@@ -81,14 +81,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from . import entries, masters
-from ...conventions import (
-    CLUSTER_NAME,
-    OCI_COMPARTMENTS,
-    OCI_REGION,
-    OCI_SEED_USER_EMAIL,
-    OCI_USER_EMAIL_DOMAIN,
-    Compartment,
-)
+from ... import conventions
+from ...conventions import CLUSTER_NAME, OCI_SEED_USER_EMAIL, Compartment
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -192,7 +186,7 @@ class Identity:
         name = cls.name_for(consumer)
         return cls(
             name=name,
-            email=f'{name}@{OCI_USER_EMAIL_DOMAIN}',
+            email=f'{name}@{conventions.OCI_TENANCY.user_email_domain}',
             section='§3',
             statements=(f'Allow group {name} to manage all-resources in compartment id {compartment_id}',),
         )
@@ -322,7 +316,7 @@ def identity_client(tenancy: str, user: str, private_key_pem: str, *, domain_url
         'user': user,
         'key_content': private_key_pem,
         'fingerprint': fingerprint(private_key_pem),
-        'region': OCI_REGION,
+        'region': conventions.OCI_TENANCY.region,
     }
     try:
         oci.config.validate_config(config)
@@ -1225,7 +1219,7 @@ class ApiKey:
 
     @property
     def region(self) -> str:
-        return OCI_REGION
+        return conventions.OCI_TENANCY.region
 
     @property
     def fingerprint(self) -> str:
@@ -1257,13 +1251,13 @@ def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) 
     if override is not None:
         log.info('confining %s to %s, which was named on the command line', consumer, override)
         return override
-    intended = OCI_COMPARTMENTS[consumer]
+    intended = conventions.OCI_TENANCY.compartments[consumer]
     log.info('looking up the %s compartment', intended.name)
     found = iam.find_compartment(intended.name)
     if intended.ocid is None:
         ocid = found if found is not None else iam.create_compartment(intended)
         log.warning(
-            'the %s compartment is %s: record it as the `%s` entry of `conventions.OCI_COMPARTMENTS` and commit '
+            'the %s compartment is %s: record it as the `%s` entry of `conventions.OCI_TENANCY.compartments` and commit '
             'that line, because the stack reads the OCID from there and refuses until it is written',
             intended.name,
             ocid,

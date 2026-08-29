@@ -202,6 +202,6 @@ def test_load_balancer_pools_are_a_service_label() -> None:
     successor here."""
     from kluster.lib.k8s import lb_pool_labels
 
-    assert lb_pool_labels(conventions.POOL_LAN) == {conventions.LB_POOL_LABEL: conventions.POOL_LAN}
+    assert lb_pool_labels(conventions.LAN_POOL.name) == {conventions.LB_POOL_LABEL: conventions.LAN_POOL.name}
     with pytest.raises(ValueError, match='no such load-balancer pool'):
         _ = lb_pool_labels('homelab')

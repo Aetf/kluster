@@ -29,6 +29,7 @@ from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
+from compartments import with_compartment
 from kluster import conventions
 from kluster.components.gateway import estate as gw_estate
 from kluster.scripts.credentials import (
@@ -213,7 +214,8 @@ def test_the_token_scope_is_the_zone_set_the_gateway_vhosts_need() -> None:
     # `credentials --help`. This is what holds the two equal: a vhost moved to
     # another zone fails here rather than at a renewal on the device months
     # later, and a zone left in the set after its last vhost leaves fails too.
-    served = {_vhost_zone(name) for name in (gw_estate.VHOST_CONTROLLER, *gw_estate.VHOST_ADGUARD.values())}
+    vhosts = [conventions.VHOST_CONTROLLER, *(instance.vhost for instance in gw_estate.resolvers())]
+    served = {_vhost_zone(name) for name in vhosts if name is not None}
 
     assert served == set(derived.GATEWAY_ACME_ZONES)
 
@@ -352,7 +354,7 @@ def test_the_physical_stack_gets_the_signing_configuration_a_provider_needs(
     private = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(private)
     assert oci_iam.fingerprint(private) in tenancy.identity.keys[user]
-    assert runner.config[derived.OCI_REGION_KEY] == conventions.OCI_REGION
+    assert runner.config[derived.OCI_REGION_KEY] == conventions.OCI_TENANCY.region
     # And nothing else: the compartment the stack acts in is a convention
     # rather than a config key, so the delivery does not restate it.
     assert 'compartmentId' not in runner.config
@@ -384,12 +386,8 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
     slot, _ = physical_stack
     # The pre-record state: `conventions` names the compartment but holds no
     # OCID yet, which is every consumer's shape before its first mint.
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.PHYSICAL,
-        conventions.Compartment(consumer=intended.consumer, name=intended.name),
-    )
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
+    with_compartment(monkeypatch, conventions.Compartment(consumer=intended.consumer, name=intended.name))
 
     _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
 
@@ -409,7 +407,7 @@ def test_the_recorded_compartment_is_adopted_not_recreated(
     slot, _ = physical_stack
     # The post-record state `conventions` carries today: the OCID is written,
     # so the mint must find that compartment and act in it, creating nothing.
-    intended = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
     assert intended.ocid is not None
     tenancy.identity.compartments[intended.ocid] = Named(id=intended.ocid, name=intended.name)
 
@@ -521,7 +519,7 @@ def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
     config = oci.config.from_file(str(written))
     oci.config.validate_config(config)  # pyright: ignore[reportUnknownMemberType]
     user = _named(tenancy, f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}')
-    assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_REGION)
+    assert (config['tenancy'], config['user'], config['region']) == (TENANCY, user, conventions.OCI_TENANCY.region)
     # The credential and nothing else: where the appliance may act is a
     # convention its provisioner reads, so a copy here could only go stale.
     assert 'compartment-id' not in config

@@ -100,9 +100,9 @@ def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
         if not route.lan_side:
             continue
         v4, v6 = (
-            (conventions.VIP_MEDIA_V4, conventions.VIP_MEDIA_V6)
+            (conventions.LAN_POOL.media_vip.v4, conventions.LAN_POOL.media_vip.v6)
             if route.exposure is Exposure.IOT
-            else (conventions.VIP_LAN_V4, conventions.VIP_LAN_V6)
+            else (conventions.LAN_POOL.default_vip.v4, conventions.LAN_POOL.default_vip.v6)
         )
         for zone in route.zones:
             domain = f'{route.host}.{zone}'

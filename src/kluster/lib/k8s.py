@@ -242,6 +242,6 @@ def lb_pool_labels(pool: str) -> dict[str, str]:
     successor, because Cilium allocates an address from a pool rather than
     lending out whichever node happens to be announcing.
     """
-    if pool not in (conventions.POOL_INTERNET, conventions.POOL_LAN):
+    if pool not in (conventions.POOL_INTERNET, conventions.LAN_POOL.name):
         raise ValueError(f'no such load-balancer pool: {pool}')
     return {conventions.LB_POOL_LABEL: pool}

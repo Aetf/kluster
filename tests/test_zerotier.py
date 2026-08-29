@@ -319,8 +319,8 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     assert '192.168.71.0/24' in targets, 'the `lan` pool'
     # The pool is not a subnet anything is attached to: it is carried because
     # the gateway learns host routes into it over BGP.
-    assert conventions.LAN_POOL_V4 in conventions.ZT_MANAGED_ROUTES
-    assert conventions.CLUSTER_VLAN_V4 in conventions.ZT_MANAGED_ROUTES
+    assert conventions.LAN_POOL.v4 in conventions.ZT_MANAGED_ROUTES
+    assert conventions.CLUSTER_VLAN.v4 in conventions.ZT_MANAGED_ROUTES
 
 
 def test_the_gateway_member_is_placed_at_the_constant_every_client_dials() -> None:

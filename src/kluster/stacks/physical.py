@@ -35,7 +35,7 @@ from kluster.components.backup import BackupBucket
 from kluster.components.cloud import CloudNetwork
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
-from kluster.components.cloud.storage import CHUNK_IDENTITY, CacheVolume, ChunkStore
+from kluster.components.cloud.storage import NodeVolume
 from kluster.components.gateway import estate as gw_estate
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
@@ -45,12 +45,11 @@ from putils import async_output
 KUBE_API_PORT = 6443
 
 #: The tenancy the OCI credential signs for, read out of the provider's own
-#: configuration rather than restated as a key of this program's. It is not a
-#: decision this program makes — it is the account the key belongs to, written
-#: beside the key by the mint that issued it (credentials.md §3) — and three
-#: resources below need it, because all three are tenancy-level objects that
-#: *name* a compartment rather than living in one: the quota policy, the
-#: budget, and the IAM policy confining the chunk credential.
+#: configuration rather than restated as a key of this program's. It is the
+#: account the key belongs to, written beside the key by the mint that issued
+#: it (credentials.md §3), and the two guardrail resources need it because both
+#: are tenancy-level objects that *name* a compartment rather than living in
+#: one: the quota policy and the budget.
 OCI_NAMESPACE = 'oci'
 OCI_TENANCY_KEY = 'tenancyOcid'
 
@@ -87,7 +86,7 @@ async def main() -> None:
     # this stack's own credential is confined to, decided here and created by
     # the mint that issues that credential (credentials.md §3). A stack whose
     # compartment does not exist yet refuses by naming that command.
-    compartment_id = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL].require()
+    compartment_id = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL].require()
     tenancy_id = pulumi.Config(OCI_NAMESPACE).require_secret(OCI_TENANCY_KEY)
     talos_version = config.require('talosVersion')
 
@@ -119,7 +118,7 @@ async def main() -> None:
         # because the VLAN and its gateway are this program's own decision
         # (`conventions`), and a second place to state it is a second place
         # for it to be wrong.
-        bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN_GATEWAY_V4}/32'},
+        bgp_peers={conventions.HOMELAB_NODE: f'{conventions.CLUSTER_VLAN.require_gateway()}/32'},
     )
 
     placements = async_output(lambda: _placements(compartment_id))
@@ -136,7 +135,7 @@ async def main() -> None:
         memory_gb=conventions.NODE_MEMORY_GB,
         boot_volume_gb=conventions.NODE_BOOT_VOLUME_GB,
         placements=placements,
-        augmented=conventions.AUGMENTED_NODE,
+        augmented=conventions.DEDICATED_VIP_NODE,
         load_balancer=load_balancer,
     )
 
@@ -156,7 +155,7 @@ async def main() -> None:
     pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
 
     _declare_talos_day1(cluster=cluster, nodes=nodes, cluster_endpoint=load_balancer.address)
-    _declare_storage(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id, nodes=nodes)
+    _declare_storage(compartment_id=compartment_id, nodes=nodes)
     _declare_guardrails(config=config, compartment_id=compartment_id, tenancy_id=tenancy_id)
 
     # The two domains that are not the cloud: the host under libvirt, and the
@@ -247,10 +246,11 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
     credentials, because they authorize three different things and no one of
     them should imply the others.
 
-    Everything read here is a site fact: what the images were built as, where
-    the resolvers sit, which nodes are on the overlay. The decisions — the
-    estate's shape, the firewall census, the roster's roles and the rules that
-    confine a run — are code, and the configuration is checked against them.
+    Everything read here is a site fact: what the images were built as, which
+    nodes are on the overlay, what the worker's global address turned out to
+    be. The decisions — the service census and the addresses on it, the
+    firewall census, the roster's roles and the rules that confine a run — are
+    code, and the configuration is checked against them.
 
     The overlay's own census arrives as `overlay` rather than being read here,
     because the libvirt session needs it too and the two must agree on it
@@ -279,8 +279,6 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
     `ssh-ed25519 <blob>` line with no host name in front of it, so it matches
     the device at whichever address the session dials (`providers/device_files/ssh.py`).
     """
-    addresses = gw_estate.parse_addresses(config.require_object('gatewayAddresses'))
-    resolvers = [addresses[instance] for instance in sorted(gw_estate.VHOST_ADGUARD)]
     gateway_host = overlay.gateway
 
     gateway.declare_estate(
@@ -292,7 +290,6 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
         bgp_password=config.require_secret('gatewayBgpPassword'),
         acme_token=config.require_secret('gatewayAcmeToken'),
         rootfs=gw_estate.parse_rootfs(config.require_object('gatewayRootfs')),
-        addresses=addresses,
     )
     gateway.declare_firewall(
         conventions.CLUSTER_NAME,
@@ -323,7 +320,7 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
         api_token=config.require_secret('zerotierApiToken'),
         network_id=config.require('zerotierNetworkId'),
         members=members,
-        adguard=resolvers,
+        adguard=[resolver.address for resolver in gw_estate.resolvers()],
     )
     # Machine facts, for the `dns` stack's `*.zt` host block: the overlay
     # address ZeroTier Central assigned each member. Only these cross — which
@@ -348,68 +345,45 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
 
 @dataclass(frozen=True)
 class Storage:
-    """The three resources §1 and §5 declare, returned as one handle.
+    """What §1 and §5 declare, returned as one handle.
 
-    They belong together because the rule that separates them is the point:
-    two live on the cloud provider beside the nodes, and the third is
-    somewhere else on purpose.
+    The block volumes and the bucket belong together because the rule that
+    separates them is the point: the volumes live on the cloud provider beside
+    the nodes, and the bucket is somewhere else on purpose.
     """
 
-    cache: CacheVolume
-    chunks: ChunkStore
+    volumes: Mapping[str, NodeVolume]
     backup: BackupBucket
 
 
-def _declare_storage(
-    *,
-    config: pulumi.Config,
-    compartment_id: str,
-    tenancy_id: pulumi.Input[str],
-    nodes: CloudNodes,
-) -> Storage:
-    """§1 and §5: the block volume and both object buckets.
+def _declare_storage(*, compartment_id: str, nodes: CloudNodes) -> Storage:
+    """§1 and §5: the fleet's block volumes and the backup bucket.
 
-    The augmented node's block volume, the chunk bucket that sits in-region
-    with the cloud nodes, and the backup bucket that deliberately does not —
-    a backup kept at the provider whose loss it insures is not a backup —
-    together with their scoped keys and the version-retention rule that makes
-    a deletion by automation recoverable.
-
-    Three site facts arrive as configuration because nothing here can derive
-    them: the identity domain's endpoint and name, which are properties of the
-    tenancy rather than of the region (`ociIdentityDomainUrl`,
-    `ociIdentityDomainName`), and the backup account's region, which no B2 API
-    returns in the form its S3 endpoint is spelled with (`b2Region`).
+    One volume per entry of `conventions.NODE_VOLUMES`, attached to the node
+    that entry names — for the following volume, whichever node holds the
+    dedicated VIP. The bucket is on the other provider deliberately: a backup
+    kept at the provider whose loss it insures is not a backup, and the
+    version-retention rule beside it is what makes a deletion by automation
+    recoverable.
     """
-    cache = CacheVolume(
-        conventions.CLUSTER_NAME,
-        compartment_id=compartment_id,
-        # Both read off the instance rather than restated: a volume attaches
-        # only within its own availability domain, and the node's domain is
-        # itself a regional fact chosen at apply time (`_placements`).
-        availability_domain=nodes.augmented.availability_domain,
-        instance_id=nodes.augmented.id,
-    )
-
-    chunks = ChunkStore(
-        conventions.CLUSTER_NAME,
-        compartment_id=compartment_id,
-        tenancy_id=tenancy_id,
-        # The region the nodes are in, because that is what makes this bucket
-        # worth having here: node ↔ Object Storage traffic in-region is $0 and
-        # rides the service gateway (storage.md §4).
-        region=conventions.OCI_REGION,
-        idcs_endpoint=config.require('ociIdentityDomainUrl'),
-        domain_name=config.require('ociIdentityDomainName'),
-        # The domain refuses a user without a unique primary address, so each
-        # user this program creates is addressed after itself (`conventions`).
-        user_email=f'{CHUNK_IDENTITY}@{conventions.OCI_USER_EMAIL_DOMAIN}',
-        bucket_name=conventions.BUCKET_CHUNKS,
-    )
+    volumes = {
+        name: NodeVolume(
+            f'{conventions.CLUSTER_NAME}-{name}',
+            compartment_id=compartment_id,
+            # Both read off the instance rather than restated: a volume
+            # attaches only within its own availability domain, and the node's
+            # domain is itself a regional fact chosen at apply time
+            # (`_placements`).
+            availability_domain=nodes.instances[volume.attached_node].availability_domain,
+            instance_id=nodes.instances[volume.attached_node].id,
+            size_gb=volume.size_gb,
+        )
+        for name, volume in sorted(conventions.NODE_VOLUMES.items())
+    }
 
     backup = BackupBucket(
         conventions.CLUSTER_NAME,
-        region=config.require('b2Region'),
+        region=conventions.B2_ACCOUNT.region,
         bucket_name=conventions.BUCKET_BACKUP,
     )
 
@@ -418,10 +392,6 @@ def _declare_storage(
     # barman keys are not here: the census of namespaces belongs to the stack
     # that declares them, and each arrives as a scope on this bucket when it
     # does. What exists without any application is the etcd snapshot key.
-    pulumi.export('chunk_bucket', chunks.bucket_name)
-    pulumi.export('chunk_endpoint', chunks.endpoint)
-    pulumi.export('chunk_access_key_id', chunks.access_key_id)
-    pulumi.export('chunk_secret_key', chunks.secret_access_key)
     pulumi.export('backup_bucket', backup.bucket_name)
     pulumi.export('backup_endpoint', backup.endpoint)
     pulumi.export(
@@ -429,7 +399,7 @@ def _declare_storage(
         {scope: {'id': backup.key_id(scope), 'secret': backup.key_secret(scope)} for scope in backup.keys},
     )
 
-    return Storage(cache=cache, chunks=chunks, backup=backup)
+    return Storage(volumes=volumes, backup=backup)
 
 
 def _declare_guardrails(*, config: pulumi.Config, compartment_id: str, tenancy_id: pulumi.Input[str]) -> Guardrails:
@@ -444,7 +414,7 @@ def _declare_guardrails(*, config: pulumi.Config, compartment_id: str, tenancy_i
     which is why the name is a convention this program decides rather than
     something read back from the tenancy.
     """
-    compartment = conventions.OCI_COMPARTMENTS[conventions.PHYSICAL]
+    compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
     return Guardrails(
         conventions.CLUSTER_NAME,
         tenancy_id=tenancy_id,
@@ -509,9 +479,10 @@ def _declare_talos_day1(*, cluster: TalosCluster, nodes: CloudNodes, cluster_end
             conventions.HOMELAB_NODE: str(conventions.HOMELAB_NODE_IPV4),
         },
         endpoints={conventions.HOMELAB_NODE: cluster_endpoint},
-        # The dedicated VIP, which the augmented node does not otherwise answer
-        # for: OCI assigns the address to the VNIC and leaves the guest alone.
-        secondary_addresses={conventions.AUGMENTED_NODE: nodes.secondary_ip.ip_address},
+        # The dedicated VIP, which the node holding it does not otherwise
+        # answer for: OCI assigns the address to the VNIC and leaves the guest
+        # alone.
+        secondary_addresses={conventions.DEDICATED_VIP_NODE: nodes.secondary_ip.ip_address},
     )
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file

@@ -487,7 +487,7 @@ resource in its own compartment rather than by editing a policy, and a
 compromise of either key is confined to a boundary the console shows.
 
 **The compartment is part of the mint, not a prerequisite of it.**
-`conventions.OCI_COMPARTMENTS` names one per consumer, and the mint creates
+`conventions.OCI_TENANCY.compartments` names one per consumer, and the mint creates
 the one the tenancy does not have yet — which is what the seed's `manage
 compartments` statement is for: a boundary the platform's API can make must
 not become a console errand (§1 rule 5). The mapping carries the name, which
@@ -660,7 +660,7 @@ is five things (§2.1) and a provider recovers none of them: it reads
 `oci:region`. Those five are the whole of the push. Where the stack may
 act travels with neither the credential nor the configuration: the
 compartment is a boundary this program decides, so it is code
-(`conventions.OCI_COMPARTMENTS`) and the stack reads it there.
+(`conventions.OCI_TENANCY.compartments`) and the stack reads it there.
 
 Four of the five are config secrets — the key, and the two identifiers
 naming the tenancy and the user it belongs to, which are the class of fact

@@ -59,7 +59,6 @@ def declare_estate(
     bgp_password: pulumi.Input[str],
     acme_token: pulumi.Input[str],
     rootfs: Mapping[str, estate_module.Rootfs],
-    addresses: Mapping[str, IPv4Address],
     opts: pulumi.ResourceOptions | None = None,
 ) -> estate_module.Estate:
     """Declare the device's desired state: routing, the estate, the scripts.
@@ -76,11 +75,10 @@ def declare_estate(
     credential separate from the cluster's issuer, because the gateway's TLS has
     to keep renewing while the cluster is down.
 
-    `rootfs` and `addresses` are the estate's site facts: which build each
-    container runs and where the bridged ones sit on the container VLAN. They
-    are configuration rather than constants — a digest is whatever the build
-    produced, and the resolvers' addresses were written into every lease on the
-    LAN long before this program existed.
+    `rootfs` is the estate's one site fact: which build each container runs. It
+    is configuration rather than a constant, a digest being whatever the build
+    produced; the members themselves and the addresses the bridged ones hold
+    are the service census in `conventions`.
     """
     return estate_module.Estate(
         name,
@@ -90,7 +88,7 @@ def declare_estate(
             host_key=host_key,
             username=conventions.GW_SSH_USER,
         ),
-        containers=estate_module.census(rootfs=rootfs, addresses=addresses, acme_token=acme_token),
+        containers=estate_module.census(rootfs=rootfs, acme_token=acme_token),
         bgp_neighbour=bgp_neighbour,
         bgp_password=bgp_password,
         opts=opts,

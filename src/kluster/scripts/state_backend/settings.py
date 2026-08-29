@@ -21,7 +21,7 @@ NAME = conventions.STATE_BACKEND
 
 SHAPE = 'VM.Standard.E2.1.Micro'
 BOOT_VOLUME_GB = 50
-REGION = conventions.OCI_REGION
+REGION = conventions.OCI_TENANCY.region
 
 #: The appliance's own network (state-backend.md §4). Deliberately not the
 #: cluster VCN: that one is a `physical` resource, and Pulumi cannot create it

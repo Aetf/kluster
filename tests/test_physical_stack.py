@@ -24,24 +24,20 @@ import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
+from compartments import with_compartment
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.cloud import nodes
 from kluster.components.cloud.guardrails import Guardrails
-from kluster.components.gateway import unifi as gw_unifi
 from kluster.lib import workstation
 from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
-VNIC_ID = 'ocid1.vnic.oc1.phx.augmented'
+VNIC_ID = 'ocid1.vnic.oc1.phx.vip'
 AVAILABILITY_DOMAIN = 'ZRbp:PHX-AD-1'
-AUGMENTED_ID = 'ocid1.instance.oc1.phx.augmented'
 OBJECT_NAMESPACE = 'axmpletenancy'
 TENANCY_ID = 'ocid1.tenancy.oc1..test'
-IDCS_ENDPOINT = 'https://idcs-example.identity.oraclecloud.com'
-IDENTITY_DOMAIN = 'Default'
-B2_REGION = 'us-west-004'
 BUDGET_RECIPIENTS = ['alerts@example.invalid', 'second@example.invalid']
 ZT_NETWORK_ID = '0123456789abcdef'
 #: A LAN name for the gateway, as the first-bring-up knob carries one. Its shape
@@ -67,10 +63,10 @@ GATEWAY_CONFIG = {
     'kluster:gatewayBgpPassword': 'a-session-password',
     'kluster:gatewayAcmeToken': 'a-zone-scoped-token',
     'kluster:gatewayRootfs': json.dumps(
-        {name: {'url': f'https://example.invalid/{name}.raw', 'sha256': 'f' * 64} for name in conventions.GW_ESTATE}
-    ),
-    'kluster:gatewayAddresses': json.dumps(
-        {'caddy': '10.0.5.10', 'adguard-alice': '10.0.5.11', 'adguard-bob': '10.0.5.12'}
+        {
+            service.name: {'url': f'https://example.invalid/{service.name}.raw', 'sha256': 'f' * 64}
+            for service in conventions.GW_SERVICES
+        }
     ),
     'kluster:unifiApiKey': 'a-controller-key',
     'kluster:workerGua': WORKER_GUA,
@@ -124,10 +120,6 @@ class Mocks(pulumi.runtime.Mocks):
             outputs['networkId'] = ZT_NETWORK_ID
         if args.typ == 'oci:Core/instance:Instance':
             outputs['availabilityDomain'] = AVAILABILITY_DOMAIN
-        if args.typ == 'oci:Identity/domainsUser:DomainsUser':
-            outputs['ocid'] = 'ocid1.user.oc1..chunks'
-        if args.typ == 'oci:Identity/domainsCustomerSecretKey:DomainsCustomerSecretKey':
-            outputs |= {'accessKey': 'chunk-access-key', 'secretKey': 'chunk-secret-key'}
         if args.typ == 'b2:index/bucket:Bucket':
             outputs['bucketId'] = 'b2-bucket-id'
         if args.typ == 'b2:index/applicationKey:ApplicationKey':
@@ -185,9 +177,6 @@ COMPARTMENT = conventions.Compartment(
 STACK_CONFIG = {
     'kluster:talosVersion': 'v1.11.0',
     'oci:tenancyOcid': TENANCY_ID,
-    'kluster:ociIdentityDomainUrl': IDCS_ENDPOINT,
-    'kluster:ociIdentityDomainName': IDENTITY_DOMAIN,
-    'kluster:b2Region': B2_REGION,
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
     # The §3 domain: the credential the host is reached with, where the
     # worker's image and seed are written, and which domain is adopted rather
@@ -201,7 +190,7 @@ STACK_CONFIG = {
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
-    monkeypatch.setitem(conventions.OCI_COMPARTMENTS, conventions.PHYSICAL, COMPARTMENT)
+    with_compartment(monkeypatch, COMPARTMENT)
     # The run materializes the libvirt session's credential into the checkout's
     # `.credentials/`, so every test here is pointed at a directory of its own:
     # a test suite that wrote into the tree it runs from would leave a key
@@ -290,7 +279,7 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     assert inward['destination']['zoneId'] == zone
 
     # Two drops, one per family, because the source is a literal subnet.
-    for suffix, source in (('v4', str(conventions.VLAN_IOT)), ('v6', str(gw_unifi.VLAN_IOT_V6))):
+    for suffix, source in (('v4', str(conventions.IOT_VLAN.v4)), ('v6', str(conventions.IOT_VLAN.v6))):
         drop = setup.inputs[f'{name}-iot-cluster-{suffix}']
         assert drop['action'] == 'BLOCK'
         assert drop['source']['ips'] == [source]
@@ -340,7 +329,7 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     assert (slot / homelab.KEYFILE).read_text() == LIBVIRT_KEY
     # The pin is written against the address the URI dials: a `known_hosts`
     # entry keyed on anything else matches nothing the session sees.
-    assert (slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {homelab.HOST_KEY}\n'
+    assert (slot / homelab.KNOWN_HOSTS).read_text() == f'{address} {conventions.HOMELAB_HOST_KEY}\n'
     # And no key holds any of it: what is configured is the credential alone.
     assert not [key for key in STACK_CONFIG if 'libvirtUri' in key]
 
@@ -472,11 +461,7 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
     # compartment is named but has never been created, so there is no OCID to
     # declare anything in. What matters is that the refusal names the command
     # that produces one -- a lookup failure here would say nothing at all.
-    monkeypatch.setitem(
-        conventions.OCI_COMPARTMENTS,
-        conventions.PHYSICAL,
-        conventions.Compartment(consumer=conventions.PHYSICAL, name=COMPARTMENT.name),
-    )
+    with_compartment(monkeypatch, conventions.Compartment(consumer=conventions.PHYSICAL, name=COMPARTMENT.name))
 
     with pytest.raises(conventions.CompartmentMissing, match=r'credentials derived oci-physical mint'):
         await physical.main()
@@ -642,24 +627,30 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Mock
     assert 50000 in nodes.MANAGEMENT_PORTS
 
 
-def declare_storage() -> physical.Storage:
-    """§1 and §5 on their own, against a stub of the one node they read.
+#: The instance id each node's stub answers with, so an attachment can be
+#: asserted to have landed on the node the volume table names.
+INSTANCE_IDS = {node: f'ocid1.instance.oc1.phx.{node}' for node in conventions.CLOUD_NODES}
 
-    The augmented instance is the whole of what this domain needs from the
-    fleet: the availability domain a volume may be attached within, and the
-    instance it attaches to. Stubbing it keeps the assertions below about the
-    wiring rather than about the fleet, which `test_cloud_nodes` already holds.
+
+def declare_storage() -> physical.Storage:
+    """§1 and §5 on their own, against stubs of the nodes they read.
+
+    An instance is the whole of what this domain needs from the fleet: the
+    availability domain a volume may be attached within, and the instance it
+    attaches to. Stubbing them keeps the assertions below about the wiring
+    rather than about the fleet, which `test_cloud_nodes` already holds.
     """
     nodes = SimpleNamespace(
-        augmented=SimpleNamespace(
-            availability_domain=pulumi.Output.from_input(AVAILABILITY_DOMAIN),
-            id=pulumi.Output.from_input(AUGMENTED_ID),
-        )
+        instances={
+            node: SimpleNamespace(
+                availability_domain=pulumi.Output.from_input(AVAILABILITY_DOMAIN),
+                id=pulumi.Output.from_input(instance_id),
+            )
+            for node, instance_id in INSTANCE_IDS.items()
+        }
     )
     return physical._declare_storage(  # pyright: ignore[reportPrivateUsage]
-        config=pulumi.Config(),
         compartment_id=COMPARTMENT.require(),
-        tenancy_id=TENANCY_ID,
         nodes=cast('Any', nodes),
     )
 
@@ -673,60 +664,40 @@ def declare_guardrails() -> Guardrails:
 
 
 @pytest.mark.asyncio
-async def test_the_cache_volume_is_created_and_attached_where_the_augmented_node_is() -> None:
+async def test_every_volume_is_attached_to_the_node_the_table_names() -> None:
     """A block volume attaches only within its own availability domain.
 
     Both halves come off the instance rather than out of a constant, because
     the domain a node lands in is itself decided at apply time from what the
     region offers — a volume pinned to a remembered domain would fail to
-    attach the first time the placement list came back in another order.
+    attach the first time the placement list came back in another order. Which
+    instance each one lands on is the table's answer, and for the following
+    volume that answer is the node holding the dedicated VIP.
     """
     declared = declare_storage()
 
-    assert await declared.cache.volume.availability_domain.future() == AVAILABILITY_DOMAIN
-    assert await declared.cache.attachment.instance_id.future() == AUGMENTED_ID
+    for name, volume in conventions.NODE_VOLUMES.items():
+        component = declared.volumes[name]
+        assert await component.volume.availability_domain.future() == AVAILABILITY_DOMAIN
+        assert await component.volume.size_in_gbs.future() == str(volume.size_gb)
+        assert await component.attachment.instance_id.future() == INSTANCE_IDS[volume.attached_node]
 
-
-@pytest.mark.asyncio
-async def test_the_chunk_credential_is_granted_on_one_bucket_in_the_configured_domain() -> None:
-    """The policy is the whole of what the S3 key may do.
-
-    A customer secret key carries no scope of its own — it is only as confined
-    as the group its user is in — so the single statement here is the blast
-    radius, and it names the identity domain configuration supplies rather
-    than assuming a tenancy's domain is called anything in particular.
-    """
-    from kluster.components.cloud import storage
-
-    declared = declare_storage()
-
-    statements = await declared.chunks.policy.statements.future()
-    assert statements == [
-        storage.statement(
-            domain=IDENTITY_DOMAIN,
-            group=storage.CHUNK_IDENTITY,
-            compartment_id=COMPARTMENT.require(),
-            bucket=conventions.BUCKET_CHUNKS,
-        )
-    ]
+    following = declared.volumes['hath-cache']
+    assert await following.attachment.instance_id.future() == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
 
 
 @pytest.mark.asyncio
 async def test_the_backup_bucket_is_not_hosted_by_the_provider_it_insures() -> None:
-    """The placement rule, as the two endpoints a consumer is handed.
+    """The placement rule, as the endpoint a consumer is handed.
 
     Tenancy loss is an enumerated risk, so the bucket the cluster is rebuilt
-    from answers on another provider entirely; the chunk bucket may sit in the
-    nodes' own region because it backs a replica whose other full copy is on
-    the homelab NAS (storage.md §4).
+    from answers on another provider entirely (storage.md §4). Its region is an
+    account property rather than stack configuration, so the endpoint is
+    derivable from `conventions` alone.
     """
     declared = declare_storage()
 
-    assert declared.backup.endpoint == f'https://s3.{B2_REGION}.backblazeb2.com'
-    chunk_endpoint = await declared.chunks.endpoint.future()
-    assert chunk_endpoint == (
-        f'https://{OBJECT_NAMESPACE}.compat.objectstorage.{conventions.OCI_REGION}.oraclecloud.com'
-    )
+    assert declared.backup.endpoint == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
 
 
 @pytest.mark.asyncio
@@ -749,16 +720,8 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
     await physical.main()
 
-    assert exported['chunk_bucket'] == conventions.BUCKET_CHUNKS
     assert exported['backup_bucket'] == conventions.BUCKET_BACKUP
-    assert exported['backup_endpoint'] == f'https://s3.{B2_REGION}.backblazeb2.com'
-
-    endpoint = cast('pulumi.Output[str]', exported['chunk_endpoint'])
-    assert await endpoint.future() == (
-        f'https://{OBJECT_NAMESPACE}.compat.objectstorage.{conventions.OCI_REGION}.oraclecloud.com'
-    )
-    secret_key = cast('pulumi.Output[str]', exported['chunk_secret_key'])
-    assert await secret_key.future() == 'chunk-secret-key'
+    assert exported['backup_endpoint'] == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
 
     # The one consumer that exists whether or not any application does.
     keys = cast('dict[str, dict[str, pulumi.Output[str]]]', exported['backup_keys'])
@@ -826,9 +789,6 @@ def test_the_tenancy_is_read_from_the_key_the_mint_writes() -> None:
 #: inside a provider call.
 SITE_FACTS = [
     'oci:tenancyOcid',
-    'kluster:ociIdentityDomainUrl',
-    'kluster:ociIdentityDomainName',
-    'kluster:b2Region',
     'kluster:budgetAlertRecipients',
     'kluster:libvirtPrivateKey',
     'kluster:libvirtStorageDir',

@@ -218,7 +218,7 @@ def _oci_consumer(command: argparse.ArgumentParser, consumer: str) -> None:
         metavar='<ocid>',
         help=(
             'mint against this compartment instead of the one `conventions` names for '
-            f'{consumer} ({conventions.OCI_COMPARTMENTS[consumer].name}), for a drill tenancy'
+            f'{consumer} ({conventions.OCI_TENANCY.compartments[consumer].name}), for a drill tenancy'
         ),
     )
 

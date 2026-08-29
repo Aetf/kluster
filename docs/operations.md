@@ -56,9 +56,10 @@ says so.
     re-create → rejoin quorum → health gate. Facts that shape it:
     A1 capacity at re-create is the known risk (the standing quorum
     holds capacity; rebuild promptly), NLB backends follow from
-    `physical` automatically; the **augmented node** carries extra
-    steps — block volume reattach, secondary private IP, reserved-IP
-    NAT re-point (architecture.md §3.2).
+    `physical` automatically; a node carrying a **block volume** needs
+    it reattached, and the node holding the **dedicated VIP** needs the
+    secondary private IP and the reserved-IP NAT re-pointed
+    (architecture.md §3.2).
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
     Gist: re-create from machine config (nocloud seed); local-path
     data returns via VolSync restore (that's the drilled move-path,
@@ -139,7 +140,7 @@ Owning docs keep the content — the index only locates it.
 | --- | --- |
 | State backend (cert/CA, PG major, rebuild, age rotation) | physical/state-backend.md §7 |
 | Gateway (ZT container down, firmware-wiped estate, UDM replacement) | physical/gateway.md §3 |
-| Node replacement (CP node, worker VM, augmented-node extras) | §3 here |
+| Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
 | Backup restores (CNPG, VolSync, etcd) | storage.md §5 + drill scripts |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down) | architecture.md §4.3 |
