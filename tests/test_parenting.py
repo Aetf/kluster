@@ -3,9 +3,8 @@
 A resource declared inside a component without a parent is not an error to
 Pulumi. It lands on the stack instead of on the component, inherits the stack's
 providers instead of the component's, and the failure that follows — if any —
-names a missing provider rather than a missing parent. rfc-002 §8.2 makes the
-framework refuse it, because a transformation cannot repair it: the SDK rejects
-any transformation that changes a resource's parent.
+names a missing provider rather than a missing parent. rfc-002 §8.2 is why
+the framework refuses it instead of repairing it.
 
 The cases below are the boundary of that refusal, in both directions. Nothing
 here contacts an engine: the monitor is Pulumi's mock, and every resource is a
@@ -190,20 +189,32 @@ async def test_the_scope_ends_at_register_outputs() -> None:
     assert await loose.urn.future() is not None
 
 
+class BuildsProvider(Component, pulumi_type='test:BuildsProvider'):
+    """A component that builds its own provider, with or without owning it.
+
+    rfc-002 §8.1 builds a provider inside the component whose credential opens
+    it, which makes the provider that component's child like anything else.
+    """
+
+    def __init__(self, name: str, *, parented: bool) -> None:
+        super().__init__(name)
+        self.provider = Prov(f'{name}-prov', opts=self.child_opts() if parented else None)
+        self.register_outputs({})
+
+
 @pytest.mark.asyncio
-async def test_a_provider_built_inside_a_component_is_judged_like_any_resource() -> None:
-    """Providers are not exempt: rfc-002 §8.1 builds them inside their owner, hence under it."""
-
-    class BuildsProvider(Component, pulumi_type='test:BuildsProvider'):
-        def __init__(self, name: str, *, parented: bool) -> None:
-            super().__init__(name)
-            self.provider = Prov(f'{name}-prov', opts=self.child_opts() if parented else None)
-            self.register_outputs({})
-
+async def test_a_provider_built_inside_a_component_without_a_parent_is_refused() -> None:
+    """Providers are not exempt from the rule."""
     message = refused(lambda: BuildsProvider('loose-provider', parented=False))
+
     assert 'pulumi:providers:test' in message
     assert 'loose-provider-prov' in message
+    assert 'loose-provider (test:BuildsProvider)' in message
 
+
+@pytest.mark.asyncio
+async def test_a_provider_owned_by_the_component_that_built_it_passes() -> None:
+    """Which is the shape rfc-002 §8.1 asks for."""
     component = BuildsProvider('owned-provider', parented=True)
     assert await component.provider.urn.future() is not None
 
@@ -259,11 +270,24 @@ async def test_a_forgotten_register_outputs_misnames_the_next_refusal() -> None:
 
 @pytest.mark.asyncio
 async def test_installing_twice_registers_one_transformation() -> None:
-    """One refusal, not two, however many times the program installs the backstop."""
+    """The install is idempotent per stack, and a refusal cannot show that.
+
+    A second copy of the transformation would refuse the same resources the
+    first one already refused — the first raise ends the registration — so the
+    only place the difference is visible is the root stack resource's own list.
+    The fixture has installed it once already; these two add nothing.
+    """
     install_parent_backstop()
     install_parent_backstop()
 
-    refused(lambda: Forgetful('twice'))
+    root = pulumi.runtime.get_root_resource()
+    assert root is not None
+    installed = [
+        transformation
+        for transformation in root._transformations  # pyright: ignore[reportPrivateUsage]
+        if transformation is putils_component._refuse_unparented  # pyright: ignore[reportPrivateUsage]
+    ]
+    assert len(installed) == 1
 
 
 @pytest.mark.asyncio
