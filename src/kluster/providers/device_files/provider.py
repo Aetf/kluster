@@ -45,15 +45,24 @@ unreachable -- deliberate, since a preview that silently reports "no changes"
 about a device it never reached is worse than one that says it could not look.
 
 **A change to any declared input is a change**, whether or not the device already
-agrees, and that includes the two credentials. An update rewrites bytes the
-device may already have, which is free and idempotent; the alternative -- calling
-a credential rotation "no change" because the file is already right -- leaves the
-superseded key in state, and a `delete` months later would then authenticate with
-a key that no longer opens the door. The address dialled is declared for the same
-reason and converges the same way: it is the same box behind a new address --
-during a first bring-up the device is reached over the LAN rather than over the
-overlay (physical/gateway.md §2.5) -- so the file is rewritten at the new address
-rather than moved to it, and nothing is deleted at the old one.
+agrees: an update rewrites bytes the device may already have, which is free and
+idempotent. The address dialled is declared and converges the same way -- it is
+the same box behind a new address, during a first bring-up reached over the LAN
+rather than over the overlay (physical/gateway.md §2.5) -- so the file is
+rewritten at the new address rather than moved to it, and nothing is deleted at
+the old one.
+
+**The session is the provider's own business, and `check` is what makes it
+visible.** The credential that opens the device is read in `configure`, out of
+stack configuration, inside the plugin's process: no caller declares it, no
+component passes it, and nothing pickles it. So that a reader still sees what it
+does, `check` adds two properties to every resource's checked inputs --
+`session`, the endpoint and a short digest of the credential, and
+`provider_version`, this module's own version. The engine compares checked
+inputs, so a rotation and a change to this module's behavior each render as a
+property diff no caller declared (rfc-002 §7.4). Neither is a change to the
+device: an update whose declared inputs all match re-stamps the resource and
+writes nothing.
 
 **Only the path is a replacement.** The bytes cannot be at two paths at once, so
 a moved file is created before the old one is deleted. Nothing else about a
@@ -76,25 +85,26 @@ it reads has changed, and a marker written after the hook would be a change the
 hook could never see. The marker beside the archive stays last, because it is
 the claim that the whole sequence succeeded.
 
-Secret-bearing inputs are declared secret: the client private key always, and a
-file's content on request (`secret=True`), for the files that carry device
-credentials. Content is not secret by default, because a secret input renders as
-a hash in a preview and most of what a device holds is configuration one wants
-to read.
-The pinned host key is deliberately *not* among them -- it is a public key, and a
-reviewable pin is worth more than a redacted one.
+A file's content is declared secret on request (`secret=True`), for the files
+that carry device credentials, and not by default: a secret input renders as a
+hash in a preview, and most of what a device holds is configuration one wants to
+read. The pinned host key is deliberately not secret either -- it is a public
+key, and a reviewable pin is worth more than a redacted one.
 
-The provider classes hold no state of their own. A dynamic provider is pickled
-into the stack's state and revived in a separate process where each call arrives
-on a thread with no event loop, so every operation runs its own loop, opens its
-own session and closes both. The two seams a test replaces -- how a session is
-opened, how a URL is fetched -- are module-level functions looked up when they
-are called rather than attributes captured at construction, which keeps the
-pickled provider a constant.
+The provider classes carry nothing into state. A dynamic provider is pickled into
+every resource it manages, so what these classes serialize to is what state
+holds: their own module and class name and an empty bag -- inert, identical for
+every resource, and unchanged by a credential rotation. They are revived in a
+separate process where each call arrives on a thread with no event loop, so every
+operation runs its own loop, opens its own session and closes both. The two seams
+a test replaces -- how a session is opened, how a URL is fetched -- are
+module-level functions looked up when they are called rather than attributes
+captured at construction, which keeps the pickled provider a constant.
 """
 
 from __future__ import annotations
 
+import abc
 import asyncio
 import hashlib
 import io
@@ -114,11 +124,19 @@ from kluster.providers.device_files import ssh
 
 __all__ = (
     'ADDRESS',
+    'ARTIFACT_COMPARED',
     'ARTIFACT_DECLARED',
-    'CREDENTIALS',
     'EXTRACTING_SUFFIX',
+    'FILE_COMPARED',
     'FILE_DECLARED',
+    'FINGERPRINT_LENGTH',
+    'PIN',
+    'PRIVATE_KEY_CONFIG',
+    'PROVIDER_VERSION',
+    'SESSION',
+    'STAMPS',
     'SUPERSEDED_SUFFIX',
+    'VERSION',
     'ZSTD_MAGIC',
     'Connection',
     'DigestMismatch',
@@ -127,7 +145,9 @@ __all__ = (
     'DeviceArtifactProvider',
     'DeviceFile',
     'DeviceFileProvider',
+    'DeviceProvider',
     'HookFailed',
+    'endpoint',
     'fetch',
     'gone',
     'marker_path',
@@ -149,18 +169,58 @@ __all__ = (
 #: taken off the network anyway.
 ADDRESS = ('host', 'port', 'username')
 
-#: The credentials the session is opened with. They say nothing about the file's
-#: contents, but they are declared inputs, so a rotation is a change -- see the
-#: module docstring on why "no change" would be a trap.
-CREDENTIALS = ('private_key', 'host_key')
+#: The key the device must present. Declared like the address and for the same
+#: reason: it is a public key the caller decides on, it belongs in a preview
+#: where a reviewer can read it, and a provider has no way to reach the caller's
+#: decisions for itself. The credential that answers it goes the other way --
+#: `PRIVATE_KEY_CONFIG`, read in `configure` and declared by nobody.
+PIN = ('host_key',)
 
 #: What a `DeviceFile` declares beyond its own path.
-FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
+FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 
 #: The same for a `DeviceArtifact`. The digest is the payload's identity and the URL
 #: is only where the bytes were found, but both are declared, so moving a release
 #: to another mirror is a diff a reviewer sees.
-ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *CREDENTIALS)
+ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
+
+#: The stack-configuration key the session's credential is read from, in
+#: `configure` and nowhere else. It is project-namespaced by the plugin, which
+#: also decrypts it on the way in (rfc-002 §7.5 E2), so the program neither reads
+#: it nor passes it on: this module is the only code in the repository that ever
+#: holds the device's private key.
+PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
+
+#: Which door a resource was last written through: the endpoint, and a short
+#: digest of the credential that opened it.
+SESSION = 'session'
+
+#: This module's version, as every resource records it.
+PROVIDER_VERSION = 'provider_version'
+
+#: What `check` stamps on a resource that no caller declared. They are inputs
+#: rather than outputs because the engine renders its comparison against the
+#: checked inputs: an output can record which session wrote a file, but it cannot
+#: carry a rotation into a preview (rfc-002 §7.5 E4, E8).
+STAMPS = (SESSION, PROVIDER_VERSION)
+
+#: Bumped by hand when an operation's behavior changes. Not ceremony: a provider
+#: class is pickled by reference, so editing the body of `create` changes not one
+#: byte of state and produces no diff at all, leaving every resource's outputs
+#: stale and saying nothing about it (rfc-002 §7.5 E1). This is what turns such
+#: an edit into a visible update.
+VERSION = '1'
+
+#: How much of the credential's digest a resource carries. Enough to tell two
+#: keys apart in a preview, and far too little to be the key.
+FINGERPRINT_LENGTH = 12
+
+#: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
+#: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
+#: that only an operation's outs ever carried lives in `olds` alone -- and a
+#: provider comparing the two bags wholesale reports a change on every run.
+FILE_COMPARED = (*FILE_DECLARED, *STAMPS)
+ARTIFACT_COMPARED = (*ARTIFACT_DECLARED, *STAMPS)
 
 #: How long the runner may spend fetching an artifact before giving up.
 FETCH_TIMEOUT = 300
@@ -222,14 +282,14 @@ class DigestMismatch(Exception):
 class Connection:
     """Where and as whom to write, and the key the device must present.
 
-    `host_key` is the pin. It is an input like any other so that it can come from
-    stack configuration rather than from a file the runner assembled, and it is
+    Everything here is public and everything here is a caller's decision, which
+    is why it travels as resource inputs. `host_key` is the pin, and it is
     required: there is no shape of this object that means "trust whatever
-    answers".
+    answers". The credential the session authenticates with is not here at all --
+    it is `PRIVATE_KEY_CONFIG`, read in the provider's own process.
     """
 
     host: pulumi.Input[str]
-    private_key: pulumi.Input[str]
     host_key: pulumi.Input[str]
     username: pulumi.Input[str] = 'root'
     port: pulumi.Input[int] = 22
@@ -239,7 +299,6 @@ class Connection:
             'host': self.host,
             'port': self.port,
             'username': self.username,
-            'private_key': self.private_key,
             'host_key': self.host_key,
         }
 
@@ -327,19 +386,17 @@ def marker_path(target: str) -> str:
 
 
 def secret_outputs(*, secret_content: bool = False) -> list[str]:
-    """The properties the engine must keep out of plain state and previews."""
-    return ['private_key', *(['content'] if secret_content else [])]
+    """The properties the engine must keep out of plain state and previews.
+
+    Only a file's content is ever one. The address and the pin are public, and
+    the credential is not a property of any resource.
+    """
+    return ['content'] if secret_content else []
 
 
-def device(props: Mapping[str, Any]) -> ssh.Device:
-    """The device a property bag names."""
-    return ssh.Device(
-        host=str(props['host']),
-        port=int(props['port']),
-        username=str(props['username']),
-        private_key=str(props['private_key']),
-        host_key=str(props['host_key']),
-    )
+def endpoint(props: Mapping[str, Any]) -> str:
+    """Where a property bag says the session goes, as one legible string."""
+    return f'{props["username"]}@{props["host"]}:{props["port"]}'
 
 
 def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
@@ -437,16 +494,97 @@ def gone() -> dynamic.ReadResult:
     return dynamic.ReadResult(id_=None, outs={})
 
 
+class DeviceProvider(dynamic.ResourceProvider, abc.ABC):
+    """What both device providers share: the session, and what it makes visible.
+
+    **The credential is not an attribute until `configure` has run**, and that is
+    the design rather than an oversight. What lands in state is a pickle of the
+    provider instance, so an attribute set where the program builds it would be a
+    copy of the credential on every resource, and rotating the key would rewrite
+    all of them. `__getstate__` returns an empty bag instead, and the plugin
+    deserializes and configures the provider before any operation reaches it
+    (rfc-002 §7.5 E2, E3) -- which is what makes reading `self.private_key` in an
+    operation safe. Giving it a default would not make anything safer: it would
+    turn a provider that was never configured into one that dials with the wrong
+    key.
+    """
+
+    #: Read in `configure`, in the plugin's process, and never serialized.
+    private_key: str
+
+    def configure(self, req: dynamic.ConfigureRequest) -> None:
+        """Take the session's credential from the stack's configuration."""
+        self.private_key = str(req.config.require(PRIVATE_KEY_CONFIG))
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Nothing at all -- see the class docstring."""
+        return {}
+
+    def _stamp(self, news: Mapping[str, Any], failures: list[dynamic.CheckFailure]) -> dynamic.CheckResult:
+        """The checked inputs, plus the two properties the provider itself decides.
+
+        `check` is the one hook that runs before every diff, and what it returns
+        is what the engine stores and compares -- so a property added here is a
+        property whose change is a visible diff (rfc-002 §7.5 E8). Nothing a
+        caller declares would show a credential rotation or a change to this
+        module.
+        """
+        return dynamic.CheckResult({**news, SESSION: self._session(news), PROVIDER_VERSION: VERSION}, failures)
+
+    def _session(self, props: Mapping[str, Any]) -> str:
+        """The door this resource is written through: the endpoint, and the key.
+
+        The digest is stored and previewed in the clear, deliberately. A property
+        a provider synthesizes carries no secret marking however secret the
+        configuration behind it (rfc-002 §7.5 E10), and this one is meant to be
+        read: a truncated digest of a key is not the key, and a redacted value
+        would make illegible the diff this property exists to render.
+        """
+        fingerprint = hashlib.sha256(self.private_key.encode()).hexdigest()[:FINGERPRINT_LENGTH]
+        return f'{endpoint(props)}#{fingerprint}'
+
+    def _device(self, props: Mapping[str, Any]) -> ssh.Device:
+        """The device a property bag names, opened with the configured credential."""
+        return ssh.Device(
+            host=str(props['host']),
+            port=int(props['port']),
+            username=str(props['username']),
+            private_key=self.private_key,
+            host_key=str(props['host_key']),
+        )
+
+    async def _restamp_only(self, olds: Mapping[str, Any], news: Mapping[str, Any], declared: tuple[str, ...]) -> bool:
+        """Whether this update has nothing for the device: only a stamp moved.
+
+        The stamps change without the device changing, so a rotation or a version
+        bump must not rewrite every file on the gateway -- the update re-stamps
+        the resource and leaves the device alone. The device still gets the last
+        word, because drift is the other reason an update is planned with every
+        declared input equal, and `diff` cannot say through its result which of
+        the two answers it gave. So it is asked again, and this branch reads:
+        writing is what it never does.
+        """
+        if declared_change(olds, news, declared):
+            return False
+        return not await self._drifted(news)
+
+    @abc.abstractmethod
+    async def _drifted(self, props: Mapping[str, Any]) -> bool:
+        """Whether the device disagrees with what `props` declares."""
+
+
 @final
-class DeviceFileProvider(dynamic.ResourceProvider):
+class DeviceFileProvider(DeviceProvider):
     """One desired-state file on the device: write it, then make it take effect."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        return dynamic.CheckResult(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
+        return self._stamp(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         run_sync(self._apply(props))
-        return dynamic.CreateResult(id_=_identifier(props, str(props['path'])), outs=props)
+        # The checked inputs go back out as the outputs, stamps included, so the
+        # stored bag records the session that wrote this file.
+        return dynamic.CreateResult(id_=str(props['path']), outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         replaces = replacements(olds, news, 'path')
@@ -456,12 +594,15 @@ class DeviceFileProvider(dynamic.ResourceProvider):
             return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=False)
         if has_unknowns(news):
             return dynamic.DiffResult(changes=None)
-        if declared_change(olds, news, FILE_DECLARED):
+        if declared_change(olds, news, FILE_COMPARED):
             return dynamic.DiffResult(changes=True, replaces=[])
         return dynamic.DiffResult(changes=run_sync(self._drifted(news)), replaces=[])
 
-    def update(self, _id: str, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
-        run_sync(self._apply(news))
+    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
+        if not run_sync(self._restamp_only(olds, news, FILE_DECLARED)):
+            run_sync(self._apply(news))
+        # The outs replace the stored output bag (rfc-002 §7.5 E9), so what state
+        # says about the session that last wrote this file stays true.
         return dynamic.UpdateResult(outs=news)
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
@@ -471,7 +612,7 @@ class DeviceFileProvider(dynamic.ResourceProvider):
         run_sync(self._delete(props))
 
     async def _apply(self, props: Mapping[str, Any]) -> None:
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             await transport.write(
                 str(props['path']),
                 str(props['content']).encode(),
@@ -482,7 +623,7 @@ class DeviceFileProvider(dynamic.ResourceProvider):
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         path = str(props['path'])
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
             if stat is None:
                 return True
@@ -492,7 +633,7 @@ class DeviceFileProvider(dynamic.ResourceProvider):
 
     async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
         path = str(props['path'])
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
             content = None if stat is None else await transport.read(path)
             if stat is None or content is None:
@@ -508,7 +649,7 @@ class DeviceFileProvider(dynamic.ResourceProvider):
         return dynamic.ReadResult(id_=id_, outs=outs)
 
     async def _delete(self, props: Mapping[str, Any]) -> None:
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             await transport.remove(str(props['path']))
             # The hook runs on the way out too: whatever reads this file has to
             # be told it is gone, exactly as it was told it had arrived.
@@ -516,7 +657,7 @@ class DeviceFileProvider(dynamic.ResourceProvider):
 
 
 @final
-class DeviceArtifactProvider(dynamic.ResourceProvider):
+class DeviceArtifactProvider(DeviceProvider):
     """A digest-pinned payload on the device, tracked by a marker file."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
@@ -524,11 +665,11 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
         sha256 = news.get('sha256')
         if sha256 is not None and not is_unknown(sha256) and not _is_sha256(str(sha256)):
             failures.append(dynamic.CheckFailure('sha256', f'must be a hex SHA-256 digest, got {sha256!r}'))
-        return dynamic.CheckResult(news, failures)
+        return self._stamp(news, failures)
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         self._push(props)
-        return dynamic.CreateResult(id_=_identifier(props, str(props['target'])), outs=props)
+        return dynamic.CreateResult(id_=str(props['target']), outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
         replaces = replacements(olds, news, 'target')
@@ -536,12 +677,16 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
             return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=False)
         if has_unknowns(news):
             return dynamic.DiffResult(changes=None)
-        if declared_change(olds, news, ARTIFACT_DECLARED):
+        if declared_change(olds, news, ARTIFACT_COMPARED):
             return dynamic.DiffResult(changes=True, replaces=[])
         return dynamic.DiffResult(changes=run_sync(self._drifted(news)), replaces=[])
 
-    def update(self, _id: str, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
-        self._push(news)
+    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
+        # A re-stamp fetches nothing either: the payload the device holds is the
+        # payload the pin names, and the runner has no reason to download it
+        # again to find that out.
+        if not run_sync(self._restamp_only(olds, news, ARTIFACT_DECLARED)):
+            self._push(news)
         return dynamic.UpdateResult(outs=news)
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
@@ -566,7 +711,7 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
     async def _land(self, props: Mapping[str, Any], data: bytes, digest: str) -> None:
         target = str(props['target'])
         tree = _extract(props)
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             await transport.write(target, data, mode=str(props['mode']), owner=_owner(props))
             if tree:
                 await self._unpack(transport, target, tree)
@@ -589,7 +734,7 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
         target = str(props['target'])
         tree = _extract(props)
         pinned = str(props['sha256']).lower()
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(target)
             if stat is None:
                 return True
@@ -603,7 +748,7 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
     async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
         target = str(props['target'])
         tree = _extract(props)
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(target)
             marker = None if stat is None else await transport.read(marker_path(target))
             if stat is None or marker is None:
@@ -626,7 +771,7 @@ class DeviceArtifactProvider(dynamic.ResourceProvider):
     async def _delete(self, props: Mapping[str, Any]) -> None:
         target = str(props['target'])
         tree = _extract(props)
-        async with open_transport(device(props)) as transport:
+        async with open_transport(self._device(props)) as transport:
             await transport.remove(marker_path(target))
             await transport.remove(target)
             if tree:
@@ -735,15 +880,10 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
                 'owner': owner,
                 'hook': hook,
             },
-            pulumi.ResourceOptions.merge(
-                pulumi.ResourceOptions(additional_secret_outputs=secret_outputs()),
-                opts,
-            ),
+            # No property of an artifact is a secret: a URL, a digest and a path
+            # are all things a reviewer should read in a preview.
+            opts,
         )
-
-
-def _identifier(props: Mapping[str, Any], location: str) -> str:
-    return f'{props["username"]}@{props["host"]}:{props["port"]}{location}'
 
 
 def _extract(props: Mapping[str, Any]) -> str | None:

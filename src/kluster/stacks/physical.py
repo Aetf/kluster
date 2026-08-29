@@ -231,13 +231,15 @@ def declare_gateway(config: pulumi.Config) -> None:
     configuration over ZeroTier Central's — and no one of them implies the
     others.
 
-    Two of the three are not read here. The controller's API key and the
-    overlay's administration token each configure a provider and nothing else,
-    so each is read at the line that builds that provider, inside the component
-    that owns the connection (rfc-002 §8.1). The device's own SSH credential is
-    still read here and handed down, because the provider behind it is a
-    dynamic one that carries no configuration yet; §7.4 moves that read into
-    the provider's own process.
+    None of the three is read here. The controller's API key and the overlay's
+    administration token each configure a provider and nothing else, so each is
+    read at the line that builds that provider, inside the component that owns
+    the connection (rfc-002 §8.1). The device's SSH credential is the same rule
+    for a provider with no such line: a dynamic provider reads its configuration
+    in `configure`, in its own process, so `gatewayPrivateKey` is read there and
+    by nothing else (§7.4). What the gateway is still told is where the device
+    answers and which host key it must present — an address and a public key,
+    both of which belong in a preview.
 
     What is left is site facts: what the images were built as, and what the
     worker's global address turned out to be. The decisions — the service
@@ -262,7 +264,6 @@ def declare_gateway(config: pulumi.Config) -> None:
         conventions.CLUSTER_NAME,
         host=gateway_host,
         host_key=config.require_secret('gatewayHostKey'),
-        private_key=config.require_secret('gatewayPrivateKey'),
         # One declaration per census entry, each holding the entry itself: the
         # gateway knows what a service's image is pinned at and what secret it
         # reads, and `conventions` knows the rest (rfc-002 §5.3).

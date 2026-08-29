@@ -30,7 +30,6 @@ from kluster.providers.device_files.provider import Connection
 NAME = 'kluster'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
-PRIVATE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 BGP_PASSWORD = 'a-session-password'
 ACME_TOKEN = 'a-zone-scoped-token'
 
@@ -101,7 +100,6 @@ async def stack() -> services.DeviceServices:
         NAME,
         connection=Connection(
             host=HOST,
-            private_key=PRIVATE_KEY,
             host_key=HOST_KEY,
             username=conventions.gateway.SSH_USER,
         ),

@@ -4,6 +4,13 @@ Every test below runs the provider's real code against a fake device. What is
 doubled is the wire -- the SSH session, and the HTTP fetch of an artifact -- and
 nothing above it: the shell one-liners, the quoting, the digest arithmetic, the
 key parsing and the diff logic are the shipped ones. No test opens a socket.
+
+**A provider under test is configured first**, because a provider in production
+is: the plugin deserializes it out of a resource's `__provider` property and
+calls `configure` before handing it any operation (rfc-002 §7.5 E2). `configured`
+below does that with a `ConfigureRequest` built the way the plugin builds one --
+the same class, the same project namespace -- so what the tests exercise is the
+real ordering rather than an attribute set by hand.
 """
 
 from __future__ import annotations
@@ -17,12 +24,17 @@ from typing import Any, cast, final
 
 import asyncssh
 import pulumi
+import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
 import zstandard
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+# The engine's own provider serialization, which is what a `__provider` property
+# holds. It lives beside the base class rather than in the package's exports.
+from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -182,12 +194,42 @@ def downloads(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
     return served
 
 
+#: The project the configuration keys below are namespaced by, and the one this
+#: module's declarations are mocked under. An unqualified key is resolved
+#: against the running project, which is how the plugin finds it (rfc-002 §7.5
+#: E2); which project that is has no bearing on anything asserted here.
+PROJECT = 'kluster'
+
+
+def configured[T: provider.DeviceProvider](instance: T, credential: str = PRIVATE_KEY) -> T:
+    """A provider as an operation receives one: revived, then handed the config.
+
+    The credential arrives already decrypted, which is what the plugin does with
+    a secret configuration value before calling `configure`.
+    """
+    config = dynamic.Config({f'{PROJECT}:{provider.PRIVATE_KEY_CONFIG}': credential}, PROJECT)
+    instance.configure(dynamic.ConfigureRequest(config=config))
+    return instance
+
+
+def file_provider(credential: str = PRIVATE_KEY) -> provider.DeviceFileProvider:
+    return configured(provider.DeviceFileProvider(), credential)
+
+
+def artifact_provider(credential: str = PRIVATE_KEY) -> provider.DeviceArtifactProvider:
+    return configured(provider.DeviceArtifactProvider(), credential)
+
+
+def checked(instance: provider.DeviceProvider, props: dict[str, Any]) -> dict[str, Any]:
+    """The inputs as the engine stores and compares them: what `check` returned."""
+    return instance.check({}, props).inputs
+
+
 def file_props(**overrides: Any) -> dict[str, Any]:
     return {
         'host': HOST,
         'port': 22,
         'username': 'root',
-        'private_key': PRIVATE_KEY,
         'host_key': HOST_KEY,
         'path': CONFIG_PATH,
         'content': CONFIG,
@@ -202,7 +244,6 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
         'host': HOST,
         'port': 22,
         'username': 'root',
-        'private_key': PRIVATE_KEY,
         'host_key': HOST_KEY,
         'url': ROOTFS_URL,
         'sha256': ROOTFS_SHA256,
@@ -257,20 +298,36 @@ def test_a_created_file_lands_before_the_hook_that_makes_it_take_effect(device: 
     """Write, then notify. A hook that ran first would act on the old file."""
     props = file_props()
 
-    result = provider.DeviceFileProvider().create(props)
+    _ = file_provider().create(props)
 
     assert device.files[CONFIG_PATH] == Entry(data=CONFIG.encode(), mode='0644', owner='root', group='root')
     assert device.log == [f'write {CONFIG_PATH}', f'run {HOOK}']
-    assert result.id == f'root@{HOST}:22{CONFIG_PATH}'
 
 
-def test_a_created_file_carries_the_declared_credentials_to_the_session(device: Device) -> None:
-    """The pin and the client key are resource inputs, not runner ambient state."""
-    _ = provider.DeviceFileProvider().create(file_props())
+def test_a_resource_is_identified_by_its_path_on_the_device(device: Device) -> None:
+    """A provider instance stands for one device, so the path is the whole name.
+
+    Nothing about the session is in it: an identifier carrying the address would
+    have to be re-derived the day the dial moves, and the ceremony that moves it
+    (physical/gateway.md §2.5) is meant to be an update to these same resources.
+    """
+    result = file_provider().create(file_props())
+
+    assert result.id == CONFIG_PATH
+
+
+def test_a_created_file_opens_the_session_with_the_configured_credential(device: Device) -> None:
+    """The address and the pin are declared; the key that answers them is not.
+
+    It comes from `configure`, so no property bag carries it and no caller could
+    have passed a different one.
+    """
+    _ = file_provider().create(file_props())
 
     assert device.devices == [
         ssh.Device(host=HOST, username='root', private_key=PRIVATE_KEY, host_key=HOST_KEY, port=22)
     ]
+    assert 'private_key' not in file_props()
 
 
 def test_a_file_edited_on_the_device_is_a_change_without_anyone_asking_for_a_refresh(device: Device) -> None:
@@ -279,7 +336,7 @@ def test_a_file_edited_on_the_device_is_a_change_without_anyone_asking_for_a_ref
     converged(device, props)
     device.files[CONFIG_PATH].data = b'router bgp 65001\n'
 
-    result = provider.DeviceFileProvider().diff('id', props, props)
+    result = file_provider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -288,7 +345,7 @@ def test_a_device_that_already_agrees_is_no_change(device: Device) -> None:
     props = file_props()
     converged(device, props)
 
-    result = provider.DeviceFileProvider().diff('id', props, props)
+    result = file_provider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -296,7 +353,7 @@ def test_a_device_that_already_agrees_is_no_change(device: Device) -> None:
 def test_a_file_someone_deleted_on_the_device_is_a_change(device: Device) -> None:
     props = file_props()
 
-    result = provider.DeviceFileProvider().diff('id', props, props)
+    result = file_provider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -307,7 +364,7 @@ def test_the_same_mode_written_two_ways_is_not_drift(device: Device) -> None:
     converged(device, props)
     device.files[CONFIG_PATH].mode = '644'
 
-    result = provider.DeviceFileProvider().diff('id', props, props)
+    result = file_provider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -317,7 +374,7 @@ def test_ownership_the_device_does_not_have_is_drift(device: Device) -> None:
     converged(device, props)
     device.files[CONFIG_PATH].group = 'staff'
 
-    result = provider.DeviceFileProvider().diff('id', props, props)
+    result = file_provider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -326,7 +383,7 @@ def test_moving_a_file_replaces_it_and_the_new_path_exists_before_the_old_one_go
     olds = file_props()
     news = file_props(path='/data/frr/frr.conf.new')
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    result = file_provider().diff('id', olds, news)
 
     assert result.replaces == ['path']
     assert result.delete_before_replace is False
@@ -346,26 +403,79 @@ def test_a_moved_dial_address_rewrites_the_file_and_deletes_nothing(device: Devi
     olds = file_props()
     news = file_props(host='gateway.invalid')
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    result = file_provider().diff('id', olds, news)
 
     assert result.replaces == []
     assert result.changes is True
     assert device.sessions == 0
 
-    artifact = provider.DeviceArtifactProvider().diff('id', artifact_props(), artifact_props(host='gateway.invalid'))
+    artifact = artifact_provider().diff('id', artifact_props(), artifact_props(host='gateway.invalid'))
     assert artifact.replaces == []
     assert artifact.changes is True
 
 
-def test_a_rotated_credential_is_a_change_so_state_stops_naming_the_retired_key(device: Device) -> None:
-    """Otherwise the eventual `delete` authenticates with a key that is gone."""
-    olds = file_props()
-    news = file_props(private_key=private_key())
+def test_a_rotated_credential_is_a_change_nobody_declared(device: Device) -> None:
+    """The point of the session stamp: a rotation is a diff with no program in it.
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    No caller mentions the credential, so the only thing that can carry a
+    rotation into a preview is a property the provider adds to the checked
+    inputs itself.
+    """
+    olds = checked(file_provider(), file_props())
+    news = checked(file_provider(private_key()), file_props())
+
+    result = file_provider().diff('id', olds, news)
 
     assert result.changes is True
     assert result.replaces == []
+    assert device.sessions == 0
+
+
+def test_the_session_stamp_names_the_endpoint_and_fingerprints_the_key() -> None:
+    """`root@10.144.1.1:22#<12 hex>` — the door, and which key opens it.
+
+    The digest is what a preview shows on a rotation, so it is stored in the
+    clear: a truncated digest of a key is not the key, and a redacted one would
+    say only that something opaque changed.
+    """
+    session = checked(file_provider(), file_props())[provider.SESSION]
+    endpoint, _, fingerprint = session.partition('#')
+
+    assert endpoint == f'root@{HOST}:22'
+    assert len(fingerprint) == provider.FINGERPRINT_LENGTH
+    assert set(fingerprint) <= set('0123456789abcdef')
+    assert PRIVATE_KEY not in session
+    assert fingerprint == hashlib.sha256(PRIVATE_KEY.encode()).hexdigest()[: provider.FINGERPRINT_LENGTH]
+
+
+def test_two_keys_are_two_fingerprints_and_one_key_is_always_the_same_one() -> None:
+    rotated = private_key()
+
+    first = checked(file_provider(), file_props())[provider.SESSION]
+    again = checked(file_provider(), file_props())[provider.SESSION]
+    after = checked(file_provider(rotated), file_props())[provider.SESSION]
+
+    assert first == again
+    assert first != after
+
+
+def test_a_change_to_this_module_is_a_change_a_reader_can_see(
+    device: Device,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider is pickled by reference, so editing an operation moves nothing.
+
+    The version constant is what makes such an edit an update instead of a
+    silent no-op that leaves every resource's outputs as the old code left them.
+    """
+    shipped = provider.VERSION
+    olds = checked(file_provider(), file_props())
+    monkeypatch.setattr(provider, 'VERSION', f'{shipped}-next')
+    news = checked(file_provider(), file_props())
+
+    assert olds[provider.PROVIDER_VERSION] == shipped
+    assert news[provider.PROVIDER_VERSION] == f'{shipped}-next'
+    assert file_provider().diff('id', olds, news).changes is True
     assert device.sessions == 0
 
 
@@ -373,7 +483,7 @@ def test_a_declared_change_needs_no_look_at_the_device(device: Device) -> None:
     olds = file_props()
     news = file_props(content='router bgp 65001\n')
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    result = file_provider().diff('id', olds, news)
 
     assert result.changes is True
     assert device.sessions == 0
@@ -384,7 +494,7 @@ def test_an_input_that_is_still_unknown_is_an_unknown_diff_and_touches_nothing(d
     olds = file_props()
     news = file_props(hook=rpc.UNKNOWN)
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    result = file_provider().diff('id', olds, news)
 
     assert result.changes is None
     assert device.sessions == 0
@@ -395,23 +505,104 @@ def test_an_unknown_path_is_never_read_as_a_replacement(device: Device) -> None:
     olds = file_props()
     news = file_props(path=rpc.UNKNOWN)
 
-    result = provider.DeviceFileProvider().diff('id', olds, news)
+    result = file_provider().diff('id', olds, news)
 
     assert result.replaces in (None, [])
     assert result.changes is None
+
+
+def test_a_stored_output_bag_wider_than_the_inputs_is_not_a_change(device: Device) -> None:
+    """`diff` compares the keys it declares, and only those.
+
+    Its `olds` is the stored output bag and its `news` the checked input bag, so
+    a key some earlier operation returned is in `olds` and can never be in
+    `news`. A provider comparing the bags wholesale would call that a change and
+    report one on every single run.
+    """
+    props = checked(file_provider(), file_props())
+    converged(device, props)
+    olds = props | {'a_property_an_older_version_returned': 'and this one no longer does'}
+
+    result = file_provider().diff('id', olds, props)
+
+    assert result.changes is False
+
+
+def test_a_rotation_restamps_the_resource_and_leaves_the_device_alone(device: Device) -> None:
+    """The whole point of the requirement: a new key is not new content.
+
+    Rewriting every file on the gateway because a credential was rotated is what
+    this branch exists to prevent. The diff stays visible — the stamp is in the
+    outputs the update returns — and the device is not written to, deleted from,
+    or created on.
+    """
+    olds = checked(file_provider(), file_props())
+    converged(device, olds)
+    device.log.clear()
+    rotated = file_provider(private_key())
+    news = checked(rotated, file_props())
+
+    result = rotated.update('id', olds, news)
+
+    assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
+    assert device.files[CONFIG_PATH].data == CONFIG.encode()
+    assert result.outs is not None
+    assert result.outs[provider.SESSION] == news[provider.SESSION]
+    assert result.outs[provider.SESSION] != olds[provider.SESSION]
+
+
+def test_an_update_still_writes_when_the_device_is_the_reason_for_it(device: Device) -> None:
+    """A rotation and a hand-edited file can arrive in the same run.
+
+    `diff` reports one change either way, so the update asks the device again
+    rather than assuming the stamp was the whole story — otherwise a run would
+    report the file converged while the device kept the edit.
+    """
+    olds = checked(file_provider(), file_props())
+    converged(device, olds)
+    device.files[CONFIG_PATH].data = b'router bgp 65001\n'
+    rotated = file_provider(private_key())
+    news = checked(rotated, file_props())
+
+    _ = rotated.update('id', olds, news)
+
+    assert device.files[CONFIG_PATH].data == CONFIG.encode()
+
+
+def test_an_update_that_changes_content_writes_without_consulting_the_device(device: Device) -> None:
+    """A declared change is a change; the device has no say in it."""
+    olds = checked(file_provider(), file_props())
+    converged(device, olds)
+    device.log.clear()
+    news = checked(file_provider(), file_props(content='router bgp 65001\n'))
+
+    _ = file_provider().update('id', olds, news)
+
+    assert device.log == [f'write {CONFIG_PATH}', f'run {HOOK}']
+
+
+def test_an_update_returns_the_bag_state_keeps(device: Device) -> None:
+    """The outs replace the stored output bag, so the record stays current."""
+    olds = checked(file_provider(), file_props())
+    converged(device, olds)
+    news = checked(file_provider(), file_props(content='router bgp 65001\n'))
+
+    result = file_provider().update('id', olds, news)
+
+    assert result.outs == news
 
 
 def test_a_hook_that_refuses_fails_the_apply(device: Device) -> None:
     device.hook_status = 3
 
     with pytest.raises(provider.HookFailed) as raised:
-        _ = provider.DeviceFileProvider().create(file_props())
+        _ = file_provider().create(file_props())
 
     assert 'exited 3' in str(raised.value)
 
 
 def test_a_file_with_no_hook_is_written_and_nothing_else_happens(device: Device) -> None:
-    _ = provider.DeviceFileProvider().create(file_props(hook=None))
+    _ = file_provider().create(file_props(hook=None))
 
     assert device.commands == []
     assert CONFIG_PATH in device.files
@@ -423,7 +614,7 @@ def test_deleting_a_file_tells_the_device_it_is_gone(device: Device) -> None:
     converged(device, props)
     device.log.clear()
 
-    provider.DeviceFileProvider().delete('id', props)
+    file_provider().delete('id', props)
 
     assert CONFIG_PATH not in device.files
     assert device.log == [f'remove {CONFIG_PATH}', f'run {HOOK}']
@@ -434,7 +625,7 @@ def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(
     converged(device, props)
     device.files[CONFIG_PATH].data = b'router bgp 65001\n'
 
-    result = provider.DeviceFileProvider().read('id', props)
+    result = file_provider().read('id', props)
 
     assert result.outs is not None
     assert result.outs['content'] == 'router bgp 65001\n'
@@ -443,7 +634,7 @@ def test_reading_reports_what_the_device_holds_rather_than_what_state_remembers(
 
 def test_reading_a_file_someone_deleted_drops_the_identifier(device: Device) -> None:
     """A dropped identifier is how the next up learns to create the file again."""
-    result = provider.DeviceFileProvider().read('id', file_props())
+    result = file_provider().read('id', file_props())
 
     assert result.id is None
     # An empty bag, not `None`: the dynamic-provider host writes its own key
@@ -453,30 +644,30 @@ def test_reading_a_file_someone_deleted_drops_the_identifier(device: Device) -> 
 
 
 def test_two_reads_of_an_absent_file_do_not_share_one_bag(device: Device) -> None:
-    first = provider.DeviceFileProvider().read('id', file_props())
+    first = file_provider().read('id', file_props())
     assert first.outs is not None
     first.outs['__provider'] = 'whatever the host writes here'
 
-    second = provider.DeviceFileProvider().read('id', file_props())
+    second = file_provider().read('id', file_props())
 
     assert second.outs == {}
 
 
 def test_a_relative_path_is_refused_before_anything_is_written() -> None:
-    result = provider.DeviceFileProvider().check({}, file_props(path='data/frr/frr.conf'))
+    result = file_provider().check({}, file_props(path='data/frr/frr.conf'))
 
     assert [failure.property for failure in result.failures] == ['path']
 
 
 def test_a_mode_that_is_not_octal_is_refused() -> None:
-    result = provider.DeviceFileProvider().check({}, file_props(mode='rw-r--r--'))
+    result = file_provider().check({}, file_props(mode='rw-r--r--'))
 
     assert [failure.property for failure in result.failures] == ['mode']
 
 
 def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
     """A preview placeholder is not a validation failure."""
-    result = provider.DeviceFileProvider().check({}, file_props(path=rpc.UNKNOWN))
+    result = file_provider().check({}, file_props(path=rpc.UNKNOWN))
 
     assert result.failures == []
 
@@ -492,7 +683,7 @@ def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
 ) -> None:
     """The marker is a claim, so it is made only once the claim is true."""
     assert downloads
-    result = provider.DeviceArtifactProvider().create(artifact_props())
+    result = artifact_provider().create(artifact_props())
 
     assert device.log == [
         f'write {ROOTFS_TARGET}',
@@ -501,7 +692,7 @@ def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
     ]
     assert device.files[ROOTFS_TARGET].data == ROOTFS
     assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_SHA256}\n'.encode()
-    assert result.id == f'root@{HOST}:22{ROOTFS_TARGET}'
+    assert result.id == ROOTFS_TARGET
 
 
 def test_bytes_that_do_not_match_their_pin_never_reach_the_device(
@@ -512,7 +703,7 @@ def test_bytes_that_do_not_match_their_pin_never_reach_the_device(
     downloads[ROOTFS_URL] = b'something else entirely'
 
     with pytest.raises(provider.DigestMismatch) as raised:
-        _ = provider.DeviceArtifactProvider().create(artifact_props())
+        _ = artifact_provider().create(artifact_props())
 
     assert ROOTFS_SHA256 in str(raised.value)
     assert device.sessions == 0
@@ -524,7 +715,7 @@ def test_a_marker_naming_the_pinned_digest_is_no_change(device: Device) -> None:
     props = artifact_props()
     landed(device, props)
 
-    result = provider.DeviceArtifactProvider().diff('id', props, props)
+    result = artifact_provider().diff('id', props, props)
 
     assert result.changes is False
 
@@ -534,7 +725,7 @@ def test_a_marker_naming_other_bytes_is_a_change(device: Device) -> None:
     landed(device, props)
     device.files[provider.marker_path(ROOTFS_TARGET)].data = b'0' * 64 + b'\n'
 
-    result = provider.DeviceArtifactProvider().diff('id', props, props)
+    result = artifact_provider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -545,7 +736,7 @@ def test_a_payload_with_no_marker_beside_it_is_a_change(device: Device) -> None:
     landed(device, props)
     del device.files[provider.marker_path(ROOTFS_TARGET)]
 
-    result = provider.DeviceArtifactProvider().diff('id', props, props)
+    result = artifact_provider().diff('id', props, props)
 
     assert result.changes is True
 
@@ -554,17 +745,56 @@ def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device)
     olds = artifact_props()
     news = artifact_props(sha256='b' * 64)
 
-    result = provider.DeviceArtifactProvider().diff('id', olds, news)
+    result = artifact_provider().diff('id', olds, news)
 
     assert result.changes is True
     assert device.sessions == 0
+
+
+def test_a_rotation_restamps_an_artifact_without_fetching_or_pushing_it(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """Megabytes are not moved because a credential changed.
+
+    Nothing is downloaded either: the marker on the device already names the pin,
+    and the runner has no reason to fetch the payload to find that out.
+    """
+    olds = checked(artifact_provider(), artifact_props())
+    landed(device, olds)
+    device.log.clear()
+    downloads.clear()
+    rotated = artifact_provider(private_key())
+    news = checked(rotated, artifact_props())
+
+    result = rotated.update('id', olds, news)
+
+    assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
+    assert result.outs is not None
+    assert result.outs[provider.SESSION] == news[provider.SESSION]
+
+
+def test_an_artifact_update_still_pushes_when_the_marker_disagrees(
+    device: Device,
+    downloads: dict[str, bytes],
+) -> None:
+    """A stamp does not excuse a device that no longer holds what it claimed."""
+    assert downloads
+    olds = checked(artifact_provider(), artifact_props())
+    landed(device, olds)
+    del device.files[provider.marker_path(ROOTFS_TARGET)]
+    rotated = artifact_provider(private_key())
+
+    _ = rotated.update('id', olds, checked(rotated, artifact_props()))
+
+    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_SHA256}\n'.encode()
 
 
 def test_reading_an_artifact_reports_the_digest_the_device_claims(device: Device) -> None:
     props = artifact_props()
     landed(device, props, payload=b'a different release')
 
-    result = provider.DeviceArtifactProvider().read('id', props)
+    result = artifact_provider().read('id', props)
 
     assert result.outs is not None
     assert result.outs['sha256'] == hashlib.sha256(b'a different release').hexdigest()
@@ -575,7 +805,7 @@ def test_reading_an_artifact_with_no_marker_drops_the_identifier(device: Device)
     landed(device, props)
     del device.files[provider.marker_path(ROOTFS_TARGET)]
 
-    result = provider.DeviceArtifactProvider().read('id', props)
+    result = artifact_provider().read('id', props)
 
     assert result.id is None
 
@@ -585,7 +815,7 @@ def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
     landed(device, props)
     device.log.clear()
 
-    provider.DeviceArtifactProvider().delete('id', props)
+    artifact_provider().delete('id', props)
 
     assert device.files == {}
     assert device.log == [
@@ -596,13 +826,13 @@ def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
 
 
 def test_a_digest_that_is_not_a_sha256_is_refused() -> None:
-    result = provider.DeviceArtifactProvider().check({}, artifact_props(sha256='deadbeef'))
+    result = artifact_provider().check({}, artifact_props(sha256='deadbeef'))
 
     assert [failure.property for failure in result.failures] == ['sha256']
 
 
 def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
-    result = provider.DeviceArtifactProvider().check({}, unpacking_props(extract='services/roots/adguard'))
+    result = artifact_provider().check({}, unpacking_props(extract='services/roots/adguard'))
 
     assert [failure.property for failure in result.failures] == ['extract']
 
@@ -626,7 +856,7 @@ def test_the_pin_is_checked_against_what_was_published_and_the_device_gets_the_a
     """
     assert downloads[ROOTFS_ZST_URL] != ROOTFS, 'the published artifact is the compressed one'
 
-    _ = provider.DeviceArtifactProvider().create(unpacking_props())
+    _ = artifact_provider().create(unpacking_props())
 
     assert device.files[ROOTFS_TARGET].data == ROOTFS
     assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
@@ -641,7 +871,7 @@ def test_compressed_bytes_that_do_not_match_their_pin_are_never_decompressed(
     downloads[ROOTFS_ZST_URL] = zstandard.ZstdCompressor().compress(b'a substituted release')
 
     with pytest.raises(provider.DigestMismatch):
-        _ = provider.DeviceArtifactProvider().create(unpacking_props())
+        _ = artifact_provider().create(unpacking_props())
 
     assert device.sessions == 0
 
@@ -650,7 +880,7 @@ def test_an_uncompressed_payload_is_pushed_as_it_arrived(device: Device, downloa
     """A publisher that stops compressing does not turn a working pin into a
     corrupt one: what the device must receive is a plain archive either way."""
     assert downloads
-    _ = provider.DeviceArtifactProvider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
+    _ = artifact_provider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
 
     assert device.files[ROOTFS_TARGET].data == ROOTFS
 
@@ -667,7 +897,7 @@ def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
     run yet. Clearing them is the next push's first act.
     """
     assert downloads
-    _ = provider.DeviceArtifactProvider().create(unpacking_props())
+    _ = artifact_provider().create(unpacking_props())
 
     unpack = next(command for command in device.commands if 'tar -xf' in command)
     staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
@@ -691,7 +921,7 @@ def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
     stays last, because it is the claim that the whole sequence succeeded.
     """
     assert downloads
-    _ = provider.DeviceArtifactProvider().create(unpacking_props())
+    _ = artifact_provider().create(unpacking_props())
 
     assert device.log == [
         f'write {ROOTFS_TARGET}',
@@ -712,7 +942,7 @@ def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
     device.refuse = ('tar -xf',)
 
     with pytest.raises(provider.ExtractFailed):
-        _ = provider.DeviceArtifactProvider().create(unpacking_props())
+        _ = artifact_provider().create(unpacking_props())
 
     assert provider.marker_path(ROOTFS_TREE) not in device.files
     assert provider.marker_path(ROOTFS_TARGET) not in device.files
@@ -725,7 +955,7 @@ def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(de
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     del device.files[ROOTFS_TREE]
 
-    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is True
+    assert artifact_provider().diff('id', props, props).changes is True
 
 
 def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
@@ -733,14 +963,14 @@ def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
 
-    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is True
+    assert artifact_provider().diff('id', props, props).changes is True
 
 
 def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device) -> None:
     props = unpacking_props()
     landed(device, props, digest=ROOTFS_ZST_SHA256)
 
-    assert provider.DeviceArtifactProvider().diff('id', props, props).changes is False
+    assert artifact_provider().diff('id', props, props).changes is False
 
 
 def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
@@ -749,7 +979,7 @@ def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Dev
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     del device.files[ROOTFS_TREE]
 
-    assert provider.DeviceArtifactProvider().read('id', props).id is None
+    assert artifact_provider().read('id', props).id is None
 
 
 def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
@@ -759,7 +989,7 @@ def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(d
     landed(device, props, digest=ROOTFS_ZST_SHA256)
     device.log.clear()
 
-    provider.DeviceArtifactProvider().delete('id', props)
+    artifact_provider().delete('id', props)
 
     assert device.log == [
         f'remove {provider.marker_path(ROOTFS_TARGET)}',
@@ -791,27 +1021,65 @@ def test_an_archive_that_is_not_compressed_survives_the_decompression_step() -> 
 ##
 
 
-def test_the_client_key_is_kept_out_of_plain_state_and_a_secret_file_with_it() -> None:
-    """The provider echoes its inputs back, so the echo has to be marked."""
-    assert provider.secret_outputs() == ['private_key']
-    assert provider.secret_outputs(secret_content=True) == ['private_key', 'content']
+def test_only_a_files_content_is_ever_kept_out_of_plain_state() -> None:
+    """The provider echoes its inputs back, so a secret one has to be marked.
 
-
-def test_the_pinned_host_key_stays_readable_because_it_is_a_public_key() -> None:
-    """A pin nobody can read in a diff is a pin nobody reviews."""
+    There is one: the credential is not a property of any resource, and the pin
+    is a public key that a diff should show — a pin nobody can read is a pin
+    nobody reviews.
+    """
+    assert provider.secret_outputs() == []
+    assert provider.secret_outputs(secret_content=True) == ['content']
     assert 'host_key' not in provider.secret_outputs(secret_content=True)
 
 
-def test_a_connection_hands_every_resource_the_same_five_properties() -> None:
-    connection = provider.Connection(host=HOST, private_key=PRIVATE_KEY, host_key=HOST_KEY)
+def test_a_connection_hands_every_resource_the_same_four_properties() -> None:
+    """Where the device answers, as whom, and which key it must present."""
+    connection = provider.Connection(host=HOST, host_key=HOST_KEY)
 
     assert connection.props() == {
         'host': HOST,
         'port': 22,
         'username': 'root',
-        'private_key': PRIVATE_KEY,
         'host_key': HOST_KEY,
     }
+
+
+def test_what_lands_in_state_is_a_provider_with_nothing_in_it() -> None:
+    """Every resource stores a pickle of its provider; this one is a name.
+
+    Serialized through the engine's own function, so what is asserted is what a
+    `__provider` property would actually hold. A class imported from a module is
+    pickled by reference and `__getstate__` returns an empty bag, so state
+    carries something inert: identical for every resource, identical across a
+    rotation, and holding nothing that a rotation would have to reach into.
+    """
+    one = serialize_provider(file_provider())
+    rotated = serialize_provider(file_provider(private_key()))
+
+    assert file_provider().__getstate__() == {}
+    assert one == rotated
+    assert PRIVATE_KEY not in one
+    assert len(one) < 256
+
+
+def test_a_provider_that_was_never_configured_has_no_credential_to_dial_with() -> None:
+    """The attribute exists only after `configure`, and that is the design.
+
+    A default would not make an unconfigured provider safe; it would make one
+    that dials with the wrong key. The plugin configures before the first
+    operation, so nothing in production sees this state.
+    """
+    with pytest.raises(AttributeError):
+        _ = provider.DeviceFileProvider().private_key
+
+
+def test_a_missing_credential_refuses_by_name() -> None:
+    """A half-filled configuration stops the run rather than the session."""
+    with pytest.raises(ValueError, match=provider.PRIVATE_KEY_CONFIG):
+        provider.DeviceFileProvider().configure(
+            dynamic.ConfigureRequest(config=dynamic.Config({}, PROJECT)),
+        )
 
 
 class Mocks(pulumi.runtime.Mocks):
@@ -832,7 +1100,7 @@ async def stack() -> None:
     registration task, and only the tasks this module added may be awaited.
     """
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
-    connection = provider.Connection(host=HOST, private_key=PRIVATE_KEY, host_key=HOST_KEY)
+    connection = provider.Connection(host=HOST, host_key=HOST_KEY)
 
     before = asyncio.all_tasks()
     _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
@@ -866,6 +1134,11 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     assert inputs['path'] == CONFIG_PATH
     assert inputs['content'] == CONFIG
     assert inputs['hook'] == HOOK
+    # What the caller declares, and no more: the credential is the provider's,
+    # and the two stamps are added by `check` in the plugin's process.
+    assert 'private_key' not in inputs
+    assert provider.SESSION not in inputs
+    assert provider.PROVIDER_VERSION not in inputs
 
 
 def test_a_declared_artifact_carries_its_pin_and_never_its_bytes() -> None:
