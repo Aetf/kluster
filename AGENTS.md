@@ -136,7 +136,9 @@ doc-vs-implementation audit of the milestone's areas plus the
 operator's design-level review and acceptance. Each operator pass
 covers one milestone's worth of change, so problems surface while
 they are cheap. Any other major structural change runs the same
-RFC-first sequence (rfc-002 is the shape). An issue that needs an
+RFC-first sequence (rfc-002 is the shape), and an RFC names the
+design documents its content must land in once built, where any. An
+issue that needs an
 operator ruling carries the `decision` label the moment it is filed —
 the label is how the operator finds what waits on them.
 
