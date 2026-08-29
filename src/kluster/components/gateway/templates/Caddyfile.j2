@@ -1,0 +1,19 @@
+{{ controller }} {
+	tls {
+		dns cloudflare {file.{{ token_path }}}
+	}
+	reverse_proxy https://127.0.0.1:443 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
+{%- for resolver in resolvers %}
+
+{{ resolver.vhost }} {
+	tls {
+		dns cloudflare {file.{{ token_path }}}
+	}
+	reverse_proxy http://{{ resolver.address }}:{{ api_port }}
+}
+{%- endfor %}

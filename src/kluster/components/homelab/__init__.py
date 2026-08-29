@@ -76,10 +76,15 @@ import pulumi_libvirt as libvirt
 
 from kluster import conventions
 from kluster.components.talos import TalosCluster
-from kluster.lib import workstation
+from kluster.lib import templates, workstation
 from putils import Component, own_provider_opts, with_provider
 
 __all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'declare', 'slot')
+
+#: The package `importlib.resources` resolves this module's `templates/`
+#: directory against, so the stylesheet travels with the code that reads it
+#: (rfc-002 §9.1).
+_PACKAGE = 'kluster.components.homelab'
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
@@ -257,7 +262,7 @@ def connection_uri(*, host: str, private_key: str, root: Path | None = None) -> 
     return f'{LIBVIRT_ENDPOINT}://{LIBVIRT_USER}@{host}{LIBVIRT_OBJECT}?{query}'
 
 
-def disk_tuning_xslt(disk_format: str = DISK_FORMAT) -> str:
+def disk_tuning_xslt() -> str:
     """The stylesheet that gives the data disk `cache=none` and `discard=unmap`.
 
     Neither is expressible through the provider's disk block, and both are
@@ -271,22 +276,12 @@ def disk_tuning_xslt(disk_format: str = DISK_FORMAT) -> str:
     The driver element is written rather than patched, so the result does not
     depend on which attributes the provider happened to emit. Only the data
     disk is matched: the seed is a cdrom, and it wants neither setting.
+
+    The stylesheet takes no parameters and is read verbatim: the disk format it
+    names is `DISK_FORMAT`, which the volume is created with, and the suite
+    holds the two in step.
     """
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-  <xsl:output method="xml" encoding="UTF-8" omit-xml-declaration="yes"/>
-  <xsl:template match="node()|@*">
-    <xsl:copy><xsl:apply-templates select="node()|@*"/></xsl:copy>
-  </xsl:template>
-  <xsl:template match="/domain/devices/disk[@device='disk']">
-    <xsl:copy>
-      <xsl:apply-templates select="@*"/>
-      <driver name="qemu" type="{disk_format}" cache="none" discard="unmap"/>
-      <xsl:apply-templates select="node()[not(self::driver)]"/>
-    </xsl:copy>
-  </xsl:template>
-</xsl:stylesheet>
-"""
+    return templates.load(_PACKAGE, 'templates/disk-tuning.xslt')
 
 
 def seed_metadata(hostname: str) -> str:

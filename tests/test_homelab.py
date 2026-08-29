@@ -518,7 +518,7 @@ def test_the_slot_is_the_checkouts_own_local_directory() -> None:
 
 
 def test_the_data_disk_returns_freed_space_to_the_host() -> None:
-    from kluster.components.homelab import disk_tuning_xslt
+    from kluster.components.homelab import DISK_FORMAT, disk_tuning_xslt
 
     disk = _transformed_disk("disk[@device='disk']")
 
@@ -530,7 +530,11 @@ def test_the_data_disk_returns_freed_space_to_the_host() -> None:
     # otherwise cache it a second time.
     assert disk.attrib['cache'] == 'none'
     assert disk.attrib['type'] == 'raw'
-    assert 'raw' in disk_tuning_xslt()
+    # The stylesheet is read verbatim, so the format it writes is a literal in
+    # the file rather than something the volume hands it. The two must agree:
+    # a driver naming a format the volume was not created with is a domain that
+    # will not start.
+    assert f'type="{DISK_FORMAT}"' in disk_tuning_xslt()
 
 
 def test_the_seed_is_left_exactly_as_the_provider_wrote_it() -> None:

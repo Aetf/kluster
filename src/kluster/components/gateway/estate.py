@@ -72,6 +72,7 @@ import pulumi
 
 from kluster import conventions
 from kluster.components.gateway import facts
+from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection, GwArtifact, GwFile
 from putils import Component
 
@@ -116,6 +117,11 @@ __all__ = (
     'unit_file',
     'unit_name',
 )
+
+#: The package `importlib.resources` resolves this module's `templates/`
+#: directory against, so the rendered files travel with the code that renders
+#: them (rfc-002 §9.1).
+_PACKAGE = 'kluster.components.gateway'
 
 # ---------------------------------------------------------------------------
 # Where things live on the device
@@ -360,6 +366,28 @@ def dropin_path(container: str, dropin: Dropin) -> str:
     return secret_path(container, dropin.name) if dropin.secret else config_path(container, dropin.name)
 
 
+@final
+@dataclass(frozen=True)
+class _FrrParams:
+    """What `frr.conf.j2` reads.
+
+    The pools arrive whole rather than as text, so the file states the prefix
+    length each family admits down to instead of being handed it.
+    """
+
+    cluster: str
+    peer: str
+    peer_description: str
+    password: str
+    local_asn: int
+    peer_asn: int
+    pool_v4: IPv4Network
+    pool_v6: IPv6Network
+    v4_list: str
+    v6_list: str
+    max_prefixes: int
+
+
 def frr_config(
     *,
     neighbour: IPv4Address,
@@ -388,42 +416,46 @@ def frr_config(
     outbound policy exists, which for a session that only ever *receives* would
     be ceremony with a failure mode.
     """
-    peer = str(neighbour)
-    v4_list = f'{conventions.CLUSTER_NAME}-lan-pool-v4'
-    v6_list = f'{conventions.CLUSTER_NAME}-lan-pool-v6'
-    return '\n'.join(
-        (
-            f'! Managed by the {conventions.CLUSTER_NAME} physical stack. Local edits are overwritten.',
-            'frr defaults traditional',
-            '!',
-            f'router bgp {local_asn}',
-            ' no bgp ebgp-requires-policy',
-            f' neighbor {peer} remote-as {peer_asn}',
-            f' neighbor {peer} description {conventions.CLUSTER_NAME} {conventions.HOMELAB_NODE}',
-            f' neighbor {peer} password {password}',
-            ' !',
-            ' address-family ipv4 unicast',
-            f'  neighbor {peer} activate',
-            f'  neighbor {peer} soft-reconfiguration inbound',
-            f'  neighbor {peer} prefix-list {v4_list} in',
-            f'  neighbor {peer} maximum-prefix {MAX_PREFIXES}',
-            ' exit-address-family',
-            ' !',
-            ' address-family ipv6 unicast',
-            f'  neighbor {peer} activate',
-            f'  neighbor {peer} soft-reconfiguration inbound',
-            f'  neighbor {peer} prefix-list {v6_list} in',
-            f'  neighbor {peer} maximum-prefix {MAX_PREFIXES}',
-            ' exit-address-family',
-            '!',
-            f'ip prefix-list {v4_list} seq 10 permit {pool_v4} le {pool_v4.max_prefixlen}',
-            f'ip prefix-list {v4_list} seq 20 deny any',
-            f'ipv6 prefix-list {v6_list} seq 10 permit {pool_v6} le {pool_v6.max_prefixlen}',
-            f'ipv6 prefix-list {v6_list} seq 20 deny any',
-            '!',
-            '',
-        )
+    return templates.render(
+        _PACKAGE,
+        'templates/frr.conf.j2',
+        _FrrParams(
+            cluster=conventions.CLUSTER_NAME,
+            peer=str(neighbour),
+            peer_description=f'{conventions.CLUSTER_NAME} {conventions.HOMELAB_NODE}',
+            password=password,
+            local_asn=local_asn,
+            peer_asn=peer_asn,
+            pool_v4=pool_v4,
+            pool_v6=pool_v6,
+            v4_list=f'{conventions.CLUSTER_NAME}-lan-pool-v4',
+            v6_list=f'{conventions.CLUSTER_NAME}-lan-pool-v6',
+            max_prefixes=MAX_PREFIXES,
+        ),
     )
+
+
+@final
+@dataclass(frozen=True)
+class _UnitParams:
+    """What `container.service.j2` reads.
+
+    Every conditional part of the command line is already decided here, as the
+    thing itself or as `None`: `bridge` is the container VLAN's bridge unless
+    the member runs in the host's namespace, and `state_bind` and `binds` are
+    whole `--bind` arguments rather than pairs the file has to assemble.
+    """
+
+    cluster: str
+    name: str
+    root: str
+    kill_signal: str
+    kill_gracetime: int
+    environment: Mapping[str, str]
+    bridge: str | None
+    state_bind: str | None
+    devices: tuple[str, ...]
+    binds: tuple[str, ...]
 
 
 def unit_file(container: Container) -> str:
@@ -434,79 +466,26 @@ def unit_file(container: Container) -> str:
     — which is why the ZeroTier member is described by having no address rather
     than by a switch.
 
-    The root is a directory rather than a filesystem image because that is the
-    shape the pins arrive in: the artifacts are root filesystem tarballs, and
-    `--image=` boots a partitioned or filesystem image, not an archive. Turning
-    one into the other on the device would mean building a filesystem and
-    loop-mounting it there; unpacking it is the same information with none of
-    the machinery.
-
-    The rest of the command line is what running an s6 image asks for, and each
-    flag answers something the image does or does not do for itself.
+    What the rest of the command line answers is in the template beside this
+    module: every flag on it is something an s6 image does or does not do for
+    itself.
     """
-    command = [
-        '/usr/bin/systemd-nspawn',
-        '--quiet',
-        '--keep-unit',
-        '--boot',
-        # `--boot` looks for an init and finds the one the image places at
-        # `/sbin/init`, which is s6's. That init never sends a readiness
-        # message, so nspawn answers for it: the unit is ready once the
-        # container's PID 1 exists. `Type=notify` below is about nspawn's own
-        # message, not the guest's — asked to wait for the guest instead, every
-        # member would hang until its start timed out and it was killed.
-        '--notify-ready=no',
-        # A member's `/etc/resolv.conf` is the image's answer to a question it
-        # was built with, and overwriting it would undo that answer: the member
-        # carrying the overlay resolves through public servers on purpose,
-        # because it has to come up while the LAN's resolvers — two other
-        # members of this estate — are down.
-        '--resolv-conf=off',
-        # Every image configures its own interface from inside, and that takes
-        # the one capability nspawn's default set does not keep.
-        '--capability=CAP_NET_ADMIN',
-        f'--kill-signal={KILL_SIGNAL}',
-        f'--machine={container.name}',
-        f'--directory={root_path(container.name)}',
-        f'--setenv=S6_KILL_GRACETIME={S6_KILL_GRACETIME}',
-    ]
-    # What the member itself is told. The unit's own `Environment=` would not do:
-    # that is the environment of the `systemd-nspawn` process on the device, and
-    # what has to be set is the environment of PID 1 inside the container.
-    command.extend(f'--setenv={name}={value}' for name, value in container.environment.items())
-    if not container.host_network:
-        command.append(f'--network-bridge={CONTAINER_BRIDGE}')
-    if container.state:
-        command.append(f'--bind={state_path(container.name)}:{container.state}')
-    for device in container.devices:
-        command.append(f'--bind={device}')
-    for dropin in container.files:
-        command.append(f'--bind-ro={dropin_path(container.name, dropin)}:{dropin.target}')
-
-    lines = [
-        '[Unit]',
-        f'Description={conventions.CLUSTER_NAME} estate container {container.name}',
-        'After=network-online.target',
-        'Wants=network-online.target',
-        '',
-        '[Service]',
-        'Type=notify',
-        f'ExecStart={" ".join(command)}',
-        'Restart=always',
-        'RestartSec=5',
-        'KillMode=mixed',
-    ]
-    if container.devices:
-        # A bind alone does not grant access to a device node; the unit's own
-        # control-group policy has to admit it as well, or the container sees
-        # the file and cannot open it. Naming any device at all is what turns
-        # that policy from open into a list, so the list also has to carry what
-        # a container needs anyway: its console is a pseudo-terminal, and
-        # pseudo-terminals are not in the small set every service gets.
-        lines.extend(f'DeviceAllow={device} rw' for device in container.devices)
-        lines.append('DeviceAllow=char-pts rw')
-    lines.extend(('', '[Install]', 'WantedBy=multi-user.target', ''))
-    return '\n'.join(lines)
+    return templates.render(
+        _PACKAGE,
+        'templates/container.service.j2',
+        _UnitParams(
+            cluster=conventions.CLUSTER_NAME,
+            name=container.name,
+            root=root_path(container.name),
+            kill_signal=KILL_SIGNAL,
+            kill_gracetime=S6_KILL_GRACETIME,
+            environment=container.environment,
+            bridge=None if container.host_network else CONTAINER_BRIDGE,
+            state_bind=f'{state_path(container.name)}:{container.state}' if container.state else None,
+            devices=container.devices,
+            binds=tuple(f'{dropin_path(container.name, dropin)}:{dropin.target}' for dropin in container.files),
+        ),
+    )
 
 
 def net_setup_environment(address: IPv4Address) -> dict[str, str]:
@@ -531,6 +510,21 @@ def net_setup_environment(address: IPv4Address) -> dict[str, str]:
     }
 
 
+@final
+@dataclass(frozen=True)
+class _CaddyParams:
+    """What `Caddyfile.j2` reads.
+
+    The resolvers arrive as the census has them, so the file names each one's
+    vhost and address without a second list to keep in step.
+    """
+
+    controller: str
+    token_path: str
+    api_port: int
+    resolvers: tuple[conventions.BridgedService, ...]
+
+
 def caddyfile() -> str:
     """The gateway's own vhosts, with certificates it issues for itself.
 
@@ -544,36 +538,27 @@ def caddyfile() -> str:
     it presents is the device's self-signed one; the name that matters is the
     one the client asked for, which is forwarded unchanged.
     """
-    blocks = [
-        '\n'.join(
-            (
-                f'{conventions.VHOST_CONTROLLER} {{',
-                '\ttls {',
-                f'\t\tdns cloudflare {{file.{CADDY_TOKEN_PATH}}}',
-                '\t}',
-                '\treverse_proxy https://127.0.0.1:443 {',
-                '\t\ttransport http {',
-                '\t\t\ttls_insecure_skip_verify',
-                '\t\t}',
-                '\t}',
-                '}',
-            )
-        )
-    ]
-    blocks.extend(
-        '\n'.join(
-            (
-                f'{instance.vhost} {{',
-                '\ttls {',
-                f'\t\tdns cloudflare {{file.{CADDY_TOKEN_PATH}}}',
-                '\t}',
-                f'\treverse_proxy http://{instance.address}:{conventions.ADGUARD_API_PORT}',
-                '}',
-            )
-        )
-        for instance in resolvers()
+    return templates.render(
+        _PACKAGE,
+        'templates/Caddyfile.j2',
+        _CaddyParams(
+            controller=conventions.VHOST_CONTROLLER,
+            token_path=CADDY_TOKEN_PATH,
+            api_port=conventions.ADGUARD_API_PORT,
+            resolvers=resolvers(),
+        ),
     )
-    return '\n\n'.join(blocks) + '\n'
+
+
+@final
+@dataclass(frozen=True)
+class _AdguardSeedParams:
+    """What `adguard-home.initial.yaml.j2` reads."""
+
+    cluster: str
+    address: IPv4Address
+    api_port: int
+    upstreams: tuple[str, ...]
 
 
 def adguard_seed(address: IPv4Address) -> str:
@@ -589,26 +574,58 @@ def adguard_seed(address: IPv4Address) -> str:
     because the working directory is bind-mounted from the device and survives
     the tree that is thrown away with it.
     """
-    upstreams = '\n'.join(f'    - {upstream}' for upstream in ADGUARD_UPSTREAMS)
-    return '\n'.join(
-        (
-            f'# Seed configuration written by the {conventions.CLUSTER_NAME} physical stack.',
-            "# Installed only where the instance has none: rewrites are the dns stack's,",
-            '# written through the API, and live in this same file once accepted.',
-            'http:',
-            f'  address: {address}:{conventions.ADGUARD_API_PORT}',
-            'dns:',
-            f'  bind_hosts:\n    - {address}',
-            '  port: 53',
-            '  upstream_dns:',
-            upstreams,
-            '  bootstrap_dns:',
-            '    - 9.9.9.9',
-            '    - 1.1.1.1',
-            'schema_version: 29',
-            '',
-        )
+    return templates.render(
+        _PACKAGE,
+        'templates/adguard-home.initial.yaml.j2',
+        _AdguardSeedParams(
+            cluster=conventions.CLUSTER_NAME,
+            address=address,
+            api_port=conventions.ADGUARD_API_PORT,
+            upstreams=ADGUARD_UPSTREAMS,
+        ),
     )
+
+
+@final
+@dataclass(frozen=True)
+class _Seeding:
+    """Where one member's own configuration is delivered from, and where it lands."""
+
+    source: str
+    destination: str
+
+
+@final
+@dataclass(frozen=True)
+class _UnitState:
+    """One member as the recovery script deals with it.
+
+    Both paths are resolved here rather than in the file: where a dropin,
+    a root filesystem tree or a state directory sits is this module's, and the
+    script only has to compare and copy.
+    """
+
+    name: str
+    inputs: tuple[str, ...]
+    seed: _Seeding | None
+
+
+@final
+@dataclass(frozen=True)
+class _RecoveryParams:
+    """What `recover-services.sh.j2` reads, with the members in startup order."""
+
+    cluster: str
+    data_root: str
+    unit_dir: str
+    state_dir: str
+    root_dir: str
+    unit_prefix: str
+    config_mode: str
+    frr_config: str
+    frr_mode: str
+    frr_live_config: str
+    units: tuple[_UnitState, ...]
 
 
 def on_boot_script(containers: Sequence[Container]) -> str:
@@ -633,119 +650,37 @@ def on_boot_script(containers: Sequence[Container]) -> str:
     deployment would restart the ZeroTier member that the deployment's own
     session is riding on.
     """
-    ordered = _startup_order(containers)
-    units = ' '.join(unit_name(container.name) for container in ordered)
-    stamped = '\n'.join(
-        '        {unit}) inputs="{inputs}" ;;'.format(
-            unit=unit_name(container.name),
-            inputs=' '.join(_stamp_inputs(container)),
-        )
-        for container in ordered
+    return templates.render(
+        _PACKAGE,
+        'templates/recover-services.sh.j2',
+        _RecoveryParams(
+            cluster=conventions.CLUSTER_NAME,
+            data_root=conventions.GW_DATA_ROOT,
+            unit_dir=UNIT_DIR,
+            state_dir=STATE_DIR,
+            root_dir=ROOT_DIR,
+            unit_prefix=UNIT_PREFIX,
+            config_mode=CONFIG_MODE,
+            frr_config=FRR_CONFIG,
+            frr_mode=FRR_MODE,
+            frr_live_config=FRR_LIVE_CONFIG,
+            units=tuple(_unit_state(container) for container in _startup_order(containers)),
+        ),
     )
-    seeded = (
-        '\n'.join(
-            '        {unit}) source={source}; destination={destination} ;;'.format(
-                unit=unit_name(container.name),
-                source=config_path(container.name, container.seed.source),
-                destination=f'{state_path(container.name)}/{container.seed.into}',
-            )
-            for container in ordered
-            if container.seed is not None
-        )
-        or '        # no member of this estate owns its own configuration'
+
+
+def _unit_state(container: Container) -> _UnitState:
+    """One member, named and located the way the recovery script needs it."""
+    return _UnitState(
+        name=unit_name(container.name),
+        inputs=_stamp_inputs(container),
+        seed=None
+        if container.seed is None
+        else _Seeding(
+            source=config_path(container.name, container.seed.source),
+            destination=f'{state_path(container.name)}/{container.seed.into}',
+        ),
     )
-    return f"""#!/bin/sh
-# Managed by the {conventions.CLUSTER_NAME} physical stack. Local edits are overwritten.
-#
-# Re-establishes the container estate and the routing configuration from the
-# desired state under {conventions.GW_DATA_ROOT}. Runs at boot, when nothing else is present, and
-# again after every deployment, so the recovery path is never the untested one.
-set -eu
-
-UNITS={UNIT_DIR}
-SYSTEMD=/etc/systemd/system
-STATE={STATE_DIR}
-DECLARED="{units}"
-
-stamp_inputs() {{
-    case "$1" in
-{stamped}
-        *) inputs="" ;;
-    esac
-    echo "$inputs"
-}}
-
-# Place a container's own configuration where nothing put one. Whatever is
-# already there belongs to the software that wrote it -- the resolvers' rewrites
-# arrive through their API and land in this very file -- so an existing file is
-# never touched.
-seed_state() {{
-    source=""
-    destination=""
-    case "$1" in
-{seeded}
-    esac
-    [ -n "$destination" ] || return 0
-    [ -e "$source" ] || return 0
-    if [ -e "$destination" ]; then
-        return 0
-    fi
-    mkdir -p "$(dirname "$destination")"
-    cp "$source" "$destination"
-}}
-
-install -d "$SYSTEMD" "$STATE"
-
-# What is declared *and* has landed. A deployment writes this script before the
-# files it describes, so a member whose unit or root filesystem tree is still
-# missing is a member this run has nothing to do about -- not an error, and not
-# a reason to leave the rest unconverged.
-READY=""
-for unit in $DECLARED; do
-    [ -e "$UNITS/$unit" ] || continue
-    machine=${{unit#{UNIT_PREFIX}}}
-    [ -d "{ROOT_DIR}/${{machine%.service}}" ] || continue
-    install -m {CONFIG_MODE} "$UNITS/$unit" "$SYSTEMD/$unit"
-    READY="$READY $unit"
-done
-
-# Retire what is not declared at all. Only this estate's own units are
-# candidates: the device has plenty of others and none of them are ours.
-for live in "$SYSTEMD/{UNIT_PREFIX}"*.service; do
-    [ -e "$live" ] || continue
-    name=$(basename "$live")
-    case " $DECLARED " in
-        *" $name "*) continue ;;
-    esac
-    systemctl disable --now "$name" || true
-    rm -f "$live"
-    rm -f "$STATE/$name.stamp"
-done
-
-# The routing daemon reads outside {conventions.GW_DATA_ROOT}, so its configuration is copied
-# rather than linked; a device that lost it in an update gets it back here.
-if [ -e {FRR_CONFIG} ]; then
-    install -m {FRR_MODE} {FRR_CONFIG} {FRR_LIVE_CONFIG}
-    systemctl reload frr || systemctl restart frr || true
-fi
-
-systemctl daemon-reload
-
-# Start what changed, in an order that leaves the member carrying this session
-# for last.
-for unit in $READY; do
-    systemctl enable "$unit" >/dev/null 2>&1 || true
-    seed_state "$unit"
-    stamp="$STATE/$unit.stamp"
-    want=$(cat $(stamp_inputs "$unit") 2>/dev/null | cksum)
-    have=$(cat "$stamp" 2>/dev/null || echo none)
-    if [ "$want" = "$have" ] && systemctl is-active --quiet "$unit"; then
-        continue
-    fi
-    systemctl restart "$unit"
-    echo "$want" > "$stamp"
-done
-"""
 
 
 def _stamp_inputs(container: Container) -> tuple[str, ...]:

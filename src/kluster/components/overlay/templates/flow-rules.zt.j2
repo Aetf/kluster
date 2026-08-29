@@ -1,0 +1,34 @@
+# Managed by the {{ cluster }} physical stack. Edits in Central are overwritten.
+
+tag role
+  id {{ tag_role_id }}
+  default {{ role_personal }}
+{%- for label, value in roles.items() %}
+  enum {{ value }} {{ label }}
+{%- endfor %}
+;
+
+# The stock base filter: IP and ARP, nothing else on the wire.
+drop
+  not ethertype ipv4
+  and not ethertype arp
+  and not ethertype ipv6
+;
+accept ethertype arp;
+
+# Continuous integration reaches four destinations and no others.
+# Every flow is declared twice: evaluation is stateless, so the
+# return leg is a rule of its own rather than a consequence.
+{%- for target in targets %}
+# {{ target.why }}
+accept tseq role {{ role_ci }} and ipdest {{ target.destination }} and dport {{ target.port }};
+accept treq role {{ role_ci }} and ipsrc {{ target.destination }} and sport {{ target.port }};
+{%- endfor %}
+
+# Nothing may open a connection towards a run, either: it is a
+# client on this network and never a service.
+drop tseq role {{ role_ci }};
+drop treq role {{ role_ci }};
+
+# Everyone else: parity with sitting on the LAN.
+accept;
