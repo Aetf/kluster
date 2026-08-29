@@ -78,9 +78,8 @@ framework can: `install_parent_backstop()` registers a stack transformation
 that fails any resource registered while a component is under construction
 whose options name no parent, naming both the resource and the component.
 
-It refuses rather than repairs because the SDK rejects a transformation that
-changes a resource's parent — the parent is what decides which
-transformations run in the first place. rfc-002 §8.2 has the reasoning.
+It refuses rather than repairs, and rfc-002 §8.2 is where that reads as a
+conclusion rather than an assertion.
 
 Two consequences worth knowing:
 
