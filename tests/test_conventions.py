@@ -53,6 +53,21 @@ def test_every_fixed_vip_is_an_address_out_of_the_pool_that_holds_it() -> None:
         assert vip.v6 in conventions.LAN_POOL.v6
 
 
+def test_a_fixed_vips_two_families_carry_the_same_host_number() -> None:
+    """`.1` and `::1` are one address wearing two families.
+
+    The v6 half is written out in full, prefix included, where the pool's own
+    /64 is derived — so this is the one place the hand-spelled prefix and the
+    host number it carries can drift from the v4 sibling they are meant to
+    name. A rewrite pointing at `::2` for what the firewall admits at `.1` is
+    a split-horizon answer that reaches the wrong service.
+    """
+    for vip in (conventions.LAN_POOL.default_vip, conventions.LAN_POOL.media_vip):
+        v4_host = int(vip.v4) - int(conventions.LAN_POOL.v4.network_address)
+        v6_host = int(vip.v6) - int(conventions.LAN_POOL.v6.network_address)
+        assert v4_host == v6_host
+
+
 def test_every_bridged_service_sits_on_the_container_vlan() -> None:
     """The unit places a service by injecting this address with the VLAN's prefix.
 
@@ -101,3 +116,21 @@ def test_the_following_volume_is_wherever_the_dedicated_vip_is() -> None:
     assert hath.node is conventions.FOLLOWS_DEDICATED_VIP
     assert hath.attached_node == conventions.DEDICATED_VIP_NODE
     assert conventions.NodeVolume(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
+
+
+def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> None:
+    """The quota refuses at creation, so a table that outgrew it never applies.
+
+    The guardrail is a literal of its own on purpose — an envelope this program
+    is held to rather than a number derived from what it happens to declare —
+    which is exactly why the two have to be compared somewhere. A volume added
+    to the table without the envelope following it would not be caught by a
+    preview: the refusal arrives from the tenancy, mid-apply, against this
+    program's own policy.
+    """
+    from kluster.components.cloud.guardrails import BLOCK_STORAGE_GB_PER_AD
+
+    largest = max(volume.size_gb for volume in conventions.NODE_VOLUMES.values())
+    # One node's boot volume, the largest volume it may carry, and room to
+    # restore such a volume beside the one it replaces.
+    assert conventions.NODE_BOOT_VOLUME_GB + 2 * largest <= BLOCK_STORAGE_GB_PER_AD
