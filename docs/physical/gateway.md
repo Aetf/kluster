@@ -96,41 +96,53 @@ design: roster, addressing, routes, flow rules, and cutover.
 ### 2.1 Member roster & addressing
 
 The roster is **`conventions.ZT_ROSTER`**: one entry per member,
-carrying the name Central shows, the `role` tag, and — where the
-address is a decision this repository owns rather than an assignment
-that predates it — a static overlay address. It lives in
-`conventions` rather than in one stack's data because two stacks
-decide from it and neither owns it: `physical` admits members by it
-(`gateway.zerotier.parse_members`) and `dns` publishes the `*.zt` host
-block from it, one A record per entry (declarative/dns.md §2). A member
-is therefore admitted and named by the same declaration, and a device
-that leaves the overlay leaves both together.
+carrying the name Central shows, the `role` tag, the member's overlay
+address, and — for a device that minted its own identity — its node id.
+It lives in `conventions` rather than in one stack's data because two
+stacks decide from it and neither owns it: `physical` declares the
+membership from it and `dns` publishes the `*.zt` host block from it,
+one A record per entry (declarative/dns.md §2). A member is therefore
+admitted and named by the same declaration, and a device that leaves
+the overlay leaves both together.
 
-**Admission is checked in both directions**, which is what makes that
-tuple a census rather than a list: a name in the stack's configuration
-the roster does not carry is refused, and a rostered entry with nothing
-configured for it is refused as well. That is what keeps the tag's
-permissive default (§2.3) out of reach — an undeclared member never
-joins to receive it. There is one exception, and it is narrow: a
-ZeroTier identity comes into being when the daemon first runs on a
-device, so a member this stack is *delivering* the daemon to is named
-`unminted` by the caller and left out of the desired state until it
-has one. The gateway is the only such member — its daemon is a
-container of the estate.
+**An entry is the whole of admission**, which is what makes that tuple
+a census rather than a list. A node id is minted by the device and
+never changes, so it is an identity rather than a setting, and it is
+recorded here beside the address; there is no configured mapping to
+cross-check the roster against, and no way for the tag's permissive
+default (§2.3) to reach anything undeclared. Two shapes carry that:
+`EnrolledMember` for a device that arrived with an identity,
+`GeneratedMember` for the two whose key material this program creates
+in state — so a generated member with a node id written down is a
+combination that does not type-check rather than one something has to
+refuse. The roster's own invariants — names, node ids and addresses
+unique, every address inside the overlay subnet, the gateway at
+`10.144.1.1` when it is there at all, the roster no larger than
+multicast reaches — are held by the test suite and by nothing at run
+time: the roster is static code, so a run cannot break what a test did
+not already catch.
+
+**The gateway is absent until the ceremony records it.** Its node id
+does not exist until the ZeroTier daemon — a container of the estate
+this stack delivers — has run once on the device, so §2.5 step 2 reads
+that id off the device and adds the entry as a commit. Absence is the
+whole of the mechanism: no member is declared for the gateway and no
+`udm.zt` record is published for exactly as long as the entry is
+missing.
 
 **Every member is placed; none draws from the pool.** A pool address
 would move, and the flow rules and DNS records naming it would not move
-with it. The three addresses this repository decides are in
-`conventions`; the rest are the assignments Central already made,
-which reach the stack as configuration and are re-declared as static
-from there. A member whose display name contains a space keeps it:
-the record helper lowercases and hyphenates the DNS label, rather than
-the device being renamed in Central.
+with it. The gateway's address and the two continuous-integration ones
+are this repository's decision; the rest are the assignments Central
+already made, recorded on the entry and re-declared as static from
+there. A member whose display name contains a space keeps it: the
+record helper lowercases and hyphenates the DNS label, rather than the
+device being renamed in Central.
 
 | Member | role tag | Notes |
 | --- | --- | --- |
-| `udm` | `infra` | The gateway: a static managed address, and the next hop of every managed route. |
-| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (ZT carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules look up rather than take from a constant. |
+| `udm` | `infra` | The gateway: a static managed address, and the next hop of every managed route. Absent from the roster until §2.5 step 2 records the node id its daemon mints. |
+| `Aetf-Arch-Homelab` | `infra` | The homelab host: a plain member, never a router (ZT carries no home-LAN routes), and the recovery side-door (§3). The one address the flow rules and the libvirt session look up rather than take from a constant. |
 | `Aetf-Arch-VPS` | `infra` | The legacy deployment. Retires in Wave F together with its `10.42.0.0/24` route. |
 | `haos` | `infra` | Home automation, reachable while the cluster is not. |
 | `ci-physical` | `ci` | The `physical` identity domain: `plan-physical`, `up-physical`, and the drift matrix's `physical` entry. Identity generated in state (`zerotier_identity`), private key an Environment secret; `zt-physical` keeps it live in one job at a time (§2.6). IPv4-only (§2.3). |
@@ -298,15 +310,14 @@ What breaks the cycle is the LAN, which reaches the UDM before and
 independently of ZT, and an optional key of the `physical` stack:
 
 **`gatewayBootstrapHost`** — a LAN address for the gateway, e.g. a name
-the home resolvers already answer for. While it is set it means *the
-gateway is not on the overlay yet*, and everything it does follows from
-that one meaning. Both providers that reach the device dial that address
-instead of the roster's `10.144.1.1` — the desired-state push over SSH
-and the controller's API over HTTPS, one box behind two ports — and the
-ZT roster tolerates the gateway having no configured node id, declaring
-no member for it rather than refusing the run. Unset, which is the
-steady state, every client derives the address from the roster, whose
-census is complete again.
+the home resolvers already answer for. It answers one question: where
+does the device answer today. While it is set, both providers that
+reach the device dial that address instead of the roster's
+`10.144.1.1` — the desired-state push over SSH and the controller's API
+over HTTPS, one box behind two ports. Unset, which is the steady state,
+both derive the address from `conventions`. Whether the gateway is a
+member at all is a separate question with a separate answer: the roster
+carries an entry for it or it does not (§2.1).
 
 The ceremony, four steps and three applies:
 
@@ -317,7 +328,10 @@ The ceremony, four steps and three applies:
     carries is formed by the worker off this apply's own router
     advertisement, so the pinhole waits for step 3 (§4.2).
 2.  **Read the minted node id off the device** — `zerotier-cli info` in
-    that container — and write it into `zerotierMembers.udm.id`.
+    that container — and add the gateway's entry to `ZT_ROSTER`, at
+    `10.144.1.1` and with that id. It is a commit rather than a
+    configuration change: a node id is an identity the device minted
+    once and keeps.
 3.  **Read the worker's GUA off the VLAN-7 advertisement** — the
     address it formed by SLAAC once step 1 declared the network and
     booted it — into `workerGua`, and **apply again, knob still

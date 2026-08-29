@@ -61,11 +61,11 @@ owns sequencing, data movement, and teardown.
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and
-    apply, which lands the estate and with it the ZT container; read the
-    node id that container mints into `zerotierMembers.udm.id` and apply
-    again, which authorizes the member and adds the routes; unset the
-    knob and apply once more, which dials over the overlay and is
-    thereby the verification. Step by step, and why each step is one:
+    apply, which lands the estate and with it the ZT container; commit
+    the gateway's roster entry, carrying the node id that container
+    mints, and apply again, which authorizes the member and adds the
+    routes; unset the knob and apply once more, which dials over the
+    overlay and is thereby the verification. Step by step, and why each step is one:
     physical/gateway.md §2.5. `dns` up: zones + estate records
     imported wholesale (records still pointing at `archvps.hosts`; the
     import census also drops dead weight — `abacus.hosts`, its ZT

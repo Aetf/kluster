@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
+from typing import final
 
 from kluster.conventions.site import CLUSTER_VLAN, CONTAINER_VLAN, IOT_VLAN, LAN_POOL, SERVER_LAN
 
@@ -45,46 +46,66 @@ ZT_MANAGED_ROUTES = (
 #: stack that joins the overlay during a run (physical/gateway.md §2.6).
 ZT_CI_MEMBERS = ('ci-physical', 'ci-dns')
 
-#: The gateway, as the roster names it. It is the only member whose identity
-#: is minted by work this program does — the daemon runs on the device as a
-#: container of the estate — which is why it is also the only member a caller
-#: ever declares unminted (`gateway.zerotier.parse_members`).
+#: The gateway, as the roster names it. It is the one member the roster may be
+#: missing: its node id is minted by the ZeroTier daemon's first run, and that
+#: daemon is a container this program delivers, so the id does not exist until
+#: the bring-up has happened. Step 2 of the ceremony reads it off the device
+#: and adds the entry as a commit (physical/gateway.md §2.5).
 ZT_MEMBER_UDM = 'udm'
 
 #: The homelab host, as the roster names it. It is the one member the flow
-#: rules have to look up rather than take from a constant: the libvirt session
-#: a run opens reaches it member to member, at whatever overlay address it was
-#: assigned before this program existed.
+#: rules and the libvirt session look up rather than take from a constant: the
+#: session reaches it member to member, at the overlay address it was assigned
+#: before this program existed.
 ZT_MEMBER_HOMELAB = 'Aetf-Arch-Homelab'
 
 
+@final
 @dataclass(frozen=True)
-class ZtMember:
-    """A member of the overlay: what it is called, what it may do, where it sits.
+class EnrolledMember:
+    """A member that minted its own identity before this program saw it.
 
-    `address` is set where the address is a convention this program owns — the
-    gateway's, and the two continuous-integration identities' — and left unset
-    where it is a fact about a device that existed first, in which case the
-    address arrives beside the node identifier as `physical` stack
-    configuration and leaves again as that stack's `zerotier_addresses` output.
-
-    `generated` marks the members whose key material this program creates.
-    They have no configured identifier for the same reason they have no
-    configured address: both are outputs of the resource that makes them.
+    A node id is minted by the device the daemon runs on and never changes, so
+    it is an identity rather than a setting — it is recorded here beside the
+    address ZeroTier Central assigned, not read from stack configuration. The
+    role is neither: it is a decision.
     """
 
     #: What ZeroTier Central shows the member as. Display names are what they
     #: are — several contain spaces — and DNS normalizes rather than renames
     #: (`dns.zones.zt_label`).
     name: str
+    #: The ten hexadecimal digits the device's daemon minted.
+    node_id: str
+    #: The overlay address the member holds.
+    address: IPv4Address
     #: One of the three `ZT_ROLE_*` values, carried as the member's role tag.
     role: int
-    #: The overlay address, where this program decides it.
-    address: IPv4Address | None = None
-    #: Whether the identity behind the member is created in state.
-    generated: bool = False
     #: Why the member is on the network, shown as its description in Central.
     note: str = ''
+
+
+@final
+@dataclass(frozen=True)
+class GeneratedMember:
+    """A member whose identity this program creates in state.
+
+    It carries no node id for the same reason it is here at all: the id is an
+    output of the resource that mints the key material, so writing one down
+    would be writing down a value the run has yet to produce.
+    """
+
+    name: str
+    #: The overlay address this program hands the member.
+    address: IPv4Address
+    role: int
+    note: str = ''
+
+
+#: One entry of the roster. Two shapes rather than one with optional fields:
+#: a generated member carrying a node id is a combination that cannot be
+#: declared instead of one something has to refuse.
+RosterEntry = EnrolledMember | GeneratedMember
 
 
 #: Every member of the overlay. The order is the order the design lists them
@@ -92,10 +113,8 @@ class ZtMember:
 #: reach it unattended, then the people.
 #:
 #: The table is a convention rather than one stack's data because two stacks
-#: decide from it and neither owns it. `physical` admits members by it — a
-#: name in configuration the roster does not carry is refused, and a roster
-#: entry with nothing configured for it is refused as well
-#: (`gateway.zerotier.parse_members`) — and `dns` publishes the `*.zt` host
+#: decide from it and neither owns it. `physical` declares the membership from
+#: it, one authorized member per entry, and `dns` publishes the `*.zt` host
 #: block from it, one A record per entry (`dns.zones.zt_records`). A member is
 #: therefore admitted and named by the same declaration, so a member with no
 #: record is not a state either stack can be in; a device that leaves the
@@ -105,47 +124,75 @@ class ZtMember:
 #: permissive one, so a member that arrived without a declared role would be
 #: treated as a personal device — safe only because admission is gated by this
 #: same table, so an undeclared member never reaches the default.
-ZT_ROSTER: tuple[ZtMember, ...] = (
-    ZtMember(
-        name=ZT_MEMBER_UDM,
-        role=ZT_ROLE_INFRA,
-        address=ZT_UDM,
-        note='the gateway: nexthop of every managed route',
-    ),
-    ZtMember(
+#:
+#: The gateway is absent, and absence is the whole of what says so: no member
+#: is declared for it and no `udm.zt` record is published until the ceremony
+#: that reads its minted node id adds the entry (`ZT_MEMBER_UDM`).
+ZT_ROSTER: tuple[RosterEntry, ...] = (
+    EnrolledMember(
         name=ZT_MEMBER_HOMELAB,
+        node_id='c3755c24d1',
+        address=IPv4Address('10.144.180.10'),
         role=ZT_ROLE_INFRA,
         note='the homelab host: a plain member and the recovery side-door, never a router',
     ),
-    ZtMember(
+    EnrolledMember(
         name='Aetf-Arch-VPS',
+        node_id='fb6c235c67',
+        address=IPv4Address('10.144.160.212'),
         role=ZT_ROLE_INFRA,
         note='the legacy deployment, retiring with its own route',
     ),
-    ZtMember(
+    EnrolledMember(
         name='haos',
+        node_id='788d26ad08',
+        address=IPv4Address('10.144.84.129'),
         role=ZT_ROLE_INFRA,
         note='home automation, reachable while the cluster is not',
     ),
-    ZtMember(
+    GeneratedMember(
         name='ci-physical',
-        role=ZT_ROLE_CI,
         address=ZT_CI_PHYSICAL,
-        generated=True,
+        role=ZT_ROLE_CI,
         note='the physical stack: plan, apply, and its drift check',
     ),
-    ZtMember(
+    GeneratedMember(
         name='ci-dns',
-        role=ZT_ROLE_CI,
         address=ZT_CI_DNS,
-        generated=True,
+        role=ZT_ROLE_CI,
         note="the dns stack: previews, proofs, and the resolvers' rewrites",
     ),
-    ZtMember(name='Aetf-Arch-XPS', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='Aetf-Win-XPS', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='Aetf-Handheld', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='PC-Homelab', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='OnePlus6T', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='Pixel 7 Pro', role=ZT_ROLE_PERSONAL),
-    ZtMember(name='S26 Ultra', role=ZT_ROLE_PERSONAL),
+    EnrolledMember(
+        name='Aetf-Arch-XPS', node_id='0d83052605', address=IPv4Address('10.144.175.24'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(
+        name='Aetf-Win-XPS', node_id='02af51aec9', address=IPv4Address('10.144.188.195'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(
+        name='Aetf-Handheld', node_id='d57f65f742', address=IPv4Address('10.144.117.120'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(
+        name='PC-Homelab', node_id='3383aa0836', address=IPv4Address('10.144.147.56'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(
+        name='OnePlus6T', node_id='ecd8be1a4e', address=IPv4Address('10.144.164.143'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(
+        name='Pixel 7 Pro', node_id='f80515f135', address=IPv4Address('10.144.0.120'), role=ZT_ROLE_PERSONAL
+    ),
+    EnrolledMember(name='S26 Ultra', node_id='1aaec45044', address=IPv4Address('10.144.92.151'), role=ZT_ROLE_PERSONAL),
 )
+
+
+def zt_member(name: str) -> RosterEntry:
+    """The roster entry a member name stands for.
+
+    Raises:
+        ValueError: no member of that name is declared. The gateway is the one
+            name that is legitimately absent, and nothing looks it up — its
+            absence is read by iterating the roster, not by asking for it.
+    """
+    for entry in ZT_ROSTER:
+        if entry.name == name:
+            return entry
+    raise ValueError(f'{name} is not on the ZeroTier roster')

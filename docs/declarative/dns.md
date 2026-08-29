@@ -122,15 +122,15 @@ Cloudflare set; jiahui.id takes none.
     convention (private IPs in public DNS, deliberate and existing
     practice). It is not a table: it is one A record per entry of the
     overlay roster, `conventions.ZT_ROSTER`, which is the same table the
-    `physical` stack admits members by (physical/gateway.md §2.1). A
-    device joins the overlay and gets its name here by one declaration,
-    and a device that leaves loses both — so the legacy VPS's record
-    goes when its roster entry does, in Wave F. Only the addresses cross
-    the StackReference, and only for the members whose address ZeroTier
-    Central assigned; the ones this repository decides — the gateway's
-    and the two continuous-integration identities' — are read straight
-    off the roster entry, which is why `udm.zt` resolves before the
-    gateway's own identity has been minted.
+    `physical` stack declares the membership from (physical/gateway.md
+    §2.1). A device joins the overlay and gets its name here by one
+    declaration, and a device that leaves loses both — so the legacy
+    VPS's record goes when its roster entry does, in Wave F. Nothing
+    here crosses the StackReference: an entry carries the member's name
+    and its overlay address together, so the whole block is code, and it
+    is declared identically before and after `physical` is applied. The
+    gateway is the one member the roster may not carry yet, and `udm.zt`
+    appears with its entry (physical/gateway.md §2.5).
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.

@@ -8,8 +8,10 @@ each allowed flow is declared in both directions, that a run reaches four
 destinations and no fifth one, that nothing may open a connection towards a run,
 and that everyone else falls through untouched.
 
-The roster is asserted the same way: what makes it a census is that it is checked
-in both directions against configuration, so both directions are tested.
+The roster is asserted the same way, and here it is the *only* way. The roster
+is static code, so nothing can break one of its invariants at runtime that these
+cases did not already catch — which is why the program itself checks none of
+them (rfc-002 §10.2).
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from typing import Any, cast
 
 import pulumi
 import pulumi.runtime.settings
-import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -32,24 +33,11 @@ NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'
 API_TOKEN = 'a-central-token'
 
+#: The homelab host's overlay address, as the flow-rule cases name it.
+#: `flow_rules` is a pure function of what it is handed, so those cases keep a
+#: literal; that the roster is what hands it over is a case of its own.
 HOMELAB_ZT = IPv4Address('10.144.180.10')
 ADGUARD = (IPv4Address('10.0.5.11'), IPv4Address('10.0.5.12'))
-
-#: A node identifier is ten hexadecimal digits. These are made up, which is all
-#: a test needs and all a public repository should carry.
-CONFIGURED: dict[str, object] = {
-    'udm': {'id': 'a0a0a0a0a0'},
-    'Aetf-Arch-Homelab': {'id': 'b1b1b1b1b1', 'address': str(HOMELAB_ZT)},
-    'Aetf-Arch-VPS': {'id': 'c2c2c2c2c2', 'address': '10.144.160.212'},
-    'haos': {'id': 'd3d3d3d3d3', 'address': '10.144.84.129'},
-    'Aetf-Arch-XPS': {'id': 'e4e4e4e4e4', 'address': '10.144.175.24'},
-    'Aetf-Win-XPS': {'id': 'f5f5f5f5f5', 'address': '10.144.175.25'},
-    'Aetf-Handheld': {'id': '1717171717', 'address': '10.144.127.148'},
-    'PC-Homelab': {'id': '2828282828', 'address': '10.144.180.11'},
-    'OnePlus6T': {'id': '3939393939', 'address': '10.144.160.97'},
-    'Pixel 7 Pro': {'id': '4a4a4a4a4a', 'address': '10.144.160.98'},
-    'S26 Ultra': {'id': '5b5b5b5b5b', 'address': '10.144.160.99'},
-}
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -87,7 +75,6 @@ async def stack() -> None:
         NAME,
         api_token=API_TOKEN,
         network_id=NETWORK_ID,
-        members=zerotier.parse_members(CONFIGURED),
         adguard=ADGUARD,
     )
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
@@ -108,68 +95,48 @@ def rules() -> str:
 ##
 
 
-def test_the_roster_and_the_configuration_check_each_other() -> None:
-    """A census is only a census if it is closed in both directions.
+def test_every_member_is_named_identified_and_placed_exactly_once() -> None:
+    """Three uniqueness rules, and each of them is a different collision.
 
-    A member configured but not rostered would join with no declared role and
-    inherit the permissive default; a member rostered but not configured would
-    be a name the program believes in and the network has never heard of.
+    Two entries under one name would publish two `*.zt` records with the same
+    label; two under one node id would declare two members of the same device,
+    the second overwriting the first in Central; two at one address would leave
+    a flow rule and a DNS record naming a machine that is not the one the
+    reader meant.
     """
-    parsed = zerotier.parse_members(CONFIGURED)
-    assert set(parsed) == {entry.name for entry in conventions.ZT_ROSTER if not entry.generated}
+    names = [entry.name for entry in conventions.ZT_ROSTER]
+    node_ids = [entry.node_id for entry in conventions.ZT_ROSTER if isinstance(entry, conventions.EnrolledMember)]
+    addresses = [entry.address for entry in conventions.ZT_ROSTER]
 
-    with pytest.raises(ValueError, match='intruder is not on the ZeroTier roster'):
-        zerotier.parse_members({**CONFIGURED, 'intruder': {'id': '9999999999', 'address': '10.144.9.9'}})
-    with pytest.raises(ValueError, match='no configured node id for haos'):
-        zerotier.parse_members({name: facts for name, facts in CONFIGURED.items() if name != 'haos'})
-    with pytest.raises(ValueError, match='takes no configured node id'):
-        zerotier.parse_members({**CONFIGURED, 'ci-dns': {'id': '8888888888'}})
+    assert len(set(names)) == len(names)
+    assert len(set(node_ids)) == len(node_ids)
+    assert len(set(addresses)) == len(addresses)
 
 
-def test_the_one_member_whose_identity_this_program_delivers_may_be_absent_when_it_is_named() -> None:
-    """A node id exists only after the daemon has run, and the gateway's has not.
+def test_every_member_is_placed_inside_the_overlays_own_subnet() -> None:
+    """An address outside it is not on this network at all.
 
-    The estate carries the ZeroTier daemon onto the gateway, so during a first
-    bring-up the roster is asked to admit a device whose identity nothing has
-    minted. Naming it `unminted` is how the caller says the delivery has not
-    happened; the census is otherwise unchanged, and the relaxation is per name
-    rather than a mode — every other member is still required.
+    ZeroTier assigns statically out of the network's managed range, so an entry
+    numbered outside it is one Central would reject — and, before that, one the
+    confinement rules would name to no effect.
     """
-    without_udm = {name: entry for name, entry in CONFIGURED.items() if name != conventions.ZT_MEMBER_UDM}
-
-    parsed = zerotier.parse_members(without_udm, unminted=(conventions.ZT_MEMBER_UDM,))
-    assert conventions.ZT_MEMBER_UDM not in parsed
-    assert set(parsed) == {entry.name for entry in conventions.ZT_ROSTER if not entry.generated} - {
-        conventions.ZT_MEMBER_UDM
-    }
-
-    # Permission to be absent is not a refusal to look: once the operator has
-    # read the minted id into configuration, the same call authorizes it.
-    assert zerotier.parse_members(CONFIGURED, unminted=(conventions.ZT_MEMBER_UDM,))[conventions.ZT_MEMBER_UDM].node_id
-
-    # And the relaxation reaches exactly the name it was given.
-    with pytest.raises(ValueError, match='no configured node id for haos'):
-        zerotier.parse_members(
-            {name: entry for name, entry in CONFIGURED.items() if name != 'haos'},
-            unminted=(conventions.ZT_MEMBER_UDM,),
-        )
-    with pytest.raises(ValueError, match=f'no configured node id for {conventions.ZT_MEMBER_UDM}'):
-        zerotier.parse_members(without_udm)
+    for entry in conventions.ZT_ROSTER:
+        assert entry.address in conventions.ZT_SUBNET, entry.name
 
 
-def test_an_address_is_either_a_convention_or_a_configured_fact_never_both() -> None:
-    """The gateway's address is the one the desired-state push dials.
+def test_the_gateway_is_placed_at_the_address_every_client_dials() -> None:
+    """Three consumers dial `ZT_UDM`, and the roster is where the member is put.
 
-    If configuration could move it, the estate would be pushed to one address
-    and the overlay would route to another, and the two would disagree in
-    whichever direction nobody checked.
+    The estate's SSH, the controller's API and every managed route's next hop
+    all derive from that constant, so an entry for the gateway at any other
+    address would point all three somewhere the member is not. The entry is
+    absent until the ceremony that reads the minted node id adds it
+    (physical/gateway.md §2.5), which is why this is stated as a conditional
+    rather than as a lookup.
     """
-    assert zerotier.parse_members(CONFIGURED)['udm'].address is None
+    gateway_entries = [entry for entry in conventions.ZT_ROSTER if entry.name == conventions.ZT_MEMBER_UDM]
 
-    with pytest.raises(ValueError, match="udm's address is a convention"):
-        zerotier.parse_members({**CONFIGURED, 'udm': {'id': 'a0a0a0a0a0', 'address': '10.144.1.9'}})
-    with pytest.raises(ValueError, match='carries no address'):
-        zerotier.parse_members({**CONFIGURED, 'haos': {'id': 'd3d3d3d3d3'}})
+    assert all(entry.address == conventions.ZT_UDM for entry in gateway_entries)
 
 
 def test_the_two_continuous_integration_identities_are_generated_and_confined() -> None:
@@ -179,7 +146,7 @@ def test_the_two_continuous_integration_identities_are_generated_and_confined() 
     one endpoint at a time; sharing a tag with anything else would hand that
     thing the same four destinations.
     """
-    generated = [entry for entry in conventions.ZT_ROSTER if entry.generated]
+    generated = [entry for entry in conventions.ZT_ROSTER if isinstance(entry, conventions.GeneratedMember)]
 
     assert [entry.name for entry in generated] == list(conventions.ZT_CI_MEMBERS)
     assert {entry.address for entry in generated} == {conventions.ZT_CI_PHYSICAL, conventions.ZT_CI_DNS}
@@ -323,25 +290,36 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     assert conventions.CLUSTER_VLAN.v4 in conventions.ZT_MANAGED_ROUTES
 
 
-def test_the_gateway_member_is_placed_at_the_constant_every_client_dials() -> None:
-    """The roster assigns the address, and everything else reads it from there.
+def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted() -> None:
+    """A member exists because an entry exists, and for no other reason.
 
-    The overlay address of the gateway is not a recorded site fact: this
-    program hands it out. Three consumers dial it -- the estate's SSH, the
-    controller's API and every managed route's next hop -- so the roster entry
-    and `conventions.ZT_UDM` drifting apart would point all three somewhere
-    the member is not.
+    That is what lets the gateway be absent during a first bring-up with no
+    relaxation to switch on: there is no configured mapping the roster could
+    be short against, so an entry that has not been written yet declares
+    nothing and costs nothing. The routes name `ZT_UDM` as their next hop
+    either way — a route to a router that has not joined yet is the ordinary
+    state of a bring-up.
     """
-    member = registered(f'{NAME}-member-udm')
+    declared_members = {name for typ, name, _ in declared if typ == 'zerotier:index/member:Member'}
 
-    assert member['ipAssignments'] == [str(conventions.ZT_UDM)]
-    assert member['noAutoAssignIps'] is True
-    entry = next(entry for entry in conventions.ZT_ROSTER if entry.name == 'udm')
-    assert entry.address == conventions.ZT_UDM
-    # Configuration cannot supply it either, which is what keeps the two from
-    # being two statements at all.
-    with pytest.raises(ValueError, match='is a convention of this program'):
-        _ = zerotier.parse_members(CONFIGURED | {'udm': {'id': 'a0a0a0a0a0', 'address': '10.144.9.9'}})
+    assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.ZT_ROSTER}
+    assert {route['via'] for route in registered(f'{NAME}-network')['routes']} == {str(conventions.ZT_UDM)}
+
+
+def test_the_libvirt_flow_rule_names_the_address_the_roster_places_the_host_at() -> None:
+    """The rule and the session dial one address, and the roster is that address.
+
+    A run reaches the homelab host member to member, and the rule that lets it
+    through is written from the same entry the session's URI is built from — so
+    a second statement of that address, anywhere, would be free to disagree
+    with the one the packets are actually matched against.
+    """
+    homelab = conventions.zt_member(conventions.ZT_MEMBER_HOMELAB).address
+    rendered = cast('str', registered(f'{NAME}-network')['flowRules'])
+
+    assert (
+        f'accept tseq role {conventions.ZT_ROLE_CI} and ipdest {homelab}/32 and dport {zerotier.SSH_PORT};' in rendered
+    )
 
 
 def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
@@ -374,8 +352,12 @@ def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_i
         assert member['name'] == entry.name
 
     assert registered(f'{NAME}-member-ci-physical')['memberId'] == f'{NAME}-identity-ci-physical-node'
-    assert registered(f'{NAME}-member-udm')['memberId'] == 'a0a0a0a0a0'
-    assert registered(f'{NAME}-member-udm')['ipAssignments'] == [str(conventions.ZT_UDM)]
+    # An enrolled member carries the id its own device minted, straight off the
+    # roster entry: there is nowhere else it could come from.
+    haos = conventions.zt_member('haos')
+    assert isinstance(haos, conventions.EnrolledMember)
+    assert registered(f'{NAME}-member-haos')['memberId'] == haos.node_id
+    assert registered(f'{NAME}-member-haos')['ipAssignments'] == [str(haos.address)]
 
 
 def test_the_central_credential_belongs_to_a_provider_of_its_own() -> None:

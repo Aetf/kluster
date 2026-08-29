@@ -25,16 +25,9 @@ from kluster.components.dns.zones import (
     zt_records,
 )
 
-#: What the `physical` stack publishes, in shape only: an address for each
-#: member whose address it does not decide itself. The real census lives in
-#: that stack's configuration and in ZeroTier Central, never here.
-ZT_CONFIGURED: dict[str, str] = {
-    entry.name: f'10.144.99.{index}' for index, entry in enumerate(conventions.ZT_ROSTER) if entry.address is None
-}
-
 
 def _zt() -> tuple[Record, ...]:
-    return zt_records(ZT_CONFIGURED.__getitem__)
+    return zt_records()
 
 
 def _records(zone: str) -> tuple[Record, ...]:
@@ -100,30 +93,30 @@ def test_the_retired_members_are_published_by_nobody() -> None:
     assert not members & {'Abacus', 'Aetf-Arch-Mac', 'Aetf-MacbookPro', 'Aetf-Laptop'}
 
 
-def test_the_gateways_record_is_a_convention_and_waits_for_no_identity() -> None:
-    """`udm.zt` is the address this repository assigns, not one it is told.
+def test_the_gateway_has_no_record_for_as_long_as_it_has_no_roster_entry() -> None:
+    """`udm.zt` appears when the member does, by the same edit and no other.
 
     The gateway's ZeroTier identity is minted by the daemon the `physical`
-    stack delivers to it, so during first bring-up there is no member for it in
-    Central at all — and this record still has to resolve, because it is the
-    address the overlay routes through. Nothing looks it up: `ZT_CONFIGURED`
-    has no entry for it, so a lookup would raise rather than be tolerated.
+    stack delivers to it, so until the bring-up ceremony has read that id onto
+    the roster there is no member — and a record for a member that does not
+    exist would resolve to an address nothing answers at. Both come from the
+    one entry, so neither can arrive without the other.
     """
-    udm = next(record for record in _zt() if record.label == f'udm.{conventions.ZT_LABEL}')
+    labels = {record.label for record in _zt()}
 
-    assert udm.content == str(conventions.ZT_UDM)
-    assert 'udm' not in ZT_CONFIGURED
+    assert (f'{conventions.ZT_MEMBER_UDM}.{conventions.ZT_LABEL}' in labels) == (
+        conventions.ZT_MEMBER_UDM in {entry.name for entry in conventions.ZT_ROSTER}
+    )
 
 
-def test_a_members_own_address_is_the_one_the_overlay_assigned_it() -> None:
-    # The half of the roster this repository does not decide: it arrives from
-    # ZeroTier Central by way of the `physical` stack, and the record carries
-    # it verbatim.
+def test_a_members_record_carries_the_address_its_roster_entry_holds() -> None:
+    # The roster is the only source: an entry has a concrete address whichever
+    # of the two shapes it is, so nothing about this block waits on a run.
     member = 'Aetf-Arch-Homelab'
 
     record = next(record for record in _zt() if record.label == f'{zt_label(member)}.{conventions.ZT_LABEL}')
 
-    assert record.content == ZT_CONFIGURED[member]
+    assert record.content == str(conventions.zt_member(member).address)
     assert record.ttl == conventions.ANCHOR_TTL
 
 
