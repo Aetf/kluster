@@ -27,16 +27,23 @@ provider uploads into the pool over its own connection.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import final
 
 import pulumi
 import pulumi_oci as oci
 from pulumiverse_talos import imagefactory
 
+from kluster.lib import templates
 from kluster.providers.talos_factory import FactoryImage
 from putils import Component, async_output, resolve
+
+#: The package `importlib.resources` resolves this module's `templates/`
+#: directory against, so the schematic document travels with the code that
+#: renders it (rfc-002 §9.1).
+_PACKAGE = 'kluster.components.talos'
 
 #: The cloud nodes are ARM; the homelab worker is x86.
 CLOUD_ARCHITECTURE = 'arm64'
@@ -210,6 +217,19 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
         return str(IMAGE_CACHE / f'{name}.raw')
 
 
+@final
+@dataclass(frozen=True)
+class _SchematicParams:
+    """What `schematic.yaml.j2` reads."""
+
+    extensions: Sequence[str]
+
+
 def _schematic_document(extensions: Sequence[str]) -> str:
-    """The factory's customization document, as YAML-shaped JSON."""
-    return json.dumps({'customization': {'systemExtensions': {'officialExtensions': list(extensions)}}})
+    """The factory's customization document, as YAML-shaped JSON.
+
+    One line and no trailing newline, because a schematic's contents decide its
+    id and the id names every image built from it: re-spelling the document
+    would rebuild artefacts that have not changed.
+    """
+    return templates.render(_PACKAGE, 'templates/schematic.yaml.j2', _SchematicParams(extensions=extensions))

@@ -55,12 +55,15 @@ over v6 that it cannot reach over v4.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from ipaddress import IPv4Address
+from typing import final
 
 import pulumi
 import pulumi_zerotier as zerotier
 
 from kluster import conventions
+from kluster.lib import templates
 from putils import Component, own_provider_opts, with_provider
 
 __all__ = (
@@ -72,6 +75,11 @@ __all__ = (
     'flow_rules',
     'roles',
 )
+
+#: The package `importlib.resources` resolves this module's `templates/`
+#: directory against, so the rules program travels with the code that renders
+#: it (rfc-002 §9.1).
+_PACKAGE = 'kluster.components.overlay'
 
 #: The gateway's own management ports, as reached over the overlay: the shell
 #: the desired-state push writes through, and the controller API the firewall
@@ -99,6 +107,29 @@ def roles() -> Mapping[str, int]:
     }
 
 
+@final
+@dataclass(frozen=True)
+class _Target:
+    """One destination continuous integration may reach, and why it may."""
+
+    destination: str
+    port: int
+    why: str
+
+
+@final
+@dataclass(frozen=True)
+class _FlowRulesParams:
+    """What `flow-rules.zt.j2` reads."""
+
+    cluster: str
+    tag_role_id: int
+    role_personal: int
+    role_ci: int
+    roles: Mapping[str, int]
+    targets: tuple[_Target, ...]
+
+
 def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4Address]) -> str:
     """The network's rules: a base filter, the confinement, and a fallthrough.
 
@@ -112,54 +143,33 @@ def flow_rules(*, udm: IPv4Address, homelab: IPv4Address, adguard: Sequence[IPv4
     they would have sitting on the LAN, local discovery included: every rule
     above it matches a tagged continuous-integration endpoint and nothing else.
     """
-    enumeration = '\n'.join(f'  enum {value} {label}' for label, value in roles().items())
-    targets: list[tuple[str, int, str]] = [
-        (f'{udm}/32', SSH_PORT, 'the gateway, for the desired-state push'),
-        (f'{udm}/32', UNIFI_API_PORT, 'the controller API on the gateway, for the firewall resources'),
-        *(
-            (f'{address}/32', conventions.ADGUARD_API_PORT, 'a resolver, for the split-horizon rewrites')
-            for address in adguard
+    return templates.render(
+        _PACKAGE,
+        'templates/flow-rules.zt.j2',
+        _FlowRulesParams(
+            cluster=conventions.CLUSTER_NAME,
+            tag_role_id=conventions.ZT_TAG_ROLE_ID,
+            role_personal=conventions.ZT_ROLE_PERSONAL,
+            role_ci=conventions.ZT_ROLE_CI,
+            roles=roles(),
+            targets=(
+                _Target(f'{udm}/32', SSH_PORT, 'the gateway, for the desired-state push'),
+                _Target(
+                    f'{udm}/32',
+                    UNIFI_API_PORT,
+                    'the controller API on the gateway, for the firewall resources',
+                ),
+                *(
+                    _Target(
+                        f'{address}/32',
+                        conventions.ADGUARD_API_PORT,
+                        'a resolver, for the split-horizon rewrites',
+                    )
+                    for address in adguard
+                ),
+                _Target(f'{homelab}/32', SSH_PORT, 'the homelab host, for the libvirt session'),
+            ),
         ),
-        (f'{homelab}/32', SSH_PORT, 'the homelab host, for the libvirt session'),
-    ]
-    confinement: list[str] = []
-    for destination, port, why in targets:
-        confinement.append(f'# {why}')
-        confinement.append(f'accept tseq role {conventions.ZT_ROLE_CI} and ipdest {destination} and dport {port};')
-        confinement.append(f'accept treq role {conventions.ZT_ROLE_CI} and ipsrc {destination} and sport {port};')
-
-    return '\n'.join(
-        (
-            f'# Managed by the {conventions.CLUSTER_NAME} physical stack. Edits in Central are overwritten.',
-            '',
-            'tag role',
-            f'  id {conventions.ZT_TAG_ROLE_ID}',
-            f'  default {conventions.ZT_ROLE_PERSONAL}',
-            enumeration,
-            ';',
-            '',
-            '# The stock base filter: IP and ARP, nothing else on the wire.',
-            'drop',
-            '  not ethertype ipv4',
-            '  and not ethertype arp',
-            '  and not ethertype ipv6',
-            ';',
-            'accept ethertype arp;',
-            '',
-            '# Continuous integration reaches four destinations and no others.',
-            '# Every flow is declared twice: evaluation is stateless, so the',
-            '# return leg is a rule of its own rather than a consequence.',
-            *confinement,
-            '',
-            '# Nothing may open a connection towards a run, either: it is a',
-            '# client on this network and never a service.',
-            f'drop tseq role {conventions.ZT_ROLE_CI};',
-            f'drop treq role {conventions.ZT_ROLE_CI};',
-            '',
-            '# Everyone else: parity with sitting on the LAN.',
-            'accept;',
-            '',
-        )
     )
 
 

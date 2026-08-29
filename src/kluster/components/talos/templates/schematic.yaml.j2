@@ -1,0 +1,4 @@
+{#- The factory's customization document, JSON-shaped: JSON is YAML, and a
+    schematic's contents decide the id, which every image built from it is
+    named after -- so this file renders one line and ends without a newline. -#}
+{"customization": {"systemExtensions": {"officialExtensions": [{{ extensions | map('tojson') | join(', ') }}]}}}

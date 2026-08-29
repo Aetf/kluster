@@ -1,0 +1,17 @@
+# Seed configuration written by the {{ cluster }} physical stack.
+# Installed only where the instance has none: rewrites are the dns stack's,
+# written through the API, and live in this same file once accepted.
+http:
+  address: {{ address }}:{{ api_port }}
+dns:
+  bind_hosts:
+    - {{ address }}
+  port: 53
+  upstream_dns:
+{%- for upstream in upstreams %}
+    - {{ upstream }}
+{%- endfor %}
+  bootstrap_dns:
+    - 9.9.9.9
+    - 1.1.1.1
+schema_version: 29

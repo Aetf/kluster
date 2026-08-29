@@ -1,0 +1,28 @@
+! Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+frr defaults traditional
+!
+router bgp {{ local_asn }}
+ no bgp ebgp-requires-policy
+ neighbor {{ peer }} remote-as {{ peer_asn }}
+ neighbor {{ peer }} description {{ peer_description }}
+ neighbor {{ peer }} password {{ password }}
+ !
+ address-family ipv4 unicast
+  neighbor {{ peer }} activate
+  neighbor {{ peer }} soft-reconfiguration inbound
+  neighbor {{ peer }} prefix-list {{ v4_list }} in
+  neighbor {{ peer }} maximum-prefix {{ max_prefixes }}
+ exit-address-family
+ !
+ address-family ipv6 unicast
+  neighbor {{ peer }} activate
+  neighbor {{ peer }} soft-reconfiguration inbound
+  neighbor {{ peer }} prefix-list {{ v6_list }} in
+  neighbor {{ peer }} maximum-prefix {{ max_prefixes }}
+ exit-address-family
+!
+ip prefix-list {{ v4_list }} seq 10 permit {{ pool_v4 }} le {{ pool_v4.max_prefixlen }}
+ip prefix-list {{ v4_list }} seq 20 deny any
+ipv6 prefix-list {{ v6_list }} seq 10 permit {{ pool_v6 }} le {{ pool_v6.max_prefixlen }}
+ipv6 prefix-list {{ v6_list }} seq 20 deny any
+!
