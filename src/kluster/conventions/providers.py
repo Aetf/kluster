@@ -71,10 +71,12 @@ class Compartment:
 class OciTenancy:
     """The cloud account, as everything that declares into it has to know it.
 
-    TODO(kluster-ops#117): the tenancy OCID belongs here too. It is still
-    `oci:tenancyOcid` in stack configuration, written there by the mint that
-    issues the key, and moving it needs both that sink retired and a ruling on
-    committing an account identifier to a public repository.
+    TODO(kluster-ops#117): the tenancy OCID belongs here too, and the ruling
+    that says so is made — the OCID is public, `conventions` takes it, and the
+    mint verifies it rather than writing it. Until that is implemented it is
+    `kluster-py:ociTenancyOcid` in stack configuration, written there by the
+    mint that issues the key and read by the stack program at the line that
+    builds the cloud provider (rfc-002 §8.1).
     """
 
     #: Home region — permanent per tenancy, and where the whole free envelope
