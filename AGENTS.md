@@ -117,7 +117,7 @@ Two angles, one reviewer each (they may run in parallel):
 
 Findings go to the builder as one fix cycle (mid-flight message or a
 follow-up brief); a finding the operator must rule on becomes a
-`decision` issue. A clean review is stated in one line on the pull
+`decision/pending` issue. A clean review is stated in one line on the pull
 request thread before merge. Small diffs get small reviews — a
 docs-only change may take a single combined pass — but no pull request
 merges reviewed by nobody but its author.
@@ -156,7 +156,7 @@ merge can report once:
 -   **Every task is an ops issue** carrying an `area/*` label, a
     `kind/*` label, and a **milestone** (the roadmap's phases M0–M4
     plus `Parallel`; the index is the roadmap issue). Issues needing
-    an operator ruling carry `decision`; issues that gate the next
+    an operator ruling carry `decision/pending`; issues that gate the next
     milestone carry `blocker`. The project board tracks these issues;
     labels and milestones are what make its views mean something.
 -   **Dispatch is visible**: the dispatcher adds `in-flight` when a
