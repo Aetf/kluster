@@ -121,7 +121,7 @@ async def fake() -> Fake:
 
 def build_cluster(**kwargs: Any) -> Any:
     """Day 0: the PKI and the configuration each machine boots with."""
-    from kluster.physical.talos import TalosCluster
+    from kluster.components.talos import TalosCluster
 
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
@@ -138,7 +138,7 @@ def build_cluster(**kwargs: Any) -> Any:
 
 def build(**kwargs: Any) -> Any:
     """Day 1, on top of a day 0 the caller may hand in to inspect."""
-    from kluster.physical.talos import TalosDay1
+    from kluster.components.talos import TalosDay1
 
     kwargs.setdefault('cluster', build_cluster())
     kwargs.setdefault('addresses', ADDRESSES)
@@ -363,7 +363,7 @@ async def test_the_second_address_is_applied_and_never_booted_with(fake: Fake) -
 @pytest.mark.asyncio
 async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake: Fake) -> None:
     from kluster import conventions
-    from kluster.physical.talos import STATIC_ADDRESSES
+    from kluster.components.talos import STATIC_ADDRESSES
 
     # Day 0, not day 1: the address is a constant this program decides, so it
     # is on the seed the machine boots from rather than applied to a machine
@@ -396,7 +396,7 @@ async def test_only_the_augmented_node_is_configured_twice(fake: Fake) -> None:
 
 @pytest.mark.asyncio
 async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
-    from kluster.physical.talos import BGP_PORT
+    from kluster.components.talos import BGP_PORT
 
     cluster = build_cluster()
 

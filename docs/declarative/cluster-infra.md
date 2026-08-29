@@ -19,7 +19,7 @@ that speaks the k8s API, consumed by `apps`.
     shared Secret names) get explicit `metadata.name`s with autonaming
     disabled — they are well-known singletons where autonaming only
     hurts (the legacy autonamed-PVC lesson) — and those fixed names live
-    in `conventions.py`. Where autonaming is deliberately kept, the
+    in `conventions`. Where autonaming is deliberately kept, the
     generated name is a machine fact and flows as a stack output. The
     point of minimizing outputs is CI: every cross-stack output widens
     the "stale downstream preview" window (ci.md §3).
@@ -146,7 +146,8 @@ Two channels, chosen by who consumes the secret:
 
 ### 1.2 Installing a chart: `helm.v4.Chart`
 
-The API every component installs through, wrapped as `kx.helm_chart`:
+The API every component installs through, wrapped as
+`kluster.lib.k8s.helm_chart`:
 
 -   **What it is.** `helm.v4.Chart` renders the chart in the provider
     and hands each rendered object to Pulumi as its own resource. It
@@ -219,7 +220,7 @@ All decided behavior from architecture.md §3, expressed as config:
     match (architecture.md §3.2); all from physical outputs) and `lan`
     (`192.168.71.0/24` + the ULA /64, outside every home network and
     the nodes' own VLAN 7 alike). Pool membership via the
-    `serviceSelector` label from `conventions.py`. Bootstrap verification: pool-contains-node-IP.
+    `serviceSelector` label from `conventions`. Bootstrap verification: pool-contains-node-IP.
 -   **BGP**: Cilium **BGPv2** resources — `CiliumBGPClusterConfig`
     (node-selected to the homelab worker only) +
     `CiliumBGPPeerConfig` + `CiliumBGPAdvertisement`; the v1
@@ -248,7 +249,7 @@ All decided behavior from architecture.md §3, expressed as config:
     Service requesting all three primary IPs via `lbipam.cilium.io/ips`
     + sharing-key), `lan-gw` (pinned to the homelab worker, `lan`
     pool), and `media-gw` (same shape as `lan-gw` on a **second,
-    dedicated `lan`-pool VIP** — a `conventions.py` literal, because
+    dedicated `lan`-pool VIP** — a `conventions` literal, because
     the UDM firewall's IoT→media allow names it,
     physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
     the decision "reachable from the IoT VLAN"; the helper exposes

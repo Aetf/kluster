@@ -48,7 +48,7 @@ async def setup_mocks() -> None:
 
 @pytest.mark.asyncio
 async def test_vcn_is_dual_stack() -> None:
-    from kluster.physical.cloud import CloudNetwork
+    from kluster.components.cloud import CloudNetwork
 
     network = CloudNetwork('kluster', compartment_id='ocid1.compartment.test')
     assert await network.vcn.cidr_blocks.future() == [str(conventions.VCN_CIDR)]
@@ -57,7 +57,7 @@ async def test_vcn_is_dual_stack() -> None:
 
 @pytest.mark.asyncio
 async def test_subnet_ipv6_is_derived_from_the_assigned_prefix() -> None:
-    from kluster.physical.cloud import CloudNetwork
+    from kluster.components.cloud import CloudNetwork
 
     network = CloudNetwork('kluster', compartment_id='ocid1.compartment.test')
     assert await network.subnet.ipv6cidr_block.future() == '2603:c020:8000:1200::/64'
@@ -65,7 +65,7 @@ async def test_subnet_ipv6_is_derived_from_the_assigned_prefix() -> None:
 
 @pytest.mark.asyncio
 async def test_object_storage_rides_the_service_gateway() -> None:
-    from kluster.physical.cloud import CloudNetwork
+    from kluster.components.cloud import CloudNetwork
 
     network = CloudNetwork('kluster', compartment_id='ocid1.compartment.test')
 

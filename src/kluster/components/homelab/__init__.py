@@ -21,9 +21,10 @@ host the same way from the same configuration.
 
 **The disk is created from the Talos image, not created empty.** The volume's
 `source` is the decompressed `nocloud` artefact on the machine running the
-program (`physical/image.py`), and the provider uploads it into the pool over
-the same connection it defines the domains through. So the first boot is a
-consequence of an apply rather than an operator writing an image by hand.
+program (`providers/talos_factory/`), and the provider uploads it into the
+pool over the same connection it defines the domains through. So the first
+boot is a consequence of an apply rather than an operator writing an image
+by hand.
 
 The system this assumes of the host — the disk shape, the second bridge, the
 two-phase GPU passthrough, and the host preparation that must happen before
@@ -74,8 +75,8 @@ from urllib.parse import urlencode
 import pulumi
 import pulumi_libvirt as libvirt
 
-from kluster.physical.talos import TalosCluster
-from kluster.scripts.credentials import workstation
+from kluster.components.talos import TalosCluster
+from kluster.lib import workstation
 from putils import Component
 
 __all__ = ('HOST_KEY', 'LIBVIRT_USER', 'HomelabHost', 'connection_uri', 'declare', 'slot')
@@ -148,9 +149,9 @@ LIBVIRT_USER = 'virt'
 #: two reasons: a public key is not a secret, and a pin typed in beside the
 #: client credential could be replaced by whoever could already replace the
 #: credential. Stored in the estate's `authorized_keys` form — the bare
-#: `ssh-ed25519 AAAA…` blob, no host name in front of it (`gateway/ssh.py`) —
-#: so the address it is written against is decided where the session is dialled
-#: rather than carried around with the key.
+#: `ssh-ed25519 AAAA…` blob, no host name in front of it
+#: (`providers/device_files/ssh.py`) — so the address it is written against is
+#: decided where the session is dialled rather than carried around with the key.
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIHV/ogdnUUf2j2DIffv86Ra43SS672UCZt3kXSvs6FF'
 
 #: The workstation slot the run materializes its transport into

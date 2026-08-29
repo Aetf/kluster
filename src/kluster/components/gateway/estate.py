@@ -71,8 +71,8 @@ from typing import final
 import pulumi
 
 from kluster import conventions
-from kluster.gateway import facts
-from kluster.gateway.provider import Connection, GwArtifact, GwFile
+from kluster.components.gateway import facts
+from kluster.providers.device_files.provider import Connection, GwArtifact, GwFile
 from putils import Component
 
 __all__ = (

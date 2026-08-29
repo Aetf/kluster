@@ -10,7 +10,7 @@ from ipaddress import IPv4Interface
 from typing import Any, cast
 
 from kluster import conventions
-from kluster.physical import talos
+from kluster.components import talos
 
 SANS = ['203.0.113.10', 'api.example.test']
 SECRETBOX = 'c2VjcmV0Ym94LWtleS1tYXRlcmlhbC0zMi1ieXRlcw=='

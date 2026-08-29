@@ -47,6 +47,7 @@ dev = [
     "ruamel-yaml>=0.19.1",
     "ruff>=0.15.11",
     "basedpyright>=1.39.10",
+    "import-linter>=2.14",
 ]
 ##
 ## Project management section
@@ -101,8 +102,11 @@ packages = ["src/kluster", "src/putils"]
 [tool.ruff]
 line-length = 120
 # In addition to the standard set of exclusions: vendored libraries, and
-# `packages/`, whose every member is a generated provider SDK.
-extend-exclude = ["lib", "packages"]
+# `packages/`, whose every member is a generated provider SDK. The leading
+# slash anchors the first one to the repository root — a bare `lib` is matched
+# against every path segment, and would silently take `src/kluster/lib/` with
+# it.
+extend-exclude = ["/lib", "packages"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -143,3 +147,71 @@ exclude = [
 reportAny = false
 reportExplicitAny = false
 reportUnusedCallResult = false
+
+##
+## Import contract
+##
+# The source layout is a set of layers, and a layer that quietly reached
+# upwards would take the layout with it — so the layering is a checked
+# contract rather than a convention (rfc-002 §2.3). Run as
+# `uv run lint-imports`, in CI beside ruff and basedpyright.
+[tool.importlinter]
+root_packages = ["kluster", "putils"]
+
+# Each entry below is one layer, so the areas *inside* a layer may import each
+# other freely — `homelab` names `talos`'s cluster type in its signature, and a
+# contract making the areas independent would enforce a boundary the design
+# does not have.
+[[tool.importlinter.contracts]]
+name = "Layers: a package imports what is below it and nothing above it"
+type = "layers"
+layers = [
+    "kluster.stacks",
+    "kluster.components",
+    "kluster.providers",
+    "kluster.lib",
+    "kluster.conventions",
+    "putils",
+]
+
+# A script is a program of its own. It shares `lib` and `conventions` with the
+# declarations and nothing else, so a console entry point can never drag a
+# stack's resource graph into a command someone runs by hand.
+[[tool.importlinter.contracts]]
+name = "Scripts declare no resources"
+type = "forbidden"
+source_modules = ["kluster.scripts"]
+forbidden_modules = ["kluster.stacks", "kluster.components", "kluster.providers"]
+
+# A custom provider is generic code for a class of system; which host, which
+# name and which credential are the estate's decisions, and they belong to the
+# provider's callers.
+[[tool.importlinter.contracts]]
+name = "A provider knows no conventions"
+type = "forbidden"
+source_modules = ["kluster.providers"]
+forbidden_modules = ["kluster.conventions"]
+
+# Not a rule so much as what `putils` is: the framework of rfc-001, which
+# knows no estate.
+[[tool.importlinter.contracts]]
+name = "The framework knows no estate"
+type = "forbidden"
+source_modules = ["putils"]
+forbidden_modules = ["kluster"]
+
+# A stack program is wiring, and `kluster.main` is the only thing that
+# dispatches it. Something another module imports for its contents is a
+# component, whatever directory it sits in.
+[[tool.importlinter.contracts]]
+name = "Only the entrypoint imports a stack program"
+type = "forbidden"
+source_modules = [
+    "kluster.components",
+    "kluster.providers",
+    "kluster.lib",
+    "kluster.conventions",
+    "kluster.scripts",
+    "putils",
+]
+forbidden_modules = ["kluster.stacks"]

@@ -1,4 +1,11 @@
-"""The cluster's OCI network (docs/declarative/physical.md §1).
+"""The cloud estate: everything declared against the OCI account.
+
+The area holds the network below, the nodes and their load balancer
+(`nodes`), the tenancy-level quotas and budget that keep the account inside
+the free envelope (`guardrails`), and the block storage attached to a node
+(`storage`).
+
+**The network** (docs/declarative/physical.md §1).
 
 One dual-stack VCN with a single public subnet: the nodes are the ingress, so
 there is no private tier to protect and no NAT gateway to pay attention to.

@@ -25,7 +25,7 @@ Managed with [uv](https://github.com/astral-sh/uv) and
 | --- | --- |
 | `__main__.py` | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
 | `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. |
-| `src/kluster/` | The program itself: `physical/` declares the OCI and Talos layer, `stacks/` dispatches, `scripts/` holds the console scripts. |
+| `src/kluster/` | The program itself: `components/` declares the resources area by area, `providers/` talks to the systems Pulumi has no provider for, `stacks/` dispatches, `scripts/` holds the console scripts, and `lib/`, `conventions/` hold what the rest share. |
 | `deploy/` | Deployment material that is not library code — the state-backend appliance's Butane file, its dump script, its operator keys. |
 | `docker/` | The self-built container images: per image, a build file plus a `.conf` holding its build args and tag. Published by the `images` workflow. |
 | `packages/crds/` | `crd2pulumi`-generated CRD types, regenerated via `uv run update_crds` (still the legacy cluster's chart set). |

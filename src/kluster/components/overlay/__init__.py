@@ -63,7 +63,7 @@ import pulumi
 import pulumi_zerotier as zerotier
 
 from kluster import conventions
-from kluster.gateway import facts
+from kluster.components.gateway import facts
 from putils import Component
 
 __all__ = (

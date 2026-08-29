@@ -34,7 +34,7 @@ async def setup_mocks() -> None:
 
 
 def build() -> Any:
-    from kluster.physical.guardrails import Guardrails
+    from kluster.components.cloud.guardrails import Guardrails
 
     return Guardrails(
         'kluster',
@@ -46,7 +46,7 @@ def build() -> Any:
 
 
 def test_compute_is_denied_before_the_one_shape_is_allowed() -> None:
-    from kluster.physical.guardrails import quota_statements
+    from kluster.components.cloud.guardrails import quota_statements
 
     lines = quota_statements(COMPARTMENT_NAME)
     zeroed = [index for index, line in enumerate(lines) if line.startswith('zero compute')]
@@ -59,7 +59,7 @@ def test_compute_is_denied_before_the_one_shape_is_allowed() -> None:
 
 
 def test_both_halves_of_a_flexible_shape_are_capped() -> None:
-    from kluster.physical.guardrails import A1_CORES_PER_AD, A1_MEMORY_GB_PER_AD, quota_statements
+    from kluster.components.cloud.guardrails import A1_CORES_PER_AD, A1_MEMORY_GB_PER_AD, quota_statements
 
     lines = quota_statements(COMPARTMENT_NAME)
     # Cores and memory are separate families on a flexible shape; capping only
@@ -69,7 +69,7 @@ def test_both_halves_of_a_flexible_shape_are_capped() -> None:
 
 
 def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
-    from kluster.physical.guardrails import OBJECT_STORAGE_GB, quota_statements
+    from kluster.components.cloud.guardrails import OBJECT_STORAGE_GB, quota_statements
 
     lines = quota_statements(COMPARTMENT_NAME)
     storage = [line for line in lines if 'object-storage' in line]
@@ -80,7 +80,7 @@ def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
 
 
 def test_every_statement_names_the_compartment() -> None:
-    from kluster.physical.guardrails import quota_statements
+    from kluster.components.cloud.guardrails import quota_statements
 
     for line in quota_statements(COMPARTMENT_NAME):
         # The statement language has no OCIDs: a compartment is named, and a
@@ -101,7 +101,7 @@ async def test_the_quota_and_budget_live_above_what_they_govern() -> None:
 
 @pytest.mark.asyncio
 async def test_the_budget_resets_monthly() -> None:
-    from kluster.physical.guardrails import BUDGET_AMOUNT
+    from kluster.components.cloud.guardrails import BUDGET_AMOUNT
 
     guardrails = build()
     assert await guardrails.budget.reset_period.future() == 'MONTHLY'
@@ -127,7 +127,7 @@ async def test_every_alert_has_an_audience() -> None:
 
 
 def test_a_budget_nobody_hears_is_refused() -> None:
-    from kluster.physical.guardrails import Guardrails
+    from kluster.components.cloud.guardrails import Guardrails
 
     with pytest.raises(ValueError, match='notifies nobody'):
         Guardrails(

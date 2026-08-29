@@ -76,7 +76,7 @@ async def setup_mocks() -> None:
 
 
 def cache_volume() -> Any:
-    from kluster.physical.storage import CacheVolume
+    from kluster.components.cloud.storage import CacheVolume
 
     return CacheVolume(
         'kluster',
@@ -87,7 +87,7 @@ def cache_volume() -> Any:
 
 
 def chunk_store() -> Any:
-    from kluster.physical.storage import ChunkStore
+    from kluster.components.cloud.storage import ChunkStore
 
     return ChunkStore(
         'kluster',
@@ -111,7 +111,7 @@ async def test_the_cache_and_its_attachment_both_need_an_unprotect() -> None:
 
 @pytest.mark.asyncio
 async def test_the_cache_volume_is_sized_and_on_the_budgeted_tier() -> None:
-    from kluster.physical.storage import CACHE_VOLUME_GB
+    from kluster.components.cloud.storage import CACHE_VOLUME_GB
 
     volume = cache_volume()
     assert await volume.volume.size_in_gbs.future() == str(CACHE_VOLUME_GB)
@@ -156,7 +156,7 @@ async def test_the_endpoint_is_the_s3_compatible_one() -> None:
 
 @pytest.mark.asyncio
 async def test_the_credential_reaches_its_own_bucket_and_no_other() -> None:
-    from kluster.physical.storage import CHUNK_BUCKET
+    from kluster.components.cloud.storage import CHUNK_BUCKET
 
     store = chunk_store()
     statements = await store.policy.statements.future()

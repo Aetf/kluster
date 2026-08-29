@@ -47,6 +47,7 @@ from .escrow import EscrowError
 from .kdbx import PATH_ENV, KdbxError, KdbxStore, default_path
 from .masters import CredentialRejected
 from .pulumi_config import SlotRefused
+from .workstation import WorkstationError
 
 log = logging.getLogger(__name__)
 
@@ -1167,7 +1168,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled command {args.subject}')
-    except (KdbxError, CredentialRejected, SlotRefused, EscrowError, AgeError) as exc:
+    except (KdbxError, CredentialRejected, SlotRefused, EscrowError, AgeError, WorkstationError) as exc:
         log.error('%s', exc)
         return 1
     return 0

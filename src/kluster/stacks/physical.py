@@ -29,17 +29,16 @@ from typing import cast
 import pulumi
 import pulumi_oci as oci
 
-from kluster import conventions, gateway
-from kluster.gateway import estate as gw_estate
-from kluster.gateway import zerotier as gw_zerotier
-from kluster.physical import homelab
-from kluster.physical.backup import BackupBucket
-from kluster.physical.cloud import CloudNetwork
-from kluster.physical.guardrails import Guardrails
-from kluster.physical.image import TalosImage, TalosNocloudImage
-from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
-from kluster.physical.storage import CHUNK_IDENTITY, CacheVolume, ChunkStore
-from kluster.physical.talos import TalosCluster, TalosDay1
+from kluster import conventions
+from kluster.components import gateway, homelab, overlay
+from kluster.components.backup import BackupBucket
+from kluster.components.cloud import CloudNetwork
+from kluster.components.cloud.guardrails import Guardrails
+from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
+from kluster.components.cloud.storage import CHUNK_IDENTITY, CacheVolume, ChunkStore
+from kluster.components.gateway import estate as gw_estate
+from kluster.components.talos import TalosCluster, TalosDay1
+from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
@@ -65,7 +64,7 @@ GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 #: The client half of the libvirt session, and the only part of that session
 #: this stack is configured with. Where it lands on the machine running the
 #: program, and the URI that names it there, are derived
-#: (`physical/homelab.py`).
+#: (`components/homelab/`).
 LIBVIRT_PRIVATE_KEY = 'libvirtPrivateKey'
 
 #: The export each continuous-integration identity's key material leaves under,
@@ -198,7 +197,7 @@ class Overlay:
     first one accepted.
     """
 
-    members: Mapping[str, gw_zerotier.Enrolled]
+    members: Mapping[str, overlay.Enrolled]
     bootstrap_host: str | None
 
     @property
@@ -232,7 +231,7 @@ def read_overlay(config: pulumi.Config) -> Overlay:
     """
     bootstrap_host = config.get(GATEWAY_BOOTSTRAP_HOST)
     return Overlay(
-        members=gw_zerotier.parse_members(
+        members=overlay.parse_members(
             config.require_object('zerotierMembers'),
             unminted=(conventions.ZT_MEMBER_UDM,) if bootstrap_host else (),
         ),
@@ -278,7 +277,7 @@ def declare_gateway(config: pulumi.Config, overlay: Overlay) -> None:
 
     The pinned host key is not affected either way: it is stored as a bare
     `ssh-ed25519 <blob>` line with no host name in front of it, so it matches
-    the device at whichever address the session dials (`gateway/ssh.py`).
+    the device at whichever address the session dials (`providers/device_files/ssh.py`).
     """
     addresses = gw_estate.parse_addresses(config.require_object('gatewayAddresses'))
     resolvers = [addresses[instance] for instance in sorted(gw_estate.VHOST_ADGUARD)]

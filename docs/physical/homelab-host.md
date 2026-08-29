@@ -9,7 +9,7 @@ itself must provide. Sizing and the host inventory live in
 
 > **Status**: designed 2026-08-23 (as declarative/physical.md §3),
 > extracted to this topic 2026-08-24. The declaration side is written:
-> `src/kluster/physical/homelab.py` declares the storage pool, the
+> `src/kluster/components/homelab/` declares the storage pool, the
 > worker's volume, seed and domain, and adopts the Home Assistant
 > domain. What this document describes of the *host* is not in place —
 > §4's change-set is a precondition of the first `pulumi up`, and §3's

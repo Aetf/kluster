@@ -17,7 +17,7 @@ from collections.abc import Iterable
 import pulumi
 import pulumi_cloudflare as cloudflare
 
-from kluster.dns.model import Record
+from kluster.components.dns.model import Record
 from putils import Component
 
 __all__ = ('ManagedZone',)

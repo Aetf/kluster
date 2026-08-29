@@ -8,7 +8,7 @@ written at all.
 do not share the untagged server LAN: they sit on `conventions.CLUSTER_VLAN_V4`
 behind VLAN id `conventions.CLUSTER_VLAN_ID`, which the controller serves with
 no DHCP server — every node states its own address in machine configuration
-(`physical/talos.py`), so a lease would be a second opinion about an address
+(`components/talos/`), so a lease would be a second opinion about an address
 three other places already treat as constant. Being a network object is what
 makes the population nameable in a policy; being alone in a firewall zone is
 what makes it *separately* nameable from everything else the internal zone

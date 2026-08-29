@@ -10,8 +10,10 @@ lock-in, and declarative management using Pulumi.
 > provider; HAOS adopted into the physical layer). Superseded approaches
 > and their reasoning live in §6; sizing, provider pricing, and HA tiers
 > live in [nodes.md](nodes.md); storage in [storage.md](storage.md). The
-> code that declares this layer is `src/kluster/physical/`, wired into a
-> stack by `src/kluster/stacks/physical.py`.
+> code that declares this layer is the `cloud`, `talos`, `homelab`,
+> `gateway`, `overlay` and `backup` areas of
+> `src/kluster/components/`, wired into a stack by
+> `src/kluster/stacks/physical.py`.
 
 ## 1. Architecture Overview
 

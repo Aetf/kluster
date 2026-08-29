@@ -2,6 +2,7 @@
 .venv/
 __pycache__/
 .ruff_cache/
+.import_linter_cache/
 *.egg-info/
 lib/crds/build
 # Every workstation slot: the seed kit, the cached Pulumi passphrase, the

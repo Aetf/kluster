@@ -19,6 +19,7 @@ from kluster.scripts.credentials import b2, entries, escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.workstation import WorkstationError
 
 from . import config, provision, settings, state
 from .state import StateError
@@ -412,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled action {args.action}')
-    except (KdbxError, EscrowError, AgeError, StateError) as exc:
+    except (KdbxError, EscrowError, AgeError, StateError, WorkstationError) as exc:
         log.error('%s', exc)
         return 1
     return 0

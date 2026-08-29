@@ -14,7 +14,7 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.dns.zones import zt_label
+from kluster.components.dns.zones import zt_label
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'

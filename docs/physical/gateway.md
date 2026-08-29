@@ -99,7 +99,7 @@ The roster is **`conventions.ZT_ROSTER`**: one entry per member,
 carrying the name Central shows, the `role` tag, and — where the
 address is a decision this repository owns rather than an assignment
 that predates it — a static overlay address. It lives in
-`conventions.py` rather than in one stack's data because two stacks
+`conventions` rather than in one stack's data because two stacks
 decide from it and neither owns it: `physical` admits members by it
 (`gateway.zerotier.parse_members`) and `dns` publishes the `*.zt` host
 block from it, one A record per entry (declarative/dns.md §2). A member
@@ -121,7 +121,7 @@ container of the estate.
 **Every member is placed; none draws from the pool.** A pool address
 would move, and the flow rules and DNS records naming it would not move
 with it. The three addresses this repository decides are in
-`conventions.py`; the rest are the assignments Central already made,
+`conventions`; the rest are the assignments Central already made,
 which reach the stack as configuration and are re-declared as static
 from there. A member whose display name contains a space keeps it:
 the record helper lowercases and hyphenates the DNS label, rather than
@@ -184,7 +184,7 @@ Facts about the rules engine that shape the draft (docs.zerotier.com
     IP/tag matchers.
 
 Draft (`flow_rules` string on the `zerotier_network` resource; IP and
-port literals come from `conventions.py`):
+port literals come from `conventions`):
 
 ```text
 tag role
@@ -341,8 +341,8 @@ Two properties make the ceremony safe to repeat. The pinned host key is
 a bare `ssh-ed25519 <blob>` line with no host name in front of it, so it
 matches the device at either address and nothing is re-pinned when the
 dial moves. And a moved dial address is an ordinary change rather than a
-replacement (`gateway/provider.py`): the file is rewritten at the new
-address, and nothing is deleted at the old one — which, both addresses
+replacement (`providers/device_files/provider.py`): the file is rewritten at
+the new address, and nothing is deleted at the old one — which, both addresses
 being the same box, would delete what the same apply had just written.
 
 **The ceremony is operator-local by construction.** Its first three
@@ -535,7 +535,7 @@ on a pair holding both a drop and an allow the position *is* the rule.
     from the LAN's least-trusted population). Address groups are
     single-family, so both rules come in v4-CIDR and ULA pairs.
     **The firewall names only the stable media VIP** (a
-    `conventions.py` literal): which apps are IoT-reachable is
+    `conventions` literal): which apps are IoT-reachable is
     decided at the Gateway layer (`media-gw` route attachment, a
     review-visible per-app parameter) — app membership changes
     never touch a firewall rule. *Correction on record*: audit

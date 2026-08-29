@@ -91,7 +91,7 @@ Backup *declarations* live with the app (co-location, as everything
 else), but their *policies* are central, so rotation is never an ad-hoc
 per-app number:
 
--   **Retention classes in `conventions.py`** — e.g. `STANDARD` (daily,
+-   **Retention classes in `conventions`** — e.g. `STANDARD` (daily,
     keep 30d), `PRECIOUS` (daily 30d + monthly 12), `BULKY` (weekly,
     keep 4) — each mapping to VolSync/restic `retain` settings plus a
     prune cadence. An app picks a class; nobody writes cron lines or

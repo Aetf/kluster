@@ -64,7 +64,7 @@ PLACEMENTS = [
 
 
 def build(placements: list[tuple[str, str]] | None = None) -> Any:
-    from kluster.physical.nodes import CloudNodes, NodeLoadBalancer
+    from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 
     load_balancer = NodeLoadBalancer(
         'kluster',
@@ -132,7 +132,7 @@ async def test_the_vip_is_reserved_and_secondary() -> None:
 
 @pytest.mark.asyncio
 async def test_management_ports_preserve_the_client_address() -> None:
-    from kluster.physical.nodes import MANAGEMENT_PORTS, NodeLoadBalancer
+    from kluster.components.cloud.nodes import MANAGEMENT_PORTS, NodeLoadBalancer
 
     balancer = NodeLoadBalancer('lb', compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
     assert set(balancer.backend_sets) == set(MANAGEMENT_PORTS)
@@ -152,7 +152,7 @@ async def test_the_balancer_publishes_a_public_address_of_each_family() -> None:
     A and an AAAA from here; the address list it reads them out of also holds
     the balancer's private address, which is not either of them.
     """
-    from kluster.physical.nodes import NodeLoadBalancer
+    from kluster.components.cloud.nodes import NodeLoadBalancer
 
     balancer = NodeLoadBalancer('lb', compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
 
@@ -164,7 +164,7 @@ async def test_the_balancer_publishes_a_public_address_of_each_family() -> None:
 @pytest.mark.asyncio
 async def test_a_missing_family_is_refused_rather_than_returned_empty() -> None:
     """An address that never arrived must not become an empty DNS record."""
-    from kluster.physical.nodes import NodeLoadBalancer
+    from kluster.components.cloud.nodes import NodeLoadBalancer
 
     balancer = NodeLoadBalancer(SINGLE_STACK, compartment_id='ocid1.compartment.test', subnet_id='ocid1.subnet.test')
 

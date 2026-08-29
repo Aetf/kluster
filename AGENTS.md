@@ -18,6 +18,17 @@
   which fight a provider-SDK codebase more than they help. Generated CRD
   bindings (`packages/crds`) are excluded — they are not ours to annotate.
   The check runs in CI alongside ruff.
+* **The source tree is layered, and the layering is a checked contract.**
+  `kluster.stacks` → `kluster.components` → `kluster.providers` →
+  `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is
+  below it and nothing above it, and four further edges are forbidden
+  outright (a script reaches no declaration; a custom provider knows no
+  `conventions`; `putils` knows no estate; only `kluster.main` imports a
+  stack program). `import-linter` enforces it —
+  `mise x uv -- uv run lint-imports`, in CI beside ruff and
+  `basedpyright`.
+  The contract is in `pyproject.toml`; what each layer is for is
+  `docs/framework/rfc-002-src-layout-and-the-gateway.md` §2.
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in
@@ -66,10 +77,11 @@ A brief carries, and an agent is finished only when it has all of them:
    means in one sentence.
 2. **Owned paths**, exhaustively. Everything else is out of scope.
 3. **The gate**: `ruff check`, `ruff format --check`, `basedpyright`
-   (strict, clean) and `pytest` all pass; new behavior has a test that
-   fails without it; `ltex-cli-plus` passes on every markdown file
-   touched, one file at a time. A change to provider-facing code also
-   ships with a live-drill transcript (`docs/framework/testing.md` §5)
+   (strict, clean), `lint-imports` and `pytest` all pass; new behavior
+   has a test that fails without it; `ltex-cli-plus` passes on every
+   markdown file touched, one file at a time. A change to
+   provider-facing code also ships with a live-drill transcript
+   (`docs/framework/testing.md` §5)
    or an explicit "unproven live" note in the pull request saying what
    the first live run must confirm.
 4. **Documentation is part of the change, not a follow-up.** Docs

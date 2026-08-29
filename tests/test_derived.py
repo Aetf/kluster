@@ -30,7 +30,7 @@ from memory_kit import MemoryKit
 from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
 from kluster import conventions
-from kluster.gateway import estate as gw_estate
+from kluster.components.gateway import estate as gw_estate
 from kluster.scripts.credentials import (
     b2,
     cloudflare,

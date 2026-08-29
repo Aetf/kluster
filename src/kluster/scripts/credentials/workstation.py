@@ -12,33 +12,37 @@ passphrase and the state-backend client bundle are read on *every* `pulumi`
 run by a template that cannot prompt, cannot unlock a keyring and cannot fail
 gracefully. A file is the shape that fits.
 
-One directory holds all of it, for two reasons:
-
--   **A checkout carries everything local it needs.** No per-machine
-    environment wiring, and no artefact of this system outside the tree it
-    belongs to. Moving a workstation is `git clone` plus copying one
-    directory.
--   **One thing to protect.** The directory is `0700` and its files are
-    `0600`, `.gitignore` covers it in one line, and there is exactly one
-    answer to "what on this machine is secret".
-
-The root is found by walking up to the `mise.toml` that defines the project,
-which is the same directory mise calls `config_root` — so a path written here
-and a path read by a mise template cannot drift apart.
+The names below are this package's; the directory they sit in and the modes
+they are written with are `kluster.lib.workstation`, which the `physical`
+stack's libvirt transport shares. A slot is durable and put there by a
+`credentials` command; a working file the stack program rewrites on every run
+is the other kind of thing in that directory (rfc-002 §8.4), and neither is
+allowed to assume the other's lifetime.
 """
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from .kdbx import KdbxError
+from kluster.lib.workstation import DIRECTORY, WorkstationError, directory, repo_root, secret_dir, write
 
-log = logging.getLogger(__name__)
-
-#: The one git-ignored directory. Named for what it holds rather than hidden
-#: under a tool's name: it survives any of the tools that read from it.
-DIRECTORY = '.credentials'
+__all__ = (
+    'BUNDLE',
+    'DIRECTORY',
+    'KIT',
+    'LEGACY_BUNDLE_DIR',
+    'PASSPHRASE',
+    'ROOTS',
+    'WorkstationError',
+    'bundle_dir',
+    'directory',
+    'kit_path',
+    'passphrase_path',
+    'repo_root',
+    'root_path',
+    'secret_dir',
+    'write',
+)
 
 #: The seed kit's default location (§2.1). `$KLUSTER_KDBX` overrides it, which
 #: is how a kit kept on removable media or shared between checkouts is used.
@@ -61,24 +65,6 @@ BUNDLE = 'state-backend'
 LEGACY_BUNDLE_DIR = Path.home() / '.config' / 'kluster' / BUNDLE
 
 
-def repo_root() -> Path:
-    """The checkout this package is running from.
-
-    `mise.toml` is the marker because it is the file whose directory mise
-    itself calls `config_root`: the templates in it and the code here resolve
-    the same directory or the code refuses to guess.
-    """
-    for candidate in Path(__file__).resolve().parents:
-        if (candidate / 'mise.toml').is_file():
-            return candidate
-    raise KdbxError('no mise.toml above this package: the workstation slots are relative to a checkout')
-
-
-def directory() -> Path:
-    """`.credentials/` in the checkout. Not created by looking at it."""
-    return repo_root() / DIRECTORY
-
-
 def kit_path() -> Path:
     return directory() / KIT
 
@@ -94,31 +80,3 @@ def root_path(name: str) -> Path:
 
 def bundle_dir() -> Path:
     return directory() / BUNDLE
-
-
-def secret_dir(path: Path) -> Path:
-    """`path`, created `0700` along with every level of it that is missing.
-
-    Each level is created separately because `mkdir(parents=True)` applies the
-    mode to the last one only, and a `0755` directory above a `0600` file
-    still tells anyone with a shell that the file is there.
-    """
-    if not path.is_dir():
-        if path.parent != path and not path.parent.is_dir():
-            _ = secret_dir(path.parent)
-        path.mkdir(mode=0o700)
-    return path
-
-
-def write(path: Path, value: str) -> Path:
-    """Put a secret in a slot: `0600`, newline-terminated, directory `0700`.
-
-    The trailing newline is what makes the file readable by everything that
-    reads it — `read_file(...) | trim` in a mise template, `$(cat ...)` in a
-    shell — and what keeps a hand-inspected file from looking truncated.
-    """
-    _ = secret_dir(path.parent)
-    _ = path.write_text(value if value.endswith('\n') else value + '\n')
-    path.chmod(0o600)
-    log.info('wrote %s', path)
-    return path

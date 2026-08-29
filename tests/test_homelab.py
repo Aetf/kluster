@@ -112,7 +112,7 @@ async def setup_mocks() -> None:
 
 
 def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
-    from kluster.physical.talos import TalosCluster
+    from kluster.components.talos import TalosCluster
 
     return TalosCluster(
         CLUSTER,
@@ -126,7 +126,7 @@ def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
 
 
 def build(**kwargs: Any) -> Any:
-    from kluster.physical.homelab import HomelabHost
+    from kluster.components.homelab import HomelabHost
 
     kwargs.setdefault('cluster', build_cluster())
     kwargs.setdefault('connection_uri', URI)
@@ -169,7 +169,7 @@ async def test_the_adopted_domain_states_nothing_about_itself() -> None:
 async def test_no_attribute_of_the_adopted_domain_is_the_programs_to_change() -> None:
     import pulumi_libvirt as libvirt
 
-    from kluster.physical.homelab import HOST_OWNED
+    from kluster.components.homelab import HOST_OWNED
 
     ignored = set((await registration(build().haos)).ignoreChanges)
 
@@ -195,21 +195,21 @@ async def test_the_adopted_domain_cannot_be_replaced() -> None:
 
 
 def test_a_uuid_reaches_the_domain_whatever_case_it_was_typed_in() -> None:
-    from kluster.physical.homelab import import_id
+    from kluster.components.homelab import import_id
 
     # The id Pulumi records has to be the one the provider reads back.
     assert import_id(HAOS_UUID.upper()) == HAOS_UUID
 
 
 def test_a_domain_name_is_not_a_domain_uuid() -> None:
-    from kluster.physical.homelab import import_id
+    from kluster.components.homelab import import_id
 
     with pytest.raises(ValueError, match='not a domain UUID'):
         import_id('haos')
 
 
 def test_an_import_id_that_is_not_known_yet_is_refused() -> None:
-    from kluster.physical.homelab import import_id
+    from kluster.components.homelab import import_id
 
     # An import id is a resource option, not an input: it is read while the
     # program is being constructed, so an output would arrive too late and
@@ -367,7 +367,7 @@ IDENTITY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVA
 
 def _dial(tmp_path: Any, host: str = HOST) -> tuple[Any, dict[str, list[str]]]:
     """The parsed URI and its parameters, for a session materialized in `tmp_path`."""
-    from kluster.physical.homelab import connection_uri
+    from kluster.components.homelab import connection_uri
 
     uri = connection_uri(host=host, private_key=IDENTITY, directory=tmp_path)
     parts = urlsplit(uri)
@@ -409,7 +409,7 @@ def test_the_pin_is_written_against_the_address_the_session_dials(tmp_path: Path
     URI dials is written in front of the blob here, at the moment the endpoint
     that decides it is derived.
     """
-    from kluster.physical.homelab import HOST_KEY
+    from kluster.components.homelab import HOST_KEY
 
     _, query = _dial(tmp_path)
 
@@ -446,7 +446,7 @@ def test_the_session_offers_the_identity_it_was_given_and_no_other(tmp_path: Pat
 
 
 def test_a_session_with_no_identity_is_refused(tmp_path: Path) -> None:
-    from kluster.physical.homelab import connection_uri
+    from kluster.components.homelab import connection_uri
 
     with pytest.raises(ValueError, match='identity is empty'):
         _ = connection_uri(host=HOST, private_key='   \n', directory=tmp_path)
@@ -458,7 +458,7 @@ def test_a_checkout_the_provider_would_rewrite_the_path_of_is_refused(tmp_path: 
     The failure that would otherwise follow arrives inside an SSH handshake,
     as an authentication that got no key, which names nothing about why.
     """
-    from kluster.physical.homelab import connection_uri
+    from kluster.components.homelab import connection_uri
 
     with pytest.raises(ValueError, match=r'expands'):
         _ = connection_uri(host=HOST, private_key=IDENTITY, directory=tmp_path / 'build$one')
@@ -471,8 +471,8 @@ def test_the_slot_is_the_checkouts_own_local_directory() -> None:
     (`credentials.md` §1 rule 6), which is what makes "what on this machine is
     secret" have one answer.
     """
-    from kluster.physical.homelab import SLOT, slot
-    from kluster.scripts.credentials import workstation
+    from kluster.components.homelab import SLOT, slot
+    from kluster.lib import workstation
 
     assert slot() == workstation.directory() / SLOT
     assert slot().is_relative_to(workstation.repo_root())
@@ -482,7 +482,7 @@ def test_the_slot_is_the_checkouts_own_local_directory() -> None:
 
 
 def test_the_data_disk_returns_freed_space_to_the_host() -> None:
-    from kluster.physical.homelab import disk_tuning_xslt
+    from kluster.components.homelab import disk_tuning_xslt
 
     disk = _transformed_disk("disk[@device='disk']")
 
@@ -518,7 +518,7 @@ async def registration(resource: pulumi.Resource) -> Any:
 
 def _transformed_disk(selector: str) -> Any:
     """One disk's driver element, after the domain XML has been through XSLT."""
-    from kluster.physical.homelab import disk_tuning_xslt
+    from kluster.components.homelab import disk_tuning_xslt
 
     etree = pytest.importorskip('lxml.etree', reason='lxml is present as a dependency of pykeepass')
     transform = etree.XSLT(etree.XML(disk_tuning_xslt().encode()))
