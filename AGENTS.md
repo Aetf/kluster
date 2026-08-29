@@ -96,19 +96,19 @@ A brief carries, and an agent is finished only when it has all of them:
 An agent that finishes early does not pick up more work; it reports.
 Scope creep is the failure mode this structure exists to prevent.
 
-### Two dispatchers
+### Concurrent dispatchers
 
-More than one dispatcher session may run at a time (typically: one
-driving a milestone's serial pipeline, one draining the `Parallel`
+Any number of dispatcher sessions may run at a time (typically: one
+driving a milestone's serial pipeline, others draining the `Parallel`
 milestone). The rules that keep them out of each other's way:
 
 1.  **The `in-flight` label is the claim.** A dispatcher labels an
     issue before dispatching it and never dispatches, edits, or merges
-    work for an issue the other has labeled. First label wins;
-    everything else follows from ownership of the claim.
+    work for an issue another dispatcher has labeled. First label
+    wins; everything else follows from ownership of the claim.
 2.  **Claims must not overlap in paths.** Before claiming, a
-    dispatcher lists the other's in-flight issues and open pull
-    requests; if the owned paths would intersect, it does not claim.
+    dispatcher lists every other in-flight issue and open pull
+    request; if the owned paths would intersect, it does not claim.
     While a structural campaign runs, the parallel dispatcher prefers
     work that cannot collide: other repositories, `scripts/`-only,
     tests-only, and docs the campaign's briefs do not name.
@@ -116,8 +116,8 @@ milestone). The rules that keep them out of each other's way:
     pull request repository-wide may touch each of them, whoever
     opened it.
 4.  **Each dispatcher merges only its own pull requests** and absorbs
-    its own rebases when the other's merge advances `main`; neither
-    ever force-touches the other's branches.
+    its own rebases when another's merge advances `main`; no one ever
+    force-touches a branch that is not theirs.
 5.  **The primary checkout stays on `main`.** Builders work in their
     own worktrees already; a dispatcher's direct edits go through a
     worktree of its own, never by switching branches in the shared
@@ -125,7 +125,7 @@ milestone). The rules that keep them out of each other's way:
 6.  **Cards follow claims**: a dispatcher moves only the board cards
     of issues it has claimed.
 7.  **Sessions talk.** Local sessions can message each other; a
-    planned touch on anything ambiguous is announced to the other
+    planned touch on anything ambiguous is announced to the affected
     dispatcher before it happens, not discovered in a conflict.
 
 ### Review stage
@@ -178,6 +178,10 @@ proposal per the reply (then sets `decision/pending` again);
 `decision/lgtm` means the latest decision in the issue is approved
 and clear to build. The dispatcher sweeps `decision/responded` and
 `decision/lgtm` whenever idle — they are the queue of what can move.
+The board follows the label: `decision/pending` puts the card in *In
+review*; `decision/responded` and `decision/lgtm` return it to
+*Backlog*, *Ready* or *In progress* by whether the work is merely
+known, planned next, or being acted on.
 
 ### How progress is reported
 
