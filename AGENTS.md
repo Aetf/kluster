@@ -128,13 +128,17 @@ built-in workflow. A card in *In review* with no open pull request is a
 dispatch that died and should be re-driven or returned to *Ready*.
 
 **Cadence**: reviews are phased, not saved up. Every pull request gets
-the two-angle review above; every milestone carries a *review
-checkpoint* issue — a read-only doc-vs-implementation audit of the
-milestone's areas plus an operator review at design level — so each
-operator pass covers one milestone's worth of change and problems
-surface while they are cheap. Major structural changes run the
-sequence in reverse: an RFC states the desired end state and is
-approved before implementation starts (rfc-001 is the shape).
+the two-angle review above, and every milestone is bracketed by the
+operator: it **opens with a design RFC** — the milestone's design
+submitted for approval before any implementation is dispatched — and
+**closes with its review-checkpoint issue** — a read-only
+doc-vs-implementation audit of the milestone's areas plus the
+operator's design-level review and acceptance. Each operator pass
+covers one milestone's worth of change, so problems surface while
+they are cheap. Any other major structural change runs the same
+RFC-first sequence (rfc-002 is the shape). An issue that needs an
+operator ruling carries the `decision` label the moment it is filed —
+the label is how the operator finds what waits on them.
 
 ### How progress is reported
 
