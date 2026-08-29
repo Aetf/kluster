@@ -679,9 +679,16 @@ structures in `conventions`, each declared once and read three times:
 
 ```python
 @dataclass(frozen=True)
+class FollowsDedicatedVip:
+    # This volume's node is whichever node holds the dedicated VIP.
+
+FOLLOWS_DEDICATED_VIP = FollowsDedicatedVip()
+
+
+@dataclass(frozen=True)
 class NodeVolume:
     # A block volume attached to one node, and where that node mounts it.
-    node: str
+    node: str | FollowsDedicatedVip
     size_gb: int
     mount: str
 
@@ -689,12 +696,39 @@ NODE_VOLUMES: Mapping[str, NodeVolume] = {...}
 DEDICATED_VIP_NODE = ...
 ```
 
-The type does not carry the table's invariants, so they are checked the way the
-roster is checked (§7.2): every `node` names a node the fleet declares, every
-`mount` is unique, and **no node carries two volumes** — which is the placement rule
-below, enforced rather than merely written down. A volume attached to a node
-that does not exist, a mount claimed twice, and a second volume landing on an
-occupied node are then all refusals with a name on them rather than an apply
+**One volume follows the VIP, and says so in its own declaration.** Splitting the
+bundle would otherwise drop a dependency the bundle was carrying implicitly: the
+dataset behind today's volume needs to be on the node that holds the dedicated
+VIP, because the workload's traffic must leave by the address it arrives on, and
+its cache is pinned to that machine. Two independent structures permit moving
+the VIP and leaving the volume, and nothing would notice until cutover day. So
+the requirement is a value the volume carries rather than a fact about a
+workload: that entry's `node` is `FOLLOWS_DEDICATED_VIP`, a sentinel type rather
+than a magic node name, and it resolves to `DEDICATED_VIP_NODE` on every read.
+Three consequences, and the second is the one worth the machinery:
+
+1.  **The wrong state cannot be written.** For a following volume there is no
+    declarable "the VIP moved, the volume stayed"; the pair does not exist as a
+    pair.
+2.  **A VIP move becomes a two-step ceremony for free.** Editing
+    `DEDICATED_VIP_NODE` re-declares the following volume's attachment against
+    the new node, and that attachment is protected — so the volume migration the
+    edit implies surfaces as a refusal until someone reconciles it, instead of a
+    silent break discovered when the workload lands.
+3.  **Scheduling converges by construction.** The persistent volume's
+    node-affinity label and the VIP machinery are guaranteed onto the same node,
+    so the workload that needs both states no placement of its own.
+
+The weaker shape — a `requires_dedicated_vip` flag beside a node name, plus a
+test — was rejected because it lets the inconsistent pair be written and only
+then refuses it, where the sentinel leaves nothing to refuse.
+
+The type does not carry the table's remaining invariants, so they are checked
+the way the roster is checked (§7.2), **after** the sentinel resolves: every
+`node` names a node the fleet declares, every `mount` is unique, and **no node
+carries two volumes**. A volume attached to a node that does not exist, a mount
+claimed twice, and a following volume that resolves onto a node another volume
+already holds are then all refusals with a name on them rather than an apply
 that half works.
 
 The three readers are the three layers the volume passes through, and naming it
@@ -713,13 +747,14 @@ That path is what keeps the vendor in the physical layer: the cloud provider
 appears where the volume is created and attached, and everything above it sees a
 directory on a node.
 
-**One volume per node, spread.** The dataset that needs the VIP keeps its volume
-on the VIP node; a second volume goes on a different node. Three reasons, in
-order of weight: disk selection in the machine configuration stays "the disk
-that is not the boot disk" rather than a discrimination by size or serial;
-losing one node stops taking two preserved datasets with it; and the load
-spreads. The cost is identical either way, which is what makes the placement
-free to choose on these grounds.
+**One volume per node, spread.** The following volume is on the VIP node by
+construction; a second volume names a different node. That second placement is
+the only one anybody chooses, and three reasons decide it, in order of weight:
+disk selection in the machine configuration stays "the disk that is not the boot
+disk" rather than a discrimination by size or serial; losing one node stops
+taking two preserved datasets with it; and the load spreads. The cost is
+identical either way, which is what leaves the choice free to make on those
+grounds.
 
 The word "augmented" retires with the bundle. The `augmented` parameter of the
 cloud-nodes component becomes the two capabilities, passed separately, and the
