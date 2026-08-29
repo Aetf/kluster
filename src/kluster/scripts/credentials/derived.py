@@ -54,7 +54,7 @@ GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
 #: credential on a device the cluster cannot re-seal carries no reach it does
 #: not use.
 #:
-#: Stated here rather than imported from `kluster.gateway`, which would drag
+#: Stated here rather than imported from `kluster.components.gateway`, which would drag
 #: the Pulumi SDKs into `credentials --help`; a test holds the two equal
 #: instead, so a vhost moved to another zone fails there.
 GATEWAY_ACME_ZONES = conventions.PRIMARY_ONLY
@@ -73,7 +73,7 @@ API_TOKEN_KEY = 'cloudflare:apiToken'
 ACCOUNT_KEY = 'cloudflareAccountId'
 
 #: Where the `physical` stack reads the gateway's ACME token before writing it
-#: onto the device beside the nspawn units it belongs to (`gateway/estate.py`).
+#: onto the device beside the nspawn units it belongs to (`components/gateway/estate.py`).
 #: Bare, and therefore in this project's namespace, for the reason the account
 #: id above is: nothing but this repository's own programs read it, and the
 #: prefix `pulumi config set` applies is the one `pulumi.Config()` resolves

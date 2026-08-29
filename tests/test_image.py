@@ -26,7 +26,8 @@ import pytest_asyncio
 import requests
 from pulumi.runtime import rpc
 
-from kluster.physical import image
+from kluster.components.talos import image
+from kluster.providers import talos_factory
 
 CLUSTER = 'kluster'
 WORKER = f'{CLUSTER}-worker'
@@ -197,7 +198,7 @@ def serve(monkeypatch: pytest.MonkeyPatch, *chunks: bytes) -> list[str]:
         requested.append(url)
         return cast('requests.Response', FakeStream(list(chunks)))
 
-    monkeypatch.setattr(image, 'fetch', fetch)
+    monkeypatch.setattr(talos_factory, 'fetch', fetch)
     return requested
 
 
@@ -206,7 +207,7 @@ def test_a_fetched_artefact_lands_decompressed(tmp_path: Path, monkeypatch: pyte
     _ = serve(monkeypatch, compressed[:20], compressed[20:])
     path = tmp_path / 'nested' / 'talos.raw'
 
-    image.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+    talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # Decompressed, whole, and in a directory the program created: the libvirt
     # provider is handed a plain raw image because it will not unpack an xz.
@@ -220,7 +221,7 @@ def test_an_artefact_already_on_disk_is_reused_rather_than_fetched_again(
     path = tmp_path / 'talos.raw'
     _ = path.write_bytes(PAYLOAD)
 
-    image.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+    talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # A file under the final name is complete by construction — the download
     # is renamed into place, never written into place — so re-creating the
@@ -235,8 +236,8 @@ def test_a_stream_that_ends_early_leaves_nothing_that_looks_finished(
     _ = serve(monkeypatch, truncated)
     path = tmp_path / 'talos.raw'
 
-    with pytest.raises(image.TruncatedArtefact):
-        image.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
+    with pytest.raises(talos_factory.TruncatedArtefact):
+        talos_factory.materialise('https://factory.invalid/nocloud-amd64.raw.xz', path)
 
     # The failure mode this guards against is silent: half an image written
     # into a volume boots into nothing, and the next run would have reused it.
@@ -257,7 +258,7 @@ def test_creating_the_resource_fetches_it_and_is_identified_by_the_path(
     _ = serve(monkeypatch, lzma.compress(PAYLOAD))
     path = tmp_path / 'talos.raw'
 
-    result = image.FactoryImageProvider().create(props('https://factory.invalid/a.raw.xz', path))
+    result = talos_factory.FactoryImageProvider().create(props('https://factory.invalid/a.raw.xz', path))
 
     assert result.id == str(path)
     assert path.read_bytes() == PAYLOAD
@@ -267,7 +268,7 @@ def test_a_new_schematic_is_a_new_artefact_rather_than_an_update(tmp_path: Path)
     olds = props('https://factory.invalid/old.raw.xz', tmp_path / 'old.raw')
     news = props('https://factory.invalid/new.raw.xz', tmp_path / 'new.raw')
 
-    result = image.FactoryImageProvider().diff('old', olds, news)
+    result = talos_factory.FactoryImageProvider().diff('old', olds, news)
 
     # There is no update: the resource *is* one artefact at one path, so a
     # different image is a different resource. The volume it feeds is
@@ -281,7 +282,7 @@ def test_a_preview_that_cannot_know_the_url_does_not_claim_a_change(tmp_path: Pa
     olds = props('https://factory.invalid/old.raw.xz', tmp_path / 'old.raw')
     news = {'url': rpc.UNKNOWN, 'path': rpc.UNKNOWN}
 
-    result = image.FactoryImageProvider().diff('old', olds, news)
+    result = talos_factory.FactoryImageProvider().diff('old', olds, news)
 
     # Before the schematic exists there is no answer, and "unknown" is the
     # honest one; reporting a replacement would put a protected volume in the
@@ -292,7 +293,7 @@ def test_a_preview_that_cannot_know_the_url_does_not_claim_a_change(tmp_path: Pa
 def test_a_local_artefact_that_is_gone_is_not_a_deleted_resource(tmp_path: Path) -> None:
     stored = props('https://factory.invalid/a.raw.xz', tmp_path / 'absent.raw')
 
-    result = image.FactoryImageProvider().read('an-id', stored)
+    result = talos_factory.FactoryImageProvider().read('an-id', stored)
 
     # The file is a build artefact, not managed state: every CI runner starts
     # without it. A refresh that called this a deleted resource would take the
@@ -305,16 +306,16 @@ def test_deleting_the_resource_takes_the_local_copy_with_it(tmp_path: Path) -> N
     path = tmp_path / 'talos.raw'
     _ = path.write_bytes(PAYLOAD)
 
-    image.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
+    talos_factory.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
 
     # Deterministic cleanup, and tolerant of the file already being gone —
     # which is the ordinary case on a machine that never created it.
     assert not path.exists()
-    image.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
+    talos_factory.FactoryImageProvider().delete('an-id', props('https://factory.invalid/a.raw.xz', path))
 
 
 def test_the_provider_carries_no_state_of_its_own() -> None:
     # A dynamic provider is pickled into the stack's state and revived in
     # another process, so anything it closed over would travel with it.
-    provider: dynamic.ResourceProvider = image.FactoryImageProvider()
+    provider: dynamic.ResourceProvider = talos_factory.FactoryImageProvider()
     assert vars(provider) == {}

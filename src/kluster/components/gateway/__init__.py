@@ -24,14 +24,9 @@ through three different doors and each needs its own credential:
     traffic the gateway's own firewall never classifies, so those rules are
     the only policing layer that traffic meets.
 
-The SSH session crosses ZeroTier, so the device's **host key is pinned**: a
-first contact that accepts whatever answers would hand an interposer root on
-the router. The transport is `asyncssh` rather than a subprocess: each provider
-operation runs on a gRPC worker thread and brings up its own event loop
-(`asyncio.run`), and inside that loop an asyncio-native client needs no
-further bridging; it ships its own type information, which a shelled-out
-`ssh` cannot; and pinning a host key is a parameter to it rather than a
-`known_hosts` file assembled on the runner.
+The first channel is a custom provider of its own,
+`kluster.providers.device_files`, which is where the session and its pinned
+host key are described.
 
 The three functions below are the whole surface the `physical` stack uses. Each
 takes the site facts its channel needs and nothing else, so what a channel can
@@ -46,10 +41,10 @@ from ipaddress import IPv4Address
 import pulumi
 
 from kluster import conventions
-from kluster.gateway import estate as estate_module
-from kluster.gateway import zerotier as zerotier_module
-from kluster.gateway.provider import Connection
-from kluster.gateway.unifi import Firewall
+from kluster.components import overlay as zerotier_module
+from kluster.components.gateway import estate as estate_module
+from kluster.components.gateway.unifi import Firewall
+from kluster.providers.device_files.provider import Connection
 
 __all__ = ('declare_estate', 'declare_firewall', 'declare_zerotier')
 

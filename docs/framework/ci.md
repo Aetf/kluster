@@ -186,7 +186,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
 -   **Path-filter skipping is a setup-cost optimization, not a
     correctness mechanism**: docs-only or clearly single-layer changes
     skip other jobs (saving checkout/deps/ZT-join); anything touching
-    shared code (`conventions.py`, `putils/`, `packages/crds`) runs all
+    shared code (`conventions/`, `putils/`, `packages/crds`) runs all
     layers and lets the internal previews no-op.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the

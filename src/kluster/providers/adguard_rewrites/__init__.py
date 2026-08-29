@@ -1,4 +1,4 @@
-"""Split-horizon rewrites on the AdGuard pair (dns.md §3).
+"""Split-horizon rewrites on an AdGuard Home instance (dns.md §3).
 
 AdGuard Home has no Terraform or Pulumi provider, but it has a small
 idempotent REST API, so a rewrite is a dynamic-provider resource: create is
@@ -6,39 +6,31 @@ idempotent REST API, so a rewrite is a dynamic-provider resource: create is
 `rewrite/list`. There is no update -- the API has none, and a rewrite is a
 pair of strings -- so any change replaces.
 
-One resource per instance per rewrite, deliberately. The pair (alice, bob)
-is written to directly rather than synchronized, so an instance that is down
-fails its own resources and leaves the other instance's converged; nothing
-else in the stack depends on a rewrite, which is what makes an unreachable
-UDM cost only these resources rather than the whole up (ci.md §2).
+A resource names the one instance it is written to, so an instance that is
+down fails its own resources and leaves the other instance's converged.
 
 The credential is AdGuard's admin login: it has no scoped API tokens, which
-is the residual the security audit records as L11.
+is the residual the security audit records as L11. It is an input on every
+rewrite; rfc-002 §7.4 states the shape that moves it into the provider's own
+process instead.
+
+Which names are rewritten, and on which instances, is
+`kluster.components.dns.adguard`'s business, not this package's.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any, cast
-from urllib.parse import urlsplit
 
 import pulumi
 import pulumi.dynamic as dynamic
 import requests
 
-from kluster.dns.routes import Rewrite
-
-__all__ = ('AdGuardRewrite', 'AdGuardRewriteProvider', 'declare_rewrites', 'instance_label')
+__all__ = ('TIMEOUT', 'AdGuardRewrite', 'AdGuardRewriteProvider')
 
 #: Long enough for a busy resolver, short enough that an unreachable UDM
 #: fails the resource instead of hanging the stack.
 TIMEOUT = 15
-
-
-def instance_label(endpoint: str) -> str:
-    """A resource-name fragment for an instance, from its base URL."""
-    host = urlsplit(endpoint).hostname or endpoint
-    return host.replace('.', '-')
 
 
 def _session(props: dict[str, Any]) -> tuple[str, requests.Session]:
@@ -134,34 +126,3 @@ class AdGuardRewrite(dynamic.Resource):
                 opts,
             ),
         )
-
-
-def declare_rewrites(
-    entries: Iterable[Rewrite],
-    *,
-    endpoints: Iterable[str],
-    username: pulumi.Input[str],
-    password: pulumi.Input[str],
-    opts: pulumi.ResourceOptions | None = None,
-) -> dict[str, AdGuardRewrite]:
-    """Every rewrite on every instance: the cross product, written directly.
-
-    Dual-writing is what retires adguardhome-sync -- a synchronizer would
-    overwrite whichever instance Pulumi wrote second (dns.md §3).
-    """
-    declared: dict[str, AdGuardRewrite] = {}
-    for endpoint in endpoints:
-        instance = instance_label(endpoint)
-        for entry in entries:
-            family = 'v6' if ':' in entry.answer else 'v4'
-            name = f'{instance}-{entry.domain}-{family}'
-            declared[name] = AdGuardRewrite(
-                name,
-                endpoint=endpoint,
-                username=username,
-                password=password,
-                domain=entry.domain,
-                answer=entry.answer,
-                opts=opts,
-            )
-    return declared

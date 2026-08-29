@@ -5,7 +5,8 @@ from typing import Any
 import pytest
 import requests
 
-from kluster.dns import adguard
+from kluster.components.dns import adguard
+from kluster.providers import adguard_rewrites
 
 ENDPOINT = 'http://alice.lan:3000'
 PROPS: dict[str, Any] = {
@@ -57,8 +58,8 @@ def session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(requests, 'Session', FakeSession)
 
 
-def _provider() -> adguard.AdGuardRewriteProvider:
-    return adguard.AdGuardRewriteProvider()
+def _provider() -> adguard_rewrites.AdGuardRewriteProvider:
+    return adguard_rewrites.AdGuardRewriteProvider()
 
 
 def test_create_adds_the_pair_and_ids_it_by_instance() -> None:

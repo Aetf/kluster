@@ -8,8 +8,8 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.dns.adguard import declare_rewrites
-from kluster.dns.routes import Exposure, Route, rewrites
+from kluster.components.dns.adguard import declare_rewrites
+from kluster.components.dns.routes import Exposure, Route, rewrites
 
 ENDPOINTS = ('http://alice.lan:3000', 'http://bob.lan:3000')
 

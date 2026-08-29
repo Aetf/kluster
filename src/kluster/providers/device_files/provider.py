@@ -109,7 +109,7 @@ import requests
 import zstandard
 from pulumi.runtime import rpc
 
-from kluster.gateway import ssh
+from kluster.providers.device_files import ssh
 
 __all__ = (
     'ADDRESS',

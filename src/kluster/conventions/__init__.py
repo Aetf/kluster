@@ -74,7 +74,7 @@ class Compartment:
 
     The **name** is a convention: it is chosen here, it is what the mint
     creates or adopts, and it is the only form OCI's quota statements accept
-    (`physical/guardrails.py`). The **OCID** is the site fact that follows
+    (`components/cloud/guardrails.py`). The **OCID** is the site fact that follows
     from creating it — an identifier the committed file may carry in the clear,
     for the reason `cloudflareAccountId` may: it names a container inside the
     tenancy rather than the account that owns it, and everything it admits is

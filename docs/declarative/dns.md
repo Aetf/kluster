@@ -9,14 +9,15 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 
 > **Status**: designed 2026-08-22, after a survey of the live
 > dnsconfig.js (6 zones; roughly half the records are not
-> cluster-related). Declared since 2026-08-25: `src/kluster/dns/`
-> holds the record model (`model.py`), the estate census
-> (`zones.py`), the app records the legacy VPS still serves
-> (`legacy.py`, transitional — §6), the route rows `apps` and `dns`
-> share (`routes.py`), and the two components that turn data into
-> resources (`zone.py`, `adguard.py`). Not yet applied: the zones
-> exist at Cloudflare and are imported into state before the first
-> `up`.
+> cluster-related). Declared since 2026-08-25:
+> `src/kluster/components/dns/` holds the record model (`model.py`),
+> the estate census (`zones.py`), the app records the legacy VPS still
+> serves (`legacy.py`, transitional — §6), the route rows `apps` and
+> `dns` share (`routes.py`), and the two components that turn data into
+> resources (`zone.py`, `adguard.py`, the latter over the custom
+> provider in `src/kluster/providers/adguard_rewrites/`). Not yet
+> applied: the zones exist at Cloudflare and are imported into state
+> before the first `up`.
 
 ## 1. Why a fourth stack
 
@@ -135,7 +136,7 @@ Cloudflare set; jiahui.id takes none.
     touches exactly one anchor record, previewed in `dns`.
 -   **Alias zones via zone sets, not copy-paste**: the mirrors
     (unlimitedcodeworks.xyz, peifeng.phd, ucw.phd) were maintained as
-    duplicated record blocks. `conventions.py` defines zone sets (e.g.
+    duplicated record blocks. `conventions` defines zone sets (e.g.
     `PUBLIC_ALL`, `PRIMARY_ONLY`); an app declares `public_route(host=…,
     zones=PUBLIC_ALL)` once and the helper fans records out across the
     set.
@@ -196,7 +197,7 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     from one template (only the listen address differs), and their
     dynamic halves stay identical because Pulumi writes both; a change
     made in one instance's web UI afterward is reconciled by nothing.
-    See `gateway/estate.py` for the estate's side of this.
+    See `components/gateway/estate.py` for the estate's side of this.
 -   **Placement**: rewrites are emitted automatically for any app
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
@@ -215,7 +216,7 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     nothing is routed and why `Pulumi.dns.yaml` carries the AdGuard
     login but not yet the endpoints. So the config key ships with the
     row that first needs it, in the same change; the route helper
-    (`kluster.dns.routes`) carries that contract beside the census
+    (`kluster.components.dns.routes`) carries that contract beside the census
     itself.
 
 ## 4. LAN DNS: three name planes

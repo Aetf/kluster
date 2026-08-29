@@ -24,8 +24,9 @@ import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
-from kluster import conventions, gateway
-from kluster.gateway import zerotier
+from kluster import conventions
+from kluster.components import gateway
+from kluster.components import overlay as zerotier
 
 NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'

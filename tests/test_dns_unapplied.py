@@ -15,7 +15,7 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.dns.zones import zt_label
+from kluster.components.dns.zones import zt_label
 
 ACCOUNT_ID = 'cf-account'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'

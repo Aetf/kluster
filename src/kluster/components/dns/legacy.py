@@ -21,8 +21,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from kluster import conventions
-from kluster.dns.model import Record, cname, srv
-from kluster.dns.zones import ANCHOR_ARCHVPS
+from kluster.components.dns.model import Record, cname, srv
+from kluster.components.dns.zones import ANCHOR_ARCHVPS
 
 __all__ = ('LEGACY',)
 

@@ -30,7 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 import pulumi
 
 from kluster import conventions
-from kluster.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
+from kluster.components.dns.model import TTL_HOUR, Record, a, caa, cname, mx, txt
 
 __all__ = (
     'ALIAS_ZONES',

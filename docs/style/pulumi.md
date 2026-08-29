@@ -41,7 +41,7 @@ anchors).
 
 ## Data: conventions, configuration, censuses
 
-**`conventions.py` holds decisions and identities; stack configuration
+**`conventions` holds decisions and identities; stack configuration
 holds operator-supplied values that can change between applies.** A
 value this repository chooses (an address plan, a role, a port) is a
 convention. A stable identity of something the design names — a

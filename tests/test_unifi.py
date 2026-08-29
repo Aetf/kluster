@@ -36,7 +36,7 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.gateway import unifi
+from kluster.components.gateway import unifi
 
 NAME = 'kluster'
 API_URL = 'https://gateway.invalid'
@@ -601,7 +601,7 @@ async def test_the_stack_seam_carries_the_peer_port_into_both_halves() -> None:
     it instead of choosing it. A seam that dropped it would leave two rules
     admitting a port nobody listens on.
     """
-    from kluster import gateway
+    from kluster.components import gateway
 
     firewall = gateway.declare_firewall(
         NAME,

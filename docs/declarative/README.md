@@ -48,7 +48,7 @@ Boundary rules:
 
 **Conventions are code, not stack outputs.** Gateway names, pool
 labels, storage-class names and the ZeroTier roster live in a shared
-`conventions.py` that every program imports, and the singletons it
+`conventions` package that every program imports, and the singletons it
 names have autonaming disabled, so the literal in the module is the real
 name ([cluster-infra.md](cluster-infra.md) §0). A table two stacks
 decide from belongs there even when only one of them declares resources

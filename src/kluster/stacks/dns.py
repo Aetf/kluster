@@ -7,7 +7,7 @@ record points at, plus the split-horizon rewrites for every app: they are
 read from the same plain-data route declaration `apps` builds its routes
 from, and they are the reason this is the one stack that joins ZeroTier.
 
-The records themselves are data (`kluster.dns.zones`, `kluster.dns.legacy`),
+The records themselves are data (`kluster.components.dns.zones`, `kluster.components.dns.legacy`),
 so this program is only the wiring: which zones exist, which records go in
 them, which addresses the anchors carry, and which instances the rewrites are
 written to.
@@ -31,12 +31,12 @@ from typing import cast
 import pulumi
 
 from kluster import conventions
-from kluster.dns.adguard import declare_rewrites
-from kluster.dns.legacy import LEGACY
-from kluster.dns.model import Record, a, aaaa
-from kluster.dns.routes import ROUTES, rewrites
-from kluster.dns.zone import ManagedZone
-from kluster.dns.zones import ESTATE, zt_records
+from kluster.components.dns.adguard import declare_rewrites
+from kluster.components.dns.legacy import LEGACY
+from kluster.components.dns.model import Record, a, aaaa
+from kluster.components.dns.routes import ROUTES, rewrites
+from kluster.components.dns.zone import ManagedZone
+from kluster.components.dns.zones import ESTATE, zt_records
 
 #: The `physical` outputs the anchors are made of: the load balancer's two
 #: public addresses, and the reserved IPv4 behind the dedicated VIP.

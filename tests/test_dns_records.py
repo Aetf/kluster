@@ -11,10 +11,10 @@ from collections import Counter
 import pytest
 
 from kluster import conventions
-from kluster.dns.legacy import LEGACY
-from kluster.dns.model import Record
-from kluster.dns.routes import Exposure, Rewrite, Route, rewrites
-from kluster.dns.zones import (
+from kluster.components.dns.legacy import LEGACY
+from kluster.components.dns.model import Record
+from kluster.components.dns.routes import Exposure, Rewrite, Route, rewrites
+from kluster.components.dns.zones import (
     ALIAS_ZONES,
     CLOUDFLARE_ISSUERS,
     CLUSTER_ISSUERS,
@@ -147,7 +147,7 @@ def test_the_records_import_without_the_gateway_behind_them() -> None:
     rest of the suite has imported all three anyway.
     """
     probe = (
-        'import sys, kluster.dns.zones; '
+        'import sys, kluster.components.dns.zones; '
         f'print(" ".join(sorted(name for name in {GATEWAY_IMPORTS!r} if name in sys.modules)))'
     )
 

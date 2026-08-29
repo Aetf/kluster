@@ -47,7 +47,7 @@ async def setup_mocks() -> None:
 
 
 def build(scopes: Any = None) -> Any:
-    from kluster.physical.backup import CLUSTER_SCOPES, BackupBucket
+    from kluster.components.backup import CLUSTER_SCOPES, BackupBucket
 
     return BackupBucket(
         'kluster',
@@ -58,7 +58,7 @@ def build(scopes: Any = None) -> Any:
 
 @pytest.mark.asyncio
 async def test_no_key_can_delete_a_file() -> None:
-    from kluster.physical.backup import FORBIDDEN_CAPABILITY, barman_scope, etcd_scope, volsync_scope
+    from kluster.components.backup import FORBIDDEN_CAPABILITY, barman_scope, etcd_scope, volsync_scope
 
     bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
     for key in bucket.keys.values():
@@ -71,7 +71,7 @@ async def test_no_key_can_delete_a_file() -> None:
 
 @pytest.mark.asyncio
 async def test_a_writer_key_can_still_read_its_own_index() -> None:
-    from kluster.physical.backup import WRITER_CAPABILITIES
+    from kluster.components.backup import WRITER_CAPABILITIES
 
     bucket = build()
     for key in bucket.keys.values():
@@ -84,7 +84,7 @@ async def test_a_writer_key_can_still_read_its_own_index() -> None:
 
 @pytest.mark.asyncio
 async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
-    from kluster.physical.backup import barman_scope, etcd_scope, volsync_scope
+    from kluster.components.backup import barman_scope, etcd_scope, volsync_scope
 
     bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
 
@@ -103,7 +103,7 @@ async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
 
 @pytest.mark.asyncio
 async def test_the_prefixes_come_from_the_one_bucket_layout() -> None:
-    from kluster.physical.backup import volsync_scope
+    from kluster.components.backup import volsync_scope
 
     # Not a restatement of the layout: if `conventions` moves the repository
     # path, the key that guards it moves with it rather than silently guarding
@@ -131,7 +131,7 @@ async def test_old_versions_age_out_and_current_ones_never_do() -> None:
 
 @pytest.mark.asyncio
 async def test_abandoned_multipart_uploads_are_cancelled() -> None:
-    from kluster.physical.backup import UNFINISHED_UPLOAD_DAYS
+    from kluster.components.backup import UNFINISHED_UPLOAD_DAYS
 
     bucket = build()
     rules = await bucket.bucket.lifecycle_rules.future()
@@ -159,7 +159,7 @@ async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
 
 @pytest.mark.asyncio
 async def test_the_consumers_that_exist_without_any_app() -> None:
-    from kluster.physical.backup import CLUSTER_SCOPES
+    from kluster.components.backup import CLUSTER_SCOPES
 
     bucket = build()
     # etcd is backed up whether or not a single application is declared; every
@@ -176,7 +176,7 @@ async def test_the_credential_halves_are_reachable_by_scope() -> None:
 
 
 def test_a_prefix_without_a_separator_is_refused() -> None:
-    from kluster.physical.backup import Scope
+    from kluster.components.backup import Scope
 
     # `volsync/app` also matches `volsync/apple/…`, so a key scoped that way
     # reads a neighbour's backups.
@@ -185,14 +185,14 @@ def test_a_prefix_without_a_separator_is_refused() -> None:
 
 
 def test_two_scopes_may_not_share_a_name() -> None:
-    from kluster.physical.backup import Scope
+    from kluster.components.backup import Scope
 
     with pytest.raises(ValueError, match='declared twice'):
         build([Scope(name='etcd', prefix='etcd/'), Scope(name='etcd', prefix='other/')])
 
 
 def test_the_endpoint_names_the_account_region() -> None:
-    from kluster.physical.backup import s3_endpoint
+    from kluster.components.backup import s3_endpoint
 
     assert s3_endpoint(REGION) == f'https://s3.{REGION}.backblazeb2.com'
     assert build().endpoint == f'https://s3.{REGION}.backblazeb2.com'

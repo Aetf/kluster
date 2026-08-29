@@ -25,7 +25,7 @@ import pulumi_crds as crds
 import pulumi_kubernetes as k8s
 
 from kluster import conventions
-from kluster.config import versions
+from kluster.lib.versions import versions
 
 __all__ = (
     'SealingScope',

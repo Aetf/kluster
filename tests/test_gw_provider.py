@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pulumi.runtime import rpc
 from pulumi.runtime.stack import wait_for_rpcs
 
-from kluster.gateway import provider, ssh
+from kluster.providers.device_files import provider, ssh
 
 
 def private_key() -> str:

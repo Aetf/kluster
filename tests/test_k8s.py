@@ -60,7 +60,7 @@ async def resources() -> None:
     pulumi.runtime.set_all_config(CHART_CONFIG)
     pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='k8s-base', preview=False)
 
-    from kluster.kx import SealingScope, SecretTemplate, helm_chart, sealed_secret
+    from kluster.lib.k8s import SealingScope, SecretTemplate, helm_chart, sealed_secret
 
     before = asyncio.all_tasks()
 
@@ -98,7 +98,7 @@ async def _search_a_rendered_set() -> tuple[str, str]:
     Run from the fixture rather than from an async test: the names arrive as
     Outputs, and resolving them needs the event loop the fixture already holds.
     """
-    from kluster.kx import find_rendered
+    from kluster.lib.k8s import find_rendered
 
     service = k8s.core.v1.Service('kube-system/metrics-server')
     config = k8s.core.v1.ConfigMap('kube-system/metrics-server-config')
@@ -132,7 +132,7 @@ def test_a_registry_chart_carries_no_repository() -> None:
 
 
 def test_an_unpinned_chart_is_refused_by_name() -> None:
-    from kluster.kx import helm_chart
+    from kluster.lib.k8s import helm_chart
 
     with pytest.raises(KeyError, match='nowhere'):
         helm_chart('nowhere', chart='nowhere', namespace='default')
@@ -141,7 +141,7 @@ def test_an_unpinned_chart_is_refused_by_name() -> None:
 def test_picking_a_rendered_resource_refuses_to_guess() -> None:
     """Reaching into a chart is a search, so an ambiguous or empty result is an
     error: a silently chosen resource would be wired somewhere by address."""
-    from kluster.kx import pick_resource
+    from kluster.lib.k8s import pick_resource
 
     service = k8s.core.v1.Service.get('one', 'kube-system/sealed-secrets')
     metrics = k8s.core.v1.Service.get('two', 'kube-system/sealed-secrets-metrics')
@@ -200,7 +200,7 @@ def test_load_balancer_pools_are_a_service_label() -> None:
     """Cilium allocates from a pool a Service asks for; the legacy cluster
     decided it on the node, with k3s `svccontroller` labels that have no
     successor here."""
-    from kluster.kx import lb_pool_labels
+    from kluster.lib.k8s import lb_pool_labels
 
     assert lb_pool_labels(conventions.POOL_LAN) == {conventions.LB_POOL_LABEL: conventions.POOL_LAN}
     with pytest.raises(ValueError, match='no such load-balancer pool'):

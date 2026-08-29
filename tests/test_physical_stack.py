@@ -25,10 +25,11 @@ import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
-from kluster.gateway import unifi as gw_unifi
-from kluster.physical import homelab, nodes
-from kluster.physical.guardrails import Guardrails
-from kluster.scripts.credentials import workstation
+from kluster.components import homelab
+from kluster.components.cloud import nodes
+from kluster.components.cloud.guardrails import Guardrails
+from kluster.components.gateway import unifi as gw_unifi
+from kluster.lib import workstation
 from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
@@ -695,7 +696,7 @@ async def test_the_chunk_credential_is_granted_on_one_bucket_in_the_configured_d
     radius, and it names the identity domain configuration supplies rather
     than assuming a tenancy's domain is called anything in particular.
     """
-    from kluster.physical import storage
+    from kluster.components.cloud import storage
 
     declared = declare_storage()
 

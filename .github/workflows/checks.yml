@@ -39,6 +39,12 @@ jobs:
       - name: Types
         run: mise x uv -- uv run basedpyright
 
+      # The source layout is a set of layers, and nothing else notices when
+      # one of them reaches upwards: a wrong import type-checks and passes
+      # its tests. The contract is in `pyproject.toml`.
+      - name: Imports
+        run: mise x uv -- uv run lint-imports
+
       # A hung coroutine must fail the job rather than burn the runner's hour.
       - name: Tests
         run: timeout 300 mise x -- uv run pytest -q

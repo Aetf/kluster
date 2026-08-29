@@ -11,13 +11,14 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 > siderolabs terraform-provider 0.11). **Declared in full, applied
 > nowhere.** `src/kluster/stacks/physical.py` calls every domain this
 > document describes, and each one is written: the OCI network, image,
-> load balancer and nodes (§1) and the Talos day-1 chain (§2) under
-> `src/kluster/physical/`, the libvirt worker and adopted HAOS domain
-> (§3) in `physical/homelab.py`, the UDM's estate, firewall and overlay
-> configuration (§4) in `src/kluster/gateway/`, and the B2 bucket (§5)
-> in `physical/backup.py` — so a run stops at no named gap. Nothing
-> described here has been provisioned: the stack has never been applied,
-> so §6's bootstrap gate is entirely ahead of it.
+> load balancer and nodes (§1) and the Talos day-1 chain (§2) in the
+> `cloud` and `talos` areas of `src/kluster/components/`, the libvirt
+> worker and adopted HAOS domain (§3) in `components/homelab/`, the
+> UDM's estate and firewall (§4) in `components/gateway/` with the
+> overlay configuration beside it in `components/overlay/`, and the B2
+> bucket (§5) in `components/backup/` — so a run stops at no named gap.
+> Nothing described here has been provisioned: the stack has never been
+> applied, so §6's bootstrap gate is entirely ahead of it.
 
 ## 0. Scope and outputs
 
@@ -127,7 +128,7 @@ machine_secrets
     co-location principle survives). Verified both ways at
     bootstrap (§6); recorded fallback if BPF precedence fails on
     the chosen datapath mode: copy the small public-port census (a
-    `conventions.py` constant — 80/443/22000×2/8443/hath, rarely
+    `conventions` constant — 80/443/22000×2/8443/hath, rarely
     changing) into machine config, accepting the cross-stack cost
     only in that world; kube-apiserver `anonymous-auth=false` pinned and audit
     logging on (a public 6443 warrants both, defaults notwithstanding);
