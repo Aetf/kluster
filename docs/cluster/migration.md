@@ -57,11 +57,11 @@ owns sequencing, data movement, and teardown.
     the flow-rules verification does CI's per-run ZT join become
     load-bearing (physical/gateway.md §2.5).
 2.  `physical` up: 3× A1 (A1 capacity confirmed at creation), worker VM
-    (60 GB), NLB, UDM FRR/estate, B2. The gateway's share of this is
+    (60 GB), NLB, UDM FRR and container services, B2. The gateway's share of this is
     **three applies, not one, and operator-local by construction** — CI
     reaches the site over ZeroTier and the gateway is not on ZeroTier
     yet. Set `gatewayBootstrapHost` to a LAN address for the UDM and
-    apply, which lands the estate and with it the ZT container; commit
+    apply, which lands the container services and with them the ZT container; commit
     the gateway's roster entry, carrying the node id that container
     mints, and apply again, which authorizes the member at the address
     the routes have named as their next hop since the first apply;

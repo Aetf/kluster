@@ -230,7 +230,7 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     (register rows in credentials.md). The playbook a diff calls for
     is human review, then reconcile reality or deploy — drift here
     means something changed behind Pulumi's back, the gw-config
-    estate and the OCI console being the realistic sources.
+    device files and the OCI console being the realistic sources.
     **How the human learns of it is not built**: the intended route is
     the same `actionable` alert the producer step raises
     (architecture.md §4.3), and neither exists, so today a diff is a
@@ -240,8 +240,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
-    reports zero diff — only the gw-config estate would surface
-    without it (GwFile/GwArtifact `diff` reads the device,
+    reports zero diff — only the gw-config device files would surface
+    without it (`DeviceFile`/`DeviceArtifact` `diff` reads the device,
     architecture.md §5.2). Consequence carried consciously:
     `--refresh` rewrites state to match reality, so a drift run
     adopts the drift into state and the next deploy's diff is

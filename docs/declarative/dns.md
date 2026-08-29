@@ -121,7 +121,7 @@ Cloudflare set; jiahui.id takes none.
 -   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing
     practice). It is not a table: it is one A record per entry of the
-    overlay roster, `conventions.ZT_ROSTER`, which is the same table the
+    overlay roster, `conventions.overlay.ROSTER`, which is the same table the
     `physical` stack declares the membership from (physical/gateway.md
     §2.1). A device joins the overlay and gets its name here by one
     declaration, and a device that leaves loses both — so the legacy
@@ -193,11 +193,11 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     externalizes the upstream list and nothing else, while the rewrites
     above land in `filtering.rewrites` inside that same file. Declaring
     the live file would therefore delete this stack's rewrites on every
-    apply. The two instances start identical because both seeds come
-    from one template (only the listen address differs), and their
+    apply. The two instances start identical because both initial-state
+    files come from one template (only the listen address differs), and their
     dynamic halves stay identical because Pulumi writes both; a change
     made in one instance's web UI afterward is reconciled by nothing.
-    See `components/gateway/estate.py` for the estate's side of this.
+    See `components/gateway/container.py` for the device's side of this.
 -   **Placement**: rewrites are emitted automatically for any app
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
