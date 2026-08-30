@@ -38,9 +38,17 @@ HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINrKKu2hnEHPUrWm4TEN40YFQVI3JEPf
 #: a firmware update, which is why everything this program puts on the device
 #: lives under it (architecture.md §5.2); `on_boot.d` holds the scripts that
 #: re-establish the services after one, with no expectation that Pulumi is
-#: reachable at boot.
+#: reachable at boot, and its path is fixed by the vendored `udm-boot.service`
+#: rather than chosen here.
+#:
+#: `custom` is the single root everything else occupies: the executables, the
+#: unit sources, the offline package cache, and whatever directory a layer of
+#: the gateway asks for. Two roots rather than one because they answer to two
+#: different owners — the boot chain's directory is upstream's, and everything
+#: below `custom` is this program's.
 DATA_ROOT = '/data'
 ON_BOOT_D = f'{DATA_ROOT}/on_boot.d'
+CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 
 #: AdGuard Home's administration and API port. Three declarations meet on it:
 #: the caddy vhost that proxies each instance's interface, the initial state
