@@ -15,26 +15,16 @@ from __future__ import annotations
 
 import contextvars
 from collections.abc import Callable
-from typing import Any, cast
 
 import pulumi
 import pulumi.runtime
 import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, run_with
 
 from putils import Component, UnparentedChildError, install_parent_backstop
 from putils import component as putils_component
-
-
-class Mocks(pulumi.runtime.Mocks):
-    """A monitor that hands every resource its own inputs back."""
-
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        return args.name + '_id', dict(cast('dict[str, Any]', args.inputs))
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
 
 
 class Thing(pulumi.CustomResource):
@@ -64,7 +54,7 @@ async def backstop() -> None:
     module-private name.
     """
     putils_component._under_construction.set(())  # pyright: ignore[reportPrivateUsage]
-    pulumi.runtime.set_mocks(Mocks(), project='putils', stack='test', preview=False)
+    _ = await run_with(Recorder(), stack='test', project='putils')
     install_parent_backstop()
 
 

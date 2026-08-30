@@ -24,6 +24,7 @@ import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
 import requests
+from mock_monitor import Recorder, run_with
 from pulumi.runtime import rpc
 
 from kluster.components.talos import image
@@ -40,39 +41,37 @@ FACTORY = 'https://factory.talos.dev/image'
 CLOUD_SCHEMATIC = f'{CLUSTER}-schematic_id'
 WORKER_SCHEMATIC = f'{WORKER}-schematic_id'
 
-#: Every `getUrls` invoke the run made, so a test can ask which artefact was
-#: requested rather than only which URL came back.
-CALLS: list[dict[str, Any]] = []
 
-
-class Fake(pulumi.runtime.Mocks):
+class Factory(Recorder):
     """The Image Factory, as far as this module needs it.
 
-    The URL is built the way the factory builds it — `nocloud` is served as
-    `.raw.xz`, `oracle` as `.qcow2` — because the shape of that name is part of
-    what the program depends on.
+    The URL is built the way the factory builds it -- `nocloud` is served as
+    `.raw.xz`, `oracle` as `.qcow2` -- because the shape of that name is part of
+    what the program depends on. Every request is kept, so a case can ask which
+    artefact was asked for rather than only which URL came back.
     """
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        return args.name + '_id', dict(cast('dict[str, Any]', args.inputs))
+    def __init__(self) -> None:
+        super().__init__()
+        #: The arguments of every `getUrls` invoke, in the order they were made.
+        self.invokes: list[dict[str, Any]] = []
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token != 'talos:imageFactory/getUrls:getUrls':
-            return {}, []
+            return {}
         arguments = dict(cast('dict[str, Any]', args.args))
-        CALLS.append(arguments)
+        self.invokes.append(arguments)
         platform = str(arguments['platform'])
         architecture = str(arguments['architecture'])
         suffix = 'raw.xz' if platform == 'nocloud' else 'qcow2'
         schematic = arguments['schematicId']
         version = arguments['talosVersion']
-        return {'urls': {'diskImage': f'{FACTORY}/{schematic}/{version}/{platform}-{architecture}.{suffix}'}}, []
+        return {'urls': {'diskImage': f'{FACTORY}/{schematic}/{version}/{platform}-{architecture}.{suffix}'}}
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks() -> None:
-    CALLS.clear()
-    pulumi.runtime.set_mocks(Fake(), project='kluster', stack='physical', preview=False)
+async def factory() -> Factory:
+    return await run_with(Factory(), stack='physical')
 
 
 def build_cloud() -> image.TalosImage:
@@ -110,14 +109,15 @@ async def test_the_worker_carries_the_gpu_firmware_before_it_has_a_gpu() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artefact() -> None:
+async def test_the_worker_asks_the_factory_for_the_nocloud_x86_artefact(factory: Factory) -> None:
     worker = build_worker()
 
     url = await worker.artefact.url.future()
+
     assert url == f'{FACTORY}/{WORKER_SCHEMATIC}/{TALOS_VERSION}/nocloud-amd64.raw.xz'
     # And it asked for that artefact rather than merely receiving it: platform
     # and architecture are what pick one file out of the factory's matrix.
-    assert {'platform': 'nocloud', 'architecture': 'amd64'}.items() <= CALLS[-1].items()
+    assert {'platform': 'nocloud', 'architecture': 'amd64'}.items() <= factory.invokes[-1].items()
 
 
 # -- the cloud half, unchanged ----------------------------------------------

@@ -8,14 +8,26 @@ any of those three slips, and it fails at exactly the moment it is needed.
 """
 
 import inspect
-from typing import Any, cast
+from typing import Any
 
 import pulumi
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
+from kluster.components.backup import (
+    CLUSTER_SCOPES,
+    FORBIDDEN_CAPABILITY,
+    UNFINISHED_UPLOAD_DAYS,
+    WRITER_CAPABILITIES,
+    BackupBucket,
+    Scope,
+    barman_scope,
+    etcd_scope,
+    s3_endpoint,
+    volsync_scope,
+)
 
 BUCKET_ID = 'b2-bucket-id'
 REGION = 'us-west-004'
@@ -28,60 +40,31 @@ KEY_ID = 'an-application-key-id'
 KEY = 'an-application-key'
 
 
-class Mocks(pulumi.runtime.Mocks):
-    def __init__(self) -> None:
-        #: Which provider instance each resource was registered against, by
-        #: resource name. The engine hands a mock the reference -- a URN and an
-        #: id -- of the provider that would manage the resource, which is how a
-        #: test can ask what a resource authenticates as rather than only that
-        #: it exists.
-        self.providers: dict[str, str] = {}
+class B2(Recorder):
+    """The identifiers the account assigns: a bucket id, and each key's pair."""
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        self.providers[args.name] = args.provider or ''
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'b2:index/bucket:Bucket':
-            outputs['bucketId'] = BUCKET_ID
+            return {'bucketId': BUCKET_ID}
         if args.typ == 'b2:index/applicationKey:ApplicationKey':
-            outputs['applicationKeyId'] = args.name + '-key-id'
-            outputs['applicationKey'] = args.name + '-secret'
-        return args.name + '_id', outputs
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
+            return {'applicationKeyId': args.name + '-key-id', 'applicationKey': args.name + '-secret'}
+        return {}
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks() -> Mocks:
+async def monitor() -> B2:
     from kluster.components.backup import APPLICATION_KEY, APPLICATION_KEY_ID
 
     pulumi.runtime.set_all_config({f'kluster:{APPLICATION_KEY_ID}': KEY_ID, f'kluster:{APPLICATION_KEY}': KEY})
-    mocks = Mocks()
-    pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
-    # A bridged SDK is a *parameterized* package: before it may register a
-    # resource it registers its own package, and the SDK gates that on a
-    # feature flag it reads out of a synchronous cache. The mock monitor
-    # answers the feature and serves the registration, but nothing on the mock
-    # path performs the async negotiation that fills the cache, so a bridged
-    # provider refuses under mocks until it is primed once.
-    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
-    return mocks
+    return await run_with(B2(), stack='physical')
 
 
-def build(scopes: Any = None) -> Any:
-    from kluster.components.backup import CLUSTER_SCOPES, BackupBucket
-
-    return BackupBucket(
-        'kluster',
-        region=REGION,
-        scopes=CLUSTER_SCOPES if scopes is None else scopes,
-    )
+def build(scopes: list[Scope] = list(CLUSTER_SCOPES)) -> BackupBucket:
+    return BackupBucket('kluster', region=REGION, scopes=scopes)
 
 
 @pytest.mark.asyncio
 async def test_no_key_can_delete_a_file() -> None:
-    from kluster.components.backup import FORBIDDEN_CAPABILITY, barman_scope, etcd_scope, volsync_scope
-
     bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
     for key in bucket.keys.values():
         capabilities = await key.capabilities.future()
@@ -93,8 +76,6 @@ async def test_no_key_can_delete_a_file() -> None:
 
 @pytest.mark.asyncio
 async def test_a_writer_key_can_still_read_its_own_index() -> None:
-    from kluster.components.backup import WRITER_CAPABILITIES
-
     bucket = build()
     for key in bucket.keys.values():
         capabilities = await key.capabilities.future()
@@ -106,8 +87,6 @@ async def test_a_writer_key_can_still_read_its_own_index() -> None:
 
 @pytest.mark.asyncio
 async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
-    from kluster.components.backup import barman_scope, etcd_scope, volsync_scope
-
     bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
 
     prefixes = {name: await key.name_prefix.future() for name, key in bucket.keys.items()}
@@ -123,10 +102,7 @@ async def test_each_key_reaches_one_prefix_and_one_bucket() -> None:
         assert await key.bucket_ids.future() == [BUCKET_ID]
 
 
-@pytest.mark.asyncio
-async def test_the_prefixes_come_from_the_one_bucket_layout() -> None:
-    from kluster.components.backup import volsync_scope
-
+def test_the_prefixes_come_from_the_one_bucket_layout() -> None:
     # Not a restatement of the layout: if `conventions` moves the repository
     # path, the key that guards it moves with it rather than silently guarding
     # a directory nothing writes to any more.
@@ -153,8 +129,6 @@ async def test_old_versions_age_out_and_current_ones_never_do() -> None:
 
 @pytest.mark.asyncio
 async def test_abandoned_multipart_uploads_are_cancelled() -> None:
-    from kluster.components.backup import UNFINISHED_UPLOAD_DAYS
-
     bucket = build()
     rules = await bucket.bucket.lifecycle_rules.future()
     assert rules is not None
@@ -181,8 +155,6 @@ async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
 
 @pytest.mark.asyncio
 async def test_the_consumers_that_exist_without_any_app() -> None:
-    from kluster.components.backup import CLUSTER_SCOPES
-
     bucket = build()
     # etcd is backed up whether or not a single application is declared; every
     # other scope is per namespace and arrives from the caller.
@@ -198,8 +170,6 @@ async def test_the_credential_halves_are_reachable_by_scope() -> None:
 
 
 def test_a_prefix_without_a_separator_is_refused() -> None:
-    from kluster.components.backup import Scope
-
     # `volsync/app` also matches `volsync/apple/…`, so a key scoped that way
     # reads a neighbour's backups.
     with pytest.raises(ValueError, match='trailing separator'):
@@ -207,15 +177,11 @@ def test_a_prefix_without_a_separator_is_refused() -> None:
 
 
 def test_two_scopes_may_not_share_a_name() -> None:
-    from kluster.components.backup import Scope
-
     with pytest.raises(ValueError, match='declared twice'):
         build([Scope(name='etcd', prefix='etcd/'), Scope(name='etcd', prefix='other/')])
 
 
 def test_the_endpoint_names_the_account_region() -> None:
-    from kluster.components.backup import s3_endpoint
-
     assert s3_endpoint(REGION) == f'https://s3.{REGION}.backblazeb2.com'
     assert build().endpoint == f'https://s3.{REGION}.backblazeb2.com'
 
@@ -230,9 +196,8 @@ async def test_the_account_key_is_read_where_the_provider_is_built() -> None:
     pair is a configuration read at one line, and a reader answering "what does
     this authenticate as" has one file to open.
     """
-    from kluster.components.backup import BackupBucket
-
     bucket = build()
+
     assert await bucket.provider.application_key_id.future() == KEY_ID
     assert await bucket.provider.application_key.future() == KEY
     # Nothing threads it in: the constructor has no parameter that could.
@@ -240,16 +205,16 @@ async def test_the_account_key_is_read_where_the_provider_is_built() -> None:
 
 
 @pytest.mark.asyncio
-async def test_every_resource_is_signed_by_that_provider(setup_mocks: Mocks) -> None:
+async def test_every_resource_is_signed_by_that_provider(monitor: B2) -> None:
     """Inheritance, not re-plumbing: no child names the provider and all of them carry it.
 
     The bucket and its keys are children of the component, and a component's
     provider map is what a child inherits - so setting the provider once, on
     the component, reaches the whole subtree.
     """
-    bucket = build()
-    await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        bucket = build()
 
     assert set(bucket.keys) == {'etcd'}
     for name in ('kluster-backup', 'kluster-backup-etcd'):
-        assert 'kluster-b2' in setup_mocks.providers[name], f'{name} is not signed by the bucket provider'
+        assert 'kluster-b2' in monitor.provider_of(name), f'{name} is not signed by the bucket provider'

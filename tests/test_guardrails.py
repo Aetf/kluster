@@ -8,11 +8,18 @@ spelled in. The budget's own assertion is smaller and blunter — that it points
 at the compartment and that somebody receives its alerts.
 """
 
-from typing import Any, cast
-
-import pulumi
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, run_with
+
+from kluster.components.cloud.guardrails import (
+    A1_CORES_PER_AD,
+    A1_MEMORY_GB_PER_AD,
+    BUDGET_AMOUNT,
+    OBJECT_STORAGE_GB,
+    Guardrails,
+    quota_statements,
+)
 
 TENANCY_ID = 'ocid1.tenancy.oc1..test'
 COMPARTMENT_ID = 'ocid1.compartment.oc1..test'
@@ -20,22 +27,12 @@ COMPARTMENT_NAME = 'kluster'
 RECIPIENTS = ('alerts@example.invalid', 'second@example.invalid')
 
 
-class Mocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        return args.name + '_id', dict(cast('dict[str, Any]', args.inputs))
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
-
-
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks() -> None:
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
+async def monitor() -> Recorder:
+    return await run_with(Recorder(), stack='physical')
 
 
-def build() -> Any:
-    from kluster.components.cloud.guardrails import Guardrails
-
+def build() -> Guardrails:
     return Guardrails(
         'kluster',
         tenancy_id=TENANCY_ID,
@@ -46,8 +43,6 @@ def build() -> Any:
 
 
 def test_compute_is_denied_before_the_one_shape_is_allowed() -> None:
-    from kluster.components.cloud.guardrails import quota_statements
-
     lines = quota_statements(COMPARTMENT_NAME)
     zeroed = [index for index, line in enumerate(lines) if line.startswith('zero compute')]
     allowed = [index for index, line in enumerate(lines) if 'standard-a1' in line]
@@ -59,8 +54,6 @@ def test_compute_is_denied_before_the_one_shape_is_allowed() -> None:
 
 
 def test_both_halves_of_a_flexible_shape_are_capped() -> None:
-    from kluster.components.cloud.guardrails import A1_CORES_PER_AD, A1_MEMORY_GB_PER_AD, quota_statements
-
     lines = quota_statements(COMPARTMENT_NAME)
     # Cores and memory are separate families on a flexible shape; capping only
     # cores leaves the memory dimension open.
@@ -69,8 +62,6 @@ def test_both_halves_of_a_flexible_shape_are_capped() -> None:
 
 
 def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
-    from kluster.components.cloud.guardrails import OBJECT_STORAGE_GB, quota_statements
-
     lines = quota_statements(COMPARTMENT_NAME)
     storage = [line for line in lines if 'object-storage' in line]
     assert len(storage) == 1
@@ -101,8 +92,6 @@ async def test_the_quota_and_budget_live_above_what_they_govern() -> None:
 
 @pytest.mark.asyncio
 async def test_the_budget_resets_monthly() -> None:
-    from kluster.components.cloud.guardrails import BUDGET_AMOUNT
-
     guardrails = build()
     assert await guardrails.budget.reset_period.future() == 'MONTHLY'
     assert await guardrails.budget.amount.future() == BUDGET_AMOUNT
@@ -127,8 +116,6 @@ async def test_every_alert_has_an_audience() -> None:
 
 
 def test_a_budget_nobody_hears_is_refused() -> None:
-    from kluster.components.cloud.guardrails import Guardrails
-
     with pytest.raises(ValueError, match='notifies nobody'):
         Guardrails(
             'kluster-silent',
