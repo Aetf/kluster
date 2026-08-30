@@ -171,12 +171,12 @@ ADDRESS = ('host', 'port', 'username')
 
 #: The key the device must present. Declared like the address and for the same
 #: reason: it is the caller's decision, and a provider has no way to reach the
-#: caller's decisions for itself. A public key by nature, so a pin a reviewer can
-#: read is the intended end state -- but the stack program supplies it as a
-#: secret-typed configuration value today, and secretness travels with the value,
-#: so a preview redacts it until the pin moves into `conventions` (rfc-002 §11).
-#: The credential that answers it goes the other way -- `PRIVATE_KEY_CONFIG`,
-#: read in `configure` and declared by nobody.
+#: caller's decisions for itself. A public key by nature, and nothing marks it
+#: secret on either side of the boundary, so a preview shows it -- which is
+#: where a reviewer checks the pin a session will be held to, and a pin nobody
+#: can read is a pin nobody reviews. The credential that answers it goes the
+#: other way -- `PRIVATE_KEY_CONFIG`, read in `configure` and declared by
+#: nobody.
 PIN = ('host_key',)
 
 #: What a `DeviceFile` declares beyond its own path.
@@ -288,10 +288,10 @@ class Connection:
     Everything here is a caller's decision, which is why it travels as resource
     inputs, and none of it is a credential. `host_key` is the pin, and it is
     required: there is no shape of this object that means "trust whatever
-    answers". It is a public key that the program hands over as a secret-typed
-    value, so a preview redacts it for now (see `PIN`). The credential the
-    session authenticates with is not here at all -- it is
-    `PRIVATE_KEY_CONFIG`, read in the provider's own process.
+    answers". It is a public key and it travels in the clear, so a preview
+    shows it (see `PIN`). The credential the session authenticates with is not
+    here at all -- it is `PRIVATE_KEY_CONFIG`, read in the provider's own
+    process.
     """
 
     host: pulumi.Input[str]

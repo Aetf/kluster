@@ -56,7 +56,7 @@ operation:
 The image is a creation-time fact for the same reason. Talos upgrades itself
 in place over its machine API — the declared artefact is what the disk was
 *written* with, not what is on it now — so the declaration stops describing the
-volume the first time the node is upgraded, and a later `talosVersion` bump
+volume the first time the node is upgraded, and a later `versions:talos` bump
 must not propose rewriting a running node's disk. Rebuilding the worker from a
 newer image is therefore a deliberate act rather than a diff: unprotect the
 volume, replace it, protect it again, and let the day-1 chain bring the node
@@ -401,7 +401,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
                 # -   `source` describes the bytes the disk was written with,
                 #     and stops describing what is on it the moment Talos
                 #     upgrades itself over the machine API. Insisting on it
-                #     would turn a routine `talosVersion` bump — which this
+                #     would turn a routine `versions:talos` bump — which this
                 #     stack makes for the machine configuration anyway — into a
                 #     proposal to rewrite a running node's disk, which `protect`
                 #     would then refuse for as long as the bump stood.

@@ -283,7 +283,7 @@ class Context:
 class Source(Protocol):
     """Where one row's value comes from, and what to call that in a listing."""
 
-    #: One word for `derived ls`: derived, minted, state-read, manual.
+    #: One word for `derived ls`: derived, minted, state-read, manual, decided.
     kind: ClassVar[str]
 
     def describe(self) -> str:
@@ -854,13 +854,15 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     a request for a specific row that quietly does nothing is worse than a
     refusal.
 
-    **What this is for is a copy, not a delivery.** Two of the map's source
-    classes hold a value whose truth lives somewhere else: a *state-read* row is
+    **What this is for is a copy, not a delivery.** Four of the map's source
+    classes hold a value whose truth lives somewhere else. A *state-read* row is
     generated inside a Pulumi program and read back out of the stack it belongs
-    to, and a *manual* row is typed in because its slot is the only place it is
-    stored. A *derived* row is a third: the plaintext is in the escrow, and this
-    copies the generation the registry currently holds. All three can be
-    obtained again, so all three can be re-filled here. The one *issued* row is
+    to; a *manual* row is typed in because its slot is the only place it is
+    stored; a *derived* row has its plaintext in the escrow, and this copies the
+    generation the registry currently holds; a *decided* row is not a credential
+    at all but a constant this repository holds, copied here because the
+    workflow that needs it beside one can only take a secret. All four can be
+    obtained again, so all four can be re-filled here. The one *issued* row is
     the exception that proves the rule -- what it copies is the CA's authority
     rather than a value, so each run hands CI a certificate it did not have
     before, and the one it replaces keeps working until it expires.
