@@ -12,9 +12,9 @@ credential and neither implies the other:
     device and whose `create`/`update` writes and then runs a hook. Bulk
     artifacts (container root filesystems built by CI) travel as a URL and a
     digest, never as bytes in state, so a preview stays cheap. `Gateway` says
-    where the device answers and which host key it must present; the credential
-    that opens the session is the provider's own, read in its `configure` and
-    handled by nothing here (rfc-002 §7.4).
+    where the device answers, and the key it must present is the pin in
+    `conventions`; the credential that opens the session is the provider's own,
+    read in its `configure` and handled by nothing here (rfc-002 §7.4).
 -   **The UniFi controller**, over its API, for the firewall. Those resources
     live in this stack and not beside the applications whose traffic they
     admit — the one deliberate exception to co-location, because a gateway
@@ -56,14 +56,12 @@ class Gateway(Component):
         name: str,
         *,
         host: str,
-        host_key: pulumi.Input[str],
         caddy: CaddyService,
         resolvers: Sequence[ResolverService],
         overlay_daemon: OverlayDaemon,
         routing: RoutingSession,
         site: str,
         worker_gua: pulumi.Input[str] | None,
-        peer_port: int,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """Declare the gateway.
@@ -75,13 +73,11 @@ class Gateway(Component):
         gateway's overlay address is one of the services this run is delivering
         (physical/gateway.md §2.5).
 
-        `host_key` is the pinned SSH host key: a bare `ssh-ed25519 <blob>` line
-        with no host name in front of it, so it matches the device at whichever
-        address the session dials. A public key by nature, and a pin is worth
-        more when a reviewer can read it — but the stack program supplies it as
-        a secret-typed configuration value, so previews redact it until the pin
-        moves into `conventions` (rfc-002 §11). The client credential that
-        answers it is not a parameter here at all.
+        The key the device must present is not a parameter: it is a pin this
+        repository decides, so it is `conventions.gateway.HOST_KEY` and a
+        preview shows it, which is where a reviewer checks what a session will
+        be held to (rfc-002 §11). The client credential that answers it is not
+        a parameter here either — it is the provider's own (§7.4).
 
         `worker_gua` is the worker VM's global IPv6 address: the one firewall
         rule that cannot be written against a stable object, because the
@@ -97,7 +93,7 @@ class Gateway(Component):
             f'{name}-services',
             connection=Connection(
                 host=host,
-                host_key=host_key,
+                host_key=conventions.gateway.HOST_KEY,
                 username=conventions.gateway.SSH_USER,
             ),
             caddy=caddy,
@@ -115,7 +111,6 @@ class Gateway(Component):
             api_url=f'https://{host}',
             site=site,
             worker_gua=worker_gua,
-            peer_port=peer_port,
             opts=self.child_opts(),
         )
 

@@ -159,7 +159,6 @@ class SiteFirewall(Component):
         api_url: str,
         site: str,
         worker_gua: pulumi.Input[str] | None,
-        peer_port: int,
         static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -181,7 +180,6 @@ class SiteFirewall(Component):
         super().__init__(name, opts=with_provider(opts, provider))
         self.provider = provider
         self.site = site
-        self.peer_port = peer_port
         hosts = STATIC_HOSTS if static_hosts is None else static_hosts
 
         child = self.child_opts()
@@ -477,7 +475,7 @@ class SiteFirewall(Component):
                 destination=unifi.FirewallZonePolicyDestinationArgs(
                     zone_id=self.zone.id,
                     ips=[worker_gua],
-                    port=peer_port,
+                    port=conventions.QBITTORRENT_PEER_PORT,
                 ),
                 auto_allow_return_traffic=True,
                 enabled=True,
@@ -493,7 +491,10 @@ class SiteFirewall(Component):
             )
 
         # The IPv4 half of the same flow, and the only port forward on the
-        # device. It lands on the worker VM's node address — read from
+        # device. Both halves take the port from the same place the public port
+        # census lives, because two rules that disagree on it admit nothing.
+        #
+        # It lands on the worker VM's node address — read from
         # `conventions`, so it follows the VLAN wherever the address plan puts
         # it — because that is the address the application's outbound peer
         # traffic already wears: the cluster masquerades it to the node, so
@@ -507,9 +508,9 @@ class SiteFirewall(Component):
             port_forward_interface='wan',
             protocol='tcp_udp',
             src_ip='any',
-            dst_port=str(peer_port),
+            dst_port=str(conventions.QBITTORRENT_PEER_PORT),
             fwd_ip=str(conventions.HOMELAB_NODE_IPV4),
-            fwd_port=str(peer_port),
+            fwd_port=str(conventions.QBITTORRENT_PEER_PORT),
             site=site,
             opts=child,
         )

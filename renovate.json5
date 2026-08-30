@@ -158,16 +158,17 @@
       datasourceTemplate: 'github-releases',
     },
     {
-      // The Talos version is stack config, which no manager reads. The file
-      // does not exist until the stack is created; renovate ignores a pattern
-      // that matches nothing, so this waits rather than needing to be
-      // remembered later.
+      // The Talos version is a Pulumi config value, which no manager reads. It
+      // lives in the project-level `versions:` namespace, so one file holds it
+      // for every stack (rfc-002 §11.1). The `rootfs-` pins beside it have no
+      // manager yet: their publication moves to registry images first, and the
+      // manager arrives with that (§11.1, §15).
       customType: 'regex',
       managerFilePatterns: [
-        '/^Pulumi\\.physical\\.yaml$/',
+        '/^Pulumi\\.yaml$/',
       ],
       matchStrings: [
-        'kluster:talosVersion:\\s*(?<currentValue>v[\\d.]+)',
+        'versions:talos:\\s*(?<currentValue>v[\\d.]+)',
       ],
       depNameTemplate: 'siderolabs/talos',
       datasourceTemplate: 'github-releases',

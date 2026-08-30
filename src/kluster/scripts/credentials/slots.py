@@ -13,9 +13,9 @@ secret and the `kluster` repository secret are all a `Slot` in
 `github_secrets.py`, differing in which repository they sit in and whether they
 name an Environment.
 
-**Every value comes from one of four places**, which is the row's source class.
-Three of them hold a value that can be obtained again, and `derived sync` copies
-those into their GitHub slots; the fourth is born into its slot and is no
+**Every value comes from one of five places**, which is the row's source class.
+Four of them hold a value that can be obtained again, and `derived sync` copies
+those into their GitHub slots; the remaining one is born into its slot and is no
 business of that command:
 
 -   **derived** -- obtainable again from the kit alone, with no provider
@@ -43,6 +43,10 @@ business of that command:
     their own (the UniFi key, the AdGuard login and the ZeroTier Central token,
     `devices.py`), and some are installed by another tracker's automation
     entirely (the UDM and libvirt SSH identities, §3).
+-   **decided** -- not a credential at all, but a constant this repository
+    holds in `conventions` that a continuous-integration job needs beside one.
+    There is one: the overlay network's id, which a workflow can only pass as a
+    secret (rfc-002 §11).
 
 **A target has to be an address, not an intention.** Where §3 names a channel
 that nothing has given a name yet -- an Environment secret no workflow reads, a
@@ -453,26 +457,29 @@ class StateRead:
 
 
 @dataclass(frozen=True)
-class ConfigRead:
-    """A key of a stack's committed configuration, read back for a second consumer.
+class Decided:
+    """A constant this repository holds, copied into a slot that can only take a secret.
 
-    The same class of act as a state read -- the value is a fact the stack
-    already carries, and this map copies it rather than deciding it -- so it
-    lists as `state-read`. It exists for the one value CI needs that is not a
-    credential at all: the ZeroTier network id, which the `physical` stack takes
-    in plain text and a workflow can only pass as a secret.
+    Not a credential and not a secret, which is why it is its own class rather
+    than a `Manual` an operator would be asked to re-type: the value is in
+    `conventions`, a checkout is the whole of what it takes to obtain it, and
+    nothing about it rotates. It exists for the one such value CI needs beside
+    a credential -- the overlay network's id, which a workflow input can only
+    be a secret.
     """
 
-    kind: ClassVar[str] = 'state-read'
+    kind: ClassVar[str] = 'decided'
 
-    stack: str
-    key: str
+    #: Where the constant lives, spelled as a reader would import it.
+    where: str
+    constant: str
 
     def describe(self) -> str:
-        return f'`{self.stack}` stack configuration, key `{self.key}`'
+        return f'`{self.where}`, a decision of this repository'
 
     def value(self, context: Context) -> str:
-        return context.stack(self.stack).get(self.key)
+        del context
+        return self.constant
 
 
 @dataclass(frozen=True)
@@ -681,7 +688,7 @@ ROWS: dict[str, Row] = {
         # Not a credential and not a secret: the workflows pass it beside the
         # identity, and a workflow input that is not a secret has nowhere else
         # to come from.
-        source=ConfigRead(PHYSICAL_STACK, 'zerotierNetworkId'),
+        source=Decided('conventions.overlay.NETWORK_ID', conventions.overlay.NETWORK_ID),
         targets=_github('ZEROTIER_NETWORK_ID', ZEROTIER_PHYSICAL + ZEROTIER_DNS),
     ),
     'pulumi-passphrase': Row(
@@ -763,7 +770,6 @@ ROWS: dict[str, Row] = {
         ),
         targets=(
             PulumiConfig(PHYSICAL_STACK, 'gatewayPrivateKey'),
-            PulumiConfig(PHYSICAL_STACK, 'gatewayHostKey'),
             PulumiConfig(PHYSICAL_STACK, 'libvirtPrivateKey'),
         ),
         pending=_IN_STACK_CONFIG,
@@ -943,8 +949,8 @@ __all__ = (
     'OPS_REPOSITORY',
     'REPOSITORY',
     'ROWS',
-    'ConfigRead',
     'Context',
+    'Decided',
     'Derived',
     'Issued',
     'Manual',

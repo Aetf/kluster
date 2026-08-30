@@ -67,6 +67,7 @@ from kluster.conventions.cluster import (
     POD_CIDR_V6,
     POOL_INTERNET,
     PUBLIC_PORT_CENSUS,
+    QBITTORRENT_PEER_PORT,
     SC_CLOUD_BLOCK,
     SC_LOCAL_PATH,
     SC_NAS,
@@ -93,6 +94,7 @@ from kluster.conventions.homelab import (
     HOMELAB_MEMORY_GIB,
     HOMELAB_NODE,
     HOMELAB_NODE_IPV4,
+    HOMELAB_STORAGE_DIR,
     HOMELAB_VCPUS,
 )
 from kluster.conventions.identity import CLUSTER_NAME, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
@@ -147,6 +149,7 @@ __all__ = (
     'HOMELAB_MEMORY_GIB',
     'HOMELAB_NODE',
     'HOMELAB_NODE_IPV4',
+    'HOMELAB_STORAGE_DIR',
     'HOMELAB_VCPUS',
     'IOT_VLAN',
     'KUBEPRISM_PORT',
@@ -169,6 +172,7 @@ __all__ = (
     'PRIMARY_ONLY',
     'PUBLIC_ALL',
     'PUBLIC_PORT_CENSUS',
+    'QBITTORRENT_PEER_PORT',
     'RETENTION_CLASSES',
     'SC_CLOUD_BLOCK',
     'SC_LOCAL_PATH',

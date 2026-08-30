@@ -43,7 +43,6 @@ API_URL = 'https://gateway.invalid'
 API_KEY = 'unifi-api-key'
 SITE = 'default'
 WORKER_GUA = '2001:db8:1:70::10'
-PEER_PORT = 51413
 
 
 class Mocks(pulumi.runtime.Mocks):
@@ -108,7 +107,6 @@ def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -
         api_url=API_URL,
         site=SITE,
         worker_gua=WORKER_GUA,
-        peer_port=PEER_PORT,
         static_hosts=static_hosts,
     )
 
@@ -514,11 +512,11 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     destination = await firewall.peer_v6.destination.future()
     assert destination is not None
     assert destination.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
-    assert destination.port == PEER_PORT
+    assert destination.port == conventions.QBITTORRENT_PEER_PORT
     assert await firewall.peer_v6.ip_version.future() == 'IPV6'
 
-    assert await firewall.peer_v4.dst_port.future() == str(PEER_PORT)
-    assert await firewall.peer_v4.fwd_port.future() == str(PEER_PORT)
+    assert await firewall.peer_v4.dst_port.future() == str(conventions.QBITTORRENT_PEER_PORT)
+    assert await firewall.peer_v4.fwd_port.future() == str(conventions.QBITTORRENT_PEER_PORT)
     assert await firewall.peer_v4.fwd_ip.future() == str(conventions.HOMELAB_NODE_IPV4)
     assert await firewall.peer_v4.src_ip.future() == 'any'
 
@@ -577,30 +575,6 @@ async def test_static_host_entries_are_empty_by_design_and_typed_when_present() 
     assert await firewall.static_hosts['printer.home.arpa'].record.future() == '192.168.80.9'
     assert await firewall.static_hosts['sensor.iot.home.arpa'].type.future() == 'AAAA'
     assert await firewall.static_hosts['sensor.iot.home.arpa'].record.future() == 'fd1a:665f:8bcb:90::9'
-
-
-@pytest.mark.asyncio
-async def test_the_peer_port_reaches_both_halves_of_the_one_flow() -> None:
-    """The port arrives as stack configuration rather than as a constant.
-
-    It is inherited from the deployment this cluster replaces, so the program
-    reads it instead of choosing it — and it names two rules, the v6 pinhole
-    and the v4 forward, which are one flow. A component that carried it into
-    only one of them would publish half a service.
-    """
-    firewall = unifi.SiteFirewall(
-        NAME,
-        api_url=API_URL,
-        site=SITE,
-        worker_gua=WORKER_GUA,
-        peer_port=6881,
-    )
-
-    assert firewall.peer_v6 is not None
-    destination = await firewall.peer_v6.destination.future()
-    assert destination is not None
-    assert destination.port == 6881
-    assert await firewall.peer_v4.dst_port.future() == '6881'
 
 
 ##

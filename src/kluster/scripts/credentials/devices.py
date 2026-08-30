@@ -212,7 +212,7 @@ DEVICES: dict[str, Device] = {
             register='ZeroTier Central API token',
             title='the ZeroTier Central API token',
             stack=PHYSICAL_STACK,
-            holds='the Central API token and the id of the network it administers',
+            holds='the Central API token',
             console=(
                 'my.zerotier.com → Account → API Access Tokens → New Token, named\n'
                 '  for this overlay. Central publishes no token API, so its web\n'
@@ -224,14 +224,11 @@ DEVICES: dict[str, Device] = {
                 '  members and its flow rules — because Central offers no narrower\n'
                 '  scope. That excess is why it is delivered straight into the one\n'
                 '  stack that uses it rather than kept anywhere else.\n'
-                "  The network id below is not a secret: it is on that network's\n"
-                '  page in the same console, and the stack needs it to know which\n'
-                "  of the account's networks is this site's overlay."
+                "  Which of the account's networks is this site's overlay is not\n"
+                '  asked for: the id is an identity rather than a setting, so it is\n'
+                '  a constant in `conventions.overlay` (rfc-002 §11).'
             ),
-            fields=(
-                Field('api-token', 'zerotierApiToken', 'the token the console showed once'),
-                Field('network-id', 'zerotierNetworkId', "the overlay network's id", secret=False),
-            ),
+            fields=(Field('api-token', 'zerotierApiToken', 'the token the console showed once'),),
         ),
     )
 }

@@ -79,7 +79,7 @@ from kluster.components.talos import TalosCluster
 from kluster.lib import templates, workstation
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'declare', 'slot')
+__all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot')
 
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the stylesheet travels with the code that reads it
@@ -473,48 +473,6 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         )
 
         self.register_outputs({})
-
-
-def declare(
-    name: str,
-    *,
-    cluster: TalosCluster,
-    storage_dir: str,
-    bridge: str,
-    vcpus: int,
-    memory_gib: int,
-    image_path: pulumi.Input[str],
-    haos_domain_uuid: pulumi.Input[str],
-    opts: pulumi.ResourceOptions | None = None,
-) -> None:
-    """Declare the worker VM and adopt the Home Assistant domain.
-
-    `storage_dir` is the nodatacow subvolume that holds both the raw disk image
-    and the seed, and `haos_domain_uuid` identifies the domain to adopt —
-    libvirt imports domains by UUID, and the UUID is the one attribute of that
-    domain nothing may change. The endpoint is not among them: the session and
-    the credential that opens it belong to the component (rfc-002 §8.1).
-
-    `image_path` is where the Talos `nocloud` image has been decompressed on
-    the machine running the program: a path rather than a URL, because the
-    factory serves the artefact compressed and the provider does not
-    decompress what it is given.
-
-    The Talos component comes in whole rather than as a rendered string: a
-    worker's configuration and the secrets the seed must carry both come out
-    of the same chain.
-    """
-    _ = HomelabHost(
-        name,
-        cluster=cluster,
-        storage_dir=storage_dir,
-        bridge=bridge,
-        vcpus=vcpus,
-        memory_gib=memory_gib,
-        image_path=image_path,
-        haos_domain_uuid=haos_domain_uuid,
-        opts=opts,
-    )
 
 
 def _sole_worker(cluster: TalosCluster) -> str:

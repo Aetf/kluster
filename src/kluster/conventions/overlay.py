@@ -17,6 +17,14 @@ from typing import final
 
 from kluster.conventions.site import CLUSTER_VLAN, CONTAINER_VLAN, IOT_VLAN, LAN_POOL, SERVER_LAN
 
+#: The network this program adopts, as ZeroTier Central minted it. An identity
+#: rather than a setting: it is what the network *is*, it is stable, and
+#: changing it means adopting a different network. It is not a secret either —
+#: joining takes an authorized member, not knowledge of the id — so the
+#: administration token beside it stays configuration and this does not
+#: (rfc-002 §11).
+NETWORK_ID = '83048a0632b6ba9b'
+
 SUBNET = IPv4Network('10.144.0.0/16')
 
 #: Static managed overlay addresses. The UDM is the nexthop of every managed

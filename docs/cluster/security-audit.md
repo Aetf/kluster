@@ -278,7 +278,9 @@ With all DNS in Pulumi and issuance entirely DNS-01, add per-zone CAA
 
 The provider does root-level writes to the UDM over ZeroTier; an
 accept-new first contact would let any ZT member MITM into gateway
-root. Pin the host key in provider config. *Lives in* physical.md §4.
+root. The host key is pinned, as a constant in `conventions` rather
+than a configuration secret: a public key is not one, and a pin a
+preview shows is a pin a reviewer can check. *Lives in* physical.md §4.
 
 ### L5 — Confine CI ZeroTier members by tag
 
