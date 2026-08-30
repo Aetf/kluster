@@ -413,6 +413,8 @@ Vultr-official
 webdav
 webroots
 Why-it-moved-off-the-homelab
+worktree
+worktrees
 www
 yadm
 yadm-managed

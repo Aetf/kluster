@@ -2,7 +2,8 @@
 
 A design proposal, written before the change it proposes and approved
 before any of it is built. Major structural work goes this way round
-(AGENTS.md "Review stage"): the milestone opens with an RFC, the
+([framework/dispatch.md](../framework/dispatch.md) §3.1): the
+milestone opens with an RFC, the
 implementation issues are cut from the accepted text, and the milestone
 closes with a review checkpoint against it.
 
