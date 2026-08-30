@@ -20,6 +20,8 @@ set:
 * `mise x uv -- uv run lint-imports` — the layering contract below
 * `timeout 60 mise x uv -- uv run pytest`
 * `ltex-cli-plus` on every markdown file touched, one file at a time
+* provider-facing code has one more requirement —
+  [dispatch.md](docs/framework/dispatch.md) §1.1
 
 New behavior ships with a test that fails without it, and the
 documentation the change makes true ships with it rather than after it.
@@ -88,7 +90,7 @@ documentation the change makes true ships with it rather than after it.
 * Work happens in a git worktree of its own, and **a worktree dies with
   the dispatch that created it** — the agent removes its own when it
   reports with no pull request, the merging dispatcher removes it after
-  the merge (dispatch.md §1.2).
+  the merge ([dispatch.md](docs/framework/dispatch.md) §1.2).
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint, and a register row
