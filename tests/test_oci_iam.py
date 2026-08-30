@@ -24,6 +24,7 @@ import pytest
 from memory_kit import MemoryKit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 
 from oci_conventions import with_compartment
 from kluster import conventions
@@ -623,6 +624,26 @@ def unhurried(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(oci_iam.time, 'sleep', no_nap)
     monkeypatch.setattr(oci_iam.time, 'monotonic', lambda: next(ticks))
+
+
+@pytest.fixture(autouse=True)
+def unchecked_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reading a private key skips the consistency check OpenSSL runs by default.
+
+    A fingerprint is derived from the key on every use rather than stored
+    (§2), so this module loads a PEM dozens of times per test, and OpenSSL's
+    RSA key check is the great majority of what a load costs. Every key
+    involved was minted by `generate_key` seconds earlier in this same
+    process, which leaves the check nothing to find. It stays on everywhere
+    else: a key read outside the suite came off disk, where it could have
+    been truncated or edited.
+    """
+    load = serialization.load_pem_private_key
+
+    def load_unchecked(data: bytes, password: bytes | None = None, *, backend: object = None) -> PrivateKeyTypes:
+        return load(data, password, unsafe_skip_rsa_key_validation=True)
+
+    monkeypatch.setattr(oci_iam.serialization, 'load_pem_private_key', load_unchecked)
 
 
 @pytest.fixture
