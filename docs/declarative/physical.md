@@ -13,9 +13,9 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 > document describes, and each one is written: the OCI network, image,
 > load balancer and nodes (§1) and the Talos day-1 chain (§2) in the
 > `cloud` and `talos` areas of `src/kluster/components/`, the libvirt
-> worker and adopted HAOS domain (§3) in `components/homelab/`, the
-> UDM's container services and firewall (§4) in `components/gateway/` with the
-> overlay configuration beside it in `components/overlay/`, and the B2
+> worker VM (§3) in `components/homelab/`, the UDM's container services
+> and firewall (§4) in `components/gateway/` with the overlay
+> configuration beside it in `components/overlay/`, and the B2
 > bucket (§5) in `components/backup/` — so a run stops at no named gap.
 > Nothing described here has been provisioned: the stack has never been
 > applied, so §6's bootstrap gate is entirely ahead of it.
@@ -23,7 +23,7 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 ## 0. Scope and outputs
 
 Owns: OCI (network, nodes, NLB, IPs, volumes, guardrails),
-libvirt on the homelab host (worker VM + adopted HAOS domain), Talos
+libvirt on the homelab host (the worker VM and its storage), Talos
 day-1 (secrets → configs → apply → bootstrap), the gw-config and unifi
 resources on the UDM, and the B2 backup bucket. DNS lives in the `dns`
 stack (declarative/dns.md), which consumes this stack's IP outputs.
@@ -222,23 +222,22 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
 -   **GPU hostdev**: not present at bootstrap (the two-phase plan,
     homelab-host.md §3); when the Wave C cutover adds it,
     pulumi-libvirt's hostdev support is thin — the provider's XSLT
-    escape hatch may be needed for the PCI device XML (the HAOS
-    domain proves the libvirt side works).
--   **HAOS**: the existing domain is `pulumi import`-ed and then
-    declared — no rebuild, no cluster coupling (architecture.md §6.8).
-    Mechanics on record: the libvirt provider imports domains **by
-    UUID** (recent provider versions), and imported state is known to
-    be incomplete for some attributes — expect an `ignore_changes`
-    tuning pass until `preview` is clean, and verify the import early
-    (a botched diff must never propose replacing this domain; its
-    resource is `protect=True` like every data-bearing resource).
-    **Adoption is mandatory** (decided 2026-08-23) — HAOS does not stay
-    outside Pulumi. If import proves unworkable, the fallback is a
-    **definition-layer takeover in a short scheduled window**: shut
-    HAOS down, let Pulumi define the domain fresh pointing at the
-    *existing* disk volumes and passthrough devices (the qcow2 and USB
-    controller are the identity; the domain XML is just metadata),
-    boot. Data is never migrated or recreated either way.
+    escape hatch may be needed for the PCI device XML (the
+    home-automation domain on the same host proves the libvirt side
+    works).
+-   **The home-automation domain is not declared here.** It shares the
+    host, and this stack says nothing about it: no resource, no
+    configuration key, no ignore list. Its full XML stays with the
+    host's own configuration management, beside the rest of that host's
+    preparation, and that is where recreation (a host-side `virsh
+    define`) and drift detection (a normalized `virsh dumpxml`
+    comparison, an operational drill) both live. Four ways of declaring
+    it were measured against the live definition and the libvirt
+    provider, and each is blind or destructive somewhere that matters;
+    the comparison and the reasoning behind leaving it out are
+    [framework/rfc-002](../framework/rfc-002-src-layout-and-the-gateway.md)
+    §13. The libvirt session above is unaffected — it is the worker
+    VM's, and so is everything §3 declares.
 
 ## 4. UDM (gw-config dynamic provider + bridged filipowm/unifi)
 

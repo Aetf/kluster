@@ -1,8 +1,8 @@
 """The `physical` stack: everything that exists before the Kubernetes API.
 
-OCI network and nodes, the Talos day-1 chain, the homelab worker VM and the
-adopted HAOS domain, the UDM's gw-config and firewall, and the B2 buckets —
-declared per docs/declarative/physical.md. The state-backend appliance is
+OCI network and nodes, the Talos day-1 chain, the homelab worker VM, the
+UDM's gw-config and firewall, and the B2 buckets — declared per
+docs/declarative/physical.md. The state-backend appliance is
 deliberately *not* here: it is this program's own prerequisite
 (docs/physical/state-backend.md).
 
@@ -81,12 +81,6 @@ OCI_PRIVATE_KEY = 'ociPrivateKey'
 #: optional keys, and the other is its mirror image: this one is set only
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
-
-#: The domain the Home Assistant declaration adopts.
-#: TODO(kluster-ops#111): this key retires with that declaration — nothing
-#: adopts the domain, which returns to the host's own configuration management
-#: (rfc-002 §13). It survives this slice only because the declaration does.
-HAOS_DOMAIN_UUID = 'haosDomainUuid'
 
 #: The export each continuous-integration identity's key material leaves under,
 #: by the roster name of the member that carries it. The names are half of a
@@ -274,10 +268,11 @@ async def main() -> None:
         opts=on_cloud,
     )
 
-    # §3: the worker VM under libvirt, and the Home Assistant domain adopted
-    # beside it. No endpoint and no credential among the arguments: the libvirt
-    # session is the component's own, so it builds its provider and reads the
-    # key that opens it (rfc-002 §8.1).
+    # §3: the worker VM under libvirt. No endpoint and no credential among the
+    # arguments: the libvirt session is the component's own, so it builds its
+    # provider and reads the key that opens it (rfc-002 §8.1). The
+    # home-automation domain on the same host is declared nowhere here
+    # (rfc-002 §13).
     HomelabHost(
         conventions.CLUSTER_NAME,
         cluster=cluster,
@@ -286,7 +281,6 @@ async def main() -> None:
         vcpus=conventions.HOMELAB_VCPUS,
         memory_gib=conventions.HOMELAB_MEMORY_GIB,
         image_path=worker_image.path,
-        haos_domain_uuid=config.require(HAOS_DOMAIN_UUID),
     )
 
     # §4: the gateway and the overlay it is the site's member of. Two top-level

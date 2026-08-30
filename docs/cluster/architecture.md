@@ -7,9 +7,10 @@ lock-in, and declarative management using Pulumi.
 > **Status**: This is the canonical architecture document, describing the
 > design **as decided 2026-08-22** (control plane in the cloud on 3× OCI
 > A1 nodes; two-pool LoadBalancer ingress; UDM automated via a gw-config
-> provider; HAOS adopted into the physical layer). Superseded approaches
-> and their reasoning live in §6; sizing, provider pricing, and HA tiers
-> live in [nodes.md](nodes.md); storage in [storage.md](storage.md). The
+> provider; home automation deliberately left outside it). Superseded
+> approaches and their reasoning live in §6; sizing, provider pricing, and
+> HA tiers live in [nodes.md](nodes.md); storage in
+> [storage.md](storage.md). The
 > code that declares this layer is the `cloud`, `talos`, `homelab`,
 > `gateway`, `overlay` and `backup` areas of
 > `src/kluster/components/`, wired into a stack by
@@ -624,9 +625,10 @@ The entire stack is deployed via Pulumi using multiple providers:
 
 1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab
     physical server (bridged to the LAN). Outputs the dynamically
-    assigned local IP. The same provider also adopts the **existing HAOS
-    VM** into the physical layer (import, then declare) — HAOS stays a
-    host-level libvirt domain, deliberately outside the cluster (§6.8).
+    assigned local IP. The **existing HAOS VM** shares that host and is
+    declared nowhere in this program — a host-level libvirt domain,
+    deliberately outside both the cluster (§6.8) and this repository
+    (declarative/physical.md §3).
 2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
     v6), the three A1 instances (Talos via custom image import), their
     primary IPs, the NLB (listeners + backend sets, §3.2), block
@@ -938,6 +940,8 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
     VM anyway, so cluster placement buys nothing; (c) the KubeVirt+CDI+
     Multus (bridge) stack plus Talos-specific friction (SELinux regression
     talos#10083-class issues) is real operational surface for zero gained
-    capability. Instead, HAOS is **adopted by the Pulumi physical layer via
-    pulumi-libvirt** (§5.1): declared, versioned, previewable — but a host
-    concern, like the NAS.
+    capability. HAOS stays a host-level libvirt domain, like the NAS role —
+    and it is not declared by this program either: its definition belongs to
+    the host's own configuration management, for the reasons in
+    [framework/rfc-002](../framework/rfc-002-src-layout-and-the-gateway.md)
+    §13.

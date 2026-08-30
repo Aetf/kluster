@@ -4,16 +4,17 @@ The system design of the homelab side's physical layer: how the worker
 VM is shaped on the host (disk, network, GPU), and what the host
 itself must provide. Sizing and the host inventory live in
 [cluster/nodes.md](../cluster/nodes.md) §4; how these resources are
-*declared* (pulumi-libvirt mechanics, HAOS import) lives in
+*declared* (pulumi-libvirt mechanics) lives in
 [declarative/physical.md](../declarative/physical.md) §3.
 
 > **Status**: designed 2026-08-23 (as declarative/physical.md §3),
 > extracted to this topic 2026-08-24. The declaration side is written:
-> `src/kluster/components/homelab/` declares the storage pool, the
-> worker's volume, seed and domain, and adopts the Home Assistant
-> domain. What this document describes of the *host* is not in place —
-> §4's change-set is a precondition of the first `pulumi up`, and §3's
-> passthrough is a Wave C step by design.
+> `src/kluster/components/homelab/` declares the storage pool and the
+> worker's volume, seed and domain, and nothing else on this host — the
+> HAOS domain beside it belongs to the host's own configuration
+> management (declarative/physical.md §3). What this document describes
+> of the *host* is not in place — §4's change-set is a precondition of
+> the first `pulumi up`, and §3's passthrough is a Wave C step by design.
 
 ## 1. VM disk: raw sparse file on the root btrfs, nodatacow, virtio-blk
 
@@ -132,6 +133,11 @@ contents, so nothing is discovered mid-bootstrap:
     (declarative/physical.md §3), and a pool defined here as well is a
     pool the first apply finds already defined, which fails the run
     rather than converging on it;
+-   the **HAOS domain's own definition** — its full XML, the file a
+    host-side `virsh define` restores the machine from. This program
+    declares nothing about that domain (declarative/physical.md §3), so
+    the change-set is where it is versioned and where the disk path it
+    names is kept in step with the subvolume above;
 -   a **dedicated service user** and its SSH identity for the libvirt
     provider (`qemu+ssh://` over the CI ZeroTier join), declared like
     every other system account in the change-set — a `systemd-sysusers`

@@ -133,7 +133,8 @@ the VPS empties progressively):
 -   **Wave F — decommission** (§4).
 
 Explicitly **not** migrating: AdGuard alice/bob (stay on the UDM, now
-Pulumi-managed), HAOS (adopted in place), the NAS role, the legacy
+Pulumi-managed), HAOS (a host-level libvirt domain, and one this program
+does not declare — declarative/physical.md §3), the NAS role, the legacy
 state backend (serves kluster-code until F), and **dmarc-check** (stays
 a host timer using the host's claude credentials, nodes.md §4.1 —
 in-cluster adoption deferred until the cluster is stable, and a
