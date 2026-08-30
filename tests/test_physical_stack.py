@@ -18,10 +18,9 @@ from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pulumi
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
-from pulumi.runtime.stack import wait_for_rpcs
+from mock_monitor import Recorder, declaring, run_with
 
 from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
@@ -99,82 +98,65 @@ ACCOUNT_CONFIG = {
 }
 
 
-class Mocks(pulumi.runtime.Mocks):
-    def __init__(self) -> None:
-        #: Every resource type the run registered, so a test can ask which
-        #: providers the program actually reached.
-        self.registered: set[str] = set()
-        #: What each resource was declared with, by name, so a test can ask
-        #: what the stack handed a provider rather than only that it made one.
-        self.inputs: dict[str, dict[str, Any]] = {}
-        #: The type each resource was registered as, and the provider instance
-        #: it was registered against, both by name. The engine hands a mock the
-        #: reference of the provider that would manage the resource, which is
-        #: how a case can ask what a declaration authenticates as rather than
-        #: only that it happened.
-        self.types: dict[str, str] = {}
-        self.providers: dict[str, str] = {}
-        #: The same for each function call, by token.
-        self.call_providers: dict[str, str] = {}
+class Estate(Recorder):
+    """Every account and appliance the program reaches, as far as it reads them back.
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        self.registered.add(args.typ)
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        self.inputs[args.name] = dict(cast('dict[str, Any]', args.inputs))
-        self.types[args.name] = args.typ
-        self.providers[args.name] = args.provider or ''
-        if args.typ == 'oci:Core/vcn:Vcn':
-            outputs['ipv6cidrBlocks'] = ['2603:c020:8000:1200::/56']
-        if args.typ == 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
-            outputs['ipAddresses'] = [
-                {'ipAddress': LB_ADDRESS, 'isPublic': True, 'ipVersion': 'IPV4'},
-                {'ipAddress': LB_ADDRESS_V6, 'isPublic': True, 'ipVersion': 'IPV6'},
-            ]
-        if args.typ == 'talos:machine/secrets:Secrets':
-            outputs['machineSecrets'] = {'cluster': {'id': 'test'}}
-        if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
-            outputs['kubeconfigRaw'] = KUBECONFIG
-        if args.typ == 'zerotier:index/identity:Identity':
-            # Keyed by the resource name, so a test can tell one member's key
-            # material from another's: which identity an export carries is the
-            # whole of the contract the credential map reads it under.
-            outputs |= {
-                'identityId': f'{args.name}-node',
-                'publicKey': 'public',
-                'privateKey': f'{args.name}-secret',
-            }
-        if args.typ == 'zerotier:index/network:Network':
-            outputs['networkId'] = ZT_NETWORK_ID
-        if args.typ == 'oci:Core/instance:Instance':
-            outputs['availabilityDomain'] = AVAILABILITY_DOMAIN
-        if args.typ == 'b2:index/bucket:Bucket':
-            outputs['bucketId'] = 'b2-bucket-id'
-        if args.typ == 'b2:index/applicationKey:ApplicationKey':
-            outputs |= {'applicationKeyId': args.name + '-key-id', 'applicationKey': args.name + '-secret'}
-        return args.name + '_id', outputs
+    The values are invented; what the suite is for is that each is read at the
+    right line and reaches the right resource.
+    """
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        self.call_providers[args.token] = args.provider or ''
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        match args.typ:
+            case 'oci:Core/vcn:Vcn':
+                return {'ipv6cidrBlocks': ['2603:c020:8000:1200::/56']}
+            case 'oci:NetworkLoadBalancer/networkLoadBalancer:NetworkLoadBalancer':
+                return {
+                    'ipAddresses': [
+                        {'ipAddress': LB_ADDRESS, 'isPublic': True, 'ipVersion': 'IPV4'},
+                        {'ipAddress': LB_ADDRESS_V6, 'isPublic': True, 'ipVersion': 'IPV6'},
+                    ]
+                }
+            case 'talos:machine/secrets:Secrets':
+                return {'machineSecrets': {'cluster': {'id': 'test'}}}
+            case 'talos:cluster/kubeconfig:Kubeconfig':
+                return {'kubeconfigRaw': KUBECONFIG}
+            case 'zerotier:index/identity:Identity':
+                # Keyed by the resource name, so a test can tell one member's key
+                # material from another's: which identity an export carries is the
+                # whole of the contract the credential map reads it under.
+                return {'identityId': f'{args.name}-node', 'publicKey': 'public', 'privateKey': f'{args.name}-secret'}
+            case 'zerotier:index/network:Network':
+                return {'networkId': ZT_NETWORK_ID}
+            case 'oci:Core/instance:Instance':
+                return {'availabilityDomain': AVAILABILITY_DOMAIN}
+            case 'b2:index/bucket:Bucket':
+                return {'bucketId': 'b2-bucket-id'}
+            case 'b2:index/applicationKey:ApplicationKey':
+                return {'applicationKeyId': args.name + '-key-id', 'applicationKey': args.name + '-secret'}
+            case _:
+                return {}
+
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         match args.token:
             case 'unifi:index/getFirewallZone:getFirewallZone':
                 name = str(cast('dict[str, Any]', args.args)['name'])
-                return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': 'default'}, []
+                return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': 'default'}
             case 'oci:Core/getServices:getServices':
-                return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}, []
+                return {'services': [{'id': 'ocid1.service.os', 'name': 'Object Storage', 'cidrBlock': 'oci-os'}]}
             case 'oci:Core/getVnicAttachments:getVnicAttachments':
-                return {'vnicAttachments': [{'vnicId': VNIC_ID}]}, []
+                return {'vnicAttachments': [{'vnicId': VNIC_ID}]}
             case 'oci:Identity/getAvailabilityDomains:getAvailabilityDomains':
-                return {'availabilityDomains': [{'name': 'ZRbp:PHX-AD-1'}]}, []
+                return {'availabilityDomains': [{'name': 'ZRbp:PHX-AD-1'}]}
             case 'oci:Identity/getFaultDomains:getFaultDomains':
-                return {'faultDomains': [{'name': f'FAULT-DOMAIN-{n}'} for n in (1, 2, 3)]}, []
+                return {'faultDomains': [{'name': f'FAULT-DOMAIN-{n}'} for n in (1, 2, 3)]}
             case 'talos:machine/getConfiguration:getConfiguration':
-                return {'machineConfiguration': 'machine: {}'}, []
+                return {'machineConfiguration': 'machine: {}'}
             case 'talos:client/getConfiguration:getConfiguration':
-                return {'talosConfig': TALOSCONFIG}, []
+                return {'talosConfig': TALOSCONFIG}
             case 'talos:cluster/getHealth:getHealth':
-                return {'id': 'healthy'}, []
+                return {'id': 'healthy'}
             case 'oci:ObjectStorage/getNamespace:getNamespace':
-                return {'namespace': OBJECT_NAMESPACE}, []
+                return {'namespace': OBJECT_NAMESPACE}
             case 'talos:imageFactory/getUrls:getUrls':
                 # Two artefacts of the same family: the cloud nodes' OCI image
                 # and the worker's `nocloud` disk image, which the factory
@@ -182,9 +164,9 @@ class Mocks(pulumi.runtime.Mocks):
                 platform = str(cast('dict[str, Any]', args.args)['platform'])
                 suffix = 'raw.xz' if platform == 'nocloud' else 'qcow2'
                 url = f'https://factory.talos.dev/image/test/v1.11.0/{platform}-arch.{suffix}'
-                return {'urls': {'diskImage': url}}, []
+                return {'urls': {'diskImage': url}}
             case _:
-                return {}, []
+                return {}
 
 
 #: The compartment the stack acts in, as `conventions` will carry it once the
@@ -217,7 +199,7 @@ STACK_CONFIG = {
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
+async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Estate:
     with_compartment(monkeypatch, COMPARTMENT)
     with_tenancy_ocid(monkeypatch, TENANCY_ID)
     # The run materializes the libvirt session's credential into the checkout's
@@ -226,13 +208,7 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
     # behind and, worse, overwrite the operator's.
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
-    mocks = Mocks()
-    pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
-    # A bridged SDK registers its own parameterized package before it may
-    # register a resource, and it gates that on a feature flag read out of a
-    # synchronous cache that only the async negotiation fills.
-    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
-    return mocks
+    return await run_with(Estate(), stack='physical')
 
 
 #: The provider of each domain the design has, by the prefix its type tokens
@@ -242,21 +218,21 @@ DOMAIN_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
 
 
 @pytest.mark.asyncio
-async def test_the_stack_declares_every_domain_of_the_design(setup: Mocks) -> None:
+async def test_the_stack_declares_every_domain_of_the_design(setup: Estate) -> None:
     # The whole program against the mocks, which is where a wiring mistake
     # surfaces — an argument the provider would reject, or a dependency that
     # needs the endpoint before it exists.
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
     # And the inventory property: a domain that declared nothing at all would
     # leave a stack that runs clean and comes up one provider short.
-    families = {typ.partition(':')[0] for typ in setup.registered}
+    families = {typ.partition(':')[0] for typ in setup.types}
     assert set(DOMAIN_PROVIDERS) <= families
 
 
 @pytest.mark.asyncio
-async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Mocks) -> None:
+async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Estate) -> None:
     """The controller's address is derived, not recorded beside its key.
 
     The gateway's overlay address is handed out by this program's own ZeroTier
@@ -265,11 +241,13 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     and the next hop of every managed route. A value typed in beside the API key would be a second
     copy of that, free to disagree with the roster that decides it.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-unifi']['apiUrl'] == f'https://{conventions.overlay.UDM}'
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host'] == str(conventions.overlay.UDM)
+    assert (
+        setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{conventions.overlay.UDM}'
+    )
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-services-routing')['host'] == str(conventions.overlay.UDM)
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
@@ -279,7 +257,7 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
 
 
 @pytest.mark.asyncio
-async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Mocks) -> None:
+async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Estate) -> None:
     """The zone matrix as the whole run declares it, not as one component does.
 
     A zone the controller has just been told about is denied against every
@@ -290,43 +268,43 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
     hold only if the stack reaches this arm of the gateway at all, which is
     what running the program rather than the component proves.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
     name = f'{conventions.CLUSTER_NAME}-firewall'
     zone = f'{name}-zone_id'
     internal = 'zone-Internal'
 
-    outward = setup.inputs[f'{name}-cluster-internal']
+    outward = setup.inputs_of(f'{name}-cluster-internal')
     assert outward['action'] == 'ALLOW'
     assert outward['source']['zoneId'] == zone
     assert outward['destination']['zoneId'] == internal
 
-    inward = setup.inputs[f'{name}-internal-cluster']
+    inward = setup.inputs_of(f'{name}-internal-cluster')
     assert inward['action'] == 'ALLOW'
     assert inward['source']['zoneId'] == internal
     assert inward['destination']['zoneId'] == zone
 
     # Two drops, one per family, because the source is a literal subnet.
     for suffix, source in (('v4', str(conventions.IOT_VLAN.v4)), ('v6', str(conventions.IOT_VLAN.v6))):
-        drop = setup.inputs[f'{name}-iot-cluster-{suffix}']
+        drop = setup.inputs_of(f'{name}-iot-cluster-{suffix}')
         assert drop['action'] == 'BLOCK'
         assert drop['source']['ips'] == [source]
         assert drop['destination']['zoneId'] == zone
 
     # The drops first: the allow behind them is the broad one here, so an
     # allow declared ahead of them would answer for the IoT VLAN as well.
-    assert setup.inputs[f'{name}-internal-cluster-order']['beforePredefinedIds'] == [
+    assert setup.inputs_of(f'{name}-internal-cluster-order')['beforePredefinedIds'] == [
         f'{name}-iot-cluster-v4_id',
         f'{name}-iot-cluster-v6_id',
         f'{name}-internal-cluster_id',
     ]
-    assert setup.inputs[f'{name}-cluster-internal-order']['beforePredefinedIds'] == [f'{name}-cluster-internal_id']
+    assert setup.inputs_of(f'{name}-cluster-internal-order')['beforePredefinedIds'] == [f'{name}-cluster-internal_id']
 
 
 @pytest.mark.asyncio
 async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
-    setup: Mocks,
+    setup: Estate,
     tmp_path: Path,
 ) -> None:
     """The libvirt endpoint is derived from the roster and the checkout.
@@ -340,10 +318,10 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
     """
     address = str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address)
 
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    uri = cast('str', setup.inputs[f'{conventions.CLUSTER_NAME}-libvirt']['uri'])
+    uri = cast('str', setup.inputs_of(f'{conventions.CLUSTER_NAME}-libvirt')['uri'])
     parts = urlsplit(uri)
     assert parts.scheme == 'qemu+ssh'
     assert parts.netloc == f'{homelab.LIBVIRT_USER}@{address}'
@@ -366,7 +344,7 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
 
 
 @pytest.mark.asyncio
-async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Mocks) -> None:
+async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Estate) -> None:
     """The policy is composed here, out of the facts the program already holds.
 
     `Overlay` declares none of it (rfc-002 §6), so this is where the four
@@ -380,10 +358,10 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
     homelab_address = conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address
     ci = conventions.overlay.Role.CI
 
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    rendered = cast('str', setup.inputs[f'{conventions.CLUSTER_NAME}-network']['flowRules'])
+    rendered = cast('str', setup.inputs_of(f'{conventions.CLUSTER_NAME}-network')['flowRules'])
     assert f'accept tseq role {ci} and ipdest {homelab_address}/32 and dport {flow_rules.SSH_PORT};' in rendered
     assert f'accept tseq role {ci} and ipdest {conventions.overlay.UDM}/32 and dport {flow_rules.SSH_PORT};' in rendered
     for resolver in conventions.gateway.RESOLVERS:
@@ -392,7 +370,7 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
 
 
 @pytest.mark.asyncio
-async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Mocks) -> None:
+async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Estate) -> None:
     """First bring-up dials the device over the LAN, on both channels.
 
     The overlay address answers only once the overlay daemon's container is on
@@ -404,19 +382,19 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     """
     pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_HOST})
 
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host'] == BOOTSTRAP_HOST
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-unifi']['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-services-routing')['host'] == BOOTSTRAP_HOST
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
     # Nothing else about the channels moves — the pin in particular is a bare
     # key with no host name in front of it, so it matches the device at either
     # address (`test_device_files`).
-    assert setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['port'] == 22
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-services-routing')['port'] == 22
 
 
 @pytest.mark.asyncio
-async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Mocks) -> None:
+async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Estate) -> None:
     """A pin nobody can read is a pin nobody reviews (rfc-002 §11).
 
     The key the device must present is a public key and a decision of this
@@ -424,16 +402,16 @@ async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setu
     is what puts it in the preview a reviewer reads, in the clear, instead of
     behind the redaction a secret-typed value carries wherever it goes.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    declared = setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host_key']
+    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-services-routing')['host_key']
     assert declared == conventions.gateway.HOST_KEY
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
 
 
 @pytest.mark.asyncio
-async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Mocks) -> None:
+async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Estate) -> None:
     """The second nested egg: the address is SLAAC off a network this run makes.
 
     The worker's global address is formed from the router advertisement of the
@@ -446,20 +424,21 @@ async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(se
     """
     pulumi.runtime.set_all_config({key: value for key, value in STACK_CONFIG.items() if key != 'kluster:workerGua'})
 
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' not in setup.inputs
+    declared = setup.names_declared
     # Nothing else waits with it. The v4 half names the node address the
     # address plan states rather than one a booted machine reports, and the
     # rest of the census never named the worker at all.
-    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-firewall-cluster-egress' in setup.inputs
-    assert f'{conventions.CLUSTER_NAME}-firewall-network' in setup.inputs
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v6' not in declared
+    assert f'{conventions.CLUSTER_NAME}-firewall-peer-v4' in declared
+    assert f'{conventions.CLUSTER_NAME}-firewall-cluster-egress' in declared
+    assert f'{conventions.CLUSTER_NAME}-firewall-network' in declared
 
 
 @pytest.mark.asyncio
-async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Mocks) -> None:
+async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Estate) -> None:
     """And with the address configured, the rule is back and carries it.
 
     Step three of the bring-up ceremony is writing the key, so what follows it
@@ -468,10 +447,10 @@ async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup:
     it: two firewall rules name it and they have to agree, so it sits with the
     public port census in `conventions` (rfc-002 §11).
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    destination = setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-peer-v6']['destination']
+    destination = setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-peer-v6')['destination']
     assert destination['ips'] == [WORKER_GUA]
     assert int(destination['port']) == conventions.QBITTORRENT_PEER_PORT
 
@@ -596,7 +575,7 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
 
 
 @pytest.mark.asyncio
-async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Mocks) -> None:
+async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Estate) -> None:
     """The worker's apid is reached without a route to its LAN address.
 
     apid routes by the node a call names, so the worker's configuration apply
@@ -607,10 +586,10 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Mock
     is why a continuous-integration run confined to the overlay's four targets
     can still carry a worker configuration change.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    worker = setup.inputs[f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config']
+    worker = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config')
     assert worker['node'] == str(conventions.HOMELAB_NODE_IPV4)
     assert worker['endpoint'] == LB_ADDRESS
     # And the balancer forwards that port, or the endpoint above is a closed
@@ -624,7 +603,7 @@ INSTANCE_IDS = {node: f'{conventions.CLUSTER_NAME}-{node}_id' for node in conven
 
 
 @pytest.mark.asyncio
-async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Mocks) -> None:
+async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Estate) -> None:
     """A block volume attaches only within its own availability domain.
 
     Both halves come off the instance rather than out of a constant, because
@@ -634,17 +613,17 @@ async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Mocks
     instance each one lands on is the table's answer, and for the following
     volume that answer is the node holding the dedicated VIP.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
     for name, volume in conventions.NODE_VOLUMES.items():
-        declared = setup.inputs[f'{conventions.CLUSTER_NAME}-{name}-volume']
-        attachment = setup.inputs[f'{conventions.CLUSTER_NAME}-{name}-attachment']
+        declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-volume')
+        attachment = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{name}-attachment')
         assert declared['availabilityDomain'] == AVAILABILITY_DOMAIN
         assert int(declared['sizeInGbs']) == volume.size_gb
         assert attachment['instanceId'] == INSTANCE_IDS[volume.attached_node]
 
-    following = setup.inputs[f'{conventions.CLUSTER_NAME}-hath-cache-attachment']
+    following = setup.inputs_of(f'{conventions.CLUSTER_NAME}-hath-cache-attachment')
     assert following['instanceId'] == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
 
 
@@ -678,7 +657,7 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
 
 @pytest.mark.asyncio
-async def test_the_quota_names_the_compartment_this_program_decided(setup: Mocks) -> None:
+async def test_the_quota_names_the_compartment_this_program_decided(setup: Estate) -> None:
     """A quota statement has no OCID form and names its compartment by name.
 
     Which is why that name is a convention rather than something read back from
@@ -686,25 +665,29 @@ async def test_the_quota_names_the_compartment_this_program_decided(setup: Mocks
     beside it targets the same compartment by OCID. The statements' own
     content - deny before allow, every family capped - is `test_guardrails`.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    statements = cast('list[str]', setup.inputs[f'{conventions.CLUSTER_NAME}-quota']['statements'])
+    statements = cast('list[str]', setup.inputs_of(f'{conventions.CLUSTER_NAME}-quota')['statements'])
     assert statements
     assert all(text.endswith(f'in compartment {COMPARTMENT.name}') for text in statements)
 
 
 @pytest.mark.asyncio
-async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Mocks) -> None:
+async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Estate) -> None:
     """The only signal this stack raises that does not go through the cluster.
 
     The addresses are the one thing about the guardrails an operator supplies,
     so what this holds is the path from the configuration key to the rule.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    alerts = [inputs for name, inputs in setup.inputs.items() if name.startswith(f'{conventions.CLUSTER_NAME}-budget-')]
+    alerts = [
+        declaration.inputs
+        for declaration in setup.declared
+        if declaration.name.startswith(f'{conventions.CLUSTER_NAME}-budget-')
+    ]
     assert alerts
     for alert in alerts:
         assert alert['recipients'] == ','.join(BUDGET_RECIPIENTS)
@@ -795,8 +778,8 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
         {name: value for name, value in STACK_CONFIG.items() if name != 'kluster:gatewayPrivateKey'}
     )
 
-    physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
 
 
 @pytest.mark.asyncio
@@ -808,8 +791,8 @@ async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> No
     which of them is a secret — so a missing one is reported against the
     gateway rather than against a run of everything.
     """
-    physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
 
 
 def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
@@ -892,7 +875,7 @@ SIGNED_BY = {
 
 
 @pytest.mark.asyncio
-async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Mocks) -> None:
+async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Estate) -> None:
     """The whole point of the slice, as one assertion over the whole program.
 
     Every resource in the stack authenticates through a provider some component
@@ -902,24 +885,24 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: M
     providers instead -- which, with default providers disabled, is nothing at
     all.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
     checked = 0
-    for name, typ in setup.types.items():
+    for declaration in setup.declared:
         # A provider resource's own type token is `pulumi:providers:<package>`,
         # so it never matches a package prefix and never checks itself.
         for prefix, provider in SIGNED_BY.items():
-            if not typ.startswith(prefix):
+            if not declaration.typ.startswith(prefix):
                 continue
-            assert provider in setup.providers[name], f'{name} ({typ}) is not signed by {provider}'
+            assert provider in declaration.provider, f'{declaration.name} is not signed by {provider}'
             checked += 1
     # A run that declared nothing would pass the loop above vacuously.
     assert checked >= len(SIGNED_BY)
 
 
 @pytest.mark.asyncio
-async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Mocks) -> None:
+async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Estate) -> None:
     """One account, six components, one provider -- built where they meet.
 
     A provider built inside any one of them would be reached into by the other
@@ -929,10 +912,10 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Moc
     builds it reads exactly the three secrets -- which is also the whole of
     what the committed file has to carry for this account.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
-    built = setup.inputs[f'{conventions.CLUSTER_NAME}-oci']
+    built = setup.inputs_of(f'{conventions.CLUSTER_NAME}-oci')
     assert built['region'] == conventions.OCI_TENANCY.region
     # The account's own identifiers arrive in the clear because they identify
     # rather than authenticate.
@@ -946,20 +929,20 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Moc
     assert _unwrapped(built['fingerprint']) == ACCOUNT_CONFIG['kluster:ociFingerprint']
     assert _unwrapped(built['privateKey']) == ACCOUNT_CONFIG['kluster:ociPrivateKey']
 
-    signed = {name for name, typ in setup.types.items() if typ.startswith('oci:')}
-    assert len({setup.providers[name] for name in signed}) == 1, 'the cloud account has more than one provider'
+    signed = {d.provider for d in setup.declared if d.typ.startswith('oci:')}
+    assert len(signed) == 1, 'the cloud account has more than one provider'
 
 
 @pytest.mark.asyncio
-async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Mocks) -> None:
+async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Estate) -> None:
     """A stack program's own invoke has no parent to inherit from.
 
     Both regional lookups are made outside any component, so nothing carries a
     provider to them: they name it. With default providers disabled an invoke
     that forgot would fail rather than sign as nobody.
     """
-    await physical.main()
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        await physical.main()
 
     for token in (
         'oci:Identity/getAvailabilityDomains:getAvailabilityDomains',
