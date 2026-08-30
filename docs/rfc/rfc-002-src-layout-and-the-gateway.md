@@ -16,7 +16,7 @@
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
     design document disagree, the design document is right: two decisions moved
     during construction, the device provider's endpoint and host-key pin staying
-    declared resource inputs rather than travelling through `configure` (§7.4,
+    declared resource inputs rather than passing through `configure` (§7.4,
     §11), and the pin becoming a `conventions` constant a preview shows (§11).
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
