@@ -13,16 +13,20 @@ The labels are listed in
 [`docs/credentials.md`](../docs/credentials.md) and enumerated in code in
 `src/kluster/scripts/credentials/escrow.py`. They cover the secrets no
 provider mints — the Pulumi state passphrase, the state-backend CA key,
-the identities the state-backend's database dumps are encrypted to, and
-the token the alert poller reads with. Certificates issued under that CA
+the identities the state-backend's database dumps are encrypted to, the
+token the alert poller reads with, and the private key of each of the two
+single-purpose GitHub Apps. Certificates issued under that CA
 are not here: they are re-issued from it on demand, so keeping a copy
 would store a secret whose loss costs nothing.
 
 ## What the shape buys
 
-Each credential is **random at creation**, and the file below it is
-written in the same act that mints it — so no command can hand out a
-generated secret the escrow does not carry.
+Most credentials here are **random at creation**, and the file below one
+is written in the same act that mints it — so no command can hand out a
+generated secret the escrow does not carry. The rest are created in a
+provider console that publishes no API for creating one, and are filed
+exactly as they arrive; the command that files one first compares against
+what is already here, so recording a key twice adds no generation.
 
 Rotating **one credential** adds a generation to its own directory, and
 only the consumer of that credential is re-run. Rotating the **offline

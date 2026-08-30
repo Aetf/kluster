@@ -527,7 +527,8 @@ Costs and facts on record:
     GitHub offers no dispatch-only permission, so the same token
     could push commits there. CI holds no long-lived credential:
     it mints an **8-hour installation token** per run, and the
-    App's private key is a seed held offline (credentials.md §2) —
+    App's private key is escrowed rather than held in the seed
+    kit (credentials.md §3) —
     GitHub has no API for creating personal access tokens, which
     is what makes the App the programmatic shape here rather than
     a matter of taste. The excess permission is **fenced by what a
