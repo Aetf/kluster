@@ -18,24 +18,8 @@ import pytest_asyncio
 import pulumi
 import pulumi.runtime.mocks
 from pulumi.output import Unknown
-from pulumi.runtime.proto import resource_pb2
 
-# Monkey-patch MockMonitor to preserve property dependencies in tests.
-# See docs/testing.md section 3.1.
-original_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
-
-
-def patched_register_resource(self, request):
-    resp = original_register_resource(self, request)
-    if isinstance(resp, resource_pb2.RegisterResourceResponse):
-        for k, v in request.propertyDependencies.items():
-            resp.propertyDependencies[k].urns.extend(v.urns)
-    return resp
-
-
-pulumi.runtime.mocks.MockMonitor.RegisterResource = patched_register_resource
-
-from putils import Component, async_output, resolve  # noqa: E402
+from putils import Component, async_output, resolve
 
 
 # Mock definitions

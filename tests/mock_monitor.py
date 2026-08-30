@@ -15,9 +15,18 @@ resources against Pulumi's mocks was re-growing:
     declaration -- without it every assertion about the monitor passes
     vacuously.
 
+Importing this module also installs the one patch of Pulumi's own mock monitor
+that the suite depends on (`_capture_request` below).
+
 What a suite still writes for itself is the part that is its subject: which
 computed outputs the provider reads back, and which invokes it answers.
 """
+
+# Pulumi's mock monitor and its gRPC message types carry no type information,
+# and the patch below reaches inside both. The unknown-type family is
+# suppressed here rather than repo-wide.
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
+# pyright: reportUnknownArgumentType=false
 
 from __future__ import annotations
 
@@ -27,6 +36,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import pulumi
+import pulumi.runtime.mocks
 import pulumi.runtime.settings
 from pulumi.runtime.stack import wait_for_rpcs
 
@@ -67,6 +77,9 @@ class Recorder(pulumi.runtime.Mocks):
         self.declared: list[Declaration] = []
         #: Which provider instance each function call went through, by token.
         self.call_providers: dict[str, str] = {}
+        #: The raw registration request of each resource, by logical name --
+        #: the only place the resource *options* survive. See `_capture_request`.
+        self.registrations: dict[str, Any] = {}
 
     # -- what a suite overrides ---------------------------------------------
 
@@ -130,6 +143,43 @@ class Recorder(pulumi.runtime.Mocks):
     def provider_of(self, name: str, typ: str | None = None) -> str:
         """The provider instance this resource was registered against."""
         return self.one(name, typ).provider
+
+    def options_of(self, name: str) -> Any:
+        """The registration request of this resource, which is where its options are."""
+        if name not in self.registrations:
+            raise AssertionError(f'{name} was never registered; the run registered {sorted(self.registrations)}')
+        return self.registrations[name]
+
+    def depends_on(self, name: str) -> list[str]:
+        """The URNs this resource was declared to depend on."""
+        return list(self.options_of(name).dependencies)
+
+
+_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
+
+
+def _capture_request(self: Any, request: Any) -> Any:
+    """Keep the two things Pulumi's mock monitor otherwise drops.
+
+    The request itself, because a resource's *options* -- `import_`,
+    `ignore_changes`, `delete_before_replace`, `depends_on` -- reach no output
+    and are exactly what several suites are about; and the per-property
+    dependency edges, which the mock's response leaves empty although the
+    request carried them (framework/testing.md §3.1).
+
+    Patched on the class, once, at import: `set_mocks` builds a fresh monitor
+    per run, so there is no instance to hook, and the recording lands on
+    whichever `Recorder` that monitor was built around rather than on a global.
+    """
+    if isinstance(self.mocks, Recorder):
+        self.mocks.registrations[request.name] = request
+    response = _register_resource(self, request)
+    for name, dependencies in request.propertyDependencies.items():
+        response.propertyDependencies[name].urns.extend(dependencies.urns)
+    return response
+
+
+pulumi.runtime.mocks.MockMonitor.RegisterResource = _capture_request
 
 
 async def run_with[MonitorT: pulumi.runtime.Mocks](
