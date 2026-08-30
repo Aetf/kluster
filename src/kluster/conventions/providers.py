@@ -136,9 +136,24 @@ class B2Account:
 #: TODO(kluster-ops#117): `tenancy_ocid` is the literal, and it is `None` only
 #: because the value has never been written down in the clear — it lives as an
 #: encrypted `kluster-py:ociTenancyOcid` in `Pulumi.physical.yaml`, which
-#: `pulumi config get` prints and this checkout cannot. Recording it here is
-#: one line; with it, the optionality on the field and the refusal below it go
-#: away, and the stale config key can be dropped from that file.
+#: `pulumi config get` prints and this checkout cannot.
+#:
+#: Writing it here is one line, and it makes the whole unrecorded state
+#: unreachable — so the same commit deletes all of it, or the tree is left
+#: carrying machinery for a case that can no longer happen:
+#:
+#: - this comment, the `| None` on the field above and the note under it;
+#: - `require_tenancy_ocid` and its two callers' use of it — `stacks/physical.py`
+#:   and `oci_iam.verify_tenancy` read the field directly;
+#: - the `TenancyUnrecorded` class, its `except` arm in `oci_iam.verify_tenancy`,
+#:   and its import and `__all__` entry in `conventions/__init__.py`;
+#: - `with_tenancy_ocid`'s `None` mode (`tests/oci_conventions.py`), and the two
+#:   cases that are the only callers of it —
+#:   `test_derived.py::test_an_account_conventions_has_not_recorded_refuses_to_deliver`
+#:   and
+#:   `test_physical_stack.py::test_a_tenancy_nobody_has_written_down_refuses_by_naming_the_line_to_write`;
+#: - the `kluster-py:ociTenancyOcid` entry in `Pulumi.physical.yaml`, which
+#:   nothing reads once the field carries the value.
 OCI_TENANCY = OciTenancy(
     region='us-phoenix-1',
     tenancy_ocid=None,
