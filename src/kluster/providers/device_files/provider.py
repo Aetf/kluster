@@ -65,7 +65,9 @@ does, `check` adds two properties to every resource's checked inputs --
 inputs, so a rotation and a change to this module's behavior each render as a
 property diff no caller declared (rfc-002 §7.4). Neither is a change to the
 device: an update whose declared inputs all match re-stamps the resource and
-writes nothing.
+writes nothing. That whole shape is `kluster.providers.configured`, which the
+providers here share with the one that writes AdGuard rewrites; what is this
+module's own is which key holds the credential and what an endpoint is.
 
 **Only the path is a replacement.** The bytes cannot be at two paths at once, so
 a moved file is created before the old one is deleted. Nothing else about a
@@ -109,7 +111,6 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import hashlib
 import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager
@@ -120,6 +121,14 @@ import pulumi
 import pulumi.dynamic as dynamic
 from pulumi.runtime import rpc
 
+from kluster.providers.configured import (
+    FINGERPRINT_LENGTH,
+    PROVIDER_VERSION,
+    SESSION,
+    STAMPS,
+    ConfiguredProvider,
+    declared_change,
+)
 from kluster.providers.device_files import registry, ssh
 from kluster.providers.device_files.registry import DigestMismatch, Image
 
@@ -196,29 +205,12 @@ ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'extract', 'mode', 'owner', 
 #: holds the device's private key.
 PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
-#: Which door a resource was last written through: the endpoint, and a short
-#: digest of the credential that opened it.
-SESSION = 'session'
-
-#: This module's version, as every resource records it.
-PROVIDER_VERSION = 'provider_version'
-
-#: What `check` stamps on a resource that no caller declared. They are inputs
-#: rather than outputs because the engine renders its comparison against the
-#: checked inputs: an output can record which session wrote a file, but it cannot
-#: carry a rotation into a preview (rfc-002 §7.5 E4, E8).
-STAMPS = (SESSION, PROVIDER_VERSION)
-
 #: Bumped by hand when an operation's behavior changes. Not ceremony: a provider
 #: class is pickled by reference, so editing the body of `create` changes not one
 #: byte of state and produces no diff at all, leaving every resource's outputs
 #: stale and saying nothing about it (rfc-002 §7.5 E1). This is what turns such
 #: an edit into a visible update.
 VERSION = '2'
-
-#: How much of the credential's digest a resource carries. Enough to tell two
-#: keys apart in a preview, and far too little to be the key.
-FINGERPRINT_LENGTH = 12
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
@@ -419,10 +411,6 @@ def replacements(olds: Mapping[str, Any], news: Mapping[str, Any], location: str
     return [location] if moved else []
 
 
-def declared_change(olds: Mapping[str, Any], news: Mapping[str, Any], keys: tuple[str, ...]) -> bool:
-    return any(olds.get(key) != news.get(key) for key in keys)
-
-
 def _observed_owner(declared: Any, stat: ssh.FileStat) -> str | None:
     """The device's ownership, in the shape the resource declared it."""
     if not declared:
@@ -461,59 +449,31 @@ def gone() -> dynamic.ReadResult:
     return dynamic.ReadResult(id_=None, outs={})
 
 
-class DeviceProvider(dynamic.ResourceProvider, abc.ABC):
+class DeviceProvider(ConfiguredProvider, abc.ABC):
     """What both device providers share: the session, and what it makes visible.
 
-    **The credential is not an attribute until `configure` has run**, and that is
-    the design rather than an oversight. What lands in state is a pickle of the
-    provider instance, so an attribute set where the program builds it would be a
-    copy of the credential on every resource, and rotating the key would rewrite
-    all of them. `__getstate__` returns an empty bag instead, and the plugin
-    deserializes and configures the provider before any operation reaches it
-    (rfc-002 §7.5 E2, E3) -- which is what makes reading `self.private_key` in an
-    operation safe. Giving it a default would not make anything safer: it would
-    turn a provider that was never configured into one that dials with the wrong
-    key.
+    The stateless-provider machinery is `kluster.providers.configured`: the key
+    is read in `configure`, nothing is pickled, and `check` stamps the session
+    and the version. What this class adds is what those hooks mean for a device
+    -- the key is `PRIVATE_KEY_CONFIG`, the endpoint is where a session dials,
+    and an update that only re-stamps must still ask the device whether it
+    agrees.
     """
 
     #: Read in `configure`, in the plugin's process, and never serialized.
     private_key: str
 
-    def configure(self, req: dynamic.ConfigureRequest) -> None:
-        """Take the session's credential from the stack's configuration."""
-        self.private_key = str(req.config.require(PRIVATE_KEY_CONFIG))
+    def _read_credential(self, config: dynamic.Config) -> None:
+        self.private_key = str(config.require(PRIVATE_KEY_CONFIG))
 
-    def __getstate__(self) -> dict[str, Any]:
-        """Nothing at all -- see the class docstring."""
-        return {}
+    def _credential(self) -> str:
+        return self.private_key
 
-    def _stamp(self, news: Mapping[str, Any], failures: list[dynamic.CheckFailure]) -> dynamic.CheckResult:
-        """The checked inputs, plus the two properties the provider itself decides.
+    def _endpoint(self, props: Mapping[str, Any]) -> str:
+        return endpoint(props)
 
-        `check` is the one hook that runs before every diff, and what it returns
-        is what the engine stores and compares -- so a property added here is a
-        property whose change is a visible diff (rfc-002 §7.5 E8). Nothing a
-        caller declares would show a credential rotation or a change to this
-        module.
-
-        A preview may hand this an endpoint that is still a placeholder, which
-        the rendered session string then carries. Nothing reads it: the raw
-        property is in the bag too, so `diff` answers "unknown" before any
-        comparison of the stamps happens.
-        """
-        return dynamic.CheckResult({**news, SESSION: self._session(news), PROVIDER_VERSION: VERSION}, failures)
-
-    def _session(self, props: Mapping[str, Any]) -> str:
-        """The door this resource is written through: the endpoint, and the key.
-
-        The digest is stored and previewed in the clear, deliberately. A property
-        a provider synthesizes carries no secret marking however secret the
-        configuration behind it (rfc-002 §7.5 E10), and this one is meant to be
-        read: a truncated digest of a key is not the key, and a redacted value
-        would make illegible the diff this property exists to render.
-        """
-        fingerprint = hashlib.sha256(self.private_key.encode()).hexdigest()[:FINGERPRINT_LENGTH]
-        return f'{endpoint(props)}#{fingerprint}'
+    def _version(self) -> str:
+        return VERSION
 
     def _device(self, props: Mapping[str, Any]) -> ssh.Device:
         """The device a property bag names, opened with the configured credential."""
