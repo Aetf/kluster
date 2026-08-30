@@ -24,8 +24,9 @@ from mock_monitor import Recorder, declaring, run_with
 
 from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
-from kluster.components import homelab
+from kluster.components import gateway, homelab
 from kluster.components.cloud import nodes
+from kluster.components.gateway import persistence
 from kluster.components.overlay import flow_rules
 from kluster.lib import workstation
 from kluster.stacks import physical
@@ -408,6 +409,26 @@ async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setu
     declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-services-routing')['host_key']
     assert declared == conventions.gateway.HOST_KEY
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
+
+
+@pytest.mark.asyncio
+async def test_the_device_is_given_the_packages_its_container_runtime_needs(setup: Estate) -> None:
+    """The gateway's persistence layer is declared, and with the set as data.
+
+    What a firmware update wipes is reinstalled by a script in the device's boot
+    chain, and which packages that script installs is the union of what the
+    layers above the mechanism require — passed in rather than written into the
+    script, so a requirement is stated by the component that has it.
+    """
+    async with declaring():
+        await physical.main()
+
+    script = setup.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-10-packages')
+
+    assert script['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.PACKAGES_SCRIPT}'
+    assert script['host'] == str(conventions.overlay.UDM)
+    for package in gateway.NSPAWN_PACKAGES:
+        assert package in script['content'], package
 
 
 @pytest.mark.asyncio

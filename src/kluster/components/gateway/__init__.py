@@ -38,6 +38,7 @@ import pulumi
 
 from kluster import conventions
 from kluster.components.gateway.container import CaddyService, OverlayDaemon, ResolverService, Rootfs
+from kluster.components.gateway.persistence import DevicePersistence
 from kluster.components.gateway.services import DeviceServices, RoutingSession
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.providers.device_files.provider import Connection
@@ -45,7 +46,18 @@ from putils import Component
 
 #: The declaration types the stack program builds a `Gateway` out of are
 #: re-exported here, so that wiring the gateway is one import.
-__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
+__all__ = ('NSPAWN_PACKAGES', 'CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
+
+#: What the container services need of the device's package set: the tooling
+#: that boots a directory as a machine, and the name-service module that
+#: resolves the machines it started. The two are version-locked to each other,
+#: which is why the mechanism installs the whole set in one transaction rather
+#: than a package at a time (`persistence`).
+#:
+#: It is stated here, beside the component that passes it on, because the set is
+#: a requirement of the container runtime and the runtime is not yet a component
+#: of its own.
+NSPAWN_PACKAGES = ('systemd-container', 'libnss-mymachines')
 
 
 class Gateway(Component):
@@ -88,14 +100,24 @@ class Gateway(Component):
         worker's IPv6 outbound-only.
         """
         super().__init__(name, opts=opts)
+        connection = Connection(
+            host=host,
+            host_key=conventions.gateway.HOST_KEY,
+            username=conventions.gateway.SSH_USER,
+        )
 
+        # The mechanism under everything else on the device: what puts the
+        # customization back after a firmware update, and the way the layers
+        # above deliver a script, an executable, a unit or a directory.
+        self.persistence = DevicePersistence(
+            f'{name}-persistence',
+            connection=connection,
+            packages=NSPAWN_PACKAGES,
+            opts=self.child_opts(),
+        )
         self.services = DeviceServices(
             f'{name}-services',
-            connection=Connection(
-                host=host,
-                host_key=conventions.gateway.HOST_KEY,
-                username=conventions.gateway.SSH_USER,
-            ),
+            connection=connection,
             caddy=caddy,
             resolvers=resolvers,
             overlay_daemon=overlay_daemon,
