@@ -24,10 +24,10 @@
     put it — a `conventions` constant, which is why a preview shows it — and it
     reaches the provider the same way the endpoint does, as a declared input on
     each resource rather than as provider-side state. §11.1's root filesystem
-    pins have since become the `image-` entries it anticipated; what a pin
-    holds and how the bytes are fetched is
-    [physical/gateway.md](../physical/gateway.md) §1, and the sample values
-    here are the proposal's rather than the built ones.
+    pins have since become the `image-` entries it anticipated, each carrying
+    the whole reference that section says a pin becomes once publication moves
+    to a registry; what a pin holds and how the bytes behind it are fetched and
+    verified is [physical/gateway.md](../physical/gateway.md) §1.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

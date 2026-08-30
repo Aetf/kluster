@@ -197,12 +197,10 @@
       datasourceTemplate: 'github-releases',
     },
     {
-      // The image pins in the same project-level block, each announced by a
-      // `# renovate:` comment on the line above it — the shape the build-arg
-      // pins in `docker/*.conf` already use, and the reason the repository is
-      // not repeated inside every value: which registry publishes a build is a
-      // rule in `conventions.gateway`, not a string an operator maintains once
-      // per pin (rfc-002 §11.1).
+      // The image pins in the same project-level block. Each value is a whole
+      // reference, so repository, tag and digest all come off the line and no
+      // annotation comment is needed to say what is being pinned (rfc-002
+      // §11.1).
       //
       // Tag and digest are captured together, so one data source moves the
       // pair and the reference the program pulls by stays whole. The
@@ -216,8 +214,9 @@
         '/^Pulumi\\.yaml$/',
       ],
       matchStrings: [
-        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+versions:image-[\\w-]+:\\s*(?<currentValue>[\\w.+-]+)@(?<currentDigest>sha256:[0-9a-f]{64})',
+        'versions:image-[\\w-]+:\\s*(?<depName>\\S+?):(?<currentValue>[^\\s:@/]+)@(?<currentDigest>sha256:[0-9a-f]{64})',
       ],
+      datasourceTemplate: 'docker',
     },
   ],
 }

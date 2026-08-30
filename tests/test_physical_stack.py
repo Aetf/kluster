@@ -80,7 +80,9 @@ GATEWAY_CONFIG = {
 VERSIONS_CONFIG = {
     'versions:talos': 'v1.11.0',
     **{
-        f'versions:image-{conventions.gateway.image_pin(service)}': f'{ROOTFS_TAG}@{DIGEST}'
+        f'versions:image-{conventions.gateway.image_pin(service)}': (
+            f'{conventions.gateway.image_repository(service.artifact)}:{ROOTFS_TAG}@{DIGEST}'
+        )
         for service in conventions.gateway.SERVICES
     },
 }
@@ -810,13 +812,12 @@ async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> No
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
-def test_a_root_filesystem_pin_becomes_the_reference_a_push_pulls_by() -> None:
-    """The pin is a tag and a digest; the repository is a convention.
+def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
+    """The pin carries repository, tag and digest, because that is what an image is.
 
-    So an operator maintains four scalars and not four references, and moving
-    publication is an edit to one rule (rfc-002 §11.1). The two resolvers have
-    a key each even though one build serves both, which is what lets a new
-    resolver be proven on one instance before the other.
+    The two resolvers have a key each even though one build serves both, which
+    is what lets a new resolver be proven on one instance before the other
+    (rfc-002 §11.1).
     """
     caddy = conventions.gateway.CADDY
     pin = physical._rootfs(caddy)  # pyright: ignore[reportPrivateUsage]
@@ -828,6 +829,21 @@ def test_a_root_filesystem_pin_becomes_the_reference_a_push_pulls_by() -> None:
     alice, bob = conventions.gateway.RESOLVERS
     assert conventions.gateway.image_pin(alice) != conventions.gateway.image_pin(bob)
     assert physical._rootfs(alice).repository == physical._rootfs(bob).repository  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_pin_naming_a_repository_that_does_not_publish_the_build_is_refused() -> None:
+    """The census says which build a service runs, and one repository publishes it.
+
+    Without this check two references could put the resolvers on two different
+    images — a state the design says is impossible and nothing else would
+    catch, since each pin is separately well-formed.
+    """
+    alice, _ = conventions.gateway.RESOLVERS
+    key = f'versions:image-{conventions.gateway.image_pin(alice)}'
+    pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {key: f'ghcr.io/somebody/else:{ROOTFS_TAG}@{DIGEST}'})
+
+    with pytest.raises(ValueError, match=key):
+        _ = physical._rootfs(alice)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_the_provider_sdks_import() -> None:

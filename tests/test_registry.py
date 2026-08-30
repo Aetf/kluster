@@ -44,13 +44,31 @@ IMAGE_INDEX = 'application/vnd.oci.image.index.v1+json'
 @final
 @dataclass(frozen=True)
 class Entry:
-    """One file a layer carries, as little of it as a test needs to name."""
+    """One entry a layer carries, as little of it as a test needs to name.
+
+    `kind` is the tar type, so a layer can hold the shapes that make flattening
+    non-trivial: a directory whose mode has to survive an opaque marker, and a
+    hard link whose target has to precede it.
+    """
 
     name: str
     content: bytes = b''
     mode: int = 0o644
-    linkname: str | None = None
+    kind: bytes = tarfile.REGTYPE
+    linkname: str = ''
     pax: Mapping[str, str] | None = None
+
+
+def directory(name: str, mode: int = 0o755) -> Entry:
+    return Entry(name, mode=mode, kind=tarfile.DIRTYPE)
+
+
+def symlink(name: str, target: str) -> Entry:
+    return Entry(name, kind=tarfile.SYMTYPE, linkname=target)
+
+
+def hardlink(name: str, target: str) -> Entry:
+    return Entry(name, kind=tarfile.LNKTYPE, linkname=target)
 
 
 def layer(*entries: Entry, compressed: bool = True) -> bytes:
@@ -60,14 +78,14 @@ def layer(*entries: Entry, compressed: bool = True) -> bytes:
         for entry in entries:
             info = tarfile.TarInfo(entry.name)
             info.mode = entry.mode
-            if entry.linkname is not None:
-                info.type = tarfile.SYMTYPE
-                info.linkname = entry.linkname
-            else:
+            info.type = entry.kind
+            info.linkname = entry.linkname
+            carries_content = entry.kind == tarfile.REGTYPE
+            if carries_content:
                 info.size = len(entry.content)
             if entry.pax is not None:
                 info.pax_headers = dict(entry.pax)
-            archive.addfile(info, None if entry.linkname is not None else io.BytesIO(entry.content))
+            archive.addfile(info, io.BytesIO(entry.content) if carries_content else None)
     raw = sink.getvalue()
     return gzip.compress(raw) if compressed else raw
 
@@ -381,6 +399,109 @@ def test_an_opaque_marker_empties_the_directory_its_layer_found(served: Registry
     assert contents(registry.rootfs(image(manifest))) == {'var/cache/c': b'new'}
 
 
+def test_an_opaque_marker_keeps_the_directory_entry_it_is_found_in(served: Registry) -> None:
+    """It hides the lower layers' children, not the directory holding them.
+
+    Losing the entry would not lose the directory — the device's `tar` recreates
+    a missing parent — which is exactly why it matters: the recreated one takes
+    whatever mode and owner the extraction runs under, and the image's `0700`
+    becomes a world-readable cache with nothing to show that it changed.
+
+    The upper layer deliberately does *not* restate the directory. An image
+    that restates it would mask the question, since the entry would come back
+    on its own; what has to survive is the one the lower layer contributed.
+    """
+    manifest = served.manifest(
+        [
+            served.store(GZIP_LAYER, layer(directory('var/cache', mode=0o700), Entry('var/cache/a', b'gone'))),
+            served.store(
+                GZIP_LAYER,
+                layer(Entry(f'var/cache/{registry.OPAQUE_WHITEOUT}'), Entry('var/cache/c', b'new')),
+            ),
+        ]
+    )
+
+    flattened = unpack(registry.rootfs(image(manifest)))
+
+    assert set(flattened) == {'var/cache', 'var/cache/c'}
+    assert flattened['var/cache'].isdir()
+    assert flattened['var/cache'].mode == 0o700
+
+
+def test_a_marker_never_hides_what_its_own_layer_contributes(served: Registry) -> None:
+    """A whiteout hides the layers *below* it, so tar order inside one is moot.
+
+    Both markers are written after the entries they would wrongly delete, which
+    is legal and is what an image builder's own ordering may well produce.
+    """
+    manifest = served.manifest(
+        [
+            served.store(GZIP_LAYER, layer(Entry('etc/hosts', b'lower'), Entry('opt/keep/a', b'lower'))),
+            served.store(
+                GZIP_LAYER,
+                layer(
+                    Entry('etc/hosts', b'upper'),
+                    directory('opt/keep'),
+                    Entry('opt/keep/b', b'upper'),
+                    Entry('etc/.wh.hosts'),
+                    Entry(f'opt/keep/{registry.OPAQUE_WHITEOUT}'),
+                ),
+            ),
+        ]
+    )
+
+    assert contents(registry.rootfs(image(manifest))) == {'etc/hosts': b'upper', 'opt/keep/b': b'upper'}
+
+
+def test_a_bare_whiteout_prefix_names_nothing_and_hides_nothing(served: Registry) -> None:
+    """Read as a marker it would empty the directory, which is far too much to
+    infer from a name the specification does not give a meaning."""
+    manifest = served.manifest(
+        [
+            served.store(GZIP_LAYER, layer(Entry('etc/hosts', b'kept'))),
+            served.store(GZIP_LAYER, layer(Entry('etc/.wh.'))),
+        ]
+    )
+
+    assert contents(registry.rootfs(image(manifest))) == {'etc/hosts': b'kept'}
+
+
+def test_a_hard_link_whose_target_survives_is_carried_through(served: Registry) -> None:
+    manifest = served.manifest(
+        [
+            served.store(GZIP_LAYER, layer(Entry('bin/busybox', b'the one copy'), hardlink('bin/ls', 'bin/busybox'))),
+        ]
+    )
+
+    flattened = unpack(registry.rootfs(image(manifest)))
+
+    assert flattened['bin/ls'].islnk()
+    assert flattened['bin/ls'].linkname == 'bin/busybox'
+
+
+def test_a_hard_link_left_pointing_at_nothing_is_refused(served: Registry) -> None:
+    """Layering can break a link no single layer does.
+
+    A whiteout hides the target and a later layer puts it back, which appends
+    it after the link naming it — an archive the device would fail to unpack at
+    the end of a push, with the tree already staged. Refused here instead,
+    where the message can name both halves.
+    """
+    manifest = served.manifest(
+        [
+            served.store(GZIP_LAYER, layer(Entry('bin/busybox', b'first'), hardlink('bin/ls', 'bin/busybox'))),
+            served.store(GZIP_LAYER, layer(Entry('bin/.wh.busybox'))),
+            served.store(GZIP_LAYER, layer(Entry('bin/busybox', b'reinstated'))),
+        ]
+    )
+
+    with pytest.raises(registry.DanglingHardLink) as raised:
+        _ = registry.rootfs(image(manifest))
+
+    assert raised.value.name == 'bin/ls'
+    assert raised.value.linkname == 'bin/busybox'
+
+
 def test_a_path_a_whiteout_removed_comes_back_if_a_later_layer_writes_it(served: Registry) -> None:
     """Order is the whole semantics: a removal is an event, not a permanent verdict."""
     manifest = served.manifest(
@@ -408,7 +529,7 @@ def test_an_entry_keeps_its_own_metadata_across_the_flattening(served: Registry)
                 GZIP_LAYER,
                 layer(
                     Entry('bin/ping', b'#!/bin/sh\n', mode=0o755, pax=capability),
-                    Entry('bin/sh', linkname='busybox'),
+                    symlink('bin/sh', 'busybox'),
                 ),
             )
         ]

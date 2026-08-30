@@ -7,7 +7,7 @@ the key (rfc-002 §11.1):
 
     versions:talos: v1.13.9
     versions:chart-cert-manager: https://charts.jetstack.io:v1.19.1
-    versions:image-gateway-caddy: 3@sha256:8258d234b66696ef…
+    versions:image-gateway-caddy: ghcr.io/aetf/homelab-containers/caddy:3@sha256:8258d234…
 
 The gateway's container root filesystems are in that third kind rather than a
 kind of their own: they are published as registry images, so an image reference
@@ -43,6 +43,21 @@ TALOS = 'talos'
 #: against a device's marker is made byte for byte against.
 _DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 
+
+def is_digest(value: str) -> bool:
+    """Whether `value` is a registry digest, in the one spelling a registry uses.
+
+    Read here and by the provider that pulls by one
+    (`providers.device_files.registry`), so that the shape a pin is accepted in
+    and the shape a pull is performed by cannot drift apart. Three boundaries
+    check it — this accessor, the resource's `check`, and the reference a pull
+    is constructed from — and a predicate each would be three chances for one
+    of them to be laxer than the marker comparison on the device, which is
+    exact.
+    """
+    return _DIGEST.fullmatch(value) is not None
+
+
 #: The namespace, read once: a `Config` holds a name and reads the runtime at
 #: every call, so one is all the accessors below need between them.
 _CONFIG = pulumi.Config(NAMESPACE)
@@ -56,16 +71,22 @@ class ChartVersion(NamedTuple):
 
 
 class ImagePin(NamedTuple):
-    """A container image: the tag it was published under, and its manifest digest.
+    """A container image, pinned as the whole reference it is pulled by.
 
-    The digest is the pin and the tag is only where those bytes were found;
-    which repository serves them is a rule in `conventions`, so a change of
-    publisher is an edit to that rule rather than to as many configured
-    references as there are pins.
+    The digest is the identity and the repository and tag are where those bytes
+    were found, but the pin carries all three, because a reference is what an
+    image *is* — it is the form renovate maintains natively, the form a reader
+    recognizes, and the form a third-party image can be pinned in at all. An
+    estate that also decides where its own builds are published expresses that
+    as a check against the pin rather than as a value the pin has to omit.
     """
 
+    repository: str
     tag: str
     digest: str
+
+    def __str__(self) -> str:
+        return f'{self.repository}:{self.tag}@{self.digest}'
 
 
 class _Kind:
@@ -89,21 +110,24 @@ class _Kind:
 
 @final
 class ImageVersions(_Kind):
-    """Container images, pinned as `<tag>@sha256:<digest>`.
+    """Container images, pinned as `<repository>:<tag>@sha256:<digest>`.
 
-    Both halves, because a digest is the only identity renovate maintains end
-    to end while a tag is what a human reads and what a data source bumps; one
-    data source moves the pair together (rfc-002 §11.1). A tag alone would be a
-    moving pin, and a digest alone would be a pin nobody can read.
+    The whole reference, because that is what an image is named by everywhere
+    else and what one renovate data source maintains end to end: it bumps the
+    tag and the digest together and reads the repository out of the same line.
+    A tag alone would be a moving pin, a digest alone a pin nobody can read,
+    and a reference without its repository would be a kind that only an image
+    this estate publishes could belong to.
 
-    What is *not* here is the repository. Which registry publishes a build is a
-    decision of the estate rather than a value repeated in every pin that names
-    the same publisher, so it is a rule in `conventions` applied to this pin —
-    the same ruling that kept the release URL out of configuration before these
-    became registry images.
+    Where a build *should* come from is a separate question with a separate
+    answer: a caller that has an opinion — the gateway does, since two of its
+    services must run one build — checks this pin against it and refuses a
+    mismatch by name. That keeps a change of publisher a reviewed edit to a
+    rule and a pin together, without making the pin unable to say where it
+    points.
 
-    The digest's shape is checked here, at the boundary, so a truncated paste
-    is a configuration error naming its key instead of a pull that reaches a
+    The shape is checked here, at the boundary, so a truncated paste is a
+    configuration error naming its key instead of a pull that reaches a
     registry and is refused there.
     """
 
@@ -111,12 +135,17 @@ class ImageVersions(_Kind):
         super().__init__('image')
 
     def __getitem__(self, name: str) -> ImagePin:
-        tag, separator, digest = self.raw(name).partition('@')
-        if not separator or not tag:
-            raise self.malformed(name, 'is not a `<tag>@sha256:<digest>` pin')
-        if not _DIGEST.fullmatch(digest):
+        reference, separator, digest = self.raw(name).partition('@')
+        if not separator:
+            raise self.malformed(name, 'is not a `<repository>:<tag>@sha256:<digest>` reference')
+        if not is_digest(digest):
             raise self.malformed(name, 'does not end in a lower-case `sha256:` digest')
-        return ImagePin(tag, digest)
+        # The last colon, so a registry named with a port keeps it: the tag is
+        # the part after it, and a tag never contains a slash.
+        repository, colon, tag = reference.rpartition(':')
+        if not colon or not repository or not tag or '/' in tag:
+            raise self.malformed(name, 'names no `<repository>:<tag>` before its digest')
+        return ImagePin(repository, tag, digest)
 
 
 @final

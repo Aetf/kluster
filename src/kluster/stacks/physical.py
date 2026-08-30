@@ -52,7 +52,7 @@ from kluster.components.overlay.flow_rules import flow_rules
 from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.lib import config as lib_config
-from kluster.lib.versions import versions
+from kluster.lib.versions import NAMESPACE as VERSIONS, versions
 from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
@@ -422,16 +422,23 @@ def _gateway(config: pulumi.Config) -> Gateway:
 def _rootfs(service: conventions.gateway.ContainerService) -> Rootfs:
     """The root filesystem one service boots, from the pin that selects it.
 
-    The pin is a tag and a manifest digest (`versions:image-gateway-…`); which
-    registry publishes the images is a rule in `conventions`, so the repository
-    is derived here rather than configured once per pin (rfc-002 §11.1).
+    The pin is a whole image reference (`versions:image-gateway-…`), because
+    that is what an image is named by (rfc-002 §11.1). What `conventions` owns
+    is not the reference but an opinion about it: the census says which build a
+    service runs, and one repository publishes that build, so a pin naming a
+    different one is refused here by key. That is what keeps the two resolvers
+    on one image — a state two independent references could otherwise reach —
+    while leaving each of them a pin that can move on its own.
     """
-    pin = versions.image[conventions.gateway.image_pin(service)]
-    return Rootfs(
-        repository=conventions.gateway.image_repository(service.artifact),
-        tag=pin.tag,
-        digest=pin.digest,
-    )
+    key = conventions.gateway.image_pin(service)
+    pin = versions.image[key]
+    published = conventions.gateway.image_repository(service.artifact)
+    if pin.repository != published:
+        raise ValueError(
+            f'{VERSIONS}:image-{key} pins {pin.repository}, but {service.name} runs the '
+            f'{service.artifact} build, which is published as {published}'
+        )
+    return Rootfs(repository=pin.repository, tag=pin.tag, digest=pin.digest)
 
 
 async def _placements(compartment_id: str, cloud: oci.Provider) -> list[tuple[str, str]]:

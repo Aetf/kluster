@@ -75,8 +75,9 @@ class BridgedService:
 
     name: str
     #: Its static address on the container VLAN. Nothing outside this program
-    #: assigns it: the resolvers take it from the environment their unit
-    #: injects, and the LAN's leases already name them.
+    #: assigns it: every bridged service takes it from the environment its own
+    #: unit injects, and where the LAN needs to reach one, its leases already
+    #: name it.
     address: IPv4Address
     #: The build the service runs, named as its registry repository names it
     #: (`image_repository`). Distinct from the service's own name because two
@@ -142,12 +143,15 @@ OVERLAY = HostNetworkService(name='zerotier', artifact='zerotier')
 SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 
 #: Where the container root filesystems are published: one registry repository
-#: per build, under a namespace of this estate's own. A pin says which tag and
-#: which digest and nothing more (`versions:image-gateway-…`), because who
-#: publishes the images is a decision rather than a value an operator maintains
-#: four copies of (rfc-002 §11.1): moving publication elsewhere is an edit here
-#: and a review of it. The device is the site's UDM and there is one of it, and
-#: each repository holds that one architecture, so a pin names no platform.
+#: per build, under a namespace of this estate's own. A pin carries its whole
+#: reference (`versions:image-gateway-…`), and this is what that reference is
+#: *checked against* rather than what it is assembled from — which is what
+#: keeps two services that must run one build from pointing at two repositories
+#: (rfc-002 §11.1). Moving publication elsewhere is then an edit here and to
+#: the pins, reviewed together.
+#:
+#: The device is the site's UDM and there is one of it, and each repository
+#: holds that one architecture, so a pin names no platform.
 IMAGE_NAMESPACE = 'ghcr.io/aetf/homelab-containers'
 
 
