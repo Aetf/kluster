@@ -1,4 +1,4 @@
-"""Rewrites as declared resources: one per instance, credentials kept secret."""
+"""Rewrites as declared resources: one per instance, and no credential on any of them."""
 
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
@@ -6,6 +6,7 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.dns.adguard import declare_rewrites
 from kluster.components.dns.routes import Exposure, Route, rewrites
+from kluster.providers import configured
 
 ENDPOINTS = ('http://alice.lan:3000', 'http://bob.lan:3000')
 
@@ -18,8 +19,6 @@ async def stack() -> Recorder:
         _ = declare_rewrites(
             rewrites([Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd',))]),
             endpoints=ENDPOINTS,
-            username='admin',
-            password='secret',
         )
     return monitor
 
@@ -46,3 +45,18 @@ def test_a_rewrite_carries_the_vip_its_route_implies(stack: Recorder) -> None:
     assert inputs['domain'] == 'photos.ucw.phd'
     assert inputs['answer'] == str(conventions.LAN_POOL.default_vip.v4)
     assert inputs['endpoint'] == ENDPOINTS[0]
+
+
+def test_a_rewrite_declares_no_credential_and_no_stamp(stack: Recorder) -> None:
+    """What the caller declares, and no more.
+
+    The login is the provider's, read in `configure`; the two stamps are added
+    by `check` in the plugin's process. A rewrite that carried either would put
+    it in state on every row, on both instances, for every name.
+    """
+    inputs = stack.inputs_of('alice-lan-photos.ucw.phd-v4')
+
+    assert 'username' not in inputs
+    assert 'password' not in inputs
+    assert configured.SESSION not in inputs
+    assert configured.PROVIDER_VERSION not in inputs

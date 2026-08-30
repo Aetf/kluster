@@ -96,18 +96,15 @@ async def main() -> None:
         for zone in conventions.ALL_ZONES
     }
 
-    # The rewrites the routes imply, on both AdGuard instances. Reading the
-    # credential only when there is something to write keeps the stack
-    # deployable before the AdGuard secrets exist, which is the state it is
-    # in until the first app declares a LAN-side route.
+    # The rewrites the routes imply, on both AdGuard instances. Reading their
+    # address only when there is something to write keeps the stack deployable
+    # before the key exists, which is the state it is in until the first app
+    # declares a LAN-side route. The login is not read here at all: it opens
+    # the rewrite provider and nothing else, so the provider reads it in
+    # `configure` (rfc-002 §7.4).
     entries = rewrites(ROUTES)
     if entries:
-        _ = declare_rewrites(
-            entries,
-            endpoints=config.require_object('adguardEndpoints'),
-            username=config.require_secret('adguardUsername'),
-            password=config.require_secret('adguardPassword'),
-        )
+        _ = declare_rewrites(entries, endpoints=config.require_object('adguardEndpoints'))
 
     # Machine facts: `apps` needs the zone ids to declare its own records.
     pulumi.export('zone_ids', {zone: managed.zone.id for zone, managed in zones.items()})
