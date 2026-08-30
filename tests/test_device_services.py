@@ -364,7 +364,7 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     rendered = container.caddyfile()
 
     assert conventions.gateway.VHOST_CONTROLLER in rendered
-    assert rendered.count(f'dns cloudflare {{file.{container.CADDY_TOKEN_PATH}}}') == 3
+    assert f'dns cloudflare {{file.{container.CADDY_TOKEN_PATH}}}' in rendered
     for resolver in conventions.gateway.RESOLVERS:
         assert resolver.vhost is not None
         assert resolver.vhost in rendered
@@ -372,6 +372,32 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     # The console presents its own certificate to the proxy and the name that
     # matters is the one the client asked for, which Caddy forwards unchanged.
     assert 'tls_insecure_skip_verify' in rendered
+
+
+def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
+    """One site block for `*.<zone>`, and the three names matched inside it.
+
+    Two reasons, and both are about what a request publishes (rfc-002 §9.3).
+    Per-name issuance would republish in Certificate Transparency exactly the
+    census that resolving nowhere was meant to hide. And the apex belongs to
+    the cluster's issuer, whose certificate carries the apex and the wildcard
+    together: asking for the same identifier set would put two issuers that
+    must survive each other's outage into one weekly duplicate-certificate
+    window.
+    """
+    rendered = container.caddyfile()
+
+    zone = conventions.ZONE_PRIMARY
+    assert rendered.startswith(f'*.{zone} {{\n')
+    # One block, so one certificate: a second site block is a second request.
+    assert rendered.count(f'{zone} {{') == 1
+    assert f'\n{zone} {{' not in rendered
+
+    # Every served name is a matcher inside it, and everything else is refused
+    # rather than answered by whichever block happened to be first.
+    for vhost in (conventions.gateway.VHOST_CONTROLLER, *(r.vhost for r in conventions.gateway.RESOLVERS)):
+        assert f'host {vhost}\n' in rendered
+    assert 'abort' in rendered
 
 
 ##
