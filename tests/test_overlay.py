@@ -5,7 +5,7 @@ as a parameter and has its own suite (`test_flow_rules.py`).
 
 The roster is asserted as invariants, and here that is the *only* way. The
 roster is static code, so nothing can break one of its invariants at runtime
-that these cases did not already catch — which is why the program itself checks
+that these cases did not already catch -- which is why the program itself checks
 none of them (rfc-002 §10.2).
 
 The declaration is asserted against the roster rather than against a fixture of
@@ -14,14 +14,13 @@ its own, because a member exists for one reason: an entry exists.
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 import re
-from typing import Any, cast
+from typing import Any
 
 import pulumi
-import pulumi.runtime.settings
 import pytest_asyncio
-from pulumi.runtime.stack import wait_for_rpcs
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components import overlay as overlay_module
@@ -30,63 +29,34 @@ NAME = 'kluster'
 NETWORK_ID = '0123456789abcdef'
 API_TOKEN = 'a-central-token'
 
+MEMBER = 'zerotier:index/member:Member'
+
 #: The rule program the fixture hands the component. It is a sentinel rather
 #: than the real thing: what these cases are about is that the component
 #: carries what it is given and composes nothing, and the program's own content
 #: is `test_flow_rules.py`'s subject.
 RULES = '# handed in, not composed\naccept;\n'
 
-#: Every resource the declaration fixture registered: type, name, inputs.
-declared: list[tuple[str, str, dict[str, Any]]] = []
 
-#: Which provider instance each of them was registered against, by name. The
-#: engine hands a mock the reference of the provider that would manage the
-#: resource, which is how a case can ask what a resource authenticates as.
-signed_by: dict[str, str] = {}
+class Central(Recorder):
+    """The two identifiers Central computes: a node's identity, and the network's id."""
 
-
-class Mocks(pulumi.runtime.Mocks):
-    """A monitor that answers with the inputs, plus the two computed identifiers."""
-
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'zerotier:index/identity:Identity':
-            outputs['identityId'] = f'{args.name}-node'
-            outputs['publicKey'] = 'public'
-            outputs['privateKey'] = 'private'
+            return {'identityId': f'{args.name}-node', 'publicKey': 'public', 'privateKey': 'private'}
         if args.typ == 'zerotier:index/network:Network':
-            outputs['networkId'] = NETWORK_ID
-        declared.append((args.typ, args.name, outputs))
-        signed_by[args.name] = args.provider or ''
-        return args.name + '_id', outputs
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
+            return {'networkId': NETWORK_ID}
+        return {}
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> None:
-    """Declare the network once, the way the `physical` stack does."""
+async def stack() -> Central:
+    """The network declared once, the way the `physical` stack declares it."""
     pulumi.runtime.set_all_config({f'kluster:{overlay_module.API_TOKEN}': API_TOKEN})
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
-    # A bridged SDK registers its own parameterized package before it may
-    # register a resource, and it gates that on a feature flag read out of a
-    # synchronous cache that only the async negotiation fills.
-    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
-
-    before = asyncio.all_tasks()
-    overlay_module.Overlay(
-        NAME,
-        network_id=NETWORK_ID,
-        flow_rules=RULES,
-    )
-    pending = asyncio.all_tasks() - before - {asyncio.current_task()}
-    _ = await asyncio.gather(*pending)
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
-
-
-def registered(name: str) -> dict[str, Any]:
-    return next(inputs for _, declared_name, inputs in declared if declared_name == name)
+    monitor = await run_with(Central(), stack='physical')
+    async with declaring():
+        overlay_module.Overlay(NAME, network_id=NETWORK_ID, flow_rules=RULES)
+    return monitor
 
 
 ##
@@ -188,14 +158,14 @@ def test_the_roster_stays_within_what_multicast_reaches() -> None:
 ##
 
 
-def test_the_network_is_adopted_and_carries_every_managed_route() -> None:
+def test_the_network_is_adopted_and_carries_every_managed_route(stack: Central) -> None:
     """The network predates the program, and the routes are net-new.
 
     Creating a second network would leave every existing member on the first
     one; declaring the routes anywhere but through the gateway's member would
     put a machine that is not a router on the management path.
     """
-    network = registered(f'{NAME}-network')
+    network = stack.inputs_of(f'{NAME}-network')
 
     assert [route['target'] for route in network['routes']] == [str(net) for net in conventions.overlay.MANAGED_ROUTES]
     assert {route['via'] for route in network['routes']} == {str(conventions.overlay.UDM)}
@@ -223,7 +193,7 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
     assert conventions.CLUSTER_VLAN.v4 in conventions.overlay.MANAGED_ROUTES
 
 
-def test_the_network_carries_the_rules_it_was_handed_and_composes_none() -> None:
+def test_the_network_carries_the_rules_it_was_handed_and_composes_none(stack: Central) -> None:
     """Policy is the caller's, and the component is the delivery of it.
 
     What confines a run is a fact about how continuous integration reaches this
@@ -231,10 +201,10 @@ def test_the_network_carries_the_rules_it_was_handed_and_composes_none() -> None
     passed in whole (rfc-002 §6). A component that reached for the roster or
     the resolver census itself would be a second place the policy is decided.
     """
-    assert registered(f'{NAME}-network')['flowRules'] == RULES
+    assert stack.inputs_of(f'{NAME}-network')['flowRules'] == RULES
 
 
-def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted() -> None:
+def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consulted(stack: Central) -> None:
     """A member exists because an entry exists, and for no other reason.
 
     That is what lets the gateway be absent during a first bring-up with no
@@ -244,23 +214,23 @@ def test_the_members_declared_are_exactly_the_roster_and_nothing_else_is_consult
     as their next hop either way — a route to a router that has not joined yet is the ordinary
     state of a bring-up.
     """
-    declared_members = {name for typ, name, _ in declared if typ == 'zerotier:index/member:Member'}
+    declared_members = stack.names(MEMBER)
 
     assert declared_members == {f'{NAME}-member-{entry.name}' for entry in conventions.overlay.ROSTER}
-    assert {route['via'] for route in registered(f'{NAME}-network')['routes']} == {str(conventions.overlay.UDM)}
+    assert {route['via'] for route in stack.inputs_of(f'{NAME}-network')['routes']} == {str(conventions.overlay.UDM)}
 
 
-def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
+def test_no_member_is_handed_an_address_the_roster_did_not_choose(stack: Central) -> None:
     """A pool assignment would move a member the rules and records name.
 
     Both derived IPv6 schemes are off for the same reason, and because a
     continuous-integration member with an address in a family its drop rules
     cannot see would eat its own neighbour discovery.
     """
-    network = registered(f'{NAME}-network')
+    network = stack.inputs_of(f'{NAME}-network')
     assert network['assignIpv6s'] == [{'rfc4193': False, 'sixplane': False, 'zerotier': False}]
 
-    members = [inputs for typ, _, inputs in declared if typ == 'zerotier:index/member:Member']
+    members = [declaration.inputs for declaration in stack.of_type(MEMBER)]
     assert len(members) == len(conventions.overlay.ROSTER)
     for member in members:
         assert member['noAutoAssignIps'] is True
@@ -268,33 +238,33 @@ def test_no_member_is_handed_an_address_the_roster_did_not_choose() -> None:
         assert len(member['ipAssignments']) == 1
 
 
-def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_id() -> None:
+def test_every_member_carries_a_declared_role_and_the_generated_ones_their_own_id(stack: Central) -> None:
     """The tag is the only thing that distinguishes a run from a laptop.
 
     A member declared without one would inherit the permissive default, which
     is exactly the hole the roster exists to close.
     """
     for entry in conventions.overlay.ROSTER:
-        member = registered(f'{NAME}-member-{entry.name}')
+        member = stack.inputs_of(f'{NAME}-member-{entry.name}')
         assert member['tags'] == [[conventions.overlay.TAG_ROLE_ID, entry.role]], entry.name
         assert member['name'] == entry.name
 
-    assert registered(f'{NAME}-member-ci-physical')['memberId'] == f'{NAME}-identity-ci-physical-node'
+    assert stack.inputs_of(f'{NAME}-member-ci-physical')['memberId'] == f'{NAME}-identity-ci-physical-node'
     # An enrolled member carries the id its own device minted, straight off the
     # roster entry: there is nowhere else it could come from.
     haos = conventions.overlay.member('haos')
     assert isinstance(haos, conventions.overlay.EnrolledMember)
-    assert registered(f'{NAME}-member-haos')['memberId'] == haos.node_id
-    assert registered(f'{NAME}-member-haos')['ipAssignments'] == [str(haos.address)]
+    assert stack.inputs_of(f'{NAME}-member-haos')['memberId'] == haos.node_id
+    assert stack.inputs_of(f'{NAME}-member-haos')['ipAssignments'] == [str(haos.address)]
 
 
-def test_the_central_credential_belongs_to_a_provider_of_its_own() -> None:
+def test_the_central_credential_belongs_to_a_provider_of_its_own(stack: Central) -> None:
     """The token administers the whole account, Central minting nothing smaller.
 
     Giving it to a provider instance rather than to the run at large is what
     bounds the resources it can reach to the ones declared here.
     """
-    settings = registered(f'{NAME}-zerotier')
+    settings = stack.inputs_of(f'{NAME}-zerotier')
     token = settings['zerotierCentralToken']
 
     assert isinstance(token, dict), 'the token is classified as a secret, so it is never plain text in state'
@@ -315,19 +285,18 @@ def test_the_administration_token_is_read_where_the_provider_is_built() -> None:
     provider rather than travelling through a signature that has no other
     opinion about it (rfc-002 §8.1).
     """
-    import inspect
-
     assert 'api_token' not in inspect.signature(overlay_module.Overlay.__init__).parameters
 
 
-def test_every_resource_is_signed_by_the_overlays_own_provider() -> None:
+def test_every_resource_is_signed_by_the_overlays_own_provider(stack: Central) -> None:
     """Inherited from the component, never re-plumbed onto a child.
 
     The network, the two generated identities and every member are children of
     the component that built the provider, so each takes it from its parent's
     provider map. Nothing below names it.
     """
-    overlay_resources = [name for typ, name, _ in declared if typ.startswith('zerotier:index/')]
+    overlay_resources = [d for d in stack.declared if d.typ.startswith('zerotier:index/')]
+
     assert overlay_resources, 'the fixture declared no overlay resources at all'
-    for name in overlay_resources:
-        assert f'{NAME}-zerotier' in signed_by[name], f'{name} is not signed by the overlay provider'
+    for declaration in overlay_resources:
+        assert f'{NAME}-zerotier' in declaration.provider, f'{declaration.name} is not signed by the provider'

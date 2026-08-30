@@ -7,11 +7,9 @@ explicit unprotect, and that its attachment asks nothing of a guest that ships
 no agent.
 """
 
-from typing import Any, cast
-
-import pulumi
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, run_with
 
 from kluster.components.cloud.storage import NodeVolume
 
@@ -21,17 +19,9 @@ INSTANCE_ID = 'ocid1.instance.oc1.phx.node'
 SIZE_GB = 50
 
 
-class Mocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        return args.name + '_id', dict(cast('dict[str, Any]', args.inputs))
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
-
-
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks() -> None:
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
+async def monitor() -> Recorder:
+    return await run_with(Recorder(), stack='physical')
 
 
 def node_volume() -> NodeVolume:
