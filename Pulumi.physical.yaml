@@ -14,7 +14,6 @@ config:
     secure: v1:G8s8IlA98mNsmmH0:TIsSpQQ4A9yddYX+PArOPYhetkJZesk0ifds525LI4Em71voPpptqq2ryVFJmDD2
   kluster-py:zerotierApiToken:
     secure: v1:mPQdF7Bt/dIs+Zk2:kUnNwex6+nJqdcxCP4+Epj9hStliiNwgbyJO0xDTdy09nZEqDhSlloUB/hB2lQ7x
-  kluster-py:haosDomainUuid: 5e10948c-8934-4239-849c-b6b9104bfe3f
   kluster-py:ociTenancyOcid:
     secure: v1:5lNlymAfQtnZM0pK:oOI2Noh0K68WtbpS7XX2AfEL6dtA75jOAXwEzuIAXt99gGWpIY6Ou/5poPcSgwwaBHDKA/2uf1UEauoEJ2MgDcsCUHRJBmni4SdbYpTxt9agmcV6bDrgci3O9bM9tWs=
   kluster-py:ociUserOcid:

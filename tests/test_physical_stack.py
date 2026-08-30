@@ -204,12 +204,11 @@ COMPARTMENT = conventions.Compartment(
 #: configure through one (rfc-002 §8.1).
 STACK_CONFIG = {
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
-    # The §3 domain: the credential the host is reached with, and which domain
-    # is adopted rather than built. There is no endpoint among them — it is
-    # derived — and no storage directory either: the host's own configuration
-    # management has to name the same one, which makes it a convention.
+    # The §3 domain: the credential the host is reached with, and nothing else.
+    # There is no endpoint among them — it is derived — and no storage
+    # directory either: the host's own configuration management has to name the
+    # same one, which makes it a convention.
     'kluster:libvirtPrivateKey': LIBVIRT_KEY,
-    'kluster:haosDomainUuid': '00000000-0000-0000-0000-000000000000',
     **VERSIONS_CONFIG,
     **ACCOUNT_CONFIG,
     **GATEWAY_CONFIG,
@@ -764,7 +763,6 @@ def test_no_provider_namespace_is_read_at_all() -> None:
 SITE_FACTS = [
     'kluster:budgetAlertRecipients',
     'kluster:libvirtPrivateKey',
-    'kluster:haosDomainUuid',
     *ACCOUNT_CONFIG,
     *VERSIONS_CONFIG,
 ]

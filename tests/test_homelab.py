@@ -2,22 +2,21 @@
 # and this file reaches inside them to read the resource options Pulumi
 # records. The unknown-type family is suppressed here rather than repo-wide.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
-"""The worker VM under libvirt, and the domain that was there before it.
+"""The worker VM under libvirt, and the session that declares it.
 
-Two very different risks share this host. The worker is ordinary
-infrastructure — it can be rebuilt — but the Home Assistant domain beside it
-cannot: it carries the home's automation, it predates this program, and a diff
-that proposed replacing it would be an outage nobody asked for. So the
-assertions here are mostly about what the program must *never* do — recreate
-the adopted domain, resize the worker's disk out from under it — and those are
-resource options, invisible in any later `pulumi diff` that goes well.
+The worker is ordinary infrastructure — it can be rebuilt — but the disk
+under it is not, so the assertions here are mostly about what the program must
+*never* do: resize or rewrite that disk out from under a running node. Those
+are resource options, invisible in any later `pulumi diff` that goes well.
+
+The home-automation domain on the same host is declared nowhere, so nothing
+here asserts about it (rfc-002 §13).
 """
 
 from __future__ import annotations
 
 import inspect
 import json
-import re
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -49,7 +48,6 @@ pulumi.runtime.mocks.MockMonitor.RegisterResource = _patched_register_resource
 CLUSTER = 'kluster'
 WORKER = 'worker'
 DOMAIN = f'{CLUSTER}-{WORKER}'
-HAOS_UUID = '5e10948c-8934-4239-849c-b6b9104bfe3f'
 MACHINE_CONFIG = 'machine: {}\n'
 STORAGE_DIR = '/var/lib/libvirt/kluster'
 BRIDGE = 'kvmbr1'
@@ -158,87 +156,7 @@ def build(**kwargs: Any) -> Any:
     kwargs.setdefault('vcpus', VCPUS)
     kwargs.setdefault('memory_gib', MEMORY_GIB)
     kwargs.setdefault('image_path', IMAGE_PATH)
-    kwargs.setdefault('haos_domain_uuid', HAOS_UUID)
     return HomelabHost(CLUSTER, **kwargs)
-
-
-# -- the adopted domain -----------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_the_home_assistant_domain_is_adopted_by_uuid() -> None:
-    request = await registration(build().haos)
-
-    # Without an import id this declaration would *create* a second Home
-    # Assistant domain on the host. With it, a stack that has never run
-    # previews an import — which is what makes the program valid before the
-    # adoption has happened.
-    assert request.importId == HAOS_UUID
-    assert request.type == 'libvirt:index/domain:Domain'
-
-
-@pytest.mark.asyncio
-async def test_the_adopted_domain_states_nothing_about_itself() -> None:
-    request = await registration(build().haos)
-
-    # The domain's disks and passthrough devices are its identity and they are
-    # the host's to describe. An input here is a claim about a machine this
-    # program did not build, and on import a claim that differs from the truth
-    # is applied *to the domain*.
-    assert dict(request.object) == {}
-
-
-@pytest.mark.asyncio
-async def test_no_attribute_of_the_adopted_domain_is_the_programs_to_change() -> None:
-    import pulumi_libvirt as libvirt
-
-    from kluster.components.homelab import HOST_OWNED
-
-    ignored = set((await registration(build().haos)).ignoreChanges)
-
-    # The ratchet: a provider release that adds a domain attribute lands here
-    # as a failure, rather than as a silent proposal to change something about
-    # a running Home Assistant.
-    parameters = [
-        name for name in inspect.signature(libvirt.DomainArgs.__init__).parameters if name not in ('__self__', 'self')
-    ]
-    assert parameters
-    assert {_camel(name) for name in parameters} <= ignored
-    assert ignored == set(HOST_OWNED)
-
-
-@pytest.mark.asyncio
-async def test_the_adopted_domain_cannot_be_replaced() -> None:
-    host = build()
-
-    # The last line of defence. If the import diff is wrong in a way nobody
-    # foresaw, protection turns "replace this domain" into a refused
-    # operation instead of a home with no automation.
-    assert host.haos._protect is True  # pyright: ignore[reportPrivateUsage]
-
-
-def test_a_uuid_reaches_the_domain_whatever_case_it_was_typed_in() -> None:
-    from kluster.components.homelab import import_id
-
-    # The id Pulumi records has to be the one the provider reads back.
-    assert import_id(HAOS_UUID.upper()) == HAOS_UUID
-
-
-def test_a_domain_name_is_not_a_domain_uuid() -> None:
-    from kluster.components.homelab import import_id
-
-    with pytest.raises(ValueError, match='not a domain UUID'):
-        import_id('haos')
-
-
-def test_an_import_id_that_is_not_known_yet_is_refused() -> None:
-    from kluster.components.homelab import import_id
-
-    # An import id is a resource option, not an input: it is read while the
-    # program is being constructed, so an output would arrive too late and
-    # silently become "create a second domain".
-    with pytest.raises(ValueError, match='known before the run'):
-        import_id(pulumi.Output.from_input(HAOS_UUID))
 
 
 # -- the worker VM ----------------------------------------------------------
@@ -360,14 +278,20 @@ async def test_a_resized_worker_is_undefined_before_it_is_redefined() -> None:
 
 
 @pytest.mark.asyncio
-async def test_both_domains_are_reached_through_one_connection() -> None:
-    host = build()
-    worker, haos = await registration(host.domain), await registration(host.haos)
+async def test_the_only_domain_on_this_host_the_program_declares_is_the_worker(setup_mocks: Fake) -> None:
+    """The home-automation domain beside it is nobody's declaration here.
 
-    # Two definitions on one host, one credential: the adopted domain is not
-    # reached through the ambient default provider.
-    assert worker.provider
-    assert haos.provider == worker.provider
+    It predates this program and outlives it, its full definition is the
+    host's own configuration management's, and every way of declaring it is
+    blind or destructive somewhere that matters (rfc-002 §13). A second domain
+    appearing under this component is that decision being undone, so the count
+    is asserted rather than left to a reader of the constructor.
+    """
+    _ = build()
+    await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    domains = [name for name, typ in setup_mocks.types.items() if typ == 'libvirt:index/domain:Domain']
+    assert domains == [DOMAIN]
 
 
 @pytest.mark.asyncio
@@ -568,10 +492,6 @@ def _transformed_disk(selector: str) -> Any:
     return driver
 
 
-def _camel(name: str) -> str:
-    return re.sub(r'_(.)', lambda match: match.group(1).upper(), name)
-
-
 def test_the_paths_in_the_uri_are_relative_to_the_checkout(tmp_path: Path) -> None:
     """An absolute path here is a diff that can never be resolved (rfc-002 §8.4).
 
@@ -620,9 +540,9 @@ async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_pa
 async def test_every_domain_and_volume_is_signed_by_the_hosts_own_provider(setup_mocks: Fake) -> None:
     """Inherited from the component, not re-plumbed onto each child.
 
-    The pool, the disk, the seed, the worker domain and the adopted one are all
-    children of the component that built the provider, so each takes it from
-    its parent\'s provider map.
+    The pool, the disk, the seed and the worker domain are all children of the
+    component that built the provider, so each takes it from its parent\'s
+    provider map.
     """
     _ = build()
     await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)

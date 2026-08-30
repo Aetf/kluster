@@ -1,11 +1,10 @@
 """The homelab side of the physical layer, under libvirt (physical.md §3).
 
-Two domains on one host, sharing one provider connection: the Talos worker VM
-this program creates, and the Home Assistant domain it *adopts*. The second is
-the interesting one — the domain predates the program, carries the home's
-automation, and is imported by UUID rather than rebuilt, because nothing about
-it may be recreated. Its disks and passthrough devices are its identity; the
-domain XML is only metadata.
+One domain on this host is this program's: the Talos worker VM, with the
+storage pool, disk and cloud-init seed it boots from. The home-automation
+domain that shares the host is **not declared here** — it predates this
+program, outlives it, and belongs to the host's own configuration management
+(rfc-002 §13).
 
 The worker's machine configuration reaches it on a cloud-init seed image
 rather than through a metadata service: there is no cloud platform here to
@@ -22,7 +21,7 @@ host the same way from the same configuration.
 **The disk is created from the Talos image, not created empty.** The volume's
 `source` is the decompressed `nocloud` artefact on the machine running the
 program (`providers/talos_factory/`), and the provider uploads it into the
-pool over the same connection it defines the domains through. So the first
+pool over the same connection it defines the domain through. So the first
 boot is a consequence of an apply rather than an operator writing an image
 by hand.
 
@@ -67,7 +66,6 @@ accident.
 from __future__ import annotations
 
 import json
-import uuid
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -107,44 +105,6 @@ MACHINE_TYPE = 'q35'
 #: guest instruction sets and buy nothing.
 CPU_MODE = 'host-passthrough'
 
-#: Every input the libvirt provider accepts for a domain. The adopted Home
-#: Assistant domain ignores all of them: Pulumi owns *that* it exists, the
-#: host owns what it is. Written out rather than wildcarded so that a provider
-#: that grows a field fails a test here instead of silently proposing a change
-#: to a domain that carries the home's automation.
-HOST_OWNED: tuple[str, ...] = (
-    'arch',
-    'autostart',
-    'bootDevices',
-    'cloudinit',
-    'cmdlines',
-    'consoles',
-    'coreosIgnition',
-    'cpu',
-    'description',
-    'disks',
-    'emulator',
-    'filesystems',
-    'firmware',
-    'fwCfgName',
-    'graphics',
-    'initrd',
-    'kernel',
-    'machine',
-    'memory',
-    'metadata',
-    'name',
-    'networkInterfaces',
-    'nvram',
-    'qemuAgent',
-    'running',
-    'tpm',
-    'type',
-    'vcpu',
-    'video',
-    'xml',
-)
-
 #: The account the session authenticates as: a dedicated service user on the
 #: host, in the `libvirt` group and no other, provisioned together with its key
 #: by the host's own configuration management (homelab-host.md §4).
@@ -160,7 +120,7 @@ KNOWN_HOSTS = 'known_hosts'
 
 #: The libvirt driver and the object the URI names on the far side. `/system`
 #: is the privileged daemon — the one that owns the storage pool and the
-#: adopted domain — as opposed to a per-user session instance.
+#: domains on this host — as opposed to a per-user session instance.
 LIBVIRT_ENDPOINT = 'qemu+ssh'
 LIBVIRT_OBJECT = '/system'
 
@@ -296,25 +256,12 @@ def seed_metadata(hostname: str) -> str:
     return json.dumps({'instance-id': hostname, 'local-hostname': hostname})
 
 
-def import_id(value: pulumi.Input[str]) -> str:
-    """The domain UUID to adopt, in the form libvirt hands it back.
-
-    An import id has to be known while the program is being *constructed* —
-    it is a resource option, not an input — so a UUID that only arrives as an
-    output is refused rather than silently ignored. The canonical form is used
-    because the id Pulumi records is the one the provider reads back, and a
-    UUID typed in upper case would otherwise never match it.
-    """
-    if not isinstance(value, str):
-        raise ValueError('the Home Assistant domain UUID must be a plain string, known before the run')
-    try:
-        return str(uuid.UUID(value))
-    except ValueError as error:
-        raise ValueError(f'{value!r} is not a domain UUID: libvirt imports domains by UUID, not by name') from error
-
-
 class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
-    """The worker VM, and the Home Assistant domain adopted beside it.
+    """The worker VM on the homelab host, and the storage it boots from.
+
+    The home-automation domain beside it is **not declared** — this component
+    reaches the host, and states nothing about a machine it did not build
+    (rfc-002 §13).
 
     The libvirt session is this component's own, so the credential that opens
     it — `libvirtPrivateKey` — is read here, at the line that builds the
@@ -332,7 +279,6 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
     :param image_path: the decompressed Talos `nocloud` image, on the machine
         running the program. The provider reads it there and uploads it into
         the pool; nothing about it is fetched by the host.
-    :param haos_domain_uuid: the domain to adopt.
     """
 
     def __init__(
@@ -345,13 +291,11 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         vcpus: int,
         memory_gib: int,
         image_path: pulumi.Input[str],
-        haos_domain_uuid: pulumi.Input[str],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        # One connection for both domains: they are two definitions on one
-        # host, and the credential that reaches them is the same. It is built
-        # before the component registers, because a provider reaches a subtree
-        # through the options the component is registered with.
+        # The session this component's resources are declared through. It is
+        # built before the component registers, because a provider reaches a
+        # subtree through the options the component is registered with.
         #
         # The identity is read in the clear rather than as a secret Output: it
         # is written to a file before any resource exists, so it reaches no
@@ -450,26 +394,6 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
             # stated, so a replacement — a RAM change, above all — has to
             # undefine the old domain before it defines the new one.
             opts=self.child_opts(delete_before_replace=True),
-        )
-
-        # Adoption, not creation (architecture.md §6.8). The import option is
-        # what makes the program valid *before* the domain is in state: a
-        # preview of a stack that has never run proposes importing this
-        # domain rather than creating a second one, and once it is in state
-        # the option is inert. Everything else about it is the host's, so the
-        # first apply has nothing to change and `protect` turns any diff that
-        # would replace it — the one outcome that must never happen — into a
-        # refusal instead of an outage. The domain's name is not stated for
-        # the same reason as the rest: the provider auto-names a domain it is
-        # not given a name for, and on an import that name comes from the
-        # domain that was read rather than from this program.
-        self.haos = libvirt.Domain(
-            f'{name}-haos',
-            opts=self.child_opts(
-                protect=True,
-                import_=import_id(haos_domain_uuid),
-                ignore_changes=list(HOST_OWNED),
-            ),
         )
 
         self.register_outputs({})
