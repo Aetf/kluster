@@ -368,6 +368,18 @@ def test_a_row_that_was_never_in_a_kit_says_so(kit: KdbxStore) -> None:
         _ = escrow.from_kit(kit, escrow.PASSPHRASE)
 
 
+def test_a_kit_carrying_no_such_row_sends_the_operator_to_the_console(kit: KdbxStore) -> None:
+    # A kit is filled from the seed table, so one written since these rows left
+    # it holds no entry to read -- which is an ordinary kit and not a broken
+    # one. "No entry seeds/GitHub App (dispatch)" would read like damage and
+    # invite a hunt for the row; what the operator needs is the other source.
+    with pytest.raises(escrow.EscrowError, match='carries no such row') as refused:
+        _ = escrow.from_kit(kit, escrow.DISPATCH_KEY)
+
+    assert 'credentials derived github-dispatch-key record' in str(refused.value)
+    assert '--from-kit' in str(refused.value)
+
+
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:
     with pytest.raises(escrow.EscrowError, match='no label'):
         _ = escrow.generate(vault.registry, 'made/up')
