@@ -191,3 +191,86 @@ the leg itself has `IPForward=no`), and the export admits exactly
 192.168.70.10. A pod that needs NAS data therefore schedules on the
 worker, and opening a remote path would be an explicit design change
 to both routing and the export — not a side effect of using NFS.
+
+## 6. How the program reaches the host: the libvirt session
+
+The `physical` stack declares this host's resources over
+`qemu+ssh://virt@<host>/system`, as the service user of §4. The URI is
+**derived on every run, never recorded**: a URI in stack configuration
+would carry file paths that exist only on the machine that wrote it,
+and this program runs on a workstation and on a continuous-integration
+runner alike. What configuration holds is the client key alone, read at
+the line that builds the provider (declarative/physical.md §3); where
+it lands on the machine running the program is this design's.
+
+Two files are written into the checkout before the provider is
+constructed, because the provider dials as soon as the engine
+configures it and reads both by path: the **client identity**, `0600`
+inside the `0700` `.credentials/` directory, and a one-line
+**`known_hosts`** pairing the address dialled with the host key pinned
+in `conventions`. The pin is a public key and is code rather than
+configuration, for the same reason the gateway's is: whoever could
+replace it could already replace the credential it guards, and a pin a
+preview redacts is a pin nobody reviews.
+
+**Both paths go into the URI relative to the checkout root.** The URI
+is a provider input and therefore lives in state, so an absolute path
+would put one machine's layout into a value every other machine then
+diffs against — noise rather than danger, since `uri` does not force a
+provider replacement, but a diff that can never be resolved on a stack
+whose merge gate is a clean preview. The provider opens both values
+without anchoring them, so a relative one resolves against the plugin
+process's working directory: the project's `main` directory where a
+project declares one, and otherwise the directory holding `Pulumi.yaml`.
+This project declares no `main`, so the two coincide and both are the
+checkout root — **adding a `main` later would move that anchor
+silently**, which is why the caveat is written beside the code and not
+only here. What a first run has to confirm rather than take from the
+provider's source is that the plugin's working directory is the project
+root on a continuous-integration runner too, not only on a workstation.
+
+The transport is the *provider's* own, not libvirt's: the bridged
+provider parses the URI itself and dials with Go's SSH client, and
+`qemu+libssh://` and `qemu+libssh2://` are not implemented. So three
+query parameters carry the whole session, in the provider's spellings
+rather than OpenSSH's:
+
+-   **`keyfile`** — the identity, read before anything an `~/.ssh/config`
+    names.
+-   **`knownhosts`**, one word. `known_hosts` is not a parameter the
+    provider reads: it would be ignored, the run would fall back on
+    `$HOME/.ssh/known_hosts`, and the session would verify against
+    whatever that machine happened to trust.
+-   **`sshauth=privkey`.** The default is `agent,privkey`, which would
+    offer every key in a forwarded agent to a root-equivalent endpoint
+    and make a runner and a workstation behave differently. Naming the
+    method is the same rule the gateway's own session follows.
+
+`no_verify` is never emitted: the provider treats it as set by its mere
+presence — `no_verify=0` disables host-key verification just as well —
+and an unverified first contact over the overlay would hand an
+interposer a root-equivalent libvirt connection. A path containing a
+`$` is refused outright rather than emitted, because the provider
+expands environment variables in both values before opening them.
+
+The hazard behind all of this, if the URI is wrong rather than merely
+non-portable, is worse than a diff: a provider that cannot reach the
+host reads every domain as absent and clears its id, so the next apply
+proposes creating a machine that is already running.
+
+**The two files are working files, not credential slots.** A slot is
+durable, written once by a `credentials` command and read by later runs
+(credentials.md §1); these two are derived from stack configuration by
+the program itself on every run, owned by it and disposable. They live
+under `.credentials/` anyway because that directory is the `0700`
+boundary — the single answer to "what on this machine is secret" — and
+a second git-ignored directory would be a second boundary to establish
+and get right. Nothing here is produced by a command, so nothing should
+go looking for the command that produced it.
+
+The contrast with the gateway's own SSH session is worth stating,
+because the two look alike and only one has this problem: the gateway's
+private key is never written to disk. It goes from configuration into
+the SSH library as bytes inside the provider's own process, so there is
+no path to put in a resource input and nothing machine-specific to
+diff. Where a mechanism allows it, that is the better shape.

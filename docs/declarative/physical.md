@@ -225,6 +225,16 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     escape hatch may be needed for the PCI device XML (the
     home-automation domain on the same host proves the libvirt side
     works).
+-   **The session**: `qemu+ssh` as the host's own service user, and the
+    provider is built inside the component that owns the connection,
+    which is where its private key is read and the only place that key
+    appears. The URI is derived on every run rather than configured:
+    the identity and the pinned `known_hosts` are written into the
+    checkout and named **relative to it**, since the URI is a provider
+    input in state and an absolute path is a diff no other machine can
+    resolve. The transport's parameters, the pin and the working-file
+    boundary they sit behind are
+    [physical/homelab-host.md](../physical/homelab-host.md) §6.
 -   **The home-automation domain is not declared here.** It shares the
     host, and this stack says nothing about it: no resource, no
     configuration key, no ignore list. Its full XML stays with the
@@ -235,7 +245,7 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     it were measured against the live definition and the libvirt
     provider, and each is blind or destructive somewhere that matters;
     the comparison and the reasoning behind leaving it out are
-    [framework/rfc-002](../framework/rfc-002-src-layout-and-the-gateway.md)
+    [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md)
     §13. The libvirt session above is unaffected — it is the worker
     VM's, and so is everything §3 declares.
 
@@ -245,10 +255,15 @@ Per architecture.md §5.2 (full push-direction absorption): the
 gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
 hooks; the UDM's **SSH host key is pinned** — the session crosses
 ZeroTier, and an accept-new first contact would hand a MITM root on
-the gateway — while the client credential that answers the pin is read
-by the provider itself, out of stack configuration, and appears on no
-resource: what a resource carries is a short digest of it, which is
-what makes a rotation visible in a preview) manages the device's
+the gateway. The pin is a `conventions` constant and a declared input
+on every device resource, like the address dialled: a public key that
+a preview shows is a pin a reviewer can check, where a secret-typed
+configuration value would be redacted in the one place anybody would
+look. The client credential that answers it goes the other way — read
+by the provider itself, out of stack configuration, in its own
+process, and appearing on no resource: what a resource carries is a
+short digest of it, which is what makes a rotation visible in a
+preview) manages the device's
 entire desired state — FRR/BGP
 (neighbor = `conventions.HOMELAB_NODE_IPV4`, a constant and deliberately not an
 output of the libvirt resource: the worker's address is written statically into
@@ -258,8 +273,14 @@ depends on a lease), the nspawn container services
 (units + digest-pinned rootfs from homelab-containers CI via
 `DeviceArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
-`/data`-persisted identity, architecture.md §5.3), on_boot.d,
-caddy, AdGuard static configs, secrets. ZT Central's network config
+`/data`-persisted identity, architecture.md §5.3), the recovery script
+in `on_boot.d` that re-establishes all of it after a firmware update
+and decides which services a deployment restarts (physical/gateway.md
+§1.1), caddy, AdGuard static configs, secrets. What a dynamic provider
+is mechanically — the pickle in each resource's state, the credential
+read in `configure`, the two properties `check` injects to make a
+rotation visible, and the traps that come with all three — is
+[framework/pulumi.md](../framework/pulumi.md) §5. ZT Central's network config
 (managed routes via the UDM member, member authorizations) is managed
 from the `physical` stack via the bridged `zerotier/zerotier`
 provider (architecture.md §5.3). The gw-config repo retires;
