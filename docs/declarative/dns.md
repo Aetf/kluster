@@ -173,12 +173,15 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     What a dynamic provider is, and the rules a `diff` here obeys —
     among them that its two property bags are not symmetrical, so the
     comparison names its keys instead of walking a bag — are
-    [framework/pulumi.md](../framework/pulumi.md) §5. The instance's
-    credential is still an input on every rewrite, which is the one
-    place this repository has not applied that section's rule that a
-    provider's own credential is read where the provider is
-    configured; AdGuard has no scoped API token, and the residual is
-    on record as M6 (cluster/security-audit.md).
+    [framework/pulumi.md](../framework/pulumi.md) §5. The instances'
+    login is that section's provider credential: `adguardUsername` and
+    `adguardPassword` on this stack, read in the provider's own
+    `configure` and declared by no rewrite, so no row carries it into
+    state. It is an admin login because AdGuard has no scoped API
+    token, and that residual is on record as M6
+    (cluster/security-audit.md). A rotation is visible all the same —
+    every rewrite is stamped with the instance and a short digest of
+    the login, so the preview names what changed.
 -   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
     the AdGuard pair is on the UDM: putting the rewrites here keeps the
     LAN reachability requirement — the ZeroTier join, and its
