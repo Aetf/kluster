@@ -30,7 +30,6 @@ dependencies = [
     "pulumi-unifi",
     "pulumi-zerotier",
     "asyncssh>=2.24.0",
-    "zstandard>=0.23.0",
 ]
 
 [project.scripts]
