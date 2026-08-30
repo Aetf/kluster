@@ -704,12 +704,14 @@ drives gw-config**:
     (surviving firmware updates) and runs the hook. This is exactly
     aconfmgr-style convergence, previewable in `pulumi preview`.
     Bulk artifacts get their own resource, **`DeviceArtifact`**
-    (2026-08-24): inputs `{url, sha256, target path, hook}` — state
-    carries the URL and digest, **never bytes**; `diff` compares the
-    pin against a device-side marker file (`/data/…/<name>.digest`);
-    `create/update` downloads on the runner, verifies the sha256,
-    streams over SSH, writes the marker, runs the hook. Rootfs images
-    ride this, keeping preview cheap and state small. Implementation
+    (2026-08-24): inputs `{repository, tag, digest, target path, hook}`
+    — state carries the reference and the manifest digest, **never
+    bytes**; `diff` compares the pin against a device-side marker file
+    (`/data/…/<name>.digest`); `create/update` pulls the image on the
+    runner, verifies the manifest against the pin and every layer
+    against that manifest, flattens the layers into one archive,
+    streams it over SSH, writes the marker, runs the hook. Rootfs
+    images ride this, keeping preview cheap and state small. Implementation
     rule for both resources: secret-bearing inputs (device secrets in
     `DeviceFile` content) are declared secret
     (`Output.secret`/`additional_secret_outputs`) so they never
@@ -742,10 +744,11 @@ drives gw-config**:
     in homelab-containers' CI (renovate keeps bases fresh; builds are
     slow, cache-dependent, and don't belong inside `pulumi up` —
     pulumi-docker-build exists and is deliberately not used). Pulumi's
-    input is a **digest-pinned reference** to a CI-built artifact
-    (nspawn rootfs release, or a registry image for in-cluster
-    workloads); bumping the pin is the previewed, reviewable deploy
-    event. Same discipline as the mise commit-pin pattern already used
+    input is a **digest-pinned registry reference** to a CI-built
+    image, whether it is an nspawn rootfs or an in-cluster workload;
+    bumping the pin is the previewed, reviewable deploy event. One
+    publication format for both is what lets one renovate data source
+    maintain tag and digest together. Same discipline as the mise commit-pin pattern already used
     for homelab-ops tooling.
 
 ### 5.3 ZeroTier terminates on the UDM (decided 2026-08-23)
@@ -773,8 +776,9 @@ already lives:
     address, useful as a fallback path) and never takes a router role
     — today it has none either; the routes via the UDM are net-new.
 -   **Deployment shape**: a fourth of the device's nspawn services
-    (alpine rootfs from homelab-containers CI, unit + config via the
-    gw-config provider, on_boot.d recovery like the others), but with
+    (alpine rootfs image from homelab-containers CI, pinned and pulled
+    like the other three, unit + config via the gw-config provider,
+    on_boot.d recovery like the others), but with
     **host networking** (`VirtualEthernet=no`) — the `zt*` interface
     must land in the main netns for the UDM to route through it — plus
     `/dev/net/tun` device access (present on the UDM, verified
