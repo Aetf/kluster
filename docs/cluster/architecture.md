@@ -943,5 +943,5 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
     capability. HAOS stays a host-level libvirt domain, like the NAS role —
     and it is not declared by this program either: its definition belongs to
     the host's own configuration management, for the reasons in
-    [framework/rfc-002](../framework/rfc-002-src-layout-and-the-gateway.md)
+    [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md)
     §13.

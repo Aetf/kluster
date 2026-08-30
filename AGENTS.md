@@ -3,7 +3,7 @@
 * ALWAYS use `mise x uv -- uv` to manage python environment of the project
 * ALWAYS use a timer when running tests, to avoid waiting forever when test hangs:
   `timeout 60 mise x uv -- uv run pytest`
-* Read `docs/framework/pulumi.md` before writing components; `docs/framework/rfc-001-native-async-inputs.md`
+* Read `docs/framework/pulumi.md` before writing components; `docs/rfc/rfc-001-native-async-inputs.md`
   has the internals. Key rules:
   - Sub-resources are created synchronously in `Component.__init__`; async input
     prep goes through `async_output`, and outputs are awaited only via `resolve`
@@ -28,7 +28,7 @@
   `mise x uv -- uv run lint-imports`, in CI beside ruff and
   `basedpyright`.
   The contract is in `pyproject.toml`; what each layer is for is
-  `docs/framework/rfc-002-src-layout-and-the-gateway.md` §2.
+  `docs/rfc/rfc-002-src-layout-and-the-gateway.md` §2.
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They
   live under `src/kluster/scripts/` and are exposed as console scripts in

@@ -9,7 +9,7 @@ program runs, and the libvirt volume is created *from that file*, which the
 provider uploads into the pool over its own connection.
 
 A dynamic provider rather than `local.Command`
-(`docs/framework/rfc-002-src-layout-and-the-gateway.md` §7.3): the download is
+(`docs/rfc/rfc-002-src-layout-and-the-gateway.md` §7.3): the download is
 checked for truncation against the length the server declared, it needs neither
 `curl` nor `xz` on the machine running the program, and the seam a test
 replaces is a Python function rather than a shell command.

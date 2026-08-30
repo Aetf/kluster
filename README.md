@@ -83,10 +83,12 @@ is run, not only what it does.
 
 ## Docs
 
-Four directories and two registers. `docs/cluster/` is what is being built and
+Six directories and two registers. `docs/cluster/` is what is being built and
 why; `docs/physical/` designs the machines and appliances themselves;
 `docs/declarative/` covers how each layer is declared in the program;
-`docs/framework/` is the Pulumi Python framework, the CI, and the forge. At the
+`docs/framework/` is the Pulumi Python framework, the CI, and the forge;
+`docs/style/` is how code and prose here are written; `docs/rfc/` keeps the
+accepted proposals the other directories were changed by. At the
 root, [credentials.md](docs/credentials.md) is the register of every credential
 — scope, slot, rotation — and [operations.md](docs/operations.md) is day-2:
 update ownership, upgrade and replacement runbooks, the drill program.

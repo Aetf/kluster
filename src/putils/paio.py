@@ -4,7 +4,7 @@ Pulumi/asyncio helpers.
 Most of this just deals with annoying boilerplate (@task, @background).
 
 `async_output` and `resolve` bridge native async/await with Pulumi outputs;
-see docs/rfc-001-native-async-inputs.md.
+see docs/rfc/rfc-001-native-async-inputs.md.
 
 From https://github.com/dingbots/putils/blob/master/putils/aws.py
 """
