@@ -30,10 +30,9 @@ from ipaddress import IPv4Address, IPv4Interface, IPv6Address
 from typing import Any, cast
 
 import pulumi
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
-from pulumi.runtime.stack import wait_for_rpcs
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.gateway import unifi
@@ -45,60 +44,20 @@ SITE = 'default'
 WORKER_GUA = '2001:db8:1:70::10'
 
 
-class Mocks(pulumi.runtime.Mocks):
-    """A monitor that answers the zone lookups and remembers what was declared."""
+class Controller(Recorder):
+    """A monitor that answers the zone lookups; every zone exists and is empty."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.declared: list[tuple[str, str]] = []
-        self.inputs: dict[str, dict[str, Any]] = {}
-        #: Which provider instance each resource was registered against, by
-        #: name, and the same for each function call: the engine hands a mock
-        #: the reference of the provider that would serve the request, which
-        #: is how a case can ask what a declaration authenticates as.
-        self.providers: dict[str, str] = {}
-        self.call_providers: dict[str, str] = {}
-
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        properties = dict(cast('dict[str, Any]', args.inputs))
-        self.declared.append((args.typ, args.name))
-        self.inputs[args.name] = properties
-        self.providers[args.name] = args.provider or ''
-        return args.name + '_id', properties
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        self.call_providers[args.token] = args.provider or ''
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token == 'unifi:index/getFirewallZone:getFirewallZone':
             name = str(cast('dict[str, Any]', args.args)['name'])
-            return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}, []
-        return {}, []
+            return {'id': f'zone-{name}', 'name': name, 'networks': [], 'site': SITE}
+        return {}
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def mocks() -> Mocks:
-    recorded = Mocks()
+async def mocks() -> Controller:
     pulumi.runtime.set_all_config({f'kluster:{unifi.API_KEY}': API_KEY})
-    pulumi.runtime.set_mocks(recorded, project='kluster', stack='physical', preview=False)
-    # Registrations are dispatched onto a queue that lives in module state and
-    # therefore outlives a test's event loop. Emptying it here is what lets
-    # `settled` mean "this test's declarations" rather than "every declaration
-    # any test ever made", half of them belonging to a loop that is closed.
-    pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
-    # A bridged SDK registers its own parameterized package before it may
-    # register a resource, and it gates that on a feature flag read out of a
-    # synchronous cache that only the async negotiation fills.
-    _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
-    return recorded
-
-
-async def settled() -> None:
-    """Wait until every declaration this test made has reached the monitor.
-
-    Only the registration half of Pulumi's own barrier: the other half drains
-    a set of output tasks that is likewise module state, and a task left there
-    by an earlier test belongs to an event loop that no longer exists.
-    """
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    return await run_with(Controller(), stack='physical')
 
 
 def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -> unifi.SiteFirewall:
@@ -112,21 +71,19 @@ def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -
 
 
 @pytest.mark.asyncio
-async def test_the_census_is_exactly_the_designed_set(mocks: Mocks) -> None:
+async def test_the_census_is_exactly_the_designed_set(mocks: Controller) -> None:
     """Nothing beyond the census, and nothing missing from it.
 
     The design's sentence is "a controller rule not on this census is drift";
     this is that sentence as an assertion, in the one direction a program can
     make it — that the program declares the census and stops there.
     """
-    build()
-    await settled()
+    async with declaring():
+        build()
 
-    by_type: dict[str, list[str]] = {}
-    for typ, name in mocks.declared:
-        by_type.setdefault(typ, []).append(name)
+    by_type = {typ: sorted(mocks.names(typ)) for typ in mocks.types}
 
-    assert sorted(by_type['unifi:index/firewallGroup:FirewallGroup']) == [
+    assert by_type['unifi:index/firewallGroup:FirewallGroup'] == [
         f'{NAME}-pool-v4',
         f'{NAME}-pool-v6',
     ]
@@ -419,42 +376,50 @@ async def test_every_pool_rule_is_sourced_from_the_iot_vlan_alone() -> None:
     assert str(conventions.IOT_VLAN.v6).endswith(':90::/64'), 'the IoT ULA follows the VLAN numbering scheme'
 
 
-@pytest.mark.asyncio
-async def test_both_allows_precede_both_drops_and_all_of_them_precede_the_predefined() -> None:
-    """Order is the rule, and it is declared rather than inherited from creation.
+#: Each ordering resource, the zone pair it orders, and the policies it puts
+#: ahead of that pair's predefined rules. Four rows because the design uses
+#: four pairs; the claim is one, and it is the same for every one of them.
+ORDERINGS = [
+    (
+        'pool_order',
+        f'zone-{unifi.ZONE_INTERNAL}',
+        f'zone-{unifi.ZONE_EXTERNAL}',
+        [f'{NAME}-iot-media-v4_id', f'{NAME}-iot-media-v6_id', f'{NAME}-iot-pool-v4_id', f'{NAME}-iot-pool-v6_id'],
+    ),
+    ('peer_order', f'zone-{unifi.ZONE_EXTERNAL}', f'{NAME}-zone_id', [f'{NAME}-peer-v6_id']),
+    ('cluster_egress_order', f'{NAME}-zone_id', f'zone-{unifi.ZONE_EXTERNAL}', [f'{NAME}-cluster-egress_id']),
+    ('cluster_internal_order', f'{NAME}-zone_id', f'zone-{unifi.ZONE_INTERNAL}', [f'{NAME}-cluster-internal_id']),
+]
 
-    Two orderings matter and neither is observable in a resource: the allow
-    ahead of the drop, and the whole group ahead of the predefined accept the
-    uplink pair carries — which would otherwise answer first and make the
-    drop unreachable.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('attribute', 'source', 'destination', 'ahead'), ORDERINGS)
+async def test_a_pair_evaluates_its_declared_policies_before_its_predefined_ones(
+    attribute: str, source: str, destination: str, ahead: list[str]
+) -> None:
+    """Order is declared rather than inherited from creation order.
+
+    Every pair carries a predefined accept or deny of its own, and it would
+    otherwise answer first -- which makes a declared policy behind it a
+    resource that changes nothing. None of this is observable in the policy
+    resources themselves, which is why it is asserted here.
     """
+    order = getattr(build(), attribute)
+
+    assert order is not None
+    assert await order.before_predefined_ids.future() == ahead
+    assert await order.source_zone_id.future() == source
+    assert await order.destination_zone_id.future() == destination
+
+
+@pytest.mark.asyncio
+async def test_nothing_is_ordered_behind_a_pairs_predefined_rules() -> None:
+    """The complement of the rule above: `after` is the placement nothing wants."""
     firewall = build()
 
-    assert await firewall.pool_order.before_predefined_ids.future() == [
-        f'{NAME}-iot-media-v4_id',
-        f'{NAME}-iot-media-v6_id',
-        f'{NAME}-iot-pool-v4_id',
-        f'{NAME}-iot-pool-v6_id',
-    ]
-    assert await firewall.pool_order.after_predefined_ids.future() is None
-    assert await firewall.pool_order.source_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
-    assert await firewall.pool_order.destination_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
-
-    assert firewall.peer_order is not None
-    assert await firewall.peer_order.before_predefined_ids.future() == [f'{NAME}-peer-v6_id']
-    assert await firewall.peer_order.source_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
-    assert await firewall.peer_order.destination_zone_id.future() == f'{NAME}-zone_id'
-
-    # The egress is one policy on a pair of its own, and it too has to precede
-    # the pair's predefined deny or it is a resource that changes nothing.
-    assert await firewall.cluster_egress_order.before_predefined_ids.future() == [f'{NAME}-cluster-egress_id']
-    assert await firewall.cluster_egress_order.source_zone_id.future() == f'{NAME}-zone_id'
-    assert await firewall.cluster_egress_order.destination_zone_id.future() == f'zone-{unifi.ZONE_EXTERNAL}'
-
-    # Outward to the home is likewise one policy on its own pair.
-    assert await firewall.cluster_internal_order.before_predefined_ids.future() == [f'{NAME}-cluster-internal_id']
-    assert await firewall.cluster_internal_order.source_zone_id.future() == f'{NAME}-zone_id'
-    assert await firewall.cluster_internal_order.destination_zone_id.future() == f'zone-{unifi.ZONE_INTERNAL}'
+    for attribute, *_ in ORDERINGS:
+        order = getattr(firewall, attribute)
+        assert await order.after_predefined_ids.future() is None, attribute
 
 
 @pytest.mark.asyncio
@@ -509,20 +474,27 @@ async def test_both_halves_of_the_peer_flow_name_the_same_port_and_host() -> Non
     firewall = build()
 
     assert firewall.peer_v6 is not None
-    destination = await firewall.peer_v6.destination.future()
-    assert destination is not None
-    assert destination.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
-    assert destination.port == conventions.QBITTORRENT_PEER_PORT
-    assert await firewall.peer_v6.ip_version.future() == 'IPV6'
+    pinhole = await firewall.peer_v6.destination.future()
+    assert pinhole is not None
 
-    assert await firewall.peer_v4.dst_port.future() == str(conventions.QBITTORRENT_PEER_PORT)
-    assert await firewall.peer_v4.fwd_port.future() == str(conventions.QBITTORRENT_PEER_PORT)
+    # The same port on both halves, each stated against the one constant that
+    # decides it -- the provider hands the v6 side a number and the v4 side a
+    # string, so the two cannot be compared to each other directly.
+    port = conventions.QBITTORRENT_PEER_PORT
+    assert pinhole.port == port
+    assert await firewall.peer_v4.dst_port.future() == str(port)
+    assert await firewall.peer_v4.fwd_port.future() == str(port)
+
+    # The same host, in the address each family reaches it at: the worker's
+    # global address on one side, its LAN address on the other.
+    assert pinhole.ips == [WORKER_GUA], 'the pinhole matches a literal address, the prefix rotating'
+    assert await firewall.peer_v6.ip_version.future() == 'IPV6'
     assert await firewall.peer_v4.fwd_ip.future() == str(conventions.HOMELAB_NODE_IPV4)
     assert await firewall.peer_v4.src_ip.future() == 'any'
 
 
 @pytest.mark.asyncio
-async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(mocks: Mocks) -> None:
+async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(mocks: Controller) -> None:
     """A key of its own, and a retry budget that cannot lock the account out.
 
     The controller's login rate limit is account-wide, so an unbounded retry
@@ -533,9 +505,10 @@ async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(moc
     settings are serialized as strings and the strings are what the run
     carries.
     """
-    build()
-    await settled()
-    settings = mocks.inputs[f'{NAME}-unifi']
+    async with declaring():
+        build()
+
+    settings = mocks.inputs_of(f'{NAME}-unifi')
 
     assert settings['apiUrl'] == API_URL
     assert settings['site'] == SITE
@@ -553,23 +526,31 @@ async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(moc
 
 
 @pytest.mark.asyncio
-async def test_static_host_entries_are_empty_by_design_and_typed_when_present() -> None:
+async def test_no_static_host_is_declared() -> None:
     """The device name plane is DHCP-derived; a static entry is an exception.
 
-    Keeping the census empty is the assertion that matters — every service is
-    reached by its public name through the split-horizon rewrites, and a host
-    entry added here would be a second naming plane to keep in step. The
-    mechanism is still exercised, so the exception works the day it is needed.
+    Every service is reached by its public name through the split-horizon
+    rewrites, so a host entry here would be a second naming plane to keep in
+    step with the first.
     """
     assert unifi.STATIC_HOSTS == {}
     assert build().static_hosts == {}
 
+
+@pytest.mark.asyncio
+async def test_a_static_host_is_typed_by_the_family_of_its_address() -> None:
+    """The exception the census does not use, exercised so it works the day it is.
+
+    The record type is the whole of what the component decides here, and it
+    decides it from the address rather than from a second argument.
+    """
     firewall = build(
         {
             'printer.home.arpa': IPv4Address('192.168.80.9'),
             'sensor.iot.home.arpa': IPv6Address('fd1a:665f:8bcb:90::9'),
         }
     )
+
     assert set(firewall.static_hosts) == {'printer.home.arpa', 'sensor.iot.home.arpa'}
     assert await firewall.static_hosts['printer.home.arpa'].type.future() == 'A'
     assert await firewall.static_hosts['printer.home.arpa'].record.future() == '192.168.80.9'
@@ -600,7 +581,7 @@ async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
 
 
 @pytest.mark.asyncio
-async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Mocks) -> None:
+async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Controller) -> None:
     """One provider, inherited by the whole subtree and by the zone lookups.
 
     The zone, the network, the address groups, the policies and the port
@@ -609,11 +590,11 @@ async def test_every_controller_resource_and_lookup_is_signed_by_it(mocks: Mocks
     invokes, which inherit only through a parent -- so they name one, and the
     provider they end up signing with is the same one.
     """
-    _ = build()
-    await settled()
+    async with declaring():
+        _ = build()
 
-    controller = [name for typ, name in mocks.declared if typ.startswith('unifi:index/')]
+    controller = [d for d in mocks.declared if d.typ.startswith('unifi:index/')]
     assert controller, 'the build declared no controller resources at all'
-    for name in controller:
-        assert f'{NAME}-unifi' in mocks.providers[name], f'{name} is not signed by the controller provider'
+    for declaration in controller:
+        assert f'{NAME}-unifi' in declaration.provider, f'{declaration.name} is not signed by the provider'
     assert f'{NAME}-unifi' in mocks.call_providers['unifi:index/getFirewallZone:getFirewallZone']
