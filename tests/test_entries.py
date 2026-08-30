@@ -33,16 +33,32 @@ def test_the_recovery_key_entry_has_one_definition() -> None:
 
 
 def test_console_only_seeds_are_the_manual_surface() -> None:
-    # Everything a rotation must stop for: the two Apps, whose key generation
-    # is console-only, and Cloudflare, which forbids a minted token from
-    # carrying token permissions and so has no credential able to mint the
-    # seed. The recovery key is generated rather than minted, so it is not one
-    # of them.
-    assert {member for member, seed in entries.SEEDS.items() if seed.manual} == {
-        'cloudflare',
-        'github-dispatch',
-        'github-trigger',
+    # Everything a rotation must stop for: Cloudflare, which forbids a minted
+    # token from carrying token permissions and so has no credential able to
+    # mint the seed. The recovery key is generated rather than minted, so it is
+    # not one of them, and a credential that is merely created in a console is
+    # not one either -- it is a §3 row, escrowed or delivered where it is read
+    # (`escrow.Console`, `devices.py`), because a kit row a consumer reads
+    # would make every kit rotation owe that consumer a redelivery.
+    assert {member for member, seed in entries.SEEDS.items() if seed.manual} == {'cloudflare'}
+
+
+def test_nothing_the_escrow_holds_is_also_a_kit_row() -> None:
+    # The membership rule from its expensive side. A credential with two homes
+    # makes the kit's own rotation owe a redelivery to whatever reads the other
+    # copy, which is precisely what stops a kit from being rotatable on its own
+    # schedule. The rows that carry a kit address are exactly the ones a kit
+    # may still hold, so declaring one in this table again is what this
+    # catches.
+    held = {seed.entry for seed in entries.SEEDS.values()}
+    addressed = {
+        row.origin.kit.entry
+        for row in escrow.register().values()
+        if isinstance(row.origin, escrow.Console) and row.origin.kit is not None
     }
+
+    assert addressed
+    assert not addressed & held
 
 
 def test_only_the_recovery_key_mints_nothing() -> None:

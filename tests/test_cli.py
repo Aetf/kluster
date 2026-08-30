@@ -123,10 +123,15 @@ def expected(path: list[str]) -> str | None:
             # The row name is the function's identifier with `-` for `_`, which
             # is the whole of the convention tying the tree to `derived.py`.
             return f'derived.{row}'.replace('-', '_')
-        case ['derived', _, 'record']:
+        case ['derived', row, 'record'] if row in devices.DEVICES:
             # One handler for every device row: what differs between them is
             # the table in `devices.py`, not the code that reads it.
             return 'devices.deliver'
+        case ['derived', _, 'record']:
+            # The same verb for a console-made row whose consumer is not a
+            # stack: what it is delivered into is the escrow, so the writer is
+            # the registry's rather than the config slot's.
+            return 'escrow.record'
         case ['derived', _, 'recover']:
             return 'escrow.Vault.open'
         case ['derived', _, 'import']:
@@ -187,6 +192,8 @@ class Dispatch:
             (cli.lifecycle, 'environment', cli.pulumi_config.BackendEnvironment()),
             (cli.escrow, 'generate', 'a-secret'),
             (cli.escrow, 'adopt', Path('placeholder')),
+            (cli.escrow, 'record', Path('placeholder')),
+            (cli.escrow, 'from_kit', 'a-recorded-key'),
             (cli.escrow, 'rewrap', []),
             (cli.escrow, 'check', []),
             (cli.escrow, 'missing', []),
@@ -263,8 +270,13 @@ def test_the_walk_finds_every_register_row() -> None:
         assert ['root', member, 'remember'] in found
     for member in devices.DEVICES:
         assert ['derived', member, 'record'] in found
-    for row in escrow.rows():
-        assert ['derived', row, 'generate'] in found
+    for row, label in escrow.rows().items():
+        # The verb an escrowed row carries follows from its origin: a value
+        # drawn here is generated, one made in a console is recorded, and
+        # offering the wrong one would advertise a mint of a credential this
+        # side cannot produce.
+        assert ['derived', row, label.verb] in found
+        assert ['derived', row, 'recover'] in found
     assert ['kit', 'bootstrap'] in found
 
 

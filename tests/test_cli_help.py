@@ -45,7 +45,7 @@ from typing import cast
 
 import pytest
 
-from kluster.scripts.credentials import cli, devices
+from kluster.scripts.credentials import cli, devices, escrow
 
 #: The width every help text here is rendered at. Argparse reads `COLUMNS` for
 #: its own wrapping, so setting it makes the rendering the same in a test
@@ -118,17 +118,30 @@ def test_the_tree_really_does_carry_see_also_lines(monkeypatch: pytest.MonkeyPat
     assert [line for line in every_line if line.strip().startswith(SEE_ALSO)]
 
 
-def test_the_bring_up_order_names_every_row_made_in_a_console(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Every row of `devices.DEVICES` is delivered the same way and belongs to
-    # the same stage of a bring-up, so an operator following the order and a
-    # tree built from that register have to agree about how many there are.
+def console_rows() -> list[str]:
+    """Every row a bring-up delivers by printing console steps and taking a value.
+
+    Two registers hold them and they are run the same way: the device rows,
+    whose value goes into a stack's config, and the escrowed rows nothing here
+    can draw, whose value goes into the registry.
+    """
+    return [
+        *devices.DEVICES,
+        *(name for name, label in escrow.rows().items() if isinstance(label.origin, escrow.Console)),
+    ]
+
+
+@pytest.mark.parametrize('member', console_rows())
+def test_the_bring_up_order_names_every_row_made_in_a_console(member: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every one of these is delivered the same way and belongs to the same
+    # stage of a bring-up, so an operator following the order and a tree built
+    # from those registers have to agree about how many there are.
     order = _rendered('credentials', monkeypatch)
 
-    for member in devices.DEVICES:
-        assert any(f'credentials derived {member} record' in line for line in order), (
-            f'`{member}` is a row of the device register but the bring-up order never runs it: '
-            'an operator who follows that order would finish with the credential undelivered.'
-        )
+    assert any(f'credentials derived {member} record' in line for line in order), (
+        f'`{member}` is a row made in a console but the bring-up order never runs it: '
+        'an operator who follows that order would finish with the credential undelivered.'
+    )
 
 
 def test_a_mention_in_the_middle_of_a_help_text_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:

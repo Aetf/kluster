@@ -69,10 +69,10 @@ def _read_console_token(seed: entries.Seed) -> str:
 def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore, entry: str) -> None:
     """Walk the operator through a credential no API can create, and write it.
 
-    Reading and writing are one function because they are one act with one
-    shape: a row's secret is either a typed token or a file the platform hands
-    over once, never both and never neither, and separating them would put
-    that either/or in a value a caller has to re-check.
+    Reading and writing are one function because they are one act: a row's
+    public identifier and its secret are asked for together and written
+    together, and a caller holding one without the other has nothing to do
+    with it.
     """
     _announce(seed)
 
@@ -81,13 +81,6 @@ def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore,
     identifier = prompt(f'{seed.title} — {seed.identifier} (the secret itself is asked next, hidden): ').strip()
     if not identifier:
         raise KdbxError(f'{seed.title}: {seed.identifier} is required')
-
-    if seed.attachment:
-        path = Path(prompt(f'{seed.title} — path to {seed.attachment}: ').strip()).expanduser()
-        payload = path.read_bytes()
-        into.put(entry, identifier, '')
-        into.attach(entry, seed.attachment, payload)
-        return
 
     secret = getpass.getpass(f'{seed.title} — the token: ').strip()
     if not secret:
@@ -118,8 +111,9 @@ def create_seed(
         case entries.OCI:
             _ = oci_iam.create_seed(root=root(masters.OCI, prompt), seeds=kit, seed_entry=where)
         case entries.CLOUDFLARE:
-            # Console-made, like the rows below, but its identifier is read
-            # off the token and its template is checked before it is stored.
+            # The one console-made row in the kit, and it is not pasted in
+            # blind: its identifier is read off the token and its template is
+            # checked before it is stored.
             _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=kit, seed_entry=where)
         case entries.B2:
             _ = b2.create_seed(root=root(masters.B2, prompt), seeds=kit, seed_entry=where)

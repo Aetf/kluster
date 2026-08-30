@@ -170,21 +170,17 @@ that rotation incomplete.
 | OCI seed API key (its own user, group and policy: manage users, groups, policies and compartments in the tenancy) | The per-stack OCI users and their API keys, and the compartment each is confined to | **Yes** — IAM creates users and keys, its own included |
 | Cloudflare seed token (**API Tokens Write**, and **Zone Read** on all zones) | The zone-scoped provider token, the DNS-01 token, the gateway's ACME token | No — a minted token may not carry token permissions, so no token can mint this one |
 | B2 seed key (`writeKeys`/`deleteKeys` + bucket admin) | The management key and every prefix-scoped writer key | **Yes** — `b2_create_key`. The account's *master* key is an account root and lives in the personal estate, borrowed only to re-seed |
-| GitHub App private keys + **client ids** (**two** single-purpose Apps: dispatch, trigger — permissions are per-App; the JWT's `iss` is the client id, the numeric app id being deprecated for that use) | Installation tokens (8 h, minted per run) | No — key generation is console-only |
 | **Recovery key** (an age X25519 identity; its public recipient is committed here, its private half is kit-only) | Nothing — it *opens* the escrowed copy of every locally-generated secret (§2.2) | Generated, not minted (§2.2) |
 
-The "No" rows are the whole manual surface of a rotation: the
+The one "No" row is the whole manual surface of a rotation: the
 rotation script stops, prints what to create in which console, and
-resumes when the new value is handed to it. Each of those pauses needs
-an account login, which is the one thing the kit deliberately does not
+resumes when the new value is handed to it. That pause needs an
+account login, which is the one thing the kit deliberately does not
 carry — so a rotation run by a successor starts in the personal estate
 (§2.1), and the kit's README says so.
 
-Two rows are console-only because the platform has no API for what they
-are: the two GitHub Apps' private keys. The Cloudflare row is
-console-only for a different reason, and the distinction matters to
-anyone reading the API and wondering why it is not used — the call
-exists and is refused. A sub-token "is
+The Cloudflare row is console-only for a reason worth stating, because
+the API a reader would reach for exists and is refused. A sub-token "is
 not allowed to have permissions to manage other tokens"
 ([Cloudflare's own
 documentation](https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/)),
@@ -260,8 +256,8 @@ itself is self-service (§4.3).
     and is not a secret — and `Password` holds the secret, and nothing
     else does. The recovery key (§2.2) needs nothing beyond that
     shape: its public recipient is the identifier, its private identity
-    is the secret. Key material that is a *file* is an attachment: the two
-    GitHub App PEM files, and the OCI API key. The OCI row is the one
+    is the secret. Key material that is a *file* is an attachment: the
+    OCI API key. The OCI row is the one
     that needs more than those two fields, an API key there being five
     things: `UserName` is the user `OCID`, the PEM is the attachment,
     and the **tenancy `OCID` is a protected custom attribute** — the
@@ -282,9 +278,9 @@ itself is self-service (§4.3).
     provider accounts exist, that their credentials live in the
     personal estate, and that the estate's own succession is arranged
     separately. Without it a successor can open every seed and still
-    not reach the console-only rotations (the two Apps and Cloudflare),
-    replace the ZeroTier Central token §3 delivers, or re-seed after a
-    total loss.
+    not reach the Cloudflare seed's console-only rotation, replace the
+    console-made credentials §3 carries — the ZeroTier Central token,
+    the two GitHub App keys — or re-seed after a total loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
     rotation (§4.2) — plus the yearly offline day, which opens one kit
     and verifies it against §2's table. It is emphatically **not** a
@@ -318,12 +314,14 @@ current, and the older ones stay for as long as anything still answers
 to them — a dump encrypted to a superseded age identity, a certificate
 issued under a superseded CA.
 
-| Label | Escrowed secret |
-| --- | --- |
-| `pulumi/passphrase` | Pulumi state passphrase |
-| `alertmanager/read` | Bearer token the issue-sync poller presents (§3) |
-| `state-backend/ca` | State-backend CA private key |
-| `backup/age/<generation>` | age identity for pg_dump encryption |
+| Label | Escrowed secret | Origin |
+| --- | --- | --- |
+| `pulumi/passphrase` | Pulumi state passphrase | Generated |
+| `alertmanager/read` | Bearer token the issue-sync poller presents (§3) | Generated |
+| `state-backend/ca` | State-backend CA private key | Generated |
+| `backup/age/<generation>` | age identity for pg_dump encryption | Generated |
+| `github/dispatch-key` | Private key of the dispatch App (§3) | Console |
+| `github/trigger-key` | Private key of the trigger App (§3) | Console |
 
 Two things are called a generation on that table, and they are not the
 same: `backup/age/<generation>` names the *backup* generation
@@ -332,9 +330,25 @@ holds one identity for its lifetime — so its escrow has one generation
 of its own, and rotating the backup key means a new label rather than a
 new generation under the old one.
 
+**Two rows are not generated here**, and the Origin column is what says
+so. A GitHub App's private key is created on the App's own settings
+page, disclosed once, and created by no API of that platform; what
+this side does is take it as it stands and escrow it, which is the same
+ciphertext, the same generations and the same recovery as everything
+above. It is here rather than in the kit because it mints nothing the
+credential tree derives from, and a kit row that a workflow consumes
+would make every kit rotation owe that workflow a redelivery (§2). What
+the registry buys such a row is that a lost slot is refilled from a
+ciphertext instead of by another visit to that page; what it does not
+buy is reproducibility — losing the ciphertext costs a new key there,
+not the credential.
+
 That table is the whole of it: **only durable roots are escrowed.** A
-value earns a row by being one whose loss loses data or forces a
-production rotation, and which nothing upstream can re-mint. Leaf
+generated value earns a row by being one whose loss loses data or
+forces a production rotation, and which nothing upstream can re-mint. A
+console-made one earns it on that second test alone: no seed can mint
+it, so the registry is the only home for a copy that the kit's own
+rotation does not have to hand out again. Leaf
 certificates under the state-backend CA fail the second test — their
 keys are generated at issuance and never escrowed, because the CA
 re-issues them (§3) — and so do the secrets a *program* generates,
@@ -422,7 +436,8 @@ by hand.
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret + CI env | `physical` |
 | B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret · on-box | restic/barman, ops-repo workflow, micro cron |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
-| GitHub installation tokens | The two App private keys | Per-run, 8 h; dispatch App = contents:write on `kluster-ops`, trigger App = actions:write on `kluster` | never stored — minted in-run | Alert producer step, weekly drift trigger |
+| GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (pending) | Alert producer step |
+| GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (pending) | Weekly drift trigger |
 | ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per identity domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
 | Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
@@ -537,6 +552,23 @@ lost one can be replaced is the account or appliance behind it — the
 Central account is one of the account roots §2 keeps out of the kit, and
 the two appliances are the estate's own.
 
+**Two more are made in a console and read by a workflow.** Each
+single-purpose GitHub App has a private key generated on its own settings
+page — disclosed once, and creatable by no API GitHub publishes — so the
+key is recorded rather than minted, exactly like the three above.
+It is not a seed for the same reason they are not: what a job makes from
+it is an **installation token**, good for eight hours and used inside the
+run that minted it, which is working material of a workflow rather than
+anything this register stores. Where these two differ from the three
+above is the slot. The consumer is a workflow rather than a stack, and
+neither workflow is built, so the escrow copy (§2.2) is the whole of the
+row today and the repository secret each key is destined for arrives with
+the job that reads it. Rotating one is another key on that page,
+recorded here, and the superseded key deleted in the same visit. The
+client id the JWT is issued under travels with the delivery rather than
+with the key: it identifies the App instead of authenticating as it, and
+the App's page shows it for as long as the App exists.
+
 ## 4. The scripts
 
 The register's executable form: `credentials`, a console script in this
@@ -551,10 +583,12 @@ rows. A row is named the same way everywhere — words joined by `-`, as
 What differs between §3's rows is the verb, because what differs between
 them is how the value comes into being: `mint` for a row a seed mints,
 `generate` / `import` / `recover` for a row generated here and escrowed
-(§2.2), and `record` for a row made in the console that checks it and
-typed in. The escrow *directory* keeps the `/` paths it files ciphertexts
-under (`escrow/pulumi/passphrase/1.age`); only the command surface uses
-the row name.
+(§2.2), and `record` for a row made in a console because no API of that
+platform makes one — into the stack that authenticates with it, or into
+the escrow where a row whose consumer does not exist yet rests. The escrow
+*directory* keeps the `/` paths it files ciphertexts under
+(`escrow/pulumi/passphrase/1.age`); only the command surface uses the row
+name.
 
 | Command | When |
 | --- | --- |
@@ -577,6 +611,7 @@ the row name.
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token and the id of the network it administers, into the `physical` stack's config. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
+| `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
@@ -641,6 +676,16 @@ credential in the process table of a shared machine, with `-` reading
 standard input. The console steps live beside the row (`devices.py`) for
 the reason §2's live beside theirs: a runbook would be a second place
 for them to be wrong.
+
+The **App-key rows** carry the same verb one slot over (`escrow.py`):
+console steps printed, the value taken on standard input, and the escrow
+generation written in place of a stack push, because no stack
+authenticates with either key. What the command adds there is a probe —
+it opens the registry and compares before it files anything, so a value
+already escrowed produces no second generation of itself. That is what
+makes moving a key out of a kit re-runnable, and it is the same
+discipline as the rest of §4.1: whether the work is done is answered by
+looking at the product, never by a note saying a command ran.
 
 The zones token's scope is not a list in the script: it is the estate's
 zones as `conventions` names them, resolved to zone ids through the seed
@@ -797,7 +842,14 @@ that puts a value there.
     here. Each prints the steps that create it, takes the value, and
     writes it into the config of the stack that reads it, which is then
     committed like the rows above.
-8.  `credentials derived sync` — the GitHub secrets CI reads, for the §3
+8.  `credentials derived github-dispatch-key record` and
+    `credentials derived github-trigger-key record` — the two GitHub App
+    private keys, each generated on its own App's settings page and
+    escrowed here. No stack authenticates with either, so the ciphertext
+    is the delivery for now, and it is a file to commit; the workflow that
+    mints an installation token from a key arrives with its own repository
+    secret (§3).
+9.  `credentials derived sync` — the GitHub secrets CI reads, for the §3
     rows whose value lives somewhere else (§4). Last, because a row read
     out of a stack needs that stack to have run; a row it cannot fill yet
     says which slot is waiting on what, and the same command run again
@@ -836,6 +888,10 @@ GitHub secret — and the rest have none.
     `derived check` reports its absence as a problem — and the token on
     file is the value those two consumers will be built around rather
     than one they replace.
+-   The **two App keys** are in that same shape, one layer out: recorded
+    and escrowed, with the repository secret each is destined for waiting
+    on the workflow that reads it. Their client ids wait with it, being
+    part of the delivery rather than of the key (§3).
 -   The **slot-drift probe** (§4). The map it would read is checked in;
     the scheduled workflow that compares it against reality is not.
 
@@ -845,9 +901,9 @@ unwritten but generates its own password into state and seals it, so a
 new volume will need no `credentials` run (rule 6). Until the commands
 above exist, a bring-up delivers the seed kit, the state backend, the
 provider credentials the `dns` and `physical` stacks run on, the three
-console-made credentials those stacks authenticate with, and the
-GitHub secrets whose values a workstation can obtain; the rest of §3 is
-design rather than procedure.
+console-made credentials those stacks authenticate with, the two App
+keys into the escrow, and the GitHub secrets whose values a workstation
+can obtain; the rest of §3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `kit bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
@@ -874,9 +930,8 @@ generate`, below) touches no other credential.
 It **writes a new database file** (`--into`), and the retired one
 is left byte-for-byte as it was: unseal the old, have each seed mint its
 successor, generate a fresh recovery key, and write all of it into
-the new database. The GitHub App private keys and the Cloudflare seed
-token are explicit pauses — the script prints the console steps and
-waits.
+the new database. The Cloudflare seed token is an explicit pause — the
+script prints the console steps and waits.
 
 **The recovery row's rotation is the re-encryption.** Rotating that row
 writes the successor identity into the new database and then, in the
@@ -898,9 +953,8 @@ that successor before the predecessor's key is retired, so a run
 interrupted anywhere leaves a working seed in one kit or the other; the
 console-made Cloudflare token is checked for both permissions the seed
 needs (§2) while the operator is still on the page that fixes either.
-The rows that are only pasted in — the two App private keys — are stored
-as given, so a wrong value there surfaces at its first use rather than
-during the rotation.
+No row in the walk is merely pasted in, which is what makes the run's
+success mean the successor kit works.
 
 Nothing beyond the kit is touched. The §3 credentials minted from
 the retired seeds keep working, and each is replaced by re-running its
