@@ -9,6 +9,7 @@ the CA it chains to, and the address it answers on.
 from __future__ import annotations
 
 import shutil
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,21 @@ def test_the_server_key_is_outside_the_bill_of_materials(roots: config.Roots) ->
     assert 'server_key' not in _digests(roots)
 
 
+def test_the_dump_key_secret_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
+    # The digest map travels in the instance's metadata. What the converge
+    # compares is the key's identity, which is `b2_dump_key_id`.
+    assert 'b2_dump_key' not in _digests(roots)
+
+
+def test_every_field_but_the_two_secrets_is_compared(roots: config.Roots) -> None:
+    # Each field declares its own digest treatment, so a field added to the
+    # machine is compared unless it says otherwise, and neither a rename nor a
+    # new field can quietly drop a component out of the comparison.
+    compared = set(_digests(roots)) - {'butane'}
+
+    assert compared == {spec.name for spec in fields(config.Machine)} - {'server_key', 'b2_dump_key'}
+
+
 def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Roots) -> None:
     # One issuance, both halves. Two calls would give the box a certificate
     # its private key does not answer for, and 5432 would never come up.
@@ -74,8 +90,8 @@ def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Root
     from cryptography.hazmat.primitives import serialization
 
     values = config.machine(roots, address=ADDRESS, dump_key_id='k', dump_key='s', bucket_id='b')
-    cert = x509.load_pem_x509_certificate(str(values['server_cert']).encode())
-    key = serialization.load_pem_private_key(str(values['server_key']).encode(), password=None)
+    cert = x509.load_pem_x509_certificate(values.server_cert.encode())
+    key = serialization.load_pem_private_key(values.server_key.encode(), password=None)
 
     assert key.public_key().public_bytes(  # pyright: ignore[reportAttributeAccessIssue]
         encoding=serialization.Encoding.DER,

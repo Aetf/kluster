@@ -97,7 +97,7 @@ def _mint() -> Path:
 def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
     _ = _mint()
 
-    client = provision.Oci.load()
+    client = provision.OciClients.load()
 
     # The slot is the signing configuration, and where the appliance may act is
     # a convention beside it: the mapping is the one place the compartment is
@@ -109,7 +109,7 @@ def test_the_appliance_signs_as_the_key_minted_for_it(slots: Path) -> None:
 def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
     _ = _mint()
 
-    client = provision.Oci.load('ocid1.compartment.oc1..elsewhere')
+    client = provision.OciClients.load('ocid1.compartment.oc1..elsewhere')
 
     # The drill escape: a run against a tenancy that is not this estate's
     # names its own compartment, because none of the mapping applies there.
@@ -133,7 +133,7 @@ def test_the_superseded_configuration_is_read_once_and_loudly(
     monkeypatch.setattr(provision, 'LEGACY_CONFIG_FILE', superseded)
 
     with caplog.at_level(logging.WARNING):
-        client = provision.Oci.load()
+        client = provision.OciClients.load()
 
     assert client.compartment_id == COMPARTMENT
     assert 'credentials derived oci-state-backend mint' in caplog.text
@@ -143,7 +143,7 @@ def test_a_machine_with_no_credential_is_told_what_mints_one(slots: Path) -> Non
     # The SDK's own answer is a missing file; this one names the command that
     # creates it, which is the whole difference between a stop and a step.
     with pytest.raises(ValueError, match='credentials derived oci-state-backend mint'):
-        _ = provision.Oci.load()
+        _ = provision.OciClients.load()
 
 
 class _Recorder:
@@ -216,10 +216,14 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(b2, 'ensure_bucket', _returning('bucket-id'))
         monkeypatch.setattr(b2, 'mint_dump_key', mint)
         monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
-        monkeypatch.setattr(provision.Oci, 'load', classmethod(_returning(object())))
-        monkeypatch.setattr(provision, 'ensure_network', _returning(('vcn', 'subnet')))
+        monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(object())))
+        monkeypatch.setattr(
+            provision, 'ensure_network', _returning(provision.Placement(vcn_id='vcn', subnet_id='subnet'))
+        )
         monkeypatch.setattr(provision, 'ensure_security_group', _returning('nsg'))
-        monkeypatch.setattr(provision, 'ensure_reserved_ip', _returning(('ip-id', '192.0.2.10')))
+        monkeypatch.setattr(
+            provision, 'ensure_reserved_ip', _returning(provision.ReservedAddress(id='ip-id', address='192.0.2.10'))
+        )
         monkeypatch.setattr(provision, 'ensure_image', _returning('image'))
         monkeypatch.setattr(provision, 'find_instance', find)
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
@@ -356,10 +360,9 @@ def test_a_launch_records_what_the_next_converge_compares(converge: Any) -> None
     converge(recorder)
     _ = _run()
 
-    assert provision.instance_config(type('Instance', (), {'metadata': recorder.launched_metadata})()) == (
-        CURRENT,
-        'key-id',
-    )
+    assert provision.instance_config(
+        type('Instance', (), {'metadata': recorder.launched_metadata})()
+    ) == provision.InstanceConfig(digests=CURRENT, dump_key_id='key-id')
 
 
 def test_replacing_forgets_the_destroyed_box_s_host_key(converge: Any) -> None:

@@ -36,8 +36,9 @@ import subprocess as sp
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import cast
 
+from kluster.lib import config as lib_config
 from kluster.scripts.credentials import age, lifecycle, pulumi_config
 
 from . import config, settings
@@ -318,8 +319,30 @@ def stacks(target: Connection) -> list[str]:
         )
     except pulumi_config.SlotRefused as exc:
         raise StateError(str(exc)) from exc
-    listing = list[dict[str, Any]](json.loads(printed or '[]'))
-    return sorted(str(entry.get('name', '')) for entry in listing)
+    return sorted(_stack_names(printed))
+
+
+def _stack_names(printed: str) -> list[str]:
+    """The names in `pulumi stack ls --json` output, or a refusal quoting it.
+
+    The boundary for that command: a restore is verified by this list, so an
+    entry that carries no name must not become an empty string that counts as
+    a stack — a backend that answered nothing useful would then read as one
+    holding state.
+    """
+    try:
+        listing: object = json.loads(printed or '[]')
+    except ValueError as exc:
+        raise StateError(f'`pulumi stack ls --json` did not print JSON: {printed[:120]!r}') from exc
+    if not isinstance(listing, list):
+        raise StateError(f'`pulumi stack ls --json` printed a {type(listing).__name__}, not a list of stacks')
+    names: list[str] = []
+    for index, entry in enumerate(cast('list[object]', listing)):
+        name = cast('dict[str, object]', entry).get('name') if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name:
+            raise StateError(f'`pulumi stack ls --json` entry {index} carries no name, and is {entry!r}')
+        names.append(name)
+    return names
 
 
 def encrypted(path: Path) -> bool:
@@ -332,7 +355,10 @@ def encrypted(path: Path) -> bool:
     """
     if not path.is_file():
         raise StateError(f'no dump at {path}')
-    head = path.read_bytes()[: len(ARMOUR_MAGIC)]
+    # The first bytes, not the file: this runs before a restore, and the input
+    # is a dump of the whole Pulumi state.
+    with path.open('rb') as handle:
+        head = handle.read(len(ARMOUR_MAGIC))
     if head.startswith(AGE_MAGIC) or head.startswith(ARMOUR_MAGIC):
         return True
     if head.startswith(ARCHIVE_MAGIC):
@@ -378,15 +404,15 @@ def decrypt(source: Path, destination: Path, identities: Sequence[str]) -> None:
     )
 
 
-def identity_file(path: Path) -> list[str]:
+def identity_file(path: Path) -> tuple[str, ...]:
     """The age identities in a file — the drill key's delivery form.
 
     The unattended drill (§7.3) holds one key in a repository secret and no
-    kit at all, so it writes that key to a file and names it. Comment lines
-    are skipped, which is what `age-keygen` puts above the key it prints.
+    kit at all, so it writes that key to a file and names it. The file is a
+    line per value with `#` comments, which is what `age-keygen` prints, and
+    is read by the reader every such file in this repository is read by.
     """
-    lines = [line.strip() for line in path.read_text().splitlines()]
-    found = [line for line in lines if line and not line.startswith('#')]
-    if not found:
-        raise StateError(f'{path} holds no age identity')
-    return found
+    try:
+        return lib_config.lines(path, 'the age identity file')
+    except (OSError, ValueError) as exc:
+        raise StateError(f'{path} holds no age identity') from exc

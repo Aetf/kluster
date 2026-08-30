@@ -20,9 +20,10 @@ import subprocess as sp
 import tarfile
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from io import BytesIO, StringIO
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, cast
 
 import requests
 from ruamel.yaml import YAML
@@ -31,18 +32,43 @@ from tqdm import tqdm
 from kluster.scripts.update_crds import pins
 from kluster.scripts.update_crds.pins import Chart, ReleaseManifest, SourceTree
 
-log = logging.getLogger('kluster.scripts.update_crds')
+log = logging.getLogger(__name__)
 
 #: Anything else in a rendered chart is a workload, and not our business.
 CRD_KIND = 'CustomResourceDefinition'
 
+#: The file names a source tree contributes. Anything else in a definitions
+#: directory is a README or a script.
+YAML_SUFFIXES = ('.yaml', '.yml')
+
 _GITHUB_API = 'https://api.github.com'
 
 
+class SourceError(RuntimeError):
+    """A fetched document is not shaped the way the thing it claims to be is."""
+
+
+@dataclass(frozen=True)
+class Definition:
+    """One CustomResourceDefinition, with the two fields the selection turns on.
+
+    The document is carried whole because that is what `crd2pulumi` reads, but
+    nothing downstream indexes it again: what the pipeline decides with —
+    which group a definition belongs to, and which name makes it a duplicate —
+    is read once, where the YAML stops being untyped.
+    """
+
+    name: str
+    group: str
+    document: dict[str, Any]
+
+
 @contextmanager
-def _progress_read(fileobj: IO[bytes], /, **kwargs: Any) -> Generator[Any, None, None]:
-    kwargs = {'unit': 'B', 'unit_scale': True, 'unit_divisor': 1024, 'miniters': 1, **kwargs}
-    with tqdm.wrapattr(fileobj, 'read', **kwargs) as wrapped:
+def _progress_read(fileobj: IO[bytes], /, *, desc: str, total: int) -> Generator[Any, None, None]:
+    """`fileobj` with a byte-counting progress bar wrapped around its reads."""
+    with tqdm.wrapattr(
+        fileobj, 'read', unit='B', unit_scale=True, unit_divisor=1024, miniters=1, desc=desc, total=total
+    ) as wrapped:
         yield wrapped
 
 
@@ -75,9 +101,9 @@ def fetch_helm(workdir: Path) -> Path:
 
     with tarfile.open(fileobj=BytesIO(archive), mode='r:gz') as tarobj:
         tarobj.extractall(workdir, filter='data')
-    helm = next(path for path in workdir.rglob('helm') if path.is_file() and os.access(path, os.X_OK))
+    helm = _extracted_binary(workdir, 'helm', source=pins.HELM_URL)
     log.info(f'Helm binary: {helm}')
-    return helm.resolve()
+    return helm
 
 
 def fetch_crd2pulumi(workdir: Path) -> Path:
@@ -94,9 +120,22 @@ def fetch_crd2pulumi(workdir: Path) -> Path:
             with tarfile.open(fileobj=f, mode='r:gz') as tarobj:
                 tarobj.extractall(workdir, filter='data')
 
-    binary = next(path for path in workdir.rglob('crd2pulumi') if path.is_file() and os.access(path, os.X_OK))
+    binary = _extracted_binary(workdir, 'crd2pulumi', source=url)
     log.info(f'crd2pulumi binary: {binary}')
-    return binary.resolve()
+    return binary
+
+
+def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
+    """The one executable called `name` an unpacked archive left under `workdir`.
+
+    An upstream that changes an archive's layout is refused by name here: the
+    bare search would otherwise end in a `StopIteration` raised inside a
+    generator, which says neither what was looked for nor where it came from.
+    """
+    found = next((path for path in workdir.rglob(name) if path.is_file() and os.access(path, os.X_OK)), None)
+    if found is None:
+        raise SourceError(f'{source} unpacked no executable called {name}')
+    return found.resolve()
 
 
 # --- Sources --------------------------------------------------------------
@@ -167,20 +206,60 @@ def fetch_source_tree(tree: SourceTree) -> list[str]:
             timeout=60,
         )
         _ = listing.raise_for_status()
-        entries = [entry for entry in listing.json() if entry['name'].endswith(('.yaml', '.yml'))]
+        urls = yaml_file_urls(listing.json(), what=f'{tree.repo}@{tree.ref}:{path}')
 
-        log.info(f'Downloading {len(entries)} CRD files from {tree.repo}@{tree.ref}:{path}')
-        for entry in tqdm(entries, desc=f'{tree.repo}:{path}'):
-            file = requests.get(entry['download_url'], timeout=60)
+        log.info(f'Downloading {len(urls)} CRD files from {tree.repo}@{tree.ref}:{path}')
+        for url in tqdm(urls, desc=f'{tree.repo}:{path}'):
+            file = requests.get(url, timeout=60)
             _ = file.raise_for_status()
             documents.append(file.text)
     return documents
 
 
+def yaml_file_urls(listing: object, *, what: str) -> list[str]:
+    """The download URLs of the YAML files in a GitHub contents listing.
+
+    The boundary for that API: `what` names the directory that was listed, so
+    a listing that is not a listing — a rate-limit object, a file where a
+    directory was expected — is refused by name here rather than raising a
+    `KeyError` over an entry nobody can identify.
+    """
+    if not isinstance(listing, list):
+        raise SourceError(f'{what}: the contents API answered a {type(listing).__name__}, not a list of entries')
+    urls: list[str] = []
+    for entry in cast('list[Any]', listing):
+        name = entry.get('name') if isinstance(entry, dict) else None
+        url = entry.get('download_url') if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not isinstance(url, str):
+            raise SourceError(f'{what}: an entry carries no name and download_url pair, and is {entry!r}')
+        if name.endswith(YAML_SUFFIXES):
+            urls.append(url)
+    return urls
+
+
 # --- Selection ------------------------------------------------------------
 
 
-def select_crds(documents: Iterable[str]) -> list[dict[str, Any]]:
+def definition(document: dict[str, Any]) -> Definition:
+    """A parsed CRD document as a `Definition`, or a refusal naming what it lacks.
+
+    The boundary between YAML and this program: a definition without a name
+    or a group cannot be deduplicated, filtered or generated from, so it is
+    rejected here rather than three steps later where the traceback would
+    name a dictionary instead of a document.
+    """
+    metadata = document.get('metadata')
+    spec = document.get('spec')
+    name = metadata.get('name') if isinstance(metadata, dict) else None
+    group = spec.get('group') if isinstance(spec, dict) else None
+    if not isinstance(name, str) or not name:
+        raise SourceError(f'a {CRD_KIND} document has no metadata.name, and holds {sorted(document)}')
+    if not isinstance(group, str) or not group:
+        raise SourceError(f'{CRD_KIND} {name} has no spec.group')
+    return Definition(name=name, group=group, document=document)
+
+
+def select_crds(documents: Iterable[str]) -> list[Definition]:
     """The CustomResourceDefinitions worth generating bindings from.
 
     Pure, so what it decides is testable without the network: keep only CRDs,
@@ -190,38 +269,34 @@ def select_crds(documents: Iterable[str]) -> list[dict[str, Any]]:
     what `crd2pulumi` cannot do.
     """
     yaml = _yaml()
-    selected: dict[str, dict[str, Any]] = {}
+    selected: dict[str, Definition] = {}
     for document in documents:
         for item in yaml.load_all(document):
             if not isinstance(item, dict) or item.get('kind') != CRD_KIND:
                 continue
-            crd: dict[str, Any] = item
-            group = crd['spec']['group']
-            if group in pins.DROPPED_GROUPS:
+            crd = definition(cast('dict[str, Any]', item))
+            if crd.group in pins.DROPPED_GROUPS or crd.name in selected:
                 continue
-            name = crd['metadata']['name']
-            if name in selected:
-                continue
-            _ = crd.pop('status', None)
-            selected[name] = crd
+            _ = crd.document.pop('status', None)
+            selected[crd.name] = crd
     return [selected[name] for name in sorted(selected)]
 
 
-def write_crd_files(crds: Iterable[dict[str, Any]], directory: Path) -> list[Path]:
+def write_crd_files(crds: Iterable[Definition], directory: Path) -> list[Path]:
     """One file per CRD, because `crd2pulumi` cannot read a multi-document one."""
     yaml = _yaml()
     files: list[Path] = []
     for index, crd in enumerate(crds):
         file = directory / f'crd_{index:03d}.yaml'
         with file.open('w') as handle:
-            yaml.dump(crd, handle)
+            yaml.dump(crd.document, handle)
         files.append(file)
     return files
 
 
-def dump_bundle(crds: Iterable[dict[str, Any]]) -> str:
+def dump_bundle(crds: Iterable[Definition]) -> str:
     """The selected CRDs as one multi-document YAML stream."""
     yaml = _yaml()
     buffer = StringIO()
-    yaml.dump_all(crds, buffer)
+    yaml.dump_all([crd.document for crd in crds], buffer)
     return buffer.getvalue()

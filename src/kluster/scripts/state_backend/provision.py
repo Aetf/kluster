@@ -32,10 +32,10 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn, cast
 
 import oci
 
@@ -67,14 +67,14 @@ def _data(response: Any) -> Any:
 
 
 @dataclass
-class Oci:
+class OciClients:
     """The OCI clients, bound to one compartment."""
 
     compartment_id: str
     config: dict[str, Any]
 
     @classmethod
-    def load(cls, compartment_id: str | None = None) -> Oci:
+    def load(cls, compartment_id: str | None = None) -> OciClients:
         """The appliance's own API key, out of the workstation slot that holds it.
 
         The key is a §3 credential like any other (credentials.md), minted
@@ -190,11 +190,11 @@ def _find(items: list[Any], display_name: str) -> Any | None:
     return None
 
 
-def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> Any:
+def _await_state(fetch: Callable[[], Any], target: str, *, what: str, timeout: int = 3600) -> Any:
     """Poll `fetch` until its resource reaches `target`.
 
-    The SDK's own waiter re-raises the transient 404s described on the client
-    above, which on an hour-long image import means losing the wait to a blip.
+    The SDK's own waiter re-raises the transient 404s the retry strategy
+    above absorbs, which on an hour-long image import means losing the wait to a blip.
     """
     started = time.monotonic()
     deadline = started + timeout
@@ -228,17 +228,30 @@ def _await_state(fetch: Any, target: str, *, what: str, timeout: int = 3600) -> 
     raise TimeoutError(f'{what} never reached {target} within {_duration(timeout)}')
 
 
-def ensure_network(client: Oci) -> tuple[str, str]:
-    """The appliance's VCN, gateway, route and subnet. Returns (vcn, subnet)."""
-    network = client.network
+@dataclass(frozen=True)
+class Placement:
+    """The VCN and the subnet everything the appliance needs is created in.
+
+    Named apart from `OciClients.network`, which is the SDK client that talks
+    to the networking service: this is the pair of identifiers that client
+    produced.
+    """
+
+    vcn_id: str
+    subnet_id: str
+
+
+def ensure_network(clients: OciClients) -> Placement:
+    """The appliance's VCN, gateway, default route and subnet."""
+    network = clients.network
     log.info('converging the VCN, internet gateway, default route and subnet')
 
-    vcn = _find(_data(network.list_vcns(client.compartment_id)), _name('vcn'))
+    vcn = _find(_data(network.list_vcns(clients.compartment_id)), _name('vcn'))
     if vcn is None:
         vcn = _data(
             network.create_vcn(
                 oci.core.models.CreateVcnDetails(
-                    compartment_id=client.compartment_id,
+                    compartment_id=clients.compartment_id,
                     cidr_block=settings.VCN_CIDR,
                     display_name=_name('vcn'),
                     dns_label='statebackend',
@@ -247,12 +260,12 @@ def ensure_network(client: Oci) -> tuple[str, str]:
         )
         log.info('created VCN %s', vcn.id)
 
-    gateway = _find(_data(network.list_internet_gateways(client.compartment_id, vcn_id=vcn.id)), _name('igw'))
+    gateway = _find(_data(network.list_internet_gateways(clients.compartment_id, vcn_id=vcn.id)), _name('igw'))
     if gateway is None:
         gateway = _data(
             network.create_internet_gateway(
                 oci.core.models.CreateInternetGatewayDetails(
-                    compartment_id=client.compartment_id,
+                    compartment_id=clients.compartment_id,
                     vcn_id=vcn.id,
                     is_enabled=True,
                     display_name=_name('igw'),
@@ -277,12 +290,12 @@ def ensure_network(client: Oci) -> tuple[str, str]:
         )
         log.info('default route now points at the gateway')
 
-    subnet = _find(_data(network.list_subnets(client.compartment_id, vcn_id=vcn.id)), _name('subnet'))
+    subnet = _find(_data(network.list_subnets(clients.compartment_id, vcn_id=vcn.id)), _name('subnet'))
     if subnet is None:
         subnet = _data(
             network.create_subnet(
                 oci.core.models.CreateSubnetDetails(
-                    compartment_id=client.compartment_id,
+                    compartment_id=clients.compartment_id,
                     vcn_id=vcn.id,
                     cidr_block=settings.SUBNET_CIDR,
                     display_name=_name('subnet'),
@@ -293,26 +306,26 @@ def ensure_network(client: Oci) -> tuple[str, str]:
         )
         log.info('created subnet %s', subnet.id)
 
-    return str(vcn.id), str(subnet.id)
+    return Placement(vcn_id=str(vcn.id), subnet_id=str(subnet.id))
 
 
-def ensure_security_group(client: Oci, vcn_id: str) -> str:
+def ensure_security_group(clients: OciClients, vcn_id: str) -> str:
     """5432 and 22 from anywhere.
 
     The client certificate is the wall (state-backend.md §4): an allowlist of
     GitHub's ranges exceeds the rule quota by an order of magnitude, and a
     home-only rule would simply break CI.
     """
-    network = client.network
+    network = clients.network
     log.info('converging the security group and its rules')
     group = _find(
-        _data(network.list_network_security_groups(compartment_id=client.compartment_id, vcn_id=vcn_id)), _name('nsg')
+        _data(network.list_network_security_groups(compartment_id=clients.compartment_id, vcn_id=vcn_id)), _name('nsg')
     )
     if group is None:
         group = _data(
             network.create_network_security_group(
                 oci.core.models.CreateNetworkSecurityGroupDetails(
-                    compartment_id=client.compartment_id,
+                    compartment_id=clients.compartment_id,
                     vcn_id=vcn_id,
                     display_name=_name('nsg'),
                 )
@@ -369,37 +382,97 @@ def ensure_security_group(client: Oci, vcn_id: str) -> str:
     return str(group.id)
 
 
-def ensure_reserved_ip(client: Oci) -> tuple[str, str]:
-    """The address the server certificate is issued for. Returns (id, address)."""
-    network = client.network
+@dataclass(frozen=True)
+class ReservedAddress:
+    """A reserved public IP: what it is called in the API, and what it is.
+
+    Both halves travel together because the two are indistinguishable strings
+    with different uses -- one addresses the reservation, the other is issued
+    into a certificate -- and a caller free to pass them apart is a caller
+    free to swap them.
+    """
+
+    id: str
+    address: str
+
+
+def ensure_reserved_ip(clients: OciClients) -> ReservedAddress:
+    """The address the server certificate is issued for."""
+    network = clients.network
     log.info('looking up the reserved address %s', _name('ip'))
-    existing = _data(network.list_public_ips(scope='REGION', compartment_id=client.compartment_id, lifetime='RESERVED'))
+    existing = _data(
+        network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
+    )
     public_ip = _find(existing, _name('ip'))
     if public_ip is None:
         public_ip = _data(
             network.create_public_ip(
                 oci.core.models.CreatePublicIpDetails(
-                    compartment_id=client.compartment_id,
+                    compartment_id=clients.compartment_id,
                     lifetime='RESERVED',
                     display_name=_name('ip'),
                 )
             )
         )
         log.info('reserved %s', public_ip.ip_address)
-    return str(public_ip.id), str(public_ip.ip_address)
+    return ReservedAddress(id=str(public_ip.id), address=str(public_ip.ip_address))
 
 
-def fcos_artifact() -> tuple[str, str, str]:
-    """The pinned stream's qcow2: (release, url, sha256 of the compressed file)."""
+@dataclass(frozen=True)
+class FcosArtifact:
+    """The compressed disk image one FCOS release publishes for this platform."""
+
+    release: str
+    url: str
+    sha256: str
+
+
+#: Where the stream metadata keeps this platform's image, key by key. Named
+#: because the refusal below quotes it: a stream that stops publishing for
+#: Oracle Cloud has to say which step of the descent failed.
+_ARTIFACT_PATH = ('architectures', 'x86_64', 'artifacts', 'oraclecloud')
+
+
+def fcos_artifact() -> FcosArtifact:
+    """The pinned stream's qcow2, out of the stream metadata Fedora publishes."""
     log.info('fetching the FCOS %s stream metadata from %s', settings.FCOS_STREAM, settings.FCOS_STREAM_URL)
     with urllib.request.urlopen(settings.FCOS_STREAM_URL, timeout=60) as response:
-        stream: dict[str, Any] = json.load(response)
-    disk = stream['architectures']['x86_64']['artifacts']['oraclecloud']['formats']['qcow2.xz']['disk']
-    release = stream['architectures']['x86_64']['artifacts']['oraclecloud']['release']
-    return str(release), str(disk['location']), str(disk['sha256'])
+        stream: object = json.load(response)
+    what = f'the FCOS {settings.FCOS_STREAM} stream metadata'
+    platform = _descend(stream, _ARTIFACT_PATH, what=what)
+    disk = _descend(platform, ('formats', 'qcow2.xz', 'disk'), what=what)
+    return FcosArtifact(
+        release=_string(platform, 'release', what=what),
+        url=_string(disk, 'location', what=what),
+        sha256=_string(disk, 'sha256', what=what),
+    )
 
 
-def reserved_address(client: Oci) -> str:
+def _descend(document: object, path: Sequence[str], *, what: str) -> object:
+    """`document` at `path`, or a refusal naming the key that was not there.
+
+    The boundary for a document this program did not write: what it holds is
+    another project's decision, so a key it stops publishing is reported as
+    the missing key rather than as a `KeyError` several levels into one
+    expression.
+    """
+    found = document
+    for step in path:
+        if not isinstance(found, dict) or step not in found:
+            raise RuntimeError(f'{what} has no {".".join(path)}: nothing under {step}')
+        found = cast('dict[str, object]', found)[step]
+    return found
+
+
+def _string(document: object, key: str, *, what: str) -> str:
+    """One non-empty string field of such a document, refused by name if absent."""
+    value = cast('dict[str, object]', document).get(key) if isinstance(document, dict) else None
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f'{what} has no {key}, and holds {document!r}')
+    return value
+
+
+def reserved_address(clients: OciClients) -> str:
     """The appliance's address, looked up rather than created.
 
     `ensure_reserved_ip` reserves one when none exists, which is right during
@@ -407,7 +480,7 @@ def reserved_address(client: Oci) -> str:
     allocate cloud resources as a side effect of being unable to find them.
     """
     existing = _data(
-        client.network.list_public_ips(scope='REGION', compartment_id=client.compartment_id, lifetime='RESERVED')
+        clients.network.list_public_ips(scope='REGION', compartment_id=clients.compartment_id, lifetime='RESERVED')
     )
     public_ip = _find(existing, _name('ip'))
     if public_ip is None:
@@ -415,7 +488,7 @@ def reserved_address(client: Oci) -> str:
     return str(public_ip.ip_address)
 
 
-def ssh(client: Oci, command: Sequence[str]) -> int:
+def ssh(clients: OciClients, command: Sequence[str]) -> NoReturn:
     """Log in to the appliance, or run one command on it.
 
     SSH is a diagnosis path only (state-backend.md §1): the box is never
@@ -425,30 +498,30 @@ def ssh(client: Oci, command: Sequence[str]) -> int:
     Replaces this process rather than wrapping it, so an interactive session
     gets a real terminal and the exit status is ssh's own.
     """
-    address = reserved_address(client)
+    address = reserved_address(clients)
     argv = ['ssh', f'core@{address}', *command]
     log.info('%s', ' '.join(argv))
     os.execvp('ssh', argv)
 
 
-def ensure_image(client: Oci) -> str:
+def ensure_image(clients: OciClients) -> str:
     """Import the FCOS qcow2 as a custom image, once per release."""
-    release, url, sha256 = fcos_artifact()
-    image_name = _name(f'fcos-{release}')
+    artifact = fcos_artifact()
+    image_name = _name(f'fcos-{artifact.release}')
 
     log.info('looking for an imported image named %s', image_name)
-    image = _find(_data(client.compute.list_images(client.compartment_id, display_name=image_name)), image_name)
+    image = _find(_data(clients.compute.list_images(clients.compartment_id, display_name=image_name)), image_name)
     if image is not None:
         # An import in flight is not yet a bootable image; launching against
         # one fails, so converge on the finished state rather than its name.
         image_id = str(image.id)
         if str(image.lifecycle_state) != 'AVAILABLE':
-            _ = _await_state(lambda: client.compute.get_image(image_id), 'AVAILABLE', what=f'image {image_name}')
+            _ = _await_state(lambda: clients.compute.get_image(image_id), 'AVAILABLE', what=f'image {image_name}')
         return image_id
 
     log.info('no image for this release yet; checking the image bucket %s', IMAGE_BUCKET)
-    namespace = _data(client.object_storage.get_namespace())
-    storage = client.object_storage
+    namespace = _data(clients.object_storage.get_namespace())
+    storage = clients.object_storage
     try:
         _ = storage.get_bucket(namespace, IMAGE_BUCKET)
     except oci.exceptions.ServiceError as exc:
@@ -458,28 +531,28 @@ def ensure_image(client: Oci) -> str:
             storage.create_bucket(
                 namespace,
                 oci.object_storage.models.CreateBucketDetails(
-                    name=IMAGE_BUCKET, compartment_id=client.compartment_id, public_access_type='NoPublicAccess'
+                    name=IMAGE_BUCKET, compartment_id=clients.compartment_id, public_access_type='NoPublicAccess'
                 ),
             )
         )
         log.info('created image bucket %s', IMAGE_BUCKET)
 
-    object_name = f'fedora-coreos-{release}.qcow2'
+    object_name = f'fedora-coreos-{artifact.release}.qcow2'
     with tempfile.TemporaryDirectory() as tmp:
         compressed = Path(tmp) / 'fcos.qcow2.xz'
-        log.info('downloading the FCOS qcow2 (~1 GiB compressed): %s', url)
-        with urllib.request.urlopen(url, timeout=600) as response, compressed.open('wb') as out:
+        log.info('downloading the FCOS qcow2 (~1 GiB compressed): %s', artifact.url)
+        with urllib.request.urlopen(artifact.url, timeout=600) as response, compressed.open('wb') as out:
             shutil.copyfileobj(response, out)
 
         # Streamed: the image is most of a gigabyte, and this box has 1 GB.
         log.info('checking the download against the pinned sha256')
-        digest = hashlib.sha256()
+        hasher = hashlib.sha256()
         with compressed.open('rb') as check:
             for chunk in iter(lambda: check.read(1 << 20), b''):
-                digest.update(chunk)
-        digest = digest.hexdigest()
-        if digest != sha256:
-            raise RuntimeError(f'FCOS image digest mismatch: {digest} != {sha256}')
+                hasher.update(chunk)
+        downloaded = hasher.hexdigest()
+        if downloaded != artifact.sha256:
+            raise RuntimeError(f'FCOS image digest mismatch: {downloaded} != {artifact.sha256}')
         log.info('digest matches; decompressing the qcow2 (a few minutes)')
 
         qcow = Path(tmp) / 'fcos.qcow2'
@@ -494,9 +567,9 @@ def ensure_image(client: Oci) -> str:
         )
 
     created = _data(
-        client.compute.create_image(
+        clients.compute.create_image(
             oci.core.models.CreateImageDetails(
-                compartment_id=client.compartment_id,
+                compartment_id=clients.compartment_id,
                 display_name=image_name,
                 launch_mode='PARAVIRTUALIZED',
                 image_source_details=oci.core.models.ImageSourceViaObjectStorageTupleDetails(
@@ -509,11 +582,11 @@ def ensure_image(client: Oci) -> str:
         )
     )
     log.info('importing image %s', created.id)
-    image = _await_state(lambda: client.compute.get_image(created.id), 'AVAILABLE', what=f'image {image_name}')
+    image = _await_state(lambda: clients.compute.get_image(created.id), 'AVAILABLE', what=f'image {image_name}')
     return str(image.id)
 
 
-def _shape_domain(client: Oci, image_id: str) -> str:
+def _shape_domain(clients: OciClients, image_id: str) -> str:
     """An availability domain that actually offers the shape.
 
     Not `domains[0]`: a shape is offered per-AD, and this one is offered in
@@ -522,11 +595,11 @@ def _shape_domain(client: Oci, image_id: str) -> str:
     shape nor the domain, and reads like a permissions problem.
     """
     log.info('looking for an availability domain that offers %s', settings.SHAPE)
-    domains = [str(domain.name) for domain in _data(client.identity.list_availability_domains(client.compartment_id))]
+    domains = [str(domain.name) for domain in _data(clients.identity.list_availability_domains(clients.compartment_id))]
     for domain in domains:
         offered = oci.pagination.list_call_get_all_results(
-            client.compute.list_shapes,
-            client.compartment_id,
+            clients.compute.list_shapes,
+            clients.compartment_id,
             availability_domain=domain,
             image_id=image_id,
         ).data
@@ -535,9 +608,9 @@ def _shape_domain(client: Oci, image_id: str) -> str:
     raise RuntimeError(f'{settings.SHAPE} is offered in none of {", ".join(domains)} for this image')
 
 
-def find_instance(client: Oci) -> Any | None:
+def find_instance(clients: OciClients) -> Any | None:
     """The appliance, if it exists. Creates nothing."""
-    return _find(_data(client.compute.list_instances(client.compartment_id)), _name('vm'))
+    return _find(_data(clients.compute.list_instances(clients.compartment_id)), _name('vm'))
 
 
 #: What the box was built from, carried on the box. Instance metadata rather
@@ -548,7 +621,20 @@ CONFIG_METADATA = 'kluster_config'
 DUMP_KEY_METADATA = 'kluster_dump_key_id'
 
 
-def instance_config(instance: Any) -> tuple[dict[str, str], str]:
+@dataclass(frozen=True)
+class InstanceConfig:
+    """What a running box says it was built from.
+
+    Both halves come off the same metadata and are compared together, so they
+    travel together: a box whose digests are current but whose dump key is
+    not is as stale as the other way round.
+    """
+
+    digests: dict[str, str]
+    dump_key_id: str
+
+
+def instance_config(instance: Any) -> InstanceConfig:
     """The digests and dump key id a running box was built with.
 
     Absent or unparsable metadata answers empty, which every caller reads as
@@ -561,10 +647,10 @@ def instance_config(instance: Any) -> tuple[dict[str, str], str]:
         digests: dict[str, str] = {str(key): str(value) for key, value in json.loads(raw).items()}
     except (json.JSONDecodeError, AttributeError):
         digests = {}
-    return digests, str(metadata.get(DUMP_KEY_METADATA) or '')
+    return InstanceConfig(digests=digests, dump_key_id=str(metadata.get(DUMP_KEY_METADATA) or ''))
 
 
-def terminate_instance(client: Oci, instance_id: str) -> None:
+def terminate_instance(clients: OciClients, instance_id: str) -> None:
     """Terminate the box and wait for it to be gone.
 
     The boot volume goes with it: the appliance holds nothing a `pg_dump`
@@ -572,11 +658,11 @@ def terminate_instance(client: Oci, instance_id: str) -> None:
     would be a second copy of the state to keep track of.
     """
     log.info('terminating %s', instance_id)
-    _ = client.compute.terminate_instance(instance_id, preserve_boot_volume=False)
+    _ = clients.compute.terminate_instance(instance_id, preserve_boot_volume=False)
     # `_await_state` checks the target before its failure states, so asking
     # for TERMINATED here is not asking for the one it raises on.
     _ = _await_state(
-        lambda: client.compute.get_instance(instance_id), 'TERMINATED', what='the old instance', timeout=900
+        lambda: clients.compute.get_instance(instance_id), 'TERMINATED', what='the old instance', timeout=900
     )
 
 
@@ -598,7 +684,7 @@ def forget_host_key(address: str) -> None:
 
 
 def ensure_instance(
-    client: Oci,
+    clients: OciClients,
     *,
     subnet_id: str,
     nsg_id: str,
@@ -608,17 +694,17 @@ def ensure_instance(
     dump_key_id: str,
 ) -> str:
     """Launch the box, or return the one already running."""
-    compute = client.compute
-    instance = find_instance(client)
+    compute = clients.compute
+    instance = find_instance(clients)
     if instance is not None:
         return str(instance.id)
 
-    availability_domain = _shape_domain(client, image_id)
+    availability_domain = _shape_domain(clients, image_id)
     log.info('launching %s (%s) in %s', _name('vm'), settings.SHAPE, availability_domain)
     launched = _data(
         compute.launch_instance(
             oci.core.models.LaunchInstanceDetails(
-                compartment_id=client.compartment_id,
+                compartment_id=clients.compartment_id,
                 availability_domain=availability_domain,
                 display_name=_name('vm'),
                 shape=settings.SHAPE,
@@ -648,11 +734,11 @@ def ensure_instance(
     return str(launched.id)
 
 
-def attach_reserved_ip(client: Oci, *, instance_id: str, public_ip_id: str) -> None:
+def attach_reserved_ip(clients: OciClients, *, instance_id: str, public_ip_id: str) -> None:
     """Point the reserved address at the instance's primary private IP."""
-    network = client.network
+    network = clients.network
     log.info('checking that the reserved address points at the instance')
-    attachments = _data(client.compute.list_vnic_attachments(client.compartment_id, instance_id=instance_id))
+    attachments = _data(clients.compute.list_vnic_attachments(clients.compartment_id, instance_id=instance_id))
     vnic_id = attachments[0].vnic_id
     private_ips = _data(network.list_private_ips(vnic_id=vnic_id))
     primary = next(ip for ip in private_ips if ip.is_primary)
@@ -736,7 +822,7 @@ def _image_digest(image: str) -> str:
 
     token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repository}:pull'
     with urllib.request.urlopen(token_url, timeout=60) as response:
-        token = json.load(response)['token']
+        token = _string(json.load(response), 'token', what=f'the registry pull token for {repository}')
 
     request = urllib.request.Request(
         f'https://registry-1.docker.io/v2/{repository}/manifests/{tag}',
@@ -750,7 +836,12 @@ def _image_digest(image: str) -> str:
         },
     )
     with urllib.request.urlopen(request, timeout=60) as response:
-        return response.headers['Docker-Content-Digest'] or ''
+        digest = response.headers['Docker-Content-Digest'] or ''
+    if not digest:
+        # An empty answer would otherwise be logged as a resolution and the
+        # check that exists to catch a bad pin would report success.
+        raise RuntimeError(f'the registry answered for {image} without a Docker-Content-Digest header')
+    return digest
 
 
 def verify_pins() -> bool:
@@ -766,27 +857,31 @@ def verify_pins() -> bool:
     ok = True
 
     log.info('downloading age %s to hash it against its pin: %s', settings.AGE_VERSION, settings.AGE_URL)
-    digest = hashlib.sha256()
+    hasher = hashlib.sha256()
     with urllib.request.urlopen(settings.AGE_URL, timeout=300) as response:
         for chunk in iter(lambda: response.read(1 << 20), b''):
-            digest.update(chunk)
-    if digest.hexdigest() != settings.AGE_SHA256:
-        log.error('age: pinned %s, actual %s', settings.AGE_SHA256, digest.hexdigest())
+            hasher.update(chunk)
+    age_digest = hasher.hexdigest()
+    if age_digest != settings.AGE_SHA256:
+        log.error('age: pinned %s, actual %s', settings.AGE_SHA256, age_digest)
         ok = False
     else:
         log.info('age %s matches its pin', settings.AGE_VERSION)
 
     try:
-        digest = _image_digest(settings.POSTGRES_IMAGE)
-    except urllib.error.HTTPError as exc:
+        image_digest = _image_digest(settings.POSTGRES_IMAGE)
+    except (urllib.error.HTTPError, RuntimeError) as exc:
         log.error('%s: registry says %s (does the tag exist?)', settings.POSTGRES_IMAGE, exc)
         ok = False
     else:
         # Logged rather than pinned: the tag is the major line on purpose
         # (podman-auto-update follows the minor stream, settings.py), so the
         # digest moving is the design working, not a drift to fail on.
-        log.info('%s resolves to %s', settings.POSTGRES_IMAGE, digest)
+        log.info('%s resolves to %s', settings.POSTGRES_IMAGE, image_digest)
 
-    release, _, _ = fcos_artifact()
-    log.info('FCOS %s stream is at %s (imported per release, no pin to drift)', settings.FCOS_STREAM, release)
+    log.info(
+        'FCOS %s stream is at %s (imported per release, no pin to drift)',
+        settings.FCOS_STREAM,
+        fcos_artifact().release,
+    )
     return ok

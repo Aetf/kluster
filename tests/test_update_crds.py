@@ -47,20 +47,20 @@ metadata:
 def test_select_crds_keeps_only_custom_resource_definitions() -> None:
     selected = sources.select_crds([f'{DEPLOYMENT}---{CRD}'])
 
-    assert [crd['metadata']['name'] for crd in selected] == ['widgets.example.com']
+    assert [crd.name for crd in selected] == ['widgets.example.com']
 
 
 def test_select_crds_drops_retired_groups() -> None:
     """`fpga.intel.com` rides along in the Intel operator chart and is retired."""
     selected = sources.select_crds([DROPPED, CRD])
 
-    assert [crd['spec']['group'] for crd in selected] == ['example.com']
+    assert [crd.group for crd in selected] == ['example.com']
 
 
 def test_select_crds_strips_the_cluster_written_status() -> None:
     (selected,) = sources.select_crds([CRD])
 
-    assert 'status' not in selected
+    assert 'status' not in selected.document
 
 
 def test_select_crds_deduplicates_by_name() -> None:
@@ -75,12 +75,60 @@ def test_select_crds_orders_by_name() -> None:
 
     selected = sources.select_crds([CRD, other])
 
-    assert [crd['metadata']['name'] for crd in selected] == ['anvils.example.com', 'widgets.example.com']
+    assert [crd.name for crd in selected] == ['anvils.example.com', 'widgets.example.com']
 
 
 def test_select_crds_tolerates_empty_documents() -> None:
     """A rendered chart whose values disabled everything is a stream of nothing."""
     assert sources.select_crds(['---\n# Source: chart/templates/empty.yaml\n---\n']) == []
+
+
+def test_select_crds_names_a_definition_that_carries_no_name() -> None:
+    nameless = """
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+spec:
+  group: example.com
+"""
+
+    with pytest.raises(sources.SourceError, match='no metadata.name'):
+        _ = sources.select_crds([nameless])
+
+
+def test_select_crds_names_a_definition_that_carries_no_group() -> None:
+    groupless = """
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+"""
+
+    with pytest.raises(sources.SourceError, match='widgets.example.com has no spec.group'):
+        _ = sources.select_crds([groupless])
+
+
+def test_yaml_file_urls_keeps_the_yaml_entries_of_a_contents_listing() -> None:
+    listing = [
+        {'name': 'widget.yaml', 'download_url': 'https://example.com/widget.yaml'},
+        {'name': 'anvil.yml', 'download_url': 'https://example.com/anvil.yml'},
+        {'name': 'README.md', 'download_url': 'https://example.com/README.md'},
+    ]
+
+    assert sources.yaml_file_urls(listing, what='example/repo@v1:crds') == [
+        'https://example.com/widget.yaml',
+        'https://example.com/anvil.yml',
+    ]
+
+
+def test_yaml_file_urls_names_the_directory_when_the_answer_is_not_a_listing() -> None:
+    """A rate-limited contents call answers an object, and every entry lookup would then fail."""
+    with pytest.raises(sources.SourceError, match='example/repo@v1:crds: the contents API answered a dict'):
+        _ = sources.yaml_file_urls({'message': 'API rate limit exceeded'}, what='example/repo@v1:crds')
+
+
+def test_yaml_file_urls_names_the_directory_when_an_entry_has_no_download_url() -> None:
+    with pytest.raises(sources.SourceError, match='example/repo@v1:crds: an entry carries no name'):
+        _ = sources.yaml_file_urls([{'name': 'widget.yaml'}], what='example/repo@v1:crds')
 
 
 @pytest.mark.parametrize(
