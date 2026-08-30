@@ -5,12 +5,11 @@ its records, that the anchors carry the physical stack's addresses rather
 than literals, and that the rewrites are emitted from the route census.
 """
 
-import asyncio
-from typing import Any, cast
+from typing import Any
 
 import pulumi
 import pytest_asyncio
-from pulumi.runtime.stack import wait_for_rpcs
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.dns.zones import zt_label
@@ -25,34 +24,25 @@ ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
-#: Every resource the program declared: (type, logical name, inputs).
-declared: list[tuple[str, str, dict[str, Any]]] = []
 
-#: Which provider instance each of them was registered against, by name. The
-#: engine hands a mock the reference of the provider that would manage the
-#: resource, which is how a case can ask what a declaration authenticates as.
-signed_by: dict[str, str] = {}
+class AppliedPhysical(Recorder):
+    """A `physical` that has run: its stack reference hands out the addresses."""
 
-
-class Mocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        declared.append((args.typ, args.name, outputs))
-        signed_by[args.name] = args.provider or ''
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'pulumi:pulumi:StackReference':
-            outputs['outputs'] = {
-                'cluster_endpoint': LB_ADDRESS,
-                'cluster_endpoint_v6': LB_ADDRESS_V6,
-                'vip1': VIP1_ADDRESS,
+            return {
+                'outputs': {
+                    'cluster_endpoint': LB_ADDRESS,
+                    'cluster_endpoint_v6': LB_ADDRESS_V6,
+                    'vip1': VIP1_ADDRESS,
+                }
             }
-        return args.name + '_id', outputs
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
+        return {}
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> None:
+async def stack() -> AppliedPhysical:
+    from kluster.stacks import dns
     from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
 
     pulumi.runtime.set_all_config(
@@ -61,112 +51,98 @@ async def stack() -> None:
             f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': API_TOKEN,
         }
     )
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='dns', preview=False)
-    from kluster.stacks import dns
-
-    # Declaring a resource only schedules its registration; without draining
-    # those the mocks have seen nothing and every assertion below would pass
-    # vacuously. This program declares without awaiting anything, so its
-    # registrations are still unstarted tasks when it returns — and draining
-    # them wholesale is not an option, because the queue is process-global and
-    # holds the deliberately failing outputs another module built. Hence the
-    # snapshot: await exactly the tasks this program added.
-    before = asyncio.all_tasks()
-
-    await dns.main()
-
-    pending = asyncio.all_tasks() - before - {asyncio.current_task()}
-    _ = await asyncio.gather(*pending)
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    monitor = await run_with(AppliedPhysical(), stack='dns')
+    async with declaring():
+        await dns.main()
+    return monitor
 
 
-def _all(typ: str) -> dict[str, dict[str, Any]]:
-    return {name: inputs for kind, name, inputs in declared if kind == typ}
+def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
+    """Every record the program declared in one zone, by logical name."""
+    return {name: inputs for name, inputs in stack.by_name(RECORD).items() if name.startswith(f'{zone}-')}
 
 
-def _records_of(zone: str) -> dict[str, dict[str, Any]]:
-    return {name: inputs for name, inputs in _all(RECORD).items() if name.startswith(f'{zone}-')}
+def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
+    assert set(stack.by_name(ZONE)) == set(conventions.ALL_ZONES)
+    assert all(inputs['account'] == {'id': ACCOUNT_ID} for inputs in stack.by_name(ZONE).values())
 
 
-def test_every_zone_is_declared_once() -> None:
-    assert set(_all(ZONE)) == set(conventions.ALL_ZONES)
-    assert all(inputs['account'] == {'id': ACCOUNT_ID} for inputs in _all(ZONE).values())
-
-
-def test_every_zone_is_signed() -> None:
+def test_every_zone_is_signed(stack: AppliedPhysical) -> None:
     # DNSSEC is per-zone and free; a zone that quietly lacks it is the zone
     # nobody notices.
-    signed = _all(DNSSEC)
+    signed = stack.by_name(DNSSEC)
 
     assert set(signed) == {f'{zone}-dnssec' for zone in conventions.ALL_ZONES}
     assert all(inputs['status'] == 'active' for inputs in signed.values())
 
 
-def test_records_are_declared_by_their_fully_qualified_name() -> None:
+def test_records_are_declared_by_their_fully_qualified_name(stack: AppliedPhysical) -> None:
     # Cloudflare's API takes the full name; a relative one silently becomes
     # `label.zone.zone`.
     for zone in conventions.ALL_ZONES:
-        for inputs in _records_of(zone).values():
+        for inputs in records_of(stack, zone).values():
             assert inputs['name'] == zone or inputs['name'].endswith(f'.{zone}'), zone
 
 
-def test_the_cluster_anchor_carries_the_load_balancer_address() -> None:
+def test_the_cluster_anchor_carries_the_load_balancer_address(stack: AppliedPhysical) -> None:
     """The anchor is the only record whose content is a machine fact.
 
     Every app record is a CNAME to it, so this is the one edge where the
     physical stack's output reaches DNS.
     """
-    anchor = _records_of(conventions.ZONE_PRIMARY)[f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-a']
+    anchor = records_of(stack, conventions.ZONE_PRIMARY)[f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-a']
 
     assert anchor['content'] == LB_ADDRESS
     assert anchor['ttl'] == conventions.ANCHOR_TTL
 
 
-def test_the_cluster_anchor_is_dual_stack() -> None:
+def test_the_cluster_anchor_is_dual_stack(stack: AppliedPhysical) -> None:
     """The load balancer answers on both families, and this is what says so.
 
     An A-only anchor would publish an IPv4-only front door: every app record
     is a CNAME to this name, so the families it carries are the families the
     whole estate is reachable on.
     """
-    anchor = _records_of(conventions.ZONE_PRIMARY)[f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-aaaa']
+    anchor = records_of(stack, conventions.ZONE_PRIMARY)[
+        f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-aaaa'
+    ]
 
     assert anchor['type'] == 'AAAA'
     assert anchor['content'] == LB_ADDRESS_V6
     assert anchor['ttl'] == conventions.ANCHOR_TTL
 
 
-def test_the_anchors_live_only_in_the_primary_zone() -> None:
+def test_the_anchors_live_only_in_the_primary_zone(stack: AppliedPhysical) -> None:
     # A rebuild moves one record, not one per zone: the mirrors' app records
     # are CNAMEs to the primary's anchor. Names are fully qualified, so this
     # asks about the name the mirror's own copy would have.
     for zone in conventions.ALL_ZONES:
         if zone == conventions.ZONE_PRIMARY:
             continue
-        declared_names = {record['name'] for record in _records_of(zone).values()}
+        declared_names = {record['name'] for record in records_of(stack, zone).values()}
         for anchor in (conventions.ANCHOR_CLUSTER, conventions.ANCHOR_VIP1):
             assert f'{anchor}.{zone}' not in declared_names, zone
 
 
-def test_the_vip_anchor_is_declared_and_is_v4_only() -> None:
+def test_the_vip_anchor_is_declared_and_is_v4_only(stack: AppliedPhysical) -> None:
     """The dedicated VIP has no IPv6 counterpart to publish.
 
     It is a reserved public IPv4 that OCI 1:1-NATs onto a secondary private
     address (architecture.md §3.2); no such mechanism exists for v6, so an
     AAAA here would name an address nothing answers on.
     """
-    records = _records_of(conventions.ZONE_PRIMARY)
+    records = records_of(stack, conventions.ZONE_PRIMARY)
     anchor = records[f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_VIP1}-a']
 
     assert anchor['content'] == VIP1_ADDRESS
     assert f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_VIP1}-aaaa' not in records
 
 
-def _zt_record(zone: str, member: str) -> dict[str, Any]:
-    return _records_of(zone)[f'{zone}-{zt_label(member)}.{conventions.ZT_LABEL}-a']
+def zt_record(stack: AppliedPhysical, zone: str, member: str) -> dict[str, Any]:
+    return records_of(stack, zone)[f'{zone}-{zt_label(member)}.{conventions.ZT_LABEL}-a']
 
 
-def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference() -> None:
+def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference(stack: AppliedPhysical) -> None:
     """Names and addresses alike come from the roster, which is code.
 
     The anchors are the only edge where a `physical` output reaches this
@@ -178,28 +154,30 @@ def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference() -> No
 
     published = {
         name.removeprefix(f'{conventions.ZONE_PRIMARY}-').removesuffix(f'.{conventions.ZT_LABEL}-a')
-        for name in _records_of(conventions.ZONE_PRIMARY)
+        for name in records_of(stack, conventions.ZONE_PRIMARY)
         if name.endswith(f'.{conventions.ZT_LABEL}-a')
     }
 
     assert published == {zt_label(entry.name) for entry in conventions.overlay.ROSTER}
-    assert _zt_record(conventions.ZONE_PRIMARY, member)['content'] == str(conventions.overlay.member(member).address)
+    assert zt_record(stack, conventions.ZONE_PRIMARY, member)['content'] == str(
+        conventions.overlay.member(member).address
+    )
 
 
-def test_the_overlay_block_reaches_every_mirror_and_no_other_zone() -> None:
+def test_the_overlay_block_reaches_every_mirror_and_no_other_zone(stack: AppliedPhysical) -> None:
     # It is part of the mirrored estate: a name fanned across `PUBLIC_ALL`
     # resolves in all of it, and the family zones carry none of it.
     for zone in conventions.ALL_ZONES:
-        names = {record['name'] for record in _records_of(zone).values()}
+        names = {record['name'] for record in records_of(stack, zone).values()}
         expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.overlay.ROSTER}
 
         assert (expected <= names) is (zone in conventions.PUBLIC_ALL), zone
         assert (expected & names == set()) is (zone not in conventions.PUBLIC_ALL), zone
 
 
-def test_structured_records_travel_as_data_not_content() -> None:
+def test_structured_records_travel_as_data_not_content(stack: AppliedPhysical) -> None:
     # SRV and CAA are the two types Cloudflare refuses as a content string.
-    structured = [inputs for inputs in _all(RECORD).values() if inputs['type'] in ('SRV', 'CAA')]
+    structured = [inputs for inputs in stack.by_name(RECORD).values() if inputs['type'] in ('SRV', 'CAA')]
 
     assert structured
     for inputs in structured:
@@ -207,26 +185,26 @@ def test_structured_records_travel_as_data_not_content() -> None:
         assert inputs['data']
 
 
-def test_no_record_still_points_at_the_retired_host() -> None:
+def test_no_record_still_points_at_the_retired_host(stack: AppliedPhysical) -> None:
     """The import census dropped Abacus and everything that named it.
 
     Its address surviving anywhere would mean a record was ported by hand.
     """
-    contents = {str(inputs.get('content')) for inputs in _all(RECORD).values()}
+    contents = {str(inputs.get('content')) for inputs in stack.by_name(RECORD).values()}
 
     assert not any('141.212.111.192' in content for content in contents)
 
 
-def test_no_rewrite_is_declared_while_no_app_declares_a_route() -> None:
+def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
     """The rewrites follow the route census, and it is empty until `apps` lands.
 
     It also means the stack deploys before the AdGuard credential exists,
     which is the state it is in today.
     """
-    assert not _all('pulumi-python:dynamic:Resource')
+    assert not stack.by_name('pulumi-python:dynamic:Resource')
 
 
-def test_every_zone_and_record_is_signed_by_one_explicit_provider() -> None:
+def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: AppliedPhysical) -> None:
     """The zones token is one credential over a set of zones, so one provider.
 
     A provider built inside a zone component would be reached into by the
@@ -235,13 +213,15 @@ def test_every_zone_and_record_is_signed_by_one_explicit_provider() -> None:
     zone, and none of them names it.
     """
     zone_provider = f'{conventions.CLUSTER_NAME}-cloudflare'
-    signed = [name for typ, name, _ in declared if typ.startswith('cloudflare:index/')]
+
+    signed = [d for d in stack.declared if d.typ.startswith('cloudflare:index/')]
+
     assert signed, 'the program declared no Cloudflare resources at all'
-    for name in signed:
-        assert zone_provider in signed_by[name], f'{name} is not signed by the zones provider'
+    for declaration in signed:
+        assert zone_provider in declaration.provider, f'{declaration.name} is not signed by the zones provider'
 
 
-def test_the_zones_token_is_read_where_that_provider_is_built() -> None:
+def test_the_zones_token_is_read_where_that_provider_is_built(stack: AppliedPhysical) -> None:
     """The credential and the provider it opens are one thing, at one line.
 
     It keeps the provider's own configuration namespace rather than moving
@@ -251,6 +231,6 @@ def test_the_zones_token_is_read_where_that_provider_is_built() -> None:
     """
     from kluster.stacks import dns
 
-    built = next(inputs for typ, _, inputs in declared if typ == 'pulumi:providers:cloudflare')
+    built = stack.of_type('pulumi:providers:cloudflare')[0].inputs
     assert built['apiToken']['value'] == API_TOKEN
     assert dns.CLOUDFLARE_NAMESPACE == 'cloudflare'
