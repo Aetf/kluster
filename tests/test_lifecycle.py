@@ -98,21 +98,6 @@ def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
     assert kit.get(seed.entry, attribute='UserName') == 'an-identifier'
 
 
-def test_a_key_file_is_stored_as_an_attachment(kit: KdbxStore, tmp_path: Path) -> None:
-    pem = tmp_path / 'app.pem'
-    _ = pem.write_bytes(b'-----BEGIN PRIVATE KEY-----\n')
-
-    created = lifecycle.bootstrap(kit, prompt=_answers('Iv1.clientid', str(pem)), only='github-dispatch')
-
-    assert created == ['github-dispatch']
-    entry = entries.SEEDS['github-dispatch'].entry
-    # §2.1: key material that is a file lives as an attachment, not in the
-    # password field.
-    assert kit.attachments(entry) == ['private-key.pem']
-    assert kit.attachment(entry, 'private-key.pem').startswith(b'-----BEGIN')
-    assert kit.get(entry, attribute='UserName') == 'Iv1.clientid'
-
-
 def test_an_account_root_is_read_at_the_moment_it_is_needed(monkeypatch: pytest.MonkeyPatch) -> None:
     # A mint borrows its account root from the desktop secret store, or from
     # the operator when there is none (§2). No database but the kit is opened

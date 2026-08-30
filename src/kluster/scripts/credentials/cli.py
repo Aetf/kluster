@@ -122,7 +122,14 @@ _ORDER = """when to run what:
          into the stack config that reads it -- physical for the UniFi
          key and the ZeroTier Central token, dns for the AdGuard login.
          Those files are then committed.
-    8. credentials derived sync
+    8. credentials derived github-dispatch-key record
+       credentials derived github-trigger-key record
+         The two GitHub App private keys. Each is generated on its own App
+         page -- shown once, and created by no API -- so the command prints
+         the steps and escrows what they produce. Nothing reads either one
+         yet: the workflows that mint an installation token from a key are
+         not built, so the escrow copy is the whole of the delivery for now.
+    9. credentials derived sync
          The GitHub secrets CI reads, for the rows whose value lives
          somewhere else and is copied into a slot. Run it again whenever one
          of those values moves; a row it cannot fill yet says which slot is
@@ -156,6 +163,11 @@ _ORDER = """when to run what:
     credentials derived <row> generate
          A new generation for that escrowed row alone, adopted by re-running
          what consumes it. Nothing else moves.
+    credentials derived <row> record
+         The same for an escrowed row nothing here can draw: make another one
+         in the console the command prints the steps for, and hand it in. A
+         value the registry already holds is recognised rather than filed a
+         second time, so a re-run costs nothing.
 
   rotating the kit
     credentials kit rotate --into <new kit>
@@ -546,8 +558,9 @@ def build_parser() -> argparse.ArgumentParser:
     # across the tree, the map and the register's tables. What differs between
     # rows is the verb, because what differs between them is how the value
     # comes into being: `mint` for a row a seed mints, `generate`/`import`/
-    # `recover` for a row generated here and escrowed, `record` for a row made
-    # in the console that checks it and typed in.
+    # `recover` for a row drawn here and escrowed, and `record` for a row made
+    # in a console -- delivered into the stack that authenticates with it, or
+    # escrowed where nothing reads it yet.
     #
     # A row joins the tree when its consumer exists -- a mint with nowhere to
     # deliver would park a secret, which is the one thing the register forbids
@@ -562,8 +575,10 @@ def build_parser() -> argparse.ArgumentParser:
             'so re-running one is how it is rotated. `generate`, `import` and `recover` belong to a row '
             'nothing external can mint: it is random, made here, and escrowed -- encrypted to the '
             "recovery key's public half and committed as a ciphertext under escrow/. `record` belongs to "
-            'a row made in the console that checks it: it prints the steps, takes the value without echoing '
-            'it, and delivers it. `ls`, `check` and `sync` act on the map rather than on one row.'
+            'a row made in a console because no API of that platform makes one: it prints the steps and '
+            'takes what they produce, into the stack that authenticates with the value or into the escrow '
+            'where a row whose consumer is not built yet rests. `ls`, `check` and `sync` act on the map '
+            'rather than on one row.'
         ),
         epilog=_see_also('§3'),
     )
@@ -803,56 +818,87 @@ def build_parser() -> argparse.ArgumentParser:
             )
         _add_bundle_dir(record)
 
-    # The escrowed rows: random secrets no provider mints, whose ciphertexts
-    # are committed and open with the one recovery key the kit holds.
-    # Generating and escrowing are a single act, so no verb here hands out a
+    # The escrowed rows: the secrets no provider mints, whose ciphertexts are
+    # committed and open with the one recovery key the kit holds. Which verbs a
+    # row has follows from its origin -- a row drawn here is generated or taken
+    # on as it stands, and a row made in a console is recorded -- so a tree
+    # built from the register cannot offer a draw for a value nothing here can
+    # draw. Escrowing is part of every one of them, so no verb here hands out a
     # secret the registry does not carry. The row's escrow label travels on the
     # namespace rather than as an argument -- the directory keeps its `/`
     # paths, and the tree names the row the way every other row is named
     # (`escrow.row_name`).
     for name, label in escrow.rows().items():
+        drawn = isinstance(label.origin, escrow.Generated)
         escrowed = rows.add_parser(
             name,
             help=f'{label.what} (escrowed)',
             description=(
-                f'This row holds {label.what}. No provider mints it: it is random, made here, and '
-                'escrowed in the same act -- encrypted to the recovery key on file and committed as a '
-                'ciphertext under escrow/, so a value this command hands back always has a copy someone '
-                'with the kit can open. Filed by generation, newest last, and nothing adopts a new '
-                'generation on its own.'
+                f'This row holds {label.what}. '
+                + (
+                    'No provider mints it: it is random, made here, and escrowed in the same act'
+                    if drawn
+                    else (
+                        'No API of the platform that holds it makes one, so it is created in a console and '
+                        'escrowed as it stands'
+                    )
+                )
+                + ' -- encrypted to the recovery key on file and committed as a ciphertext under escrow/, '
+                'so a value this command hands back always has a copy someone with the kit can open. '
+                'Filed by generation, newest last, and nothing adopts a new generation on its own.'
             ),
         )
         escrowed.set_defaults(label=label.name)
         escrow_verbs = escrowed.add_subparsers(dest='action', required=True, metavar='<verb>')
-        _ = escrow_verbs.add_parser(
-            'generate',
-            help="draw this row's next generation and escrow it",
-            description=(
-                'Draw a fresh random secret, check it against the shape this row is supposed to hold, and '
-                'write its ciphertext before handing it to anything -- so no run can leave a generated '
-                'secret the escrow does not carry. It becomes the next generation; the previous one is '
-                'still what production holds until whatever consumes this row is re-run against the new '
-                'one, which is what makes rotating a credential a decision rather than a side effect. '
-                'The new ciphertext is a file to commit.'
-            ),
-        )
-        adopt = escrow_verbs.add_parser(
-            'import',
-            help="escrow a value that already exists as this row's next generation",
-            description=(
-                "Take a secret that already exists and file it as this row's next generation, checked "
-                'against the shape the row holds before anything is written. This is how a credential '
-                'that predates the escrow is taken on without rotating it, and the next generation rather '
-                'than a fixed first one so an import can never overwrite what is already filed. The value '
-                'is read from standard input, never from an argument another process could read out of '
-                'the process table. The ciphertext is a file to commit.'
-            ),
-        )
-        _ = adopt.add_argument(
-            '--from-slot',
-            action='store_true',
-            help='read it from its workstation slot instead of standard input',
-        )
+        if drawn:
+            _ = escrow_verbs.add_parser(
+                'generate',
+                help="draw this row's next generation and escrow it",
+                description=(
+                    'Draw a fresh random secret, check it against the shape this row is supposed to hold, and '
+                    'write its ciphertext before handing it to anything -- so no run can leave a generated '
+                    'secret the escrow does not carry. It becomes the next generation; the previous one is '
+                    'still what production holds until whatever consumes this row is re-run against the new '
+                    'one, which is what makes rotating a credential a decision rather than a side effect. '
+                    'The new ciphertext is a file to commit.'
+                ),
+            )
+            adopt = escrow_verbs.add_parser(
+                'import',
+                help="escrow a value that already exists as this row's next generation",
+                description=(
+                    "Take a secret that already exists and file it as this row's next generation, checked "
+                    'against the shape the row holds before anything is written. This is how a credential '
+                    'that predates the escrow is taken on without rotating it, and the next generation rather '
+                    'than a fixed first one so an import can never overwrite what is already filed. The value '
+                    'is read from standard input, never from an argument another process could read out of '
+                    'the process table. The ciphertext is a file to commit.'
+                ),
+            )
+            _ = adopt.add_argument(
+                '--from-slot',
+                action='store_true',
+                help='read it from its workstation slot instead of standard input',
+            )
+        else:
+            recording = escrow_verbs.add_parser(
+                'record',
+                help='print the console steps and escrow what they produce',
+                description=(
+                    'Print the steps that create this credential in the console that holds it, take the '
+                    "value from standard input, and file it as this row's next generation -- never from "
+                    'an argument another process could read out of the process table. Nothing here mints '
+                    'it and nothing here can mint its successor, so re-running this with a value created '
+                    'there again is the whole of a rotation. A value the registry already holds is '
+                    'recognised and filed no second time, which is what makes a re-run safe. The new '
+                    'ciphertext is a file to commit.'
+                ),
+            )
+            _ = recording.add_argument(
+                '--from-kit',
+                action='store_true',
+                help='read it from the seed entry a kit still carries it in, rather than standard input',
+            )
         recover = escrow_verbs.add_parser(
             'recover',
             help='open the escrowed secret with the kit',
@@ -968,37 +1014,58 @@ def _check(registry: escrow.Registry) -> int:
     return 1 if problems else 0
 
 
-def _imported(args: argparse.Namespace) -> str:
-    """The value `derived <row> import` is to escrow: a slot, or standard input.
+def _piped_in(label: str) -> str:
+    """A value handed to an escrow row on standard input.
 
     Standard input rather than an argument so the value is never in an argv
-    another process can read; the slot is there because the passphrase is
-    already sitting in one on the workstation that is doing the migration.
-
-    Empty is refused here, where the source is still known, so the error can
-    name it: a command substitution or a pipe whose producer failed hands this
-    an empty string, and the traceback that says why has already scrolled past
-    by the time the import logs what it escrowed.
+    another process can read. Empty is refused here, where the source is still
+    known, so the error can name it: a command substitution or a pipe whose
+    producer failed hands this an empty string, and the traceback that says why
+    has already scrolled past by the time the write logs what it escrowed.
     """
-    if args.from_slot:
-        slot = escrow.slot(args.label)
-        if slot is None:
-            raise EscrowError(f'{args.label} has no workstation slot; pipe the value in instead')
-        path = slot.path()
-        value = path.read_text().strip()
-        if not value:
-            raise EscrowError(f'{path} is empty, so there is nothing to escrow as {args.label}')
-        return value
     if sys.stdin.isatty():
-        log.info('reading the value for %s from standard input; end it with ctrl-d', args.label)
+        log.info('reading the value for %s from standard input; end it with ctrl-d', label)
     value = sys.stdin.read().strip()
     if not value:
         raise EscrowError(
-            f'standard input was empty, so there is nothing to escrow as {args.label}; '
+            f'standard input was empty, so there is nothing to escrow as {label}; '
             'a producer that failed writes no output, so run it on its own and check what it prints '
             'before piping it in again'
         )
     return value
+
+
+def _imported(args: argparse.Namespace) -> str:
+    """The value `derived <row> import` is to escrow: a slot, or standard input.
+
+    The slot is there because the passphrase is already sitting in one on the
+    workstation that is doing the migration.
+    """
+    if not args.from_slot:
+        return _piped_in(args.label)
+    slot = escrow.slot(args.label)
+    if slot is None:
+        raise EscrowError(f'{args.label} has no workstation slot; pipe the value in instead')
+    path = slot.path()
+    value = path.read_text().strip()
+    if not value:
+        raise EscrowError(f'{path} is empty, so there is nothing to escrow as {args.label}')
+    return value
+
+
+def _recorded(args: argparse.Namespace, store: KdbxStore) -> str:
+    """The value `derived <row> record` is to escrow: a retired kit row, or standard input.
+
+    The console steps are printed either way, because they are the register's
+    answer to "where does this come from" and a run that pipes the value in is
+    exactly the run whose operator has not just read them.
+
+    The kit is the second source for one reason: a kit that carries this row as
+    a seed holds the only copy of its value, and reading that out beats a
+    console visit that would rotate a live credential for no reason.
+    """
+    escrow.announce(args.label)
+    return escrow.from_kit(store, args.label) if args.from_kit else _piped_in(args.label)
 
 
 def _write_slot(label: str, value: str) -> None:
@@ -1080,11 +1147,7 @@ def main(argv: list[str] | None = None) -> int:
                 if 'recovery' in created:
                     log.info('the recovery key is in the kit; commit %s', registry.recipients_file)
                     for label in escrow.missing(registry):
-                        log.warning(
-                            'nothing escrowed for %s yet: credentials derived %s generate',
-                            label,
-                            escrow.row_name(label),
-                        )
+                        log.warning('nothing escrowed for %s yet: %s', label, escrow.fill_command(label))
             case ('kit', 'rotate', _):
                 # Before the successor exists, not once `rotate` reaches its
                 # walk: a `--only` that names no row would otherwise leave a
@@ -1160,6 +1223,12 @@ def main(argv: list[str] | None = None) -> int:
                 _write_slot(args.label, escrow.generate(registry, args.label))
             case ('derived', row, 'import') if row in escrow.rows():
                 _ = escrow.adopt(registry, args.label, _imported(args))
+            # The console-made escrowed rows. The registry is opened rather
+            # than only written to: whether this value is already filed is
+            # answered by comparing against what it holds, which is what makes
+            # a re-run file no second copy of one key.
+            case ('derived', row, 'record') if row in escrow.rows():
+                _ = escrow.record(escrow.Vault.open(store, registry), args.label, _recorded(args, store))
             case ('derived', row, 'recover') if row in escrow.rows():
                 return _recover(args, escrow.Vault.open(store, registry))
             # The slot map's sink: one row at a time or every row whose value

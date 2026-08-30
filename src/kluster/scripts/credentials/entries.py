@@ -17,8 +17,8 @@ The rule, in full:
     A credential with no such half records what it is instead, so the field
     is never empty and never a secret.
 -   **Password** is the secret itself, and nothing else is.
--   **Attachments** carry key material that is a file rather than a string
-    (the GitHub App private keys, the OCI API key).
+-   **Attachments** carry key material that is a file rather than a string:
+    the OCI API key, written by the minter that issues it.
 -   **Protected custom attributes** carry what is left over when a credential
     is more than an identifier and a secret: the OCI row's tenancy OCID, which
     cannot go in UserName because the user OCID is there, and the identity
@@ -29,11 +29,13 @@ The rule, in full:
 
 **What belongs in this table** is what the rest of the register grows out of:
 a credential that mints successors, or the recovery key that opens what §2.2
-escrows. A credential a stack authenticates with is a §3 row even when a
+escrows. A credential something *authenticates with* is a §3 row even when a
 console is the only thing that can make one -- it is created there and
-delivered by `credentials derived <row> record` (`devices.py`), and putting it
-in the kit as well would give one credential two homes and no rotation the
-kit could perform.
+delivered by `credentials derived <row> record`, into the stack config that
+reads it (`devices.py`) or into the escrow where nothing reads it yet
+(`escrow.py`). Putting such a row here as well would give one credential two
+homes and hand the kit a rotation it cannot perform: the kit's own rotation
+would then owe every consumer a redelivery.
 
 Adding a seed means adding a row here and a row in §2, in the same change.
 """
@@ -97,10 +99,6 @@ class Seed:
     #: runbook so that `bootstrap` can read it out at the moment it stops.
     console: str = ''
 
-    #: A file the platform hands over once, stored as an attachment (§2.1)
-    #: rather than in the password field.
-    attachment: str = ''
-
     #: Protected custom attributes the row carries beyond UserName and
     #: Password. Enumerated so a kit can be checked against the register
     #: rather than against someone's memory of it.
@@ -144,7 +142,6 @@ SEEDS: dict[str, Seed] = {
             identifier='the user OCID',
             mints='the per-stack OCI users and their API keys',
             mints_own_successor=True,
-            attachment=OCI_KEY_ATTACHMENT,
             attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
             repair=Repair(
                 verb='domain',
@@ -192,34 +189,6 @@ SEEDS: dict[str, Seed] = {
             identifier='the application key id',
             mints='the management key and every prefix-scoped writer key',
             mints_own_successor=True,
-        ),
-        Seed(
-            member='github-dispatch',
-            title='GitHub App (dispatch)',
-            identifier='the client id (the JWT issuer)',
-            mints='installation tokens for kluster-ops contents:write',
-            mints_own_successor=False,
-            console=(
-                'github.com/settings/apps → New GitHub App named "kluster dispatch".\n'
-                '  Permissions: Repository → Contents: Read and write. No webhook.\n'
-                '  Install it on kluster-ops only, then generate a private key.\n'
-                '  The JWT issuer is the *client id*, not the numeric app id.'
-            ),
-            attachment='private-key.pem',
-        ),
-        Seed(
-            member='github-trigger',
-            title='GitHub App (trigger)',
-            identifier='the client id (the JWT issuer)',
-            mints='installation tokens for kluster actions:write',
-            mints_own_successor=False,
-            console=(
-                'github.com/settings/apps → New GitHub App named "kluster trigger".\n'
-                '  Permissions: Repository → Actions: Read and write. No webhook.\n'
-                '  Install it on kluster only, then generate a private key.\n'
-                '  The JWT issuer is the *client id*, not the numeric app id.'
-            ),
-            attachment='private-key.pem',
         ),
     )
 }

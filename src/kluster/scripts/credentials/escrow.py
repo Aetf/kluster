@@ -1,17 +1,25 @@
-"""The escrow: every locally-generated secret, random, with its ciphertext in git.
+"""The escrow: every secret no provider mints, with its ciphertext in git.
 
 Some secrets are not minted by any provider — a state passphrase, a CA key, a
-backup identity. The kit holds **one recovery keypair** for them
-(credentials.md §2.2): the public recipient is committed in `escrow/RECIPIENTS`
-and the private half exists only in the offline kit. Every such secret is
-random at creation, goes to its consumer exactly as before, and leaves behind
-an age ciphertext committed as `escrow/<label>/<generation>.age`.
+backup identity, a GitHub App's private key. The kit holds **one recovery
+keypair** for them (credentials.md §2.2): the public recipient is committed in
+`escrow/RECIPIENTS` and the private half exists only in the offline kit. Every
+such secret goes to its consumer exactly as before, and leaves behind an age
+ciphertext committed as `escrow/<label>/<generation>.age`.
+
+**A row's origin says where its plaintext comes from**, and there are two.
+Most are `Generated`: random at creation, drawn here. The rest are `Console`:
+made in a provider console that publishes no API for making one, so the row
+carries the steps that create it and `record` takes what they produce. The
+difference is one field because everything after it is the same — the same
+ciphertext, the same generations, the same recovery.
 
 **Generation and escrow are one act.** `generate` encrypts and writes before it
 returns the plaintext, so there is no path on which a caller holds a fresh
 secret whose ciphertext does not exist. That is the whole safety property: a
 secret nobody can recover is indistinguishable from a lost one the moment its
-consumer is rebuilt.
+consumer is rebuilt. `record` keeps the same property from the other side: the
+value is escrowed before anything is told it landed.
 
 **Rotation splits in two, and that is the point.** Rotating one credential is a
 new generation for its label, adopted by that one consumer. Rotating the kit is
@@ -68,6 +76,11 @@ PASSPHRASE = 'pulumi/passphrase'
 CA = 'state-backend/ca'
 ALERTMANAGER = 'alertmanager/read'
 BACKUP = 'backup/age'
+#: The private key each single-purpose GitHub App signs its own JWT with, from
+#: which a workflow mints the short-lived installation token it works with
+#: (credentials.md §3). One label per App, because they rotate apart.
+DISPATCH_KEY = 'github/dispatch-key'
+TRIGGER_KEY = 'github/trigger-key'
 
 #: Where the recovery key lives in the kit — the register's decision, not this
 #: module's (`entries.py`).
@@ -138,6 +151,67 @@ PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----EN
 
 
 @dataclass(frozen=True)
+class Generated:
+    """A secret this side draws at random, which is most of the registry.
+
+    Its whole definition is a mint, because a value nobody has to be asked for
+    needs nothing else: `generate` calls it, checks the result against the
+    row's shape and escrows it in the same act.
+    """
+
+    #: How a fresh one is made. Every one of these is randomness plus a format.
+    mint: Callable[[], str]
+
+
+@dataclass(frozen=True)
+class KitAttachment:
+    """Where a kit that carries this row as a seed keeps its value.
+
+    A row of §2's table is written into the kit as an entry with the key
+    material attached (`entries.py`), and a kit holding one is the only copy
+    of that value there is. `record --from-kit` reads it from there, so a
+    credential that belongs in the registry gets there without a console visit
+    that would rotate it for no reason.
+
+    Transitional by construction: a kit is filled from §2's table and a
+    rotation writes a new database from the same table, so once both envelopes
+    hold a kit written without these rows, nothing answers here and this
+    reader can go.
+    """
+
+    #: The entry path the retired seed row was written to.
+    entry: str
+    #: The attachment on it that holds the key material.
+    filename: str
+
+
+@dataclass(frozen=True)
+class Console:
+    """A secret made in a provider console, because no API of that platform makes one.
+
+    Not a seed: it mints nothing, so the kit would gain a row it cannot rotate
+    (`entries.py`). Not minted here either — what this side does is take the
+    value the console produced and escrow it, which is also the whole of a
+    rotation: create another one there, `record` it here, delete the
+    superseded one on the same page.
+
+    The steps live on the row for the reason §2's do: a runbook is a second
+    place for them to be wrong.
+    """
+
+    #: What a human does in that console, printed at the moment it is asked for.
+    steps: str
+    #: Where a kit that predates the row's classification still holds it.
+    kit: KitAttachment | None = None
+
+
+#: Where a row's plaintext comes from. Two cases and no third: a value is drawn
+#: here or it is made somewhere no API reaches, and everything downstream --
+#: the ciphertext, the generations, the recovery -- is the same either way.
+Origin = Generated | Console
+
+
+@dataclass(frozen=True)
 class WorkstationSlot:
     """Where a recovered secret is written on this machine, and who reads it there.
 
@@ -159,8 +233,8 @@ class Label:
     name: str
     #: What the secret is, in the register's words.
     what: str
-    #: How a fresh one is made. Every one of these is randomness plus a format.
-    mint: Callable[[], str]
+    #: Where its plaintext comes from, which decides the verb below.
+    origin: Origin
     #: What a value has to look like to be this label's secret.
     shape: Shape = TEXT
     #: Where `recover` puts the value when nobody asked for it on stdout, so
@@ -169,6 +243,16 @@ class Label:
     #: provisioning run or a seal. A property of the row rather than a second
     #: table keyed by label, which could name a label the register does not.
     slot: WorkstationSlot | None = None
+
+    @property
+    def verb(self) -> str:
+        """The `credentials derived <row> <verb>` that puts a value in this row.
+
+        Derived from the origin rather than declared beside it, so a row whose
+        value stopped being drawn here cannot go on advertising a command that
+        would draw one.
+        """
+        return 'generate' if isinstance(self.origin, Generated) else 'record'
 
     def validate(self, value: str) -> None:
         """Raise unless `value` could be this label's secret.
@@ -213,6 +297,34 @@ def backup_labels() -> tuple[str, ...]:
     return tuple(f'{BACKUP}/{number}' for number in window if number >= FIRST)
 
 
+#: How each App's key is created, and where the identifier that goes with it is
+#: read. The client id is not stored anywhere here: it is a public identifier
+#: that the App's own page shows for as long as the App exists, unlike the key,
+#: which is disclosed once.
+_APP_KEY_CONSOLE = """github.com/settings/apps → the "kluster {name}" App → Private keys →
+  Generate a private key. The PEM downloads once and is shown never again;
+  GitHub publishes no API that creates one, so nothing here can mint it and
+  nothing here can mint its successor. Rotation is this same visit: generate
+  another, record it, and delete the superseded key on the same page.
+  Creating the App, where there is none: New GitHub App named "kluster
+  {name}", Repository → {permission}, no webhook, installed on {installed}
+  and on nothing else.
+  The JWT issuer that goes with the key is the *client id* on that page, not
+  the numeric app id. It is public and readable there for as long as the App
+  exists, so it is read off the page when the delivery slot is filled rather
+  than stored here."""
+
+
+def _app_key_console(*, name: str, permission: str, installed: str) -> str:
+    """One App's steps, from the shape both of them share.
+
+    Two Apps differ in a name, a permission and a repository, and in nothing
+    else; writing the text twice would be two places for the part that is the
+    same to drift.
+    """
+    return _APP_KEY_CONSOLE.format(name=name, permission=permission, installed=installed)
+
+
 def register() -> dict[str, Label]:
     """Every label the escrow is expected to hold.
 
@@ -228,7 +340,7 @@ def register() -> dict[str, Label]:
         Label(
             PASSPHRASE,
             'the Pulumi state passphrase, for every stack',
-            _token,
+            Generated(_token),
             # Read on every `pulumi` run by a `mise.toml` template that can
             # neither prompt nor open a kit (credentials.md §4.4).
             slot=WorkstationSlot(
@@ -236,11 +348,34 @@ def register() -> dict[str, Label]:
                 read_by='mise.toml reads it from there on every pulumi run',
             ),
         ),
-        Label(CA, "the state-backend CA's private key", pki.generate_ca_key, shape=PRIVATE_KEY),
-        Label(ALERTMANAGER, 'the bearer token the issue-sync poller presents', _token),
+        Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),
+        Label(ALERTMANAGER, 'the bearer token the issue-sync poller presents', Generated(_token)),
         *(
-            Label(name, 'an age identity the state-backend encrypts its pg_dumps to', _identity, shape=IDENTITY)
+            Label(
+                name,
+                'an age identity the state-backend encrypts its pg_dumps to',
+                Generated(_identity),
+                shape=IDENTITY,
+            )
             for name in backup_labels()
+        ),
+        Label(
+            DISPATCH_KEY,
+            "the dispatch App's private key, which signs for contents:write on the ops repository",
+            Console(
+                _app_key_console(name='dispatch', permission='Contents: Read and write', installed='kluster-ops'),
+                kit=KitAttachment('seeds/GitHub App (dispatch)', 'private-key.pem'),
+            ),
+            shape=PRIVATE_KEY,
+        ),
+        Label(
+            TRIGGER_KEY,
+            "the trigger App's private key, which signs for actions:write on the deployment repository",
+            Console(
+                _app_key_console(name='trigger', permission='Actions: Read and write', installed='kluster'),
+                kit=KitAttachment('seeds/GitHub App (trigger)', 'private-key.pem'),
+            ),
+            shape=PRIVATE_KEY,
         ),
     ]
     return {row.name: row for row in rows}
@@ -262,6 +397,17 @@ def row_name(label: str) -> str:
 def rows() -> dict[str, Label]:
     """Every escrowed row of the register, keyed by the name the CLI gives it."""
     return {row_name(label): row for label, row in register().items()}
+
+
+def fill_command(label: str) -> str:
+    """The command that files this row's first generation, for a message that names it.
+
+    A label the register does not name has no verb of its own; a retired backup
+    generation is the one such label that legitimately exists, and `generate`
+    is what filed it while it was current.
+    """
+    row = register().get(label)
+    return f'credentials derived {row_name(label)} {row.verb if row is not None else "generate"}'
 
 
 def _row(label: str) -> Label:
@@ -338,9 +484,7 @@ class Registry:
     def latest(self, label: str) -> int:
         found = self.generations(label)
         if not found:
-            raise EscrowError(
-                f'nothing escrowed for {label!r}; `credentials derived {row_name(label)} generate` mints one'
-            )
+            raise EscrowError(f'nothing escrowed for {label!r}; `{fill_command(label)}` puts one there')
         return found[-1]
 
     def labels(self) -> list[str]:
@@ -416,8 +560,13 @@ def generate(registry: Registry, label: str) -> str:
     per-credential rotation a decision rather than a side effect.
     """
     row = _row(label)
+    if not isinstance(row.origin, Generated):
+        raise EscrowError(
+            f'{label} is made in a console, not here, so there is nothing to draw; '
+            f'`{fill_command(label)}` prints the steps and escrows what they produce'
+        )
     generation = registry.next_generation(label)
-    secret = row.mint()
+    secret = row.origin.mint()
     # The row's own mint against the row's own shape: the register says what a
     # label holds in one place, and a mint that stopped agreeing with it fails
     # here rather than at the recovery.
@@ -452,6 +601,91 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
     path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
     log.info('escrow: adopted the existing %s as generation %d in %s', label, generation, path)
     return path
+
+
+def announce(label: str) -> None:
+    """Print the steps that create a console-made value, before it is asked for.
+
+    Always, rather than only when a prompt follows: the steps are the
+    register's answer to "where does this come from", and a run that supplies
+    the value from a file is exactly the run whose operator has not just read
+    them (`devices.announce`, for the rows delivered into a stack).
+
+    A row drawn here has no steps to print, and that is not an error: the tree
+    offers `record` for no such row, so this is called with one only by a
+    caller that has already gone wrong somewhere it can be seen.
+    """
+    row = _row(label)
+    if not isinstance(row.origin, Console):
+        return
+    log.warning('%s is neither minted nor drawn here; it comes from here:', row.what)
+    for line in row.origin.steps.splitlines():
+        log.warning('  %s', line)
+
+
+def from_kit(kit: KdbxStore, label: str) -> str:
+    """This row's value out of a kit written while the row was still a seed.
+
+    The kit row carries one half the escrow does not: the App's client id, in
+    `UserName`. That half is a public identifier the App's own page shows for
+    as long as the App exists, so the register stores it nowhere -- but it is
+    printed here, because this is the last command with any reason to open the
+    kit for this row.
+    """
+    row = _row(label)
+    origin = row.origin
+    if not isinstance(origin, Console) or origin.kit is None:
+        raise EscrowError(f'{label} was never held in a kit, so there is nothing to read out of one')
+    value = kit.attachment(origin.kit.entry, origin.kit.filename).decode().strip()
+    identifier = kit.describe(origin.kit.entry).get('UserName', '')
+    if identifier:
+        log.info(
+            '%s: the kit row names %s as the client id, which is public and stays on the App page', label, identifier
+        )
+    return value
+
+
+def record(vault: Vault, label: str, secret: str) -> Path:
+    """Escrow a console-made value, unless this exact one is already filed.
+
+    The counterpart of `generate` for a row nothing here can draw (§2.2): a
+    value the console produced becomes the row's next generation, and a second
+    value produced there later becomes the one after it, which is the whole of
+    a rotation.
+
+    **Idempotent by probing the product, not by bookkeeping** (§4.1). Whether
+    the work is done is answered by opening what the registry holds and
+    comparing, so re-running the command that moved a key out of a kit files no
+    second copy of it, while a genuinely new key from the console is filed as
+    the next generation. A checkpoint would answer the same question with "this
+    ran", which stops being true the moment a key is replaced in a console.
+
+    Opening the registry is what makes that possible, so this is the one writer
+    that needs the recovery key rather than the recipients file alone.
+    """
+    row = _row(label)
+    if not isinstance(row.origin, Console):
+        raise EscrowError(
+            f'{label} is drawn here rather than made in a console; `{fill_command(label)}` mints a new '
+            f'generation of it, and `credentials derived {row_name(label)} import` takes on one that exists'
+        )
+    # Before anything is decrypted: a value that cannot be this row's secret is
+    # refused where its source is still known, rather than after a walk that
+    # opened every generation to compare it against.
+    row.validate(secret)
+    wanted = secret.strip()
+    held = next(
+        (
+            generation
+            for generation in vault.registry.generations(label)
+            if vault.recover(label, generation).strip() == wanted
+        ),
+        None,
+    )
+    if held is not None:
+        log.info('escrow: %s is already generation %d; nothing to file', label, held)
+        return vault.registry.path(label, held)
+    return adopt(vault.registry, label, secret)
 
 
 def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequence[str] | None = None) -> list[Path]:

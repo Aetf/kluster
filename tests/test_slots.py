@@ -181,6 +181,25 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
         assert f'credentials derived {member} record' in row.source.describe()
 
 
+@pytest.mark.parametrize(
+    ('name', 'label'),
+    [('github-dispatch-key', escrow.DISPATCH_KEY), ('github-trigger-key', escrow.TRIGGER_KEY)],
+)
+def test_an_app_key_is_recovered_from_its_escrow_and_says_what_it_still_waits_on(name: str, label: str) -> None:
+    row = slots.ROWS[name]
+
+    # Recovered rather than typed in again, which is the whole point of
+    # escrowing a value made in a console: filling a slot later costs a
+    # command instead of another visit to the page that generates the key.
+    assert row.source == slots.Derived(label)
+    # And no other slot yet: the workflow that reads it is not built, so the
+    # row says so instead of naming a secret a future workflow would have to
+    # guess right.
+    assert row.targets == (slots.EscrowCopy(label),)
+    assert not row.sinks
+    assert row.pending
+
+
 def test_the_webhook_is_a_repository_secret_and_not_an_environment_one() -> None:
     # The job that reads it belongs to no stack, so an Environment secret would
     # be invisible to it (ci.md §3).
@@ -583,6 +602,19 @@ def test_a_sink_that_has_been_retired_answers_with_where_the_fact_lives_now() ->
     # rather than "no such row", which is true and tells them nothing.
     with pytest.raises(SlotRefused, match=r'conventions\.OCI_TENANCY\.tenancy_ocid'):
         _ = slots.sync(context(gh), only='ociTenancyOcid')
+
+    assert gh.invocations == []
+
+
+def test_the_installation_token_row_answers_with_the_key_it_would_be_minted_from() -> None:
+    gh = RecordedGh()
+
+    # An installation token is working material of one workflow run and is
+    # stored nowhere, so it is no row of this map. Someone reading a document
+    # written while it was one gets pointed at the keys instead of at "no such
+    # row", which is true and useless.
+    with pytest.raises(SlotRefused, match='github-dispatch-key'):
+        _ = slots.sync(context(gh), only='github-installation-tokens')
 
     assert gh.invocations == []
 

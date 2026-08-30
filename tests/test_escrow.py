@@ -9,6 +9,7 @@ plaintext, and a new generation changes no other label.
 
 from __future__ import annotations
 
+import functools
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
@@ -42,9 +43,27 @@ def vault(kit: KdbxStore, registry: escrow.Registry) -> escrow.Vault:
     return escrow.Vault.open(kit, registry)
 
 
+@functools.cache
+def console_key() -> str:
+    """One PEM for every console row in the file; generating a key is the slow part."""
+    return pki.generate_ca_key()
+
+
+def _fill(registry: escrow.Registry, label: str) -> str:
+    """One label at its next generation, however that label's value comes about."""
+    origin = escrow.register()[label].origin
+    if isinstance(origin, escrow.Generated):
+        return escrow.generate(registry, label)
+    # A console row has nothing to draw: its value arrives from outside, which
+    # is what `adopt` is for.
+    value = console_key()
+    _ = escrow.adopt(registry, label, value)
+    return value
+
+
 def _filled(registry: escrow.Registry) -> dict[str, str]:
-    """Every register label at generation one, and the plaintexts minted."""
-    return {label: escrow.generate(registry, label) for label in escrow.register()}
+    """Every register label at generation one, and the plaintexts filed."""
+    return {label: _fill(registry, label) for label in escrow.register()}
 
 
 def test_init_puts_the_private_half_in_the_kit_and_the_public_half_in_the_repo(
@@ -237,6 +256,116 @@ def test_a_token_label_asks_only_that_there_be_a_value(vault: escrow.Vault) -> N
     _ = escrow.adopt(vault.registry, escrow.ALERTMANAGER, 'a-token-from-somewhere-else')
 
     assert vault.recover(escrow.ALERTMANAGER) == 'a-token-from-somewhere-else'
+
+
+# --------------------------------------------------------------------------
+# The rows made in a console: recorded rather than drawn, and probed rather
+# than remembered.
+# --------------------------------------------------------------------------
+
+
+def console_rows() -> list[str]:
+    """Every label whose value is made somewhere no API of this repository reaches."""
+    return [label for label, row in escrow.register().items() if isinstance(row.origin, escrow.Console)]
+
+
+def test_the_app_keys_are_console_rows_shaped_like_private_keys() -> None:
+    # Both halves matter. Console, because nothing here can draw a GitHub App
+    # key -- the tree must not offer a `generate` for one. A private-key shape,
+    # because what a wrong pipe hands over is caught at the record rather than
+    # on the day a workflow tries to sign a JWT with it.
+    for label in (escrow.DISPATCH_KEY, escrow.TRIGGER_KEY):
+        row = escrow.register()[label]
+
+        assert isinstance(row.origin, escrow.Console)
+        assert row.shape is escrow.PRIVATE_KEY
+        assert row.verb == 'record'
+
+
+@pytest.mark.parametrize('label', console_rows())
+def test_a_console_row_cannot_be_drawn_here(vault: escrow.Vault, label: str) -> None:
+    # Randomness would produce a PEM nothing on the platform has ever heard
+    # of. The refusal names the command that does file one instead.
+    with pytest.raises(escrow.EscrowError, match='made in a console'):
+        _ = escrow.generate(vault.registry, label)
+
+    assert vault.registry.generations(label) == []
+
+
+def test_recording_files_the_value_the_console_produced(vault: escrow.Vault) -> None:
+    key = console_key()
+
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, key)
+
+    assert vault.recover(escrow.DISPATCH_KEY) == key
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == [escrow.FIRST]
+
+
+def test_recording_a_value_already_escrowed_files_no_second_copy(vault: escrow.Vault) -> None:
+    # Idempotent by probing the product: the command that moves a key out of a
+    # kit is re-run whenever anyone is unsure whether it ran, and a second
+    # generation holding the same plaintext would make the registry claim a
+    # rotation that never happened.
+    key = console_key()
+    first = escrow.record(vault, escrow.DISPATCH_KEY, key)
+
+    again = escrow.record(vault, escrow.DISPATCH_KEY, f'{key}\n')
+
+    assert again == first
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == [escrow.FIRST]
+
+
+def test_recording_a_key_the_registry_has_never_seen_is_the_next_generation(vault: escrow.Vault) -> None:
+    # The other side of the probe: a key generated on the App page after the
+    # first one is a rotation, and rotating is exactly this command again.
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, console_key())
+    successor = pki.generate_ca_key()
+
+    _ = escrow.record(vault, escrow.DISPATCH_KEY, successor)
+
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == [1, 2]
+    assert vault.recover(escrow.DISPATCH_KEY) == successor
+
+
+def test_recording_something_that_is_not_a_private_key_is_refused(vault: escrow.Vault) -> None:
+    with pytest.raises(escrow.EscrowError, match='PEM private key'):
+        _ = escrow.record(vault, escrow.DISPATCH_KEY, 'Iv1.the-client-id')
+
+    assert vault.registry.generations(escrow.DISPATCH_KEY) == []
+
+
+def test_recording_a_row_that_is_drawn_here_is_refused(vault: escrow.Vault) -> None:
+    # `record` is for a value this side cannot produce. Pointing it at the
+    # passphrase would escrow whatever the operator pasted as a generation of
+    # a credential every stack is encrypted under.
+    with pytest.raises(escrow.EscrowError, match='drawn here'):
+        _ = escrow.record(vault, escrow.PASSPHRASE, 'a-pasted-passphrase')
+
+    assert vault.registry.generations(escrow.PASSPHRASE) == []
+
+
+@pytest.mark.parametrize('label', console_rows())
+def test_a_key_still_in_a_kit_is_read_out_of_it(vault: escrow.Vault, kit: KdbxStore, label: str) -> None:
+    # The one path that reaches a kit for a §3 row, and it exists because a kit
+    # written while these rows were seeds holds the only copy of each: the
+    # alternative is a console visit that rotates a credential for no reason.
+    origin = escrow.register()[label].origin
+    assert isinstance(origin, escrow.Console)
+    assert origin.kit is not None
+    kit.put(origin.kit.entry, 'Iv1.the-client-id', '')
+    kit.attach(origin.kit.entry, origin.kit.filename, console_key().encode())
+
+    _ = escrow.record(vault, label, escrow.from_kit(kit, label))
+
+    # Filed as the value and nothing else: an attachment carries whatever
+    # trailing newline the download had, and a secret is stored the way every
+    # other one here is.
+    assert vault.recover(label) == console_key().strip()
+
+
+def test_a_row_that_was_never_in_a_kit_says_so(kit: KdbxStore) -> None:
+    with pytest.raises(escrow.EscrowError, match='never held in a kit'):
+        _ = escrow.from_kit(kit, escrow.PASSPHRASE)
 
 
 def test_an_unregistered_label_is_refused(vault: escrow.Vault) -> None:

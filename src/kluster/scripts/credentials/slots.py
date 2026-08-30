@@ -299,8 +299,8 @@ class Derived:
     """An escrowed secret (§2.2), recovered with the kit's recovery key.
 
     Re-running a push is not a rotation: the plaintext is whatever generation
-    the registry currently holds, and producing a new one is `credentials
-    derived <row> generate`, which this map deliberately cannot do.
+    the registry currently holds, and producing a new one is the row's own
+    `generate` or `record`, which this map deliberately cannot do.
     """
 
     kind: ClassVar[str] = 'derived'
@@ -599,6 +599,15 @@ _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so 
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
+#: Why an App key reaches no workflow yet: each is read by a job that mints an
+#: installation token from it for the length of one run, and neither job is
+#: built. The escrow copy is therefore the whole of the row today -- the same
+#: shape the Alertmanager token is in, and for the same reason.
+_APP_KEY_UNDELIVERED = (
+    'the workflow that would read it is not built, so no repository secret names it; the job that will '
+    'read it mints an 8-hour installation token from this key per run and stores nothing'
+)
+
 #: Sinks this map used to carry, and where the fact each one delivered lives
 #: now. Retiring a sink moves a fact rather than deleting it, so the name that
 #: addressed the old home answers with the new one instead of with "no such
@@ -606,6 +615,11 @@ _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `
 #: Keyed by the name the sink was addressed as, which for a Pulumi config sink
 #: is its key.
 RETIRED: Mapping[str, str] = {
+    'github-installation-tokens': (
+        'an installation token is not a credential this register tracks: a workflow mints one from an App '
+        'private key, uses it inside the run and stores it nowhere. The keys it is minted from are the rows '
+        '`github-dispatch-key` and `github-trigger-key`'
+    ),
     'ociTenancyOcid': (
         "the tenancy OCID is no longer delivered anywhere: it names this program's account rather than "
         'authenticating to it, so it is `conventions.OCI_TENANCY.tenancy_ocid` and `credentials derived '
@@ -680,12 +694,17 @@ ROWS: dict[str, Row] = {
         source=Minted('state-backend provision'),
         targets=(OnBox("the appliance's Ignition"),),
     ),
-    'github-installation-tokens': Row(
-        register='GitHub installation tokens',
-        source=Minted('the alert producer and the drift trigger, per run', unbuilt='neither producer exists'),
-        # Deliberately empty: an 8-hour token minted per run is stored nowhere,
-        # which is the row's whole point, so it has no slot to map.
-        pending='never stored: minted in-run from an App private key and used within the same job',
+    'github-dispatch-key': Row(
+        register='GitHub App key (dispatch)',
+        source=Derived(escrow.DISPATCH_KEY),
+        targets=(EscrowCopy(escrow.DISPATCH_KEY),),
+        pending=_APP_KEY_UNDELIVERED,
+    ),
+    'github-trigger-key': Row(
+        register='GitHub App key (trigger)',
+        source=Derived(escrow.TRIGGER_KEY),
+        targets=(EscrowCopy(escrow.TRIGGER_KEY),),
+        pending=_APP_KEY_UNDELIVERED,
     ),
     'zerotier-identity-physical': Row(
         register='ZT CI member identities (`ci-physical`, `ci-dns`)',
