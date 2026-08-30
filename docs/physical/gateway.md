@@ -79,6 +79,16 @@ declarative/physical.md §4.
     is told nothing at all: it is host-networked, and what it needs of
     its unit is the tunnel device and the state directory that is its
     identity on the overlay.
+
+    **Host-networked is a requirement rather than an accident**, and it
+    is written here because it is easy to lose in a refactor: the
+    daemon creates an interface when it joins and this box routes
+    through that interface, and an interface created inside a private
+    namespace is invisible to the router that has to use it — the
+    member would join and route nothing. The declaration states it by
+    giving that one service no address, since no address means no
+    bridge and nspawn leaves a container with no bridge in the host's
+    own namespace.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.
@@ -99,6 +109,69 @@ declarative/physical.md §4.
     survive each other's outage do not share a credential, and the
     device holding one of them is the one machine the cluster cannot
     re-seal.
+
+### 1.1 The recovery script, and what decides a restart
+
+Everything the routing daemon and the containers need lives under
+`/data`, the one directory a firmware update leaves alone: the root
+filesystem archives and the trees unpacked from them, the unit files,
+the configuration each container reads, the per-container writable
+state, and one **recovery script** in `on_boot.d`. The script is the
+whole mechanism for making any of it take effect, and deliberately the
+only one: it runs at boot, when nothing else is present and this
+program is not reachable, and it runs again after every deployment as
+every pushed file's post-apply hook. The path that recovers a device is
+therefore the path every apply exercises, so it cannot rot unnoticed.
+
+What it guarantees, in that order: every declared unit whose unit file
+*and* root filesystem tree have landed is installed and enabled; a unit
+this program no longer declares is disabled, removed and its stamp
+cleared, and only units of this program's own prefix are candidates;
+the routing daemon's configuration is copied to where the daemon reads
+it, outside `/data`, and reloaded; a service that owns its own
+configuration is given an initial state, but only where it has none,
+because the software behind it rewrites that file afterward; and a
+service is restarted **only if a file that defines it changed**.
+
+That last point is load-bearing, and it is why the health of a service
+here is decided by *files* rather than by a probe. The **content stamp**
+is a file beside each service's state holding a checksum over
+everything that defines that service — its unit, the digest marker of
+its root filesystem tree, and every configuration file it mounts. That
+set of paths is the service's **stamped set**, and the stamp is the
+record of what was last acted on; comparing the two is how the script
+tells intended content from pushed content without asking the service
+anything about itself. An unchanged stamp plus an active unit means
+nothing to do. There is no health check inside and no monitor:
+`Restart=always` handles a service that dies and systemd is what
+notices, while the script decides only whether the *definition* moved.
+
+The stamped set names the root filesystem's **digest marker** rather
+than the tree, because walking a root filesystem to learn it has not
+changed costs more than the restart it would save — and the marker
+beside the *tree* rather than beside the archive, because the archive's
+marker is written after the hook has already run, so a service waiting
+on it would learn about a new root filesystem one deployment late. The
+two marker-shaped files are not the same thing: a **digest marker** is
+written by the push and records which published artifact a payload came
+from, while a **content stamp** is written by this script and records
+what it last acted on. The first is an input to the second.
+
+**One service is restarted last, and that is a fact about the
+deployment rather than about the machine.** The apply reaches the
+device over ZeroTier, and the overlay daemon carrying that session is
+one of the containers being updated, so restarting it severs the
+session that asked for the restart. Three things make that safe.
+Nothing restarts that did not change, without which every apply would
+cut its own session. The service carrying the session converges last,
+so everything else has settled before the risk is taken — expressed as
+the order of the restart loop, never as a unit ordering, which would
+state something false about how the device boots. And an apply that
+dies there fails its own resource: every step is idempotent and that
+service's stamp has not been written yet, so the retry finds the work
+already done. During a first bring-up there is no overlay to sever —
+the container that will carry it is the thing being delivered — and the
+session runs over the device's LAN address instead (§2.5).
 
 ## 2. ZeroTier network design
 
@@ -494,12 +567,12 @@ at the registrar.
     repair tool (gw-config push) itself rides ZT, hence the side-door:
     connect to the **homelab host's direct ZT address** (member-to-
     member traffic needs no managed routes), hop to the LAN, SSH the
-    UDM, restart the unit / rerun on_boot.d. If the host is also down:
-    physical presence (LAN).
+    UDM, restart the unit or rerun the recovery script (§1.1). If the
+    host is also down: physical presence (LAN).
 -   **Firmware update wiped the services** — trigger: post-update, nspawn
-    units gone. on_boot.d re-materializes them autonomously
-    (architecture.md §5.2); verify ZT comes back last (it carries the
-    management path). Fallback if host-networking nspawn misbehaves
+    units gone. The recovery script re-materializes them autonomously
+    (§1.1); verify ZT comes back last (it carries the management
+    path). Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (§5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the pull-direction yadm timer), re-run the
