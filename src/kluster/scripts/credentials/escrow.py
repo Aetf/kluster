@@ -636,6 +636,16 @@ def from_kit(kit: KdbxStore, label: str) -> str:
     origin = row.origin
     if not isinstance(origin, Console) or origin.kit is None:
         raise EscrowError(f'{label} was never held in a kit, so there is nothing to read out of one')
+    if not kit.has(origin.kit.entry):
+        # A kit is filled from §2's table and a rotation writes a new database
+        # from the same table, so a kit holding no such entry is one written
+        # since the row left that table -- an ordinary kit rather than a
+        # damaged one, and the answer is the console rather than a repair.
+        raise EscrowError(
+            f'{kit.path} holds no {origin.kit.entry!r}: a kit written from the seed table as it stands now '
+            f'carries no such row, so this value comes from the console instead -- pipe it into '
+            f'`credentials derived {row_name(label)} record` without --from-kit'
+        )
     value = kit.attachment(origin.kit.entry, origin.kit.filename).decode().strip()
     identifier = kit.describe(origin.kit.entry).get('UserName', '')
     if identifier:
