@@ -24,9 +24,12 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 from kluster.scripts.update_crds import pins, sources
 
+#: The package logger the configuration below attaches the console to. Every
+#: module here logs to `__name__`, which is a child of it, so the handler and
+#: the level are stated once.
 LOG_NAME = 'kluster.scripts.update_crds'
 
-DEFAULT_LOGGING = {
+LOGGING = {
     'version': 1,
     'formatters': {
         'standard': {'format': '%(asctime)s %(levelname)s: %(message)s', 'datefmt': '%Y-%m-%d - %H:%M:%S'},
@@ -39,7 +42,7 @@ DEFAULT_LOGGING = {
     },
 }
 
-log = logging.getLogger(LOG_NAME)
+log = logging.getLogger(__name__)
 
 
 def collect_documents(workdir: Path) -> list[str]:
@@ -54,15 +57,16 @@ def collect_documents(workdir: Path) -> list[str]:
         f'{len(pins.MANIFESTS)} release manifests and {len(pins.SOURCE_TREES)} source trees'
     )
 
+    # One source at a time and `extend` throughout: a release manifest is one
+    # document and a source tree is many, and the fetches stay sequential so
+    # that the log above stays a running commentary rather than a summary.
     documents: list[str] = []
-    for manifest in pins.MANIFESTS:
-        documents.append(sources.fetch_release_manifest(manifest))
+    documents.extend(sources.fetch_release_manifest(manifest) for manifest in pins.MANIFESTS)
     for tree in pins.SOURCE_TREES:
-        documents += sources.fetch_source_tree(tree)
+        documents.extend(sources.fetch_source_tree(tree))
 
     helm = sources.fetch_helm(workdir)
-    for chart in charts:
-        documents.append(sources.render_chart(helm, chart, workdir=workdir))
+    documents.extend(sources.render_chart(helm, chart, workdir=workdir) for chart in charts)
     return documents
 
 
@@ -95,8 +99,8 @@ def generate(crd_files: list[Path], output: Path, crd2pulumi: Path) -> None:
     shutil.rmtree(backup, ignore_errors=True)
 
 
-def main() -> None:
-    logging.config.dictConfig(DEFAULT_LOGGING)
+def main(argv: list[str] | None = None) -> int:
+    logging.config.dictConfig(LOGGING)
     parser = argparse.ArgumentParser(description=__doc__)
     _ = parser.add_argument(
         '--output',
@@ -114,7 +118,7 @@ def main() -> None:
         type=Path,
         help='generate from an already rendered bundle instead of fetching the pinned sources',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     output: Path = args.output
     bundle: Path | None = args.bundle
@@ -132,14 +136,19 @@ def main() -> None:
                 documents = collect_documents(workdir)
 
             crds = sources.select_crds(documents)
-            groups = sorted({crd['spec']['group'] for crd in crds})
+            groups = sorted({crd.group for crd in crds})
             log.info(f'Selected {len(crds)} CRDs in {len(groups)} groups: {", ".join(groups)}')
 
             if bundle is not None:
                 _ = bundle.write_text(sources.dump_bundle(crds))
                 log.info(f'Wrote the bundle to {bundle}')
-                return
+                return 0
 
             crd_files = sources.write_crd_files(crds, workdir)
             generate(crd_files, output.resolve(), sources.fetch_crd2pulumi(workdir))
             log.info(f'Regenerated {output}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

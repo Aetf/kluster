@@ -8,7 +8,7 @@ side of the system only delivers it:
 -   the **UniFi API key**, which the controller mints for a dedicated local
     admin and shows once;
 -   the **AdGuard admin login**, which *is* the API credential — AdGuard Home
-    has no scoped API at all (the security audit's L11), so the account both
+    has no scoped API at all (the security audit's M6), so the account both
     instances carry is what a rewrite call authenticates as;
 -   the **ZeroTier Central API token**, which Central mints only in its own
     web console and scopes to the whole account.

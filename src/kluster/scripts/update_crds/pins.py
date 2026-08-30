@@ -169,9 +169,7 @@ CHARTS: Sequence[Chart] = (
     ),
     Chart(
         name='sealed-secrets',
-        # The project moved from the `bitnami-labs` organization to `bitnami`
-        # in 2026, and the old GitHub Pages repository is gone rather than
-        # redirected — the previous URL answers 404.
+        # `bitnami-labs.github.io` answers 404 rather than redirecting here.
         repo='https://bitnami.github.io/sealed-secrets',
         # renovate: datasource=helm depName=sealed-secrets registryUrl=https://bitnami.github.io/sealed-secrets
         version='2.19.3',

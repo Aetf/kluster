@@ -9,11 +9,13 @@ the age recipients whose identities the escrow holds — and hands the result to
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
 import subprocess as sp
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
+from kluster.lib import config as lib_config
 from kluster.scripts.credentials import age, escrow, pki, workstation
 
 from . import settings
@@ -163,24 +166,100 @@ def ssl_env(directory: Path) -> dict[str, str]:
     }
 
 
-def operator_keys() -> list[str]:
-    lines = (DEPLOY_DIR / OPERATOR_KEYS).read_text().splitlines()
-    return [line.strip() for line in lines if line.strip() and not line.startswith('#')]
+def operator_keys() -> tuple[str, ...]:
+    """The public keys that may log in to the appliance.
+
+    Refused by name when the file is missing or holds nothing: an empty list
+    renders a Butane document that `butane --strict` accepts and that boots an
+    appliance nobody can reach, which is a failure discovered an hour later
+    after an image import and a launch.
+    """
+    return lib_config.lines(DEPLOY_DIR / OPERATOR_KEYS, 'the appliance operator keys')
 
 
-def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> dict[str, Any]:
+class Digested(enum.Enum):
+    """How one field of the machine enters the digest map the box carries.
+
+    The converge compares a running box to this commit component by component
+    (`digests`), and three fields cannot be compared as their value: two are
+    certificates that are re-issued on every render, and two are secrets.
+    """
+
+    #: The value itself, JSON-encoded. The default, and the safe one.
+    VALUE = 'value'
+    #: A certificate, by subject, SANs and public key — "which CA is this".
+    AUTHORITY = 'authority'
+    #: A certificate, by subject and SANs only — "what does this box answer as".
+    LEAF = 'leaf'
+    #: Not compared at all.
+    NEVER = 'never'
+
+
+def _digested(how: Digested = Digested.VALUE) -> Any:
+    """Declare a `Machine` field's digest treatment beside the field itself.
+
+    The rule travels with the name it applies to, so renaming a field cannot
+    leave a rule pointing at nothing — which for the two `NEVER` fields would
+    mean putting a secret's digest into cloud metadata.
+    """
+    return field(metadata={'digest': how})
+
+
+@dataclass(frozen=True)
+class Machine:
     """Everything the Butane template needs: the machine, as values.
 
-    Named rather than inlined because two things read it -- the renderer, and
-    the digest that decides whether a running box still matches the
+    A record rather than a mapping because two things read it — the renderer,
+    and the digest that decides whether a running box still matches the
     repository (`digests`). A field the template uses but this does not carry
-    would be a change the converge cannot see.
+    would be a change the converge cannot see, and the type checker is what
+    holds the two lists together.
     """
+
+    operator_keys: tuple[str, ...] = _digested()
+    postgres_uid: int = _digested()
+    postgres_image: str = _digested()
+    database: str = _digested()
+    ci_role: str = _digested()
+    operator_role: str = _digested()
+    #: The CA's private half comes from the escrow and outlives every render,
+    #: so "which CA does this box chain to" is a fact about the box and a
+    #: change to it is a rebuild.
+    ca_cert: str = _digested(Digested.AUTHORITY)
+    #: The leaf, compared by what it asserts and not by whose key it carries:
+    #: a re-render legitimately issues a new key for the same machine.
+    #: Rotating the server key therefore takes `provision --replace`.
+    server_cert: str = _digested(Digested.LEAF)
+    #: Random at every issuance (pki.py), so it describes this render rather
+    #: than this machine.
+    server_key: str = _digested(Digested.NEVER)
+    age_recipients: tuple[str, ...] = _digested()
+    age_url: str = _digested()
+    age_sha256: str = _digested()
+    b2_dump_key_id: str = _digested()
+    #: A credential. Its *identity* is what the converge compares, and that is
+    #: `b2_dump_key_id`; hashing the secret into cloud metadata buys nothing.
+    b2_dump_key: str = _digested(Digested.NEVER)
+    b2_bucket_id: str = _digested()
+    b2_prefix: str = _digested()
+    dump_script: str = _digested()
+    dump_schedule: str = _digested()
+    reboot_day: str = _digested()
+    reboot_time: str = _digested()
+    reboot_window_minutes: int = _digested()
+
+    def parameters(self) -> dict[str, Any]:
+        """The names the Butane template's expressions use."""
+        return {spec.name: getattr(self, spec.name) for spec in fields(self)}
+
+
+def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> Machine:
+    """The machine this commit describes, at this address, with this dump key."""
     # One issuance, both halves. A leaf key is random at issuance (pki.py), so
     # asking the CA twice would hand the box a certificate its key does not
     # match -- and a box whose TLS key is wrong answers nothing.
     server = roots.ca.issue_server(address)
-    return dict(
+    return Machine(
         operator_keys=operator_keys(),
         postgres_uid=settings.POSTGRES_UID,
         postgres_image=settings.POSTGRES_IMAGE,
@@ -190,7 +269,7 @@ def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, buck
         ca_cert=roots.ca.certificate().cert_pem.decode().strip(),
         server_cert=server.cert_pem.decode().strip(),
         server_key=server.key_pem.decode().strip(),
-        age_recipients=list(roots.age_recipients),
+        age_recipients=roots.age_recipients,
         age_url=settings.AGE_URL,
         age_sha256=settings.AGE_SHA256,
         b2_dump_key_id=dump_key_id,
@@ -206,14 +285,23 @@ def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, buck
 
 
 def render_ignition(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> str:
-    """Butane in, validated Ignition out."""
+    """Butane in, validated Ignition out.
+
+    Rendered through an environment of its own rather than through
+    `kluster.lib.templates`: that mechanism resolves a template relative to
+    the package that owns it, and this one lives in `deploy/`, which is
+    deployment material a reader is meant to be able to open on its own. The
+    settings are the repository's (`StrictUndefined`, trailing newline kept),
+    so a forgotten parameter is still an error at render time.
+    """
     environment = Environment(
         loader=FileSystemLoader(DEPLOY_DIR),
         undefined=StrictUndefined,
         keep_trailing_newline=True,
+        autoescape=False,
     )
     butane = environment.get_template(TEMPLATE).render(
-        **machine(roots, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id)
+        machine(roots, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id).parameters()
     )
     log.info('handing %s to butane for validation and conversion to Ignition', TEMPLATE)
     proc = sp.run(
@@ -226,27 +314,6 @@ def render_ignition(roots: Roots, *, address: str, dump_key_id: str, dump_key: s
     if proc.returncode != 0:
         raise RuntimeError(f'butane rejected the config:\n{proc.stderr}')
     return proc.stdout
-
-
-#: What the digest never sees. Two reasons, both of them "comparing this would
-#: say a box drifted when it did not". The dump key's secret is a credential,
-#: and putting even its hash in cloud metadata buys nothing: the key's
-#: *identity* is what the converge compares, and that is `b2_dump_key_id`.
-#: The server's private key is random at every issuance (pki.py), so it
-#: describes this render rather than this machine.
-_UNDIGESTED = frozenset({'b2_dump_key', 'server_key'})
-
-#: The CA, compared by public key. Its private half comes from the escrow and
-#: outlives every render, so "which CA does this box chain to" is a fact about
-#: the box and a change to it is a rebuild.
-_AUTHORITY = frozenset({'ca_cert'})
-
-#: The leaf, compared by what it asserts and not by whose key it carries: a
-#: re-render legitimately issues a new key for the same machine, while the
-#: subject and the address in the SAN are what the box actually answers as.
-#: Rotating the server key therefore takes `provision --replace`, which is
-#: what that flag is for.
-_LEAF = frozenset({'server_cert'})
 
 
 def _identity(pem: str, *, with_key: bool) -> str:
@@ -287,17 +354,21 @@ def digests(roots: Roots, *, address: str, dump_key_id: str, bucket_id: str) -> 
     """
     values = machine(roots, address=address, dump_key_id=dump_key_id, dump_key='', bucket_id=bucket_id)
     parts = {'butane': (DEPLOY_DIR / TEMPLATE).read_text()}
-    for key, value in values.items():
-        if key in _UNDIGESTED:
-            continue
-        if key in _AUTHORITY or key in _LEAF:
-            parts[key] = _identity(value, with_key=key in _AUTHORITY)
-        else:
-            parts[key] = json.dumps(value, sort_keys=True, default=str)
+    for spec in fields(values):
+        value = getattr(values, spec.name)
+        match spec.metadata.get('digest', Digested.VALUE):
+            case Digested.NEVER:
+                continue
+            case Digested.AUTHORITY:
+                parts[spec.name] = _identity(value, with_key=True)
+            case Digested.LEAF:
+                parts[spec.name] = _identity(value, with_key=False)
+            case _:
+                parts[spec.name] = json.dumps(value, sort_keys=True, default=str)
     return {key: hashlib.sha256(value.encode()).hexdigest()[:16] for key, value in sorted(parts.items())}
 
 
-def drift(intended: dict[str, str], actual: dict[str, str]) -> list[str]:
+def drift(intended: Mapping[str, str], actual: Mapping[str, str]) -> list[str]:
     """The component names that differ. An empty list means the box matches.
 
     A component the box does not carry counts as drift, so a box provisioned

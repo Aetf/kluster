@@ -27,7 +27,7 @@ from .state import StateError
 log = logging.getLogger(__name__)
 
 
-def _parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='state-backend', description=__doc__)
     _ = parser.add_argument('--kdbx', type=Path, default=None, help='the cluster KeePassXC database')
     _ = parser.add_argument(
@@ -116,10 +116,10 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _drift(
+def _rebuild_reasons(
     roots: config.Roots,
     session: b2.Session,
-    existing: object | None,
+    existing: object,
     *,
     address: str,
     bucket_id: str,
@@ -127,32 +127,36 @@ def _drift(
 ) -> list[str]:
     """Why the running box is not the box this commit describes.
 
-    An empty list is the skip condition, and it is the *only* one: provision
-    applies the current commit, so anything the repository changed -- the
-    Butane file, an operator key, a pinned image, the address the server
-    certificate is issued for -- makes the box stale in exactly the same way,
-    and the dump key is one component among them rather than a special case.
+    Asked only of a box that exists, so an empty list means one thing: this
+    one matches and nothing has to happen. Provision applies the current
+    commit, so anything the repository changed -- the Butane file, an operator
+    key, a pinned image, the address the server certificate is issued for --
+    makes the box stale in exactly the same way, and the dump key is one
+    component among them rather than a special case.
 
     The comparison is per component (config.digests), so the reason a box is
     being replaced names what changed instead of asserting that something did.
     """
-    if existing is None:
-        return []
     if replace:
         return ['--replace was asked for']
 
-    recorded, dump_key_id = provision.instance_config(existing)
+    recorded = provision.instance_config(existing)
     reasons: list[str] = []
     if not b2.dump_key_is_current(
-        session, dump_key_id, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
+        session,
+        recorded.dump_key_id,
+        bucket_id=bucket_id,
+        prefix=settings.B2_PREFIX,
+        name=settings.B2_DUMP_KEY_NAME,
     ):
         # The box cannot be handed a new key without being rebuilt: the
         # secret only exists inside the Ignition it booted with.
-        reasons.append(f'the dump key the box holds ({dump_key_id or "none recorded"}) is not the intended one')
+        held = recorded.dump_key_id or 'none recorded'
+        reasons.append(f'the dump key the box holds ({held}) is not the intended one')
 
-    intended = config.digests(roots, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id)
-    changed = config.drift(intended, recorded)
-    if changed and not recorded:
+    intended = config.digests(roots, address=address, dump_key_id=recorded.dump_key_id, bucket_id=bucket_id)
+    changed = config.drift(intended, recorded.digests)
+    if changed and not recorded.digests:
         reasons.append('the box predates this bookkeeping, so what it was built from cannot be compared')
     elif changed:
         reasons.append(f'the machine definition changed: {", ".join(changed)}')
@@ -183,15 +187,19 @@ def _provision(
     )
 
     log.info('[3/6] converging the OCI network: VCN, subnet, gateway, security group, reserved address')
-    client = provision.Oci.load(compartment)
-    vcn_id, subnet_id = provision.ensure_network(client)
-    nsg_id = provision.ensure_security_group(client, vcn_id)
-    public_ip_id, address = provision.ensure_reserved_ip(client)
-    log.info('appliance address: %s', address)
+    clients = provision.OciClients.load(compartment)
+    placement = provision.ensure_network(clients)
+    nsg_id = provision.ensure_security_group(clients, placement.vcn_id)
+    reserved = provision.ensure_reserved_ip(clients)
+    log.info('appliance address: %s', reserved.address)
 
     log.info('[4/6] comparing the running box against this commit')
-    existing = provision.find_instance(client)
-    reasons = _drift(roots, session, existing, address=address, bucket_id=bucket_id, replace=replace)
+    existing = provision.find_instance(clients)
+    reasons = (
+        []
+        if existing is None
+        else _rebuild_reasons(roots, session, existing, address=reserved.address, bucket_id=bucket_id, replace=replace)
+    )
     if existing is not None and not reasons:
         log.info('appliance %s matches the repository; nothing to rebuild', existing.id)
         instance_id = str(existing.id)
@@ -200,8 +208,8 @@ def _provision(
             for reason in reasons:
                 log.warning('%s', reason)
             log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
-            provision.terminate_instance(client, str(existing.id))
-            provision.forget_host_key(address)
+            provision.terminate_instance(clients, str(existing.id))
+            provision.forget_host_key(reserved.address)
         # Minting is deliberately on this side of the branch. B2 returns an
         # application key's secret once, so the box's copy cannot be read back
         # and re-used, and minting a replacement revokes what the box is
@@ -212,32 +220,37 @@ def _provision(
         dump_key_id, dump_key = b2.mint_dump_key(
             session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
         )
-        log.info('rendering the Ignition config for %s', address)
+        log.info('rendering the Ignition config for %s', reserved.address)
         ignition = config.render_ignition(
-            roots, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
+            roots, address=reserved.address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
         )
         log.info('[5/6] converging the custom image — a release not imported yet takes the better part of an hour')
-        image_id = provision.ensure_image(client)
+        image_id = provision.ensure_image(clients)
         log.info('[6/6] launching the instance')
         instance_id = provision.ensure_instance(
-            client,
-            subnet_id=subnet_id,
+            clients,
+            subnet_id=placement.subnet_id,
             nsg_id=nsg_id,
             image_id=image_id,
             ignition=ignition,
-            digests=config.digests(roots, address=address, dump_key_id=dump_key_id, bucket_id=bucket_id),
+            digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key_id, bucket_id=bucket_id),
             dump_key_id=dump_key_id,
         )
-    provision.attach_reserved_ip(client, instance_id=instance_id, public_ip_id=public_ip_id)
+    provision.attach_reserved_ip(clients, instance_id=instance_id, public_ip_id=reserved.id)
 
     bundle_dir = workstation.bundle_dir()
-    config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=address), bundle_dir)
+    config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=reserved.address), bundle_dir)
     log.info('operator certificate bundle written to %s', bundle_dir)
 
-    if not provision.wait_for_backend(address):
-        log.error('the backend did not answer on %s:%d — ssh core@%s to look', address, settings.PORT, address)
+    if not provision.wait_for_backend(reserved.address):
+        log.error(
+            'the backend did not answer on %s:%d — ssh core@%s to look',
+            reserved.address,
+            settings.PORT,
+            reserved.address,
+        )
         return 1
-    log.info('backend answering on %s:%d', address, settings.PORT)
+    log.info('backend answering on %s:%d', reserved.address, settings.PORT)
     return 0
 
 
@@ -351,61 +364,70 @@ def _restore(
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
+
+    # One dispatch, and the kit is opened by the arms that need it rather than
+    # before them: `pins`, `ssh` and a drill's `restore --identity-file` run on
+    # machines that have no offline database, and asking for one would fail
+    # before the command started.
+    def kit() -> KdbxStore:
+        return KdbxStore.from_env(args.kdbx)
+
+    def registry() -> escrow.Registry:
+        return escrow.Registry.open(args.escrow)
 
     try:
-        if args.action == 'pins':
-            return 0 if provision.verify_pins() else 1
-        if args.action == 'ssh':
-            return provision.ssh(provision.Oci.load(args.compartment), args.command)
-        if args.action == 'restore' and args.identity_file is not None:
-            # The drill machine holds one age key and no kit; asking for a
-            # database it does not have would fail before the restore starts.
-            return _restore(
-                None,
-                registry=escrow.Registry.open(args.escrow),
-                bundle_dir=args.bundle,
-                source=args.dump,
-                identity=args.identity_file,
-                force=args.force,
-            )
-
-        store = KdbxStore.from_env(args.kdbx)
-        registry = escrow.Registry.open(args.escrow)
         match args.action:
+            case 'pins':
+                return 0 if provision.verify_pins() else 1
+            case 'ssh':
+                provision.ssh(provision.OciClients.load(args.compartment), args.command)
+            case 'restore' if args.identity_file is not None:
+                return _restore(
+                    None,
+                    registry=registry(),
+                    bundle_dir=args.bundle,
+                    source=args.dump,
+                    identity=args.identity_file,
+                    force=args.force,
+                )
             case 'render':
+                store = kit()
                 print(
                     config.render_ignition(
-                        config.Roots.recover(escrow.Vault.open(store, registry)),
+                        config.Roots.recover(escrow.Vault.open(store, registry())),
                         address=args.address,
                         dump_key_id='rendered-without-a-key',
                         dump_key='rendered-without-a-key',
                         bucket_id='rendered-without-a-bucket',
                     )
                 )
+                return 0
             case 'provision':
                 return _provision(
-                    store,
+                    kit(),
                     seed_entry=args.seed_entry,
                     compartment=args.compartment,
                     replace=args.replace,
-                    registry=registry,
+                    registry=registry(),
                 )
             case 'bundle':
+                store = kit()
                 config.write_client_bundle(
                     config.client_bundle(
-                        pki.Authority.from_pem(escrow.Vault.open(store, registry).recover(escrow.CA)),
+                        pki.Authority.from_pem(escrow.Vault.open(store, registry()).recover(escrow.CA)),
                         name=args.name,
                         address=args.address,
                     ),
                     args.directory,
                 )
+                return 0
             case 'dump':
-                return _dump(store, registry=registry, bundle_dir=args.bundle, output=args.output)
+                return _dump(kit(), registry=registry(), bundle_dir=args.bundle, output=args.output)
             case 'restore':
                 return _restore(
-                    store,
-                    registry=registry,
+                    kit(),
+                    registry=registry(),
                     bundle_dir=args.bundle,
                     source=args.dump,
                     identity=None,
@@ -416,7 +438,6 @@ def main(argv: list[str] | None = None) -> int:
     except (KdbxError, EscrowError, AgeError, StateError, WorkstationError) as exc:
         log.error('%s', exc)
         return 1
-    return 0
 
 
 if __name__ == '__main__':

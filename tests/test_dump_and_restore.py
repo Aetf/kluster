@@ -595,10 +595,10 @@ def test_the_default_name_is_the_one_the_appliance_uses() -> None:
 def test_both_commands_are_on_the_command_line() -> None:
     # Cheap, and it is what fails first when a parser and a handler disagree
     # about what an argument is called.
-    parsed = cli._parser().parse_args(['dump'])  # pyright: ignore[reportPrivateUsage]
+    parsed = cli.build_parser().parse_args(['dump'])  # pyright: ignore[reportPrivateUsage]
     assert (parsed.action, parsed.output) == ('dump', None)
 
-    parsed = cli._parser().parse_args(['restore', 'a.dump.age', '--force'])  # pyright: ignore[reportPrivateUsage]
+    parsed = cli.build_parser().parse_args(['restore', 'a.dump.age', '--force'])  # pyright: ignore[reportPrivateUsage]
     assert (parsed.action, parsed.dump, parsed.identity_file, parsed.force) == (
         'restore',
         Path('a.dump.age'),
