@@ -9,13 +9,14 @@ into two Pulumi resources (architecture.md §5.2):
 -   `DeviceFile` is a file: path, content, ownership, mode, and an optional
     hook. Its content lives in state, because a configuration file is small
     and its diff is the reason to have a preview at all.
--   `DeviceArtifact` is a payload too big for state: a URL, the digest that
-    pins it, and where it lands. The bytes are fetched on the runner, checked
-    against the pin, and streamed to the device; what state carries is the pin,
-    and what the device carries is a marker file beside the payload naming the
-    digest it holds. A preview compares two hashes, never megabytes. An
-    artifact may also name a directory to `extract` into, for the payloads that
-    are root filesystem archives rather than single files.
+-   `DeviceArtifact` is a payload too big for state: a container image, the
+    manifest digest that pins it, and where it lands. The image is pulled on
+    the runner, verified against the pin, flattened into one archive and
+    streamed to the device; what state carries is the pin, and what the device
+    carries is a marker file beside the payload naming the digest it holds. A
+    preview compares two hashes, never megabytes. An artifact may also name a
+    directory to `extract` into, for the payloads that are root filesystem
+    archives rather than single files.
 
 **An extracted artifact owns two things on the device**: the archive at
 `target`, and the tree unpacked from it. The tree is derived state -- the push
@@ -27,15 +28,17 @@ behind until the *next* push clears it, because at the moment of the swap the
 container is still running on it and has not yet been restarted.
 
 **The digest pins the artifact as published, not the bytes on the wire.** The
-gateway's container root filesystems are published compressed; the runner verifies the
-downloaded bytes against the pin, decompresses them, and pushes the plain
-archive, because the device cannot be assumed to have a decompressor while `tar`
-is the floor every such system clears. So the chain is: the pin verifies
-what was downloaded, decompression is a function of bytes already verified, the
-session that carries them is pinned by host key, and the markers the device
-keeps record *the pin* -- which is therefore the digest of the published archive
-and not of the file lying beside the marker. A marker is the device's claim
-about provenance, not a checksum of its neighbour.
+gateway's container root filesystems are published as registry images; the
+runner verifies the manifest against the pin, verifies every layer against that
+manifest, flattens them into one plain archive and pushes that, because the
+device runs `systemd-nspawn` over a directory rather than a container engine and
+`tar` is the floor every such system clears (`registry`). So the chain is: the
+pin verifies the manifest, the manifest verifies the layers, flattening is a
+function of bytes already verified, the session that carries them is pinned by
+host key, and the markers the device keeps record *the pin* -- which is
+therefore the manifest's digest and not a checksum of the file lying beside the
+marker. A marker is the device's claim about provenance, not a checksum of its
+neighbour.
 
 **Both resources diff against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
@@ -97,7 +100,7 @@ holds: their own module and class name and an empty bag -- inert, identical for
 every resource, and unchanged by a credential rotation. They are revived in a
 separate process where each call arrives on a thread with no event loop, so every
 operation runs its own loop, opens its own session and closes both. The two seams
-a test replaces -- how a session is opened, how a URL is fetched -- are
+a test replaces -- how a session is opened, how an image is pulled -- are
 module-level functions looked up when they are called rather than attributes
 captured at construction, which keeps the pickled provider a constant.
 """
@@ -107,7 +110,6 @@ from __future__ import annotations
 import abc
 import asyncio
 import hashlib
-import io
 import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager
@@ -116,11 +118,10 @@ from typing import Any, final
 
 import pulumi
 import pulumi.dynamic as dynamic
-import requests
-import zstandard
 from pulumi.runtime import rpc
 
-from kluster.providers.device_files import ssh
+from kluster.providers.device_files import registry, ssh
+from kluster.providers.device_files.registry import DigestMismatch, Image
 
 __all__ = (
     'ADDRESS',
@@ -137,7 +138,6 @@ __all__ = (
     'STAMPS',
     'SUPERSEDED_SUFFIX',
     'VERSION',
-    'ZSTD_MAGIC',
     'Connection',
     'DigestMismatch',
     'ExtractFailed',
@@ -147,12 +147,12 @@ __all__ = (
     'DeviceFileProvider',
     'DeviceProvider',
     'HookFailed',
+    'Image',
     'endpoint',
     'fetch',
     'gone',
     'marker_path',
     'open_transport',
-    'plain_archive',
     'purge_script',
     'secret_outputs',
     'unpack_script',
@@ -182,10 +182,12 @@ PIN = ('host_key',)
 #: What a `DeviceFile` declares beyond its own path.
 FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 
-#: The same for a `DeviceArtifact`. The digest is the payload's identity and the URL
-#: is only where the bytes were found, but both are declared, so moving a release
-#: to another mirror is a diff a reviewer sees.
-ARTIFACT_DECLARED = ('url', 'sha256', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
+#: The same for a `DeviceArtifact`. The digest is the payload's identity, and the
+#: repository and tag are only where those bytes were found -- but all three are
+#: declared, so moving publication to another registry, or a tag that moved onto
+#: a digest the device already holds, is a diff a reviewer sees rather than a
+#: silent equivalence.
+ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 
 #: The stack-configuration key the session's credential is read from, in
 #: `configure` and nowhere else. It is project-namespaced by the plugin, which
@@ -212,7 +214,7 @@ STAMPS = (SESSION, PROVIDER_VERSION)
 #: byte of state and produces no diff at all, leaving every resource's outputs
 #: stale and saying nothing about it (rfc-002 §7.5 E1). This is what turns such
 #: an edit into a visible update.
-VERSION = '1'
+VERSION = '2'
 
 #: How much of the credential's digest a resource carries. Enough to tell two
 #: keys apart in a preview, and far too little to be the key.
@@ -225,19 +227,10 @@ FINGERPRINT_LENGTH = 12
 FILE_COMPARED = (*FILE_DECLARED, *STAMPS)
 ARTIFACT_COMPARED = (*ARTIFACT_DECLARED, *STAMPS)
 
-#: How long the runner may spend fetching an artifact before giving up.
-FETCH_TIMEOUT = 300
-
 #: The mode a digest marker is written with. The marker is the provider's own
 #: bookkeeping rather than part of the desired state, so it does not inherit the
 #: payload's ownership.
 MARKER_MODE = '0644'
-
-#: The first four bytes of a zstd frame. Recognizing the compression rather than
-#: declaring it keeps one knob off the resource: what the device must receive is
-#: a plain archive either way, and a publisher that stopped compressing would
-#: otherwise turn a working pin into a corrupt one.
-ZSTD_MAGIC = b'\x28\xb5\x2f\xfd'
 
 #: Where a tree is assembled before it becomes the live one, and where the tree
 #: it displaced waits to be cleared. Both sit beside the tree rather than in a
@@ -267,17 +260,6 @@ class ExtractFailed(Exception):
         self.directory: str = directory
         self.exit_status: int = exit_status
         self.stderr: str = stderr
-
-
-@final
-class DigestMismatch(Exception):
-    """The fetched bytes are not the bytes the pin names, so nothing is pushed."""
-
-    def __init__(self, url: str, expected: str, actual: str) -> None:
-        super().__init__(f'{url} hashes to {actual}, not the pinned {expected}; refusing to push it')
-        self.url: str = url
-        self.expected: str = expected
-        self.actual: str = actual
 
 
 @final
@@ -318,35 +300,15 @@ def open_transport(device: ssh.Device) -> AbstractAsyncContextManager[ssh.Transp
     return ssh.connect(device)
 
 
-def fetch(url: str) -> bytes:
-    """Fetch an artifact on the runner. The other seam a test replaces.
+def fetch(image: Image) -> bytes:
+    """Pull an image on the runner and flatten it. The other seam a test replaces.
 
-    The payload is held in memory for the moment between fetching and streaming
-    it, which suits the root filesystem images this exists for and would not suit
-    a disk image.
+    The verification is `registry`'s and the flattening is too; what this line
+    is, is the seam. The payload is held in memory for the moment between
+    pulling and streaming it, which suits the root filesystems this exists for
+    and would not suit a disk image.
     """
-    response = requests.get(url, timeout=FETCH_TIMEOUT)
-    response.raise_for_status()
-    return response.content
-
-
-def plain_archive(data: bytes) -> bytes:
-    """The archive as the device will read it, decompressed here if it arrived so.
-
-    Decompression runs on the runner rather than on the device on purpose. The
-    gateway's user space is the cut-down one a router ships, where a zstd binary
-    is not something a deployment may assume; extracting an uncompressed archive
-    with `tar` is the floor every such system clears. The cost is that the bytes
-    on the device are not the bytes the pin names -- see the module docstring on
-    what the digest verifies and where.
-    """
-    if not data.startswith(ZSTD_MAGIC):
-        return data
-    # `stream_reader` rather than `decompress`: the latter refuses a frame whose
-    # header omits the uncompressed size, which is a legal thing for a
-    # compressor to write and not something a consumer gets to require.
-    with zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data), read_across_frames=True) as reader:
-        return reader.read()
+    return registry.rootfs(image)
 
 
 def unpack_script(archive: str, directory: str) -> str:
@@ -672,9 +634,9 @@ class DeviceArtifactProvider(DeviceProvider):
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
         failures = [*_absolute(news, 'target'), *_absolute(news, 'extract'), *_octal(news, 'mode')]
-        sha256 = news.get('sha256')
-        if sha256 is not None and not is_unknown(sha256) and not _is_sha256(str(sha256)):
-            failures.append(dynamic.CheckFailure('sha256', f'must be a hex SHA-256 digest, got {sha256!r}'))
+        digest = news.get('digest')
+        if digest is not None and not is_unknown(digest) and not _is_digest(str(digest)):
+            failures.append(dynamic.CheckFailure('digest', f'must be a `sha256:<hex>` manifest digest, got {digest!r}'))
         return self._stamp(news, failures)
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
@@ -706,17 +668,18 @@ class DeviceArtifactProvider(DeviceProvider):
         run_sync(self._delete(props))
 
     def _push(self, props: Mapping[str, Any]) -> None:
-        """Fetch, verify, then land. Nothing reaches the device unverified."""
-        url = str(props['url'])
-        expected = str(props['sha256']).lower()
-        data = fetch(url)
-        actual = hashlib.sha256(data).hexdigest()
-        if actual != expected:
-            raise DigestMismatch(url, expected, actual)
-        # Decompressed only after the pin has been checked, so what is unpacked
-        # is a function of bytes this runner has already vouched for.
-        payload = plain_archive(data) if _extract(props) else data
-        run_sync(self._land(props, payload, actual))
+        """Pull, verify, then land. Nothing reaches the device unverified.
+
+        The verification is inside the pull rather than repeated out here: the
+        pin names a manifest, the manifest names the layers, and the archive
+        that comes back is assembled from bytes each of those digests already
+        vouched for. What lands is therefore not something this runner can hash
+        against the pin -- which is the same relationship the marker on the
+        device has to the payload beside it.
+        """
+        digest = str(props['digest'])
+        data = fetch(Image(repository=str(props['repository']), digest=digest))
+        run_sync(self._land(props, data, digest))
 
     async def _land(self, props: Mapping[str, Any], data: bytes, digest: str) -> None:
         target = str(props['target'])
@@ -743,7 +706,7 @@ class DeviceArtifactProvider(DeviceProvider):
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         target = str(props['target'])
         tree = _extract(props)
-        pinned = str(props['sha256']).lower()
+        pinned = str(props['digest'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(target)
             if stat is None:
@@ -772,7 +735,7 @@ class DeviceArtifactProvider(DeviceProvider):
                 return gone()
             outs = {
                 **props,
-                'sha256': claimed,
+                'digest': claimed,
                 'mode': stat.mode,
                 'owner': _observed_owner(props.get('owner'), stat),
             }
@@ -840,10 +803,11 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
 
 @final
 class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
-    """A digest-pinned payload -- a container root filesystem, a release tarball."""
+    """A digest-pinned container image, landed on the device as a flat archive."""
 
-    url: pulumi.Output[str]
-    sha256: pulumi.Output[str]
+    repository: pulumi.Output[str]
+    tag: pulumi.Output[str]
+    digest: pulumi.Output[str]
     target: pulumi.Output[str]
     extract: pulumi.Output[str | None]
     mode: pulumi.Output[str]
@@ -855,8 +819,9 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
         name: str,
         *,
         connection: Connection,
-        url: pulumi.Input[str],
-        sha256: pulumi.Input[str],
+        repository: pulumi.Input[str],
+        tag: pulumi.Input[str],
+        digest: pulumi.Input[str],
         target: pulumi.Input[str],
         extract: pulumi.Input[str] | None = None,
         mode: pulumi.Input[str] = '0644',
@@ -864,11 +829,14 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
         hook: pulumi.Input[str] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `target` holds the bytes `sha256` names.
+        """Declare that `target` holds the root filesystem `digest` names.
 
-        The bytes never enter state: `url` is fetched on the runner at apply
-        time, checked against `sha256`, and streamed to the device, which keeps a
-        marker beside the payload naming what it holds.
+        The bytes never enter state: the image is pulled from `repository` on
+        the runner at apply time, verified against `digest` and flattened, then
+        streamed to the device, which keeps a marker beside the payload naming
+        what it holds. `tag` is where the digest was found and is declared
+        rather than used -- the pull is by digest, because a tag is a name
+        somebody else can move.
 
         `extract` names a directory the payload is unpacked into, for an archive
         rather than a single file, and the resource owns that directory: it
@@ -882,16 +850,17 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
             name,
             {
                 **connection.props(),
-                'url': url,
-                'sha256': sha256,
+                'repository': repository,
+                'tag': tag,
+                'digest': digest,
                 'target': target,
                 'extract': extract,
                 'mode': mode,
                 'owner': owner,
                 'hook': hook,
             },
-            # No property of an artifact is a secret: a URL, a digest and a path
-            # are all things a reviewer should read in a preview.
+            # No property of an artifact is a secret: a reference, a digest and
+            # a path are all things a reviewer should read in a preview.
             opts,
         )
 
@@ -925,5 +894,17 @@ def _owner(props: Mapping[str, Any]) -> str | None:
     return str(owner) if owner else None
 
 
-def _is_sha256(value: str) -> bool:
-    return len(value) == 64 and all(character in '0123456789abcdefABCDEF' for character in value)
+def _is_digest(value: str) -> bool:
+    """Whether this is a registry digest, in the one spelling a registry uses.
+
+    Lower case and algorithm-qualified, both because that is the form a
+    reference carries and because the marker on the device is compared byte for
+    byte -- a differently-spelled digest is a pin that never matches.
+    """
+    algorithm, separator, hex_digest = value.partition(':')
+    return (
+        algorithm == 'sha256'
+        and bool(separator)
+        and len(hex_digest) == 64
+        and all(character in '0123456789abcdef' for character in hex_digest)
+    )

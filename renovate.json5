@@ -122,6 +122,25 @@
       ],
       enabled: true,
     },
+    {
+      // The gateway's container root filesystems. `physical` has no PR preview
+      // either (framework/ci.md §3), but a rootfs bump swaps the software in
+      // the router's containers rather than reimaging the node fleet, so it is
+      // its own decision and not part of the Talos group.
+      //
+      // Grouped, because the publication is one build of all of them: a single
+      // run produces every image and tags them all with its own number, so
+      // there is no such thing as one of them moving on its own upstream. What
+      // the four separate keys buy is the other direction — an operator can
+      // hold one service back by hand while another proves a build, and no
+      // grouping here takes that away.
+      matchDepNames: [
+        'ghcr.io/aetf/homelab-containers/**',
+      ],
+      groupName: 'gateway container root filesystems',
+      groupSlug: 'gateway-rootfs',
+      dependencyDashboardApproval: true,
+    },
   ],
   customManagers: [
     {
@@ -166,9 +185,7 @@
     {
       // The Talos version is a Pulumi config value, which no manager reads. It
       // lives in the project-level `versions:` namespace, so one file holds it
-      // for every stack (rfc-002 §11.1). The `rootfs-` pins beside it have no
-      // manager yet: their publication moves to registry images first, and the
-      // manager arrives with that (§11.1, §15).
+      // for every stack (rfc-002 §11.1).
       customType: 'regex',
       managerFilePatterns: [
         '/^Pulumi\\.yaml$/',
@@ -178,6 +195,29 @@
       ],
       depNameTemplate: 'siderolabs/talos',
       datasourceTemplate: 'github-releases',
+    },
+    {
+      // The image pins in the same project-level block, each announced by a
+      // `# renovate:` comment on the line above it — the shape the build-arg
+      // pins in `docker/*.conf` already use, and the reason the repository is
+      // not repeated inside every value: which registry publishes a build is a
+      // rule in `conventions.gateway`, not a string an operator maintains once
+      // per pin (rfc-002 §11.1).
+      //
+      // Tag and digest are captured together, so one data source moves the
+      // pair and the reference the program pulls by stays whole. The
+      // publication tags each build with a monotonic run number, which docker
+      // versioning reads as a major version — so every bump is a decision that
+      // waits on the dashboard, which for software the site's router runs is
+      // the right default. The commit-hash tag beside it is not a version and
+      // is ignored.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^Pulumi\\.yaml$/',
+      ],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+versions:image-[\\w-]+:\\s*(?<currentValue>[\\w.+-]+)@(?<currentDigest>sha256:[0-9a-f]{64})',
+      ],
     },
   ],
 }

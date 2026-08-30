@@ -94,19 +94,23 @@ def test_every_name_the_gateway_serves_is_one_label_under_the_primary_zone() -> 
         assert vhost.partition('.')[2] == conventions.ZONE_PRIMARY, vhost
 
 
-def test_every_service_names_a_build_the_release_publishes() -> None:
-    """One archive can serve two services, and each still gets a pin of its own.
+def test_every_service_names_a_build_the_registry_publishes() -> None:
+    """One image can serve two services, and each still gets a pin of its own.
 
     The resolvers are the case: one `adguard` build behind both, and two
-    `versions:rootfs-` keys, which is what lets a new build be proven on one
+    `versions:image-` keys, which is what lets a new build be proven on one
     instance before the other (rfc-002 §11.1).
     """
-    pins = [conventions.gateway.rootfs_pin(service) for service in conventions.gateway.SERVICES]
+    pins = [conventions.gateway.image_pin(service) for service in conventions.gateway.SERVICES]
     assert len(set(pins)) == len(conventions.gateway.SERVICES)
 
     alice, bob = conventions.gateway.RESOLVERS
     assert alice.artifact == bob.artifact
     assert conventions.gateway.CADDY.artifact != alice.artifact
+    # And the artifact is what names the repository, so two instances of one
+    # build pull the same image rather than two that happen to agree.
+    repositories = {conventions.gateway.image_repository(s.artifact) for s in conventions.gateway.SERVICES}
+    assert len(repositories) == 3
 
 
 def test_every_volume_is_attached_to_a_node_the_fleet_declares() -> None:

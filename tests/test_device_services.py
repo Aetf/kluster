@@ -33,7 +33,8 @@ HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 BGP_PASSWORD = 'a-session-password'
 ACME_TOKEN = 'a-zone-scoped-token'
 
-DIGEST = 'f' * 64
+DIGEST = f'sha256:{"f" * 64}'
+TAG = '7'
 SERVICES = tuple(service.name for service in conventions.gateway.SERVICES)
 #: Where the census places the bridged services, restated rather than read back
 #: from it: these are the addresses the LAN's leases already point at, so one
@@ -46,7 +47,7 @@ ADDRESSES = {
 
 
 def pin(service: str) -> container.Rootfs:
-    return container.Rootfs(url=f'https://example.invalid/{service}.tar.zst', sha256=DIGEST)
+    return container.Rootfs(repository=f'registry.invalid/estate/{service}', tag=TAG, digest=DIGEST)
 
 
 def declarations() -> tuple[container.ServiceDeclaration, ...]:
@@ -247,18 +248,22 @@ def test_a_unit_states_what_it_needs_of_the_machine_it_starts_on() -> None:
             assert other.unit_name not in unit
 
 
-def test_a_service_is_addressed_through_the_environment_its_image_reads() -> None:
-    """The images run s6, and a resolver configures its interface itself.
+@pytest.mark.parametrize('service', ['adguard-alice', 'adguard-bob', 'caddy'])
+def test_a_service_is_addressed_through_the_environment_its_image_reads(service: str) -> None:
+    """The images run s6, and each configures its own interface from PID 1's
+    environment, which the unit fills with `--setenv` — not out of a drop-in for
+    a network manager the image does not carry. A file delivered to such a path
+    is one nobody opens.
 
-    It reads the addressing out of PID 1's environment, which the unit fills
-    with `--setenv` — not out of a drop-in for a network manager the image does
-    not carry. A file delivered to such a path is one nobody opens, so the
-    resolvers would come up with no address at all and the LAN would lose the
-    name service that every lease points at.
+    Every bridged service, caddy included: its image carries the same
+    `net-setup` the resolvers do, the proxy is ordered after that oneshot, and
+    the oneshot exits non-zero when the addressing is absent. So a unit that
+    did not deliver it would leave the reverse proxy down rather than leave it
+    on a lease.
     """
-    unit = container.unit_file(declared_for('adguard-alice'))
+    unit = container.unit_file(declared_for(service))
 
-    for name, value in container.net_setup_environment(ADDRESSES['adguard-alice']).items():
+    for name, value in container.net_setup_environment(ADDRESSES[service]).items():
         assert f'--setenv={name}={value}' in unit
     # The unit's own `Environment=` is the environment of the process on the
     # device, which is not the one the image reads.
@@ -310,9 +315,6 @@ def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it
     assert f'--setenv=XDG_DATA_HOME={container.CADDY_STATE}' in unit
     assert caddy.state == container.CADDY_STATE
     assert f'--bind={container.state_path("caddy")}:{container.CADDY_STATE}' in unit
-    # Its address is the one thing the unit cannot deliver: the image asks for
-    # a lease, and the lease is where its resolver comes from too.
-    assert container.ENV_IPV4_CIDR not in unit
 
 
 def test_a_unit_boots_the_unpacked_tree_and_not_the_tarball_that_carried_it() -> None:
@@ -603,8 +605,9 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes() -> None:
     ]
     assert sorted(name for name, _ in images) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
     for name, inputs in images:
-        assert inputs['sha256'] == DIGEST, name
-        assert inputs['url'].endswith('.tar.zst'), name
+        assert inputs['digest'] == DIGEST, name
+        assert inputs['tag'] == TAG, name
+        assert inputs['repository'].startswith('registry.invalid/'), name
         assert 'content' not in inputs, name
 
     # Every service's artifact owns the tree its unit boots, so a pin that moves

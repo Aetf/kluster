@@ -1,7 +1,7 @@
 """The gw-config provider: convergence against a device that is not there.
 
 Every test below runs the provider's real code against a fake device. What is
-doubled is the wire -- the SSH session, and the HTTP fetch of an artifact -- and
+doubled is the wire -- the SSH session, and the registry pull of an image -- and
 nothing above it: the shell one-liners, the quoting, the digest arithmetic, the
 key parsing and the diff logic are the shipped ones. No test opens a socket.
 
@@ -27,7 +27,6 @@ import pulumi
 import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
-import zstandard
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -38,7 +37,7 @@ from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportU
 from pulumi.runtime import rpc
 from pulumi.runtime.stack import wait_for_rpcs
 
-from kluster.providers.device_files import provider, ssh
+from kluster.providers.device_files import provider, registry, ssh
 
 
 def private_key() -> str:
@@ -76,18 +75,16 @@ CONFIG_PATH = '/data/frr/frr.conf'
 CONFIG = 'router bgp 65000\n'
 HOOK = "vtysh -c 'configure terminal'"
 
-ROOTFS_URL = 'https://example.invalid/rootfs/adguard-1.2.3.tar'
+ROOTFS_REPOSITORY = 'registry.invalid/estate/adguard'
+ROOTFS_TAG = '7'
+#: The manifest digest that is the pin. It is deliberately *not* the hash of the
+#: payload below: what the runner pushes is the image flattened into an archive,
+#: and no digest of that archive appears anywhere in the design -- see
+#: `test_the_marker_names_the_pin_and_not_the_bytes_lying_beside_it`.
+ROOTFS_DIGEST = f'sha256:{"e" * 64}'
 ROOTFS = b'a root filesystem, in miniature'
-ROOTFS_SHA256 = hashlib.sha256(ROOTFS).hexdigest()
 ROOTFS_TARGET = '/data/services/images/adguard.tar'
 ROOTFS_TREE = '/data/services/roots/adguard'
-
-#: The same payload as it is actually published: a zstd-compressed archive. The
-#: pin is the digest of *these* bytes, which is the whole point of the test that
-#: follows the pin through decompression.
-ROOTFS_ZST = zstandard.ZstdCompressor().compress(ROOTFS)
-ROOTFS_ZST_SHA256 = hashlib.sha256(ROOTFS_ZST).hexdigest()
-ROOTFS_ZST_URL = 'https://example.invalid/rootfs/adguard-1.2.3.tar.zst'
 
 #: Every resource the declaration fixture registered: type, name, inputs.
 declared: list[tuple[str, str, dict[str, Any]]] = []
@@ -183,12 +180,20 @@ def device(monkeypatch: pytest.MonkeyPatch) -> Device:
 
 
 @pytest.fixture
-def downloads(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
-    """What the runner gets when it fetches a URL."""
-    served = {ROOTFS_URL: ROOTFS, ROOTFS_ZST_URL: ROOTFS_ZST}
+def pulls(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    """What the runner gets when it pulls an image, by the reference it pulled.
 
-    def fetch(url: str) -> bytes:
-        return served[url]
+    The pull's own verification is `registry`'s and is under test there; what
+    this suite needs of it is that it happened, that its result is what reaches
+    the device, and that a refusal there is a refusal here.
+    """
+    served = {f'{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}': ROOTFS}
+
+    def fetch(image: provider.Image) -> bytes:
+        payload = served.get(str(image))
+        if payload is None:
+            raise registry.DigestMismatch(str(image), image.digest, f'sha256:{"0" * 64}')
+        return payload
 
     monkeypatch.setattr(provider, 'fetch', fetch)
     return served
@@ -245,8 +250,9 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
         'port': 22,
         'username': 'root',
         'host_key': HOST_KEY,
-        'url': ROOTFS_URL,
-        'sha256': ROOTFS_SHA256,
+        'repository': ROOTFS_REPOSITORY,
+        'tag': ROOTFS_TAG,
+        'digest': ROOTFS_DIGEST,
         'target': ROOTFS_TARGET,
         'extract': None,
         'mode': '0600',
@@ -257,7 +263,7 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
 
 def unpacking_props(**overrides: Any) -> dict[str, Any]:
     """An artifact as a container service declares one: an archive and a tree."""
-    return artifact_props(url=ROOTFS_ZST_URL, sha256=ROOTFS_ZST_SHA256, extract=ROOTFS_TREE) | overrides
+    return artifact_props(extract=ROOTFS_TREE) | overrides
 
 
 def converged(device: Device, props: Mapping[str, Any]) -> None:
@@ -274,13 +280,13 @@ def converged(device: Device, props: Mapping[str, Any]) -> None:
 def landed(device: Device, props: Mapping[str, Any], payload: bytes = ROOTFS, digest: str | None = None) -> None:
     """Put the device in the state an artifact bag declares, markers and all.
 
-    `digest` is what the markers claim, which is the digest of the *published*
-    artifact and therefore not the digest of the payload lying on the device
-    once that artifact was decompressed on the way there.
+    `digest` is what the markers claim, which is the *manifest* digest of the
+    image and therefore never the digest of the flattened payload lying beside
+    them on the device.
     """
     user, _, group = str(props['owner']).partition(':')
     target = str(props['target'])
-    claimed = digest if digest is not None else hashlib.sha256(payload).hexdigest()
+    claimed = digest if digest is not None else str(props['digest'])
     device.files[target] = Entry(data=payload, mode=str(props['mode']), owner=user, group=group)
     device.files[provider.marker_path(target)] = Entry(data=f'{claimed}\n'.encode())
     tree = props.get('extract')
@@ -679,10 +685,10 @@ def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
 
 def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """The marker is a claim, so it is made only once the claim is true."""
-    assert downloads
+    assert pulls
     result = artifact_provider().create(artifact_props())
 
     assert device.log == [
@@ -691,21 +697,26 @@ def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
         f'write {provider.marker_path(ROOTFS_TARGET)}',
     ]
     assert device.files[ROOTFS_TARGET].data == ROOTFS
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_SHA256}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
     assert result.id == ROOTFS_TARGET
 
 
 def test_bytes_that_do_not_match_their_pin_never_reach_the_device(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
-    """Verification precedes the session, so a substituted release cannot land."""
-    downloads[ROOTFS_URL] = b'something else entirely'
+    """Verification precedes the session, so a substituted release cannot land.
 
-    with pytest.raises(provider.DigestMismatch) as raised:
+    The pull is what refuses -- the pin names a manifest and the manifest names
+    the layers (`registry`) -- and what matters here is that the refusal ends
+    the push before a session is opened.
+    """
+    pulls.clear()
+
+    with pytest.raises(registry.DigestMismatch) as raised:
         _ = artifact_provider().create(artifact_props())
 
-    assert ROOTFS_SHA256 in str(raised.value)
+    assert ROOTFS_DIGEST in str(raised.value)
     assert device.sessions == 0
     assert device.files == {}
 
@@ -743,7 +754,7 @@ def test_a_payload_with_no_marker_beside_it_is_a_change(device: Device) -> None:
 
 def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device) -> None:
     olds = artifact_props()
-    news = artifact_props(sha256='b' * 64)
+    news = artifact_props(digest=f'sha256:{"b" * 64}')
 
     result = artifact_provider().diff('id', olds, news)
 
@@ -753,17 +764,17 @@ def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device)
 
 def test_a_rotation_restamps_an_artifact_without_fetching_or_pushing_it(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """Megabytes are not moved because a credential changed.
 
-    Nothing is downloaded either: the marker on the device already names the pin,
-    and the runner has no reason to fetch the payload to find that out.
+    Nothing is pulled either: the marker on the device already names the pin,
+    and the runner has no reason to pull the image to find that out.
     """
     olds = checked(artifact_provider(), artifact_props())
     landed(device, olds)
     device.log.clear()
-    downloads.clear()
+    pulls.clear()
     rotated = artifact_provider(private_key())
     news = checked(rotated, artifact_props())
 
@@ -776,10 +787,10 @@ def test_a_rotation_restamps_an_artifact_without_fetching_or_pushing_it(
 
 def test_an_artifact_update_still_pushes_when_the_marker_disagrees(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """A stamp does not excuse a device that no longer holds what it claimed."""
-    assert downloads
+    assert pulls
     olds = checked(artifact_provider(), artifact_props())
     landed(device, olds)
     del device.files[provider.marker_path(ROOTFS_TARGET)]
@@ -787,17 +798,17 @@ def test_an_artifact_update_still_pushes_when_the_marker_disagrees(
 
     _ = rotated.update('id', olds, checked(rotated, artifact_props()))
 
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_SHA256}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
 
 
 def test_reading_an_artifact_reports_the_digest_the_device_claims(device: Device) -> None:
     props = artifact_props()
-    landed(device, props, payload=b'a different release')
+    landed(device, props, payload=b'a different release', digest=f'sha256:{"d" * 64}')
 
     result = artifact_provider().read('id', props)
 
     assert result.outs is not None
-    assert result.outs['sha256'] == hashlib.sha256(b'a different release').hexdigest()
+    assert result.outs['digest'] == f'sha256:{"d" * 64}'
 
 
 def test_reading_an_artifact_with_no_marker_drops_the_identifier(device: Device) -> None:
@@ -825,10 +836,16 @@ def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
     ]
 
 
-def test_a_digest_that_is_not_a_sha256_is_refused() -> None:
-    result = artifact_provider().check({}, artifact_props(sha256='deadbeef'))
+@pytest.mark.parametrize(
+    'value',
+    ['deadbeef', 'e' * 64, f'sha256:{"E" * 64}', f'sha512:{"e" * 64}'],
+    ids=['too short', 'unqualified', 'upper case', 'another algorithm'],
+)
+def test_a_digest_that_is_not_a_registry_digest_is_refused(value: str) -> None:
+    """The marker on the device is compared byte for byte, so the spelling is the pin."""
+    result = artifact_provider().check({}, artifact_props(digest=value))
 
-    assert [failure.property for failure in result.failures] == ['sha256']
+    assert [failure.property for failure in result.failures] == ['digest']
 
 
 def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
@@ -842,52 +859,44 @@ def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() 
 ##
 
 
-def test_the_pin_is_checked_against_what_was_published_and_the_device_gets_the_archive(
+def test_the_marker_names_the_pin_and_not_the_bytes_lying_beside_it(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
-    """The published artifact is compressed and the device receives it plain.
+    """What the device holds is the image flattened; what it records is the pin.
 
-    The chain that makes this safe: the digest verifies the bytes as downloaded,
-    decompression is a function of bytes already verified, and the marker the
-    device keeps names that same digest. So the marker is deliberately *not* the
+    The chain that makes this safe is in `registry`: the pin verifies the
+    manifest, the manifest verifies every layer, and the archive is assembled
+    from bytes already vouched for. So the marker is deliberately *not* the
     checksum of the file beside it — it is a claim about provenance, and a
-    reviewer reading `sha256sum` on the device should expect them to differ.
+    reviewer running `sha256sum` on the device should expect the two to differ.
     """
-    assert downloads[ROOTFS_ZST_URL] != ROOTFS, 'the published artifact is the compressed one'
+    assert pulls[f'{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}'] == ROOTFS
+    assert hashlib.sha256(ROOTFS).hexdigest() not in ROOTFS_DIGEST, 'the pin is the manifest, not the payload'
 
     _ = artifact_provider().create(unpacking_props())
 
     assert device.files[ROOTFS_TARGET].data == ROOTFS
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
-    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_ZST_SHA256}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_DIGEST}\n'.encode()
 
 
-def test_compressed_bytes_that_do_not_match_their_pin_are_never_decompressed(
+def test_a_pull_that_refuses_its_pin_unpacks_nothing_anywhere(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
-    """Verification comes first, so nothing hands unverified bytes to a decoder."""
-    downloads[ROOTFS_ZST_URL] = zstandard.ZstdCompressor().compress(b'a substituted release')
+    """Verification comes first, so no unverified bytes are handed to a decoder."""
+    pulls.clear()
 
-    with pytest.raises(provider.DigestMismatch):
+    with pytest.raises(registry.DigestMismatch):
         _ = artifact_provider().create(unpacking_props())
 
     assert device.sessions == 0
 
 
-def test_an_uncompressed_payload_is_pushed_as_it_arrived(device: Device, downloads: dict[str, bytes]) -> None:
-    """A publisher that stops compressing does not turn a working pin into a
-    corrupt one: what the device must receive is a plain archive either way."""
-    assert downloads
-    _ = artifact_provider().create(unpacking_props(url=ROOTFS_URL, sha256=ROOTFS_SHA256))
-
-    assert device.files[ROOTFS_TARGET].data == ROOTFS
-
-
 def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """A container's root is either the previous tree or the new one.
 
@@ -896,7 +905,7 @@ def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
     is still running on those files, because the hook that restarts it has not
     run yet. Clearing them is the next push's first act.
     """
-    assert downloads
+    assert pulls
     _ = artifact_provider().create(unpacking_props())
 
     unpack = next(command for command in device.commands if 'tar -xf' in command)
@@ -912,7 +921,7 @@ def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
 
 def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """The hook is what notices a new root filesystem, so it has to see it.
 
@@ -920,7 +929,7 @@ def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
     and the marker beside the tree is that file. The marker beside the archive
     stays last, because it is the claim that the whole sequence succeeded.
     """
-    assert downloads
+    assert pulls
     _ = artifact_provider().create(unpacking_props())
 
     assert device.log == [
@@ -934,11 +943,11 @@ def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
 
 def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
     device: Device,
-    downloads: dict[str, bytes],
+    pulls: dict[str, bytes],
 ) -> None:
     """The hook never runs and neither marker is written, so the next preview
     still has work to do — and the tree the container boots is untouched."""
-    assert downloads
+    assert pulls
     device.refuse = ('tar -xf',)
 
     with pytest.raises(provider.ExtractFailed):
@@ -952,7 +961,7 @@ def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
 def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(device: Device) -> None:
     """What the device runs is the tree; the archive is only how it got there."""
     props = unpacking_props()
-    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    landed(device, props)
     del device.files[ROOTFS_TREE]
 
     assert artifact_provider().diff('id', props, props).changes is True
@@ -960,7 +969,7 @@ def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(de
 
 def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
     props = unpacking_props()
-    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    landed(device, props)
     device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
 
     assert artifact_provider().diff('id', props, props).changes is True
@@ -968,7 +977,7 @@ def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
 
 def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device) -> None:
     props = unpacking_props()
-    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    landed(device, props)
 
     assert artifact_provider().diff('id', props, props).changes is False
 
@@ -976,7 +985,7 @@ def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device
 def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
     """A refresh reports what the device can actually run, which is the tree."""
     props = unpacking_props()
-    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    landed(device, props)
     del device.files[ROOTFS_TREE]
 
     assert artifact_provider().read('id', props).id is None
@@ -986,7 +995,7 @@ def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(d
     """Derived state the push created is state the push removes, leftovers of an
     interrupted extraction included."""
     props = unpacking_props()
-    landed(device, props, digest=ROOTFS_ZST_SHA256)
+    landed(device, props)
     device.log.clear()
 
     artifact_provider().delete('id', props)
@@ -1008,12 +1017,6 @@ def test_a_path_a_shell_would_mangle_is_quoted_in_the_extraction_too() -> None:
 
     assert "'/data/a file.tar'" in script
     assert "'/data/roots/a tree'" in script
-
-
-def test_an_archive_that_is_not_compressed_survives_the_decompression_step() -> None:
-    assert provider.plain_archive(ROOTFS) == ROOTFS
-    assert provider.plain_archive(ROOTFS_ZST) == ROOTFS
-    assert ROOTFS_ZST.startswith(provider.ZSTD_MAGIC)
 
 
 ##
@@ -1109,8 +1112,9 @@ async def stack() -> None:
     _ = provider.DeviceArtifact(
         'adguard-rootfs',
         connection=connection,
-        url=ROOTFS_ZST_URL,
-        sha256=ROOTFS_ZST_SHA256,
+        repository=ROOTFS_REPOSITORY,
+        tag=ROOTFS_TAG,
+        digest=ROOTFS_DIGEST,
         target=ROOTFS_TARGET,
         extract=ROOTFS_TREE,
     )
@@ -1147,8 +1151,9 @@ def test_a_declared_artifact_carries_its_pin_and_never_its_bytes() -> None:
     typ, inputs = registered('adguard-rootfs')
 
     assert typ == 'pulumi-python:dynamic/device:Artifact'
-    assert inputs['url'] == ROOTFS_ZST_URL
-    assert inputs['sha256'] == ROOTFS_ZST_SHA256
+    assert inputs['repository'] == ROOTFS_REPOSITORY
+    assert inputs['tag'] == ROOTFS_TAG
+    assert inputs['digest'] == ROOTFS_DIGEST
     assert inputs['target'] == ROOTFS_TARGET
     assert inputs['extract'] == ROOTFS_TREE
     assert 'content' not in inputs
