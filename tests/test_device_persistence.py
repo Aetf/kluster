@@ -61,6 +61,16 @@ class Layer(Component, pulumi_type='test:gateway:Layer'):
         self.register_outputs({})
 
 
+class Neighbours(Component, pulumi_type='test:gateway:Neighbours'):
+    """Two executables whose names differ only after the dot."""
+
+    def __init__(self, name: str, *, mechanism: DevicePersistence, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.shell: DeviceFile = mechanism.executable('example.sh', '#!/bin/sh\nexit 0\n', opts=self.child_opts())
+        self.python: DeviceFile = mechanism.executable('example.py', 'raise SystemExit(0)\n', opts=self.child_opts())
+        self.register_outputs({})
+
+
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
@@ -92,8 +102,8 @@ def test_the_boot_chain_is_delivered_where_the_vendored_oneshot_looks(monitor: R
     `ExecStart` of the unit vendored beside this module, so a script delivered
     anywhere else is a script nothing runs.
     """
-    packages = monitor.inputs_of(f'{NAME}-on-boot-10-packages')
-    units = monitor.inputs_of(f'{NAME}-on-boot-20-units')
+    packages = monitor.inputs_of(f'{NAME}-on-boot-{persistence.PACKAGES_SCRIPT}')
+    units = monitor.inputs_of(f'{NAME}-on-boot-{persistence.UNITS_SCRIPT}')
 
     assert packages['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.PACKAGES_SCRIPT}'
     assert units['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.UNITS_SCRIPT}'
@@ -113,7 +123,7 @@ def test_the_anchor_of_the_chain_is_delivered_as_a_unit_source(monitor: Recorder
     carries the upstream pin, because bytes vendored from somebody else are
     only reviewable if the reader can find where they came from.
     """
-    inputs = monitor.inputs_of(f'{NAME}-unit-udm-boot')
+    inputs = monitor.inputs_of(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
 
     assert inputs['path'] == persistence.unit_source(persistence.UDM_BOOT_UNIT)
     assert inputs['mode'] == persistence.FILE_MODE
@@ -172,11 +182,11 @@ def test_a_file_asked_for_through_the_layer_belongs_to_the_layer_that_asked(moni
     directory the file goes in or what runs afterwards. The mechanism's own
     files stay the mechanism's.
     """
-    for name in (f'{NAME}-on-boot-30-example', f'{NAME}-bin-example-watchdog', f'{NAME}-unit-example'):
+    for name in (f'{NAME}-on-boot-{SCRIPT}', f'{NAME}-bin-{PROGRAM}', f'{NAME}-unit-{UNIT}'):
         assert monitor.options_of(name).parent.endswith(f'::{CONSUMER}'), name
 
     assert monitor.options_of(f'{NAME}-skeleton-{DIRECTORY}').parent.endswith(f'::{CONSUMER}')
-    assert monitor.options_of(f'{NAME}-on-boot-20-units').parent.endswith(f'::{NAME}')
+    assert monitor.options_of(f'{NAME}-on-boot-{persistence.UNITS_SCRIPT}').parent.endswith(f'::{NAME}')
 
 
 def test_an_executable_is_delivered_and_nothing_is_told_about_it(monitor: Recorder) -> None:
@@ -186,11 +196,43 @@ def test_an_executable_is_delivered_and_nothing_is_told_about_it(monitor: Record
     beside it is a neighbour this program never looks at, which is what makes
     the directory shared rather than owned.
     """
-    inputs = monitor.inputs_of(f'{NAME}-bin-example-watchdog')
+    inputs = monitor.inputs_of(f'{NAME}-bin-{PROGRAM}')
 
     assert inputs['path'] == f'{persistence.BIN_DIR}/{PROGRAM}'
     assert inputs['mode'] == persistence.SCRIPT_MODE
     assert inputs.get('hook') is None
+
+
+@pytest.mark.asyncio
+async def test_two_files_whose_names_share_a_stem_are_two_resources(
+    monitor: Recorder, mechanism: DevicePersistence
+) -> None:
+    """The file's whole name decides the resource, because it decides the path.
+
+    `example.sh` and `example.py` are two files on the device, so they are two
+    resources; a name that dropped the suffix would put one URN where the device
+    has two files, and the second declaration would silently replace the first.
+    """
+    async with declaring():
+        _ = Neighbours('neighbours', mechanism=mechanism)
+
+    shell = monitor.inputs_of(f'{NAME}-bin-example.sh')
+    python = monitor.inputs_of(f'{NAME}-bin-example.py')
+
+    assert shell['path'] == f'{persistence.BIN_DIR}/example.sh'
+    assert python['path'] == f'{persistence.BIN_DIR}/example.py'
+
+
+def test_a_unit_of_a_kind_the_converger_never_walks_is_refused(mechanism: DevicePersistence) -> None:
+    """The one failure this mechanism could not report, refused where it starts.
+
+    `20-units.sh` walks the `.service` sources and nothing else, so a timer or a
+    mount delivered through this method would land on the device, run the hook,
+    and be installed by nobody — with no error anywhere. The limit is stated
+    instead, naming the script that holds it.
+    """
+    with pytest.raises(ValueError, match=persistence.UNITS_SCRIPT):
+        _ = mechanism.unit('example.timer', '[Timer]\nOnCalendar=daily\n', opts=pulumi.ResourceOptions())
 
 
 def test_a_script_of_the_chain_runs_itself_once_it_lands(monitor: Recorder) -> None:
@@ -200,7 +242,7 @@ def test_a_script_of_the_chain_runs_itself_once_it_lands(monitor: Recorder) -> N
     hook too — a script this program no longer declares is gone from the device,
     and there is nothing left to run.
     """
-    hook = monitor.inputs_of(f'{NAME}-on-boot-30-example')['hook']
+    hook = monitor.inputs_of(f'{NAME}-on-boot-{SCRIPT}')['hook']
 
     assert hook == f'if [ -x {persistence.on_boot_path(SCRIPT)} ]; then {persistence.on_boot_path(SCRIPT)}; fi'
 
@@ -214,8 +256,8 @@ async def test_a_unit_waits_for_the_converger_that_installs_it(monitor: Recorder
     """
     converger = str(await mechanism.units.urn.future())
 
-    assert converger in monitor.depends_on(f'{NAME}-unit-example')
-    assert converger in monitor.depends_on(f'{NAME}-unit-udm-boot')
+    assert converger in monitor.depends_on(f'{NAME}-unit-{UNIT}')
+    assert converger in monitor.depends_on(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
 
 
 def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Recorder) -> None:
@@ -226,7 +268,7 @@ def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Record
     and the same session disables it and removes the live copy — otherwise a
     retired unit would keep running until somebody found it on the device.
     """
-    hook = monitor.inputs_of(f'{NAME}-unit-example')['hook']
+    hook = monitor.inputs_of(f'{NAME}-unit-{UNIT}')['hook']
     live = f'{persistence.LIVE_UNIT_DIR}/{UNIT}'
 
     assert f'if [ -e {persistence.unit_source(UNIT)} ]' in hook
@@ -282,6 +324,15 @@ def test_the_package_set_is_a_set() -> None:
     assert 'PACKAGES=(a b)' in persistence.packages_script(('b', 'a'))
 
 
+def test_a_package_name_is_one_word_however_it_was_written() -> None:
+    """The array is shell, and a caller's string is not.
+
+    A name carrying a space or a metacharacter would otherwise split into
+    entries the device cannot install, or run as something else entirely.
+    """
+    assert "PACKAGES=('two words')" in persistence.packages_script(('two words',))
+
+
 @pytest.mark.asyncio
 async def test_a_mechanism_with_no_packages_is_refused() -> None:
     """An empty set renders a script that fails the boot it exists to repair.
@@ -312,3 +363,6 @@ def test_the_unit_converger_never_restarts_the_oneshot_running_it() -> None:
     assert f'dest={persistence.LIVE_UNIT_DIR}/$unit' in script
     assert f'[ "$unit" = {persistence.UDM_BOOT_UNIT} ] && continue' in script
     assert 'systemctl restart "$unit"' in script
+    # The glob and the kind `unit` accepts are one decision, so a source that
+    # would be installed by nothing cannot be declared in the first place.
+    assert f'for src in "$srcdir"/*{persistence.UNIT_SUFFIX}; do' in script

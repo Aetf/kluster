@@ -9,7 +9,8 @@
 # major-version jump or factory reset where the /etc migration may not happen.
 # udm-boot.service is the anchor of the whole on_boot chain: as long as
 # {{ unit_source_dir }} holds a copy, recovering a wiped /etc is one manual
-# command (see the README runbook) -- everything else then restores itself.
+# command -- copy it into {{ live_unit_dir }} and enable it -- and everything
+# else then restores itself.
 #
 # udm-boot.service is only converged and enabled, never restarted: it is the
 # oneshot running this very script. This script does not mirror deletions,
