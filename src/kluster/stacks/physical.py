@@ -6,11 +6,14 @@ docs/declarative/physical.md. The state-backend appliance is
 deliberately *not* here: it is this program's own prerequisite
 (docs/physical/state-backend.md).
 
-Order is dictated by the endpoint. A node's machine configuration names the
-cluster endpoint, which is the load balancer's address, so the balancer is
-declared before the configuration that names it and before the nodes that
-carry that configuration; the backends pointing back at those nodes come
-last.
+Declarations group by what they configure — the cloud account, the Talos
+chain across the fleet, the homelab worker, the backup account, the site's
+gateway and overlay — so a reader after one of those reads a run of adjacent
+lines. Inside the fleet the endpoint dictates the rest: a node's machine
+configuration names the cluster endpoint, which is the load balancer's
+address, so the balancer is declared before the configuration that names it
+and before the nodes that carry that configuration; the backends pointing
+back at those nodes come last.
 
 **Every domain of the design appears below, and every one of them is
 written.** The stack is the inventory: a domain with no implementation would
@@ -133,12 +136,6 @@ async def main() -> None:
         talos_version=talos_version,
         opts=on_cloud,
     )
-    # The worker's own artefact: the same Talos version, a schematic of its
-    # own (x86, and the i915 firmware the GPU cutover wants present from day
-    # 0), and a disk image on this machine rather than in a cloud catalogue.
-    # No cloud provider on it: nothing it declares reaches the account.
-    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
-
     load_balancer = NodeLoadBalancer(
         conventions.CLUSTER_NAME,
         compartment_id=compartment_id,
@@ -234,18 +231,6 @@ async def main() -> None:
             opts=on_cloud,
         )
 
-    # §5: the backup bucket, on the other account deliberately — a backup kept
-    # at the provider whose loss it insures is not a backup, and the
-    # version-retention rule beside it is what makes a deletion by automation
-    # recoverable. It builds its own provider and reads its own key pair
-    # (rfc-002 §8.1); its region is a property of that account rather than a
-    # setting, so it comes from `conventions` like the cloud account's.
-    backup = BackupBucket(
-        conventions.CLUSTER_NAME,
-        region=conventions.B2_ACCOUNT.region,
-        bucket_name=conventions.BUCKET_BACKUP,
-    )
-
     # §1: the spend limits. Compartment quotas that refuse to create anything
     # outside the free envelope, and a budget whose alerts arrive before a bill
     # does. The quota is the load-bearing half: an alert tells you afterwards.
@@ -263,11 +248,18 @@ async def main() -> None:
         opts=on_cloud,
     )
 
-    # §3: the worker VM under libvirt. No endpoint and no credential among the
-    # arguments: the libvirt session is the component's own, so it builds its
-    # provider and reads the key that opens it (rfc-002 §8.1). The
-    # home-automation domain on the same host is declared nowhere here
-    # (rfc-002 §13).
+    # §3: the disk the worker boots, and the VM that boots it.
+    #
+    # The image is the worker's own artefact: the fleet's Talos version, a
+    # schematic of its own (x86, and the i915 firmware the GPU cutover wants
+    # present from day 0), and a file on this machine rather than an entry in a
+    # cloud catalogue. No cloud provider on it: nothing it declares reaches the
+    # account.
+    worker_image = TalosNocloudImage(f'{conventions.CLUSTER_NAME}-worker', talos_version=talos_version)
+    # No endpoint and no credential among the VM's arguments: the libvirt
+    # session is the component's own, so it builds its provider and reads the
+    # key that opens it (rfc-002 §8.1). The home-automation domain on the same
+    # host is declared nowhere here (rfc-002 §13).
     HomelabHost(
         conventions.CLUSTER_NAME,
         cluster=cluster,
@@ -276,6 +268,18 @@ async def main() -> None:
         vcpus=conventions.HOMELAB_VCPUS,
         memory_gib=conventions.HOMELAB_MEMORY_GIB,
         image_path=worker_image.path,
+    )
+
+    # §5: the backup bucket, on the other account deliberately — a backup kept
+    # at the provider whose loss it insures is not a backup, and the
+    # version-retention rule beside it is what makes a deletion by automation
+    # recoverable. It builds its own provider and reads its own key pair
+    # (rfc-002 §8.1); its region is a property of that account rather than a
+    # setting, so it comes from `conventions` like the cloud account's.
+    backup = BackupBucket(
+        conventions.CLUSTER_NAME,
+        region=conventions.B2_ACCOUNT.region,
+        bucket_name=conventions.BUCKET_BACKUP,
     )
 
     # §4: the gateway and the overlay it is the site's member of. Two top-level
