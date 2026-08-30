@@ -20,13 +20,13 @@ import hashlib
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, cast, final
+from typing import Any, final
 
 import asyncssh
-import pulumi
 import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, declaring, run_with
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -35,7 +35,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 # holds. It lives beside the base class rather than in the package's exports.
 from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
-from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster.providers.device_files import provider, registry, ssh
 
@@ -85,9 +84,6 @@ ROOTFS_DIGEST = f'sha256:{"e" * 64}'
 ROOTFS = b'a root filesystem, in miniature'
 ROOTFS_TARGET = '/data/services/images/adguard.tar'
 ROOTFS_TREE = '/data/services/roots/adguard'
-
-#: Every resource the declaration fixture registered: type, name, inputs.
-declared: list[tuple[str, str, dict[str, Any]]] = []
 
 
 @final
@@ -1087,52 +1083,32 @@ def test_a_missing_credential_refuses_by_name() -> None:
         )
 
 
-class Mocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        declared.append((args.typ, args.name, outputs))
-        return args.name + '_id', outputs
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
-
-
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> None:
-    """Declare one of each resource, the way the gateway's services do.
-
-    The same drain as the other declaration suites: a declaration schedules a
-    registration task, and only the tasks this module added may be awaited.
-    """
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
+async def stack() -> Recorder:
+    """One of each resource, declared the way the gateway's services declare them."""
     connection = provider.Connection(host=HOST, host_key=HOST_KEY)
 
-    before = asyncio.all_tasks()
-    _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
-    _ = provider.DeviceArtifact(
-        'adguard-rootfs',
-        connection=connection,
-        repository=ROOTFS_REPOSITORY,
-        tag=ROOTFS_TAG,
-        digest=ROOTFS_DIGEST,
-        target=ROOTFS_TARGET,
-        extract=ROOTFS_TREE,
-    )
-    pending = asyncio.all_tasks() - before - {asyncio.current_task()}
-    _ = await asyncio.gather(*pending)
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    monitor = await run_with(Recorder(), stack='physical')
+    async with declaring():
+        _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
+        _ = provider.DeviceArtifact(
+            'adguard-rootfs',
+            connection=connection,
+            repository=ROOTFS_REPOSITORY,
+            tag=ROOTFS_TAG,
+            digest=ROOTFS_DIGEST,
+            target=ROOTFS_TARGET,
+            extract=ROOTFS_TREE,
+        )
+    return monitor
 
 
-def registered(name: str) -> tuple[str, dict[str, Any]]:
-    typ, _, inputs = next(row for row in declared if row[1] == name)
-    return typ, inputs
-
-
-def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_bag() -> None:
+def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_bag(stack: Recorder) -> None:
     """Declaring the resource is also what pickles the provider into state; a
     provider that could not be serialized would fail here rather than at the
     first `pulumi up`."""
-    typ, inputs = registered('frr')
+    declaration = stack.one('frr')
+    typ, inputs = declaration.typ, declaration.inputs
 
     assert typ == 'pulumi-python:dynamic/device:File'
     assert inputs['host'] == HOST
@@ -1147,8 +1123,9 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     assert provider.PROVIDER_VERSION not in inputs
 
 
-def test_a_declared_artifact_carries_its_pin_and_never_its_bytes() -> None:
-    typ, inputs = registered('adguard-rootfs')
+def test_a_declared_artifact_carries_its_pin_and_never_its_bytes(stack: Recorder) -> None:
+    declaration = stack.one('adguard-rootfs')
+    typ, inputs = declaration.typ, declaration.inputs
 
     assert typ == 'pulumi-python:dynamic/device:Artifact'
     assert inputs['repository'] == ROOTFS_REPOSITORY

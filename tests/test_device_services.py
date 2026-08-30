@@ -13,15 +13,12 @@ which is where a wiring mistake would surface.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from ipaddress import IPv4Address
-from typing import Any, cast
 
-import pulumi
 import pytest
 import pytest_asyncio
-from pulumi.runtime.stack import wait_for_rpcs
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.gateway import container, services
@@ -66,57 +63,31 @@ def declared_for(name: str) -> container.ServiceDeclaration:
     return next(declaration for declaration in declarations() if declaration.service.name == name)
 
 
-#: Every resource the declaration fixture registered: type, name, inputs.
-declared: list[tuple[str, str, dict[str, Any]]] = []
-
-
-class Mocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        declared.append((args.typ, args.name, outputs))
-        return args.name + '_id', outputs
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        return {}, []
+@pytest_asyncio.fixture(scope='module', autouse=True)
+async def monitor() -> Recorder:
+    """What the run registered, for the cases that read declarations directly."""
+    return await run_with(Recorder(), stack='physical')
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> services.DeviceServices:
-    """Declare the services once, the way `Gateway` does.
-
-    A declaration schedules a registration task on the module's own event loop,
-    and only the tasks this module added may be awaited: the others belong to
-    loops that other suites already closed.
-    """
-    pulumi.runtime.set_mocks(Mocks(), project='kluster', stack='physical', preview=False)
-
+async def stack(monitor: Recorder) -> services.DeviceServices:
+    """The services declared once, the way `Gateway` declares them."""
     caddy, alice, bob, overlay = declarations()
     assert isinstance(caddy, container.CaddyService)
     assert isinstance(alice, container.ResolverService)
     assert isinstance(bob, container.ResolverService)
     assert isinstance(overlay, container.OverlayDaemon)
 
-    before = asyncio.all_tasks()
-    device = services.DeviceServices(
-        NAME,
-        connection=Connection(
-            host=HOST,
-            host_key=HOST_KEY,
-            username=conventions.gateway.SSH_USER,
-        ),
-        caddy=caddy,
-        resolvers=(alice, bob),
-        overlay_daemon=overlay,
-        routing=services.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
-    )
-    pending = asyncio.all_tasks() - before - {asyncio.current_task()}
-    _ = await asyncio.gather(*pending)
-    await wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        device = services.DeviceServices(
+            NAME,
+            connection=Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER),
+            caddy=caddy,
+            resolvers=(alice, bob),
+            overlay_daemon=overlay,
+            routing=services.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+        )
     return device
-
-
-def registered(name: str) -> dict[str, Any]:
-    return next(inputs for _, declared_name, inputs in declared if declared_name == name)
 
 
 ##
@@ -213,20 +184,13 @@ def test_a_bridged_service_is_placed_and_the_overlay_daemon_is_not() -> None:
     assert f'--directory={container.root_path("zerotier")}' in overlay
 
 
-def test_a_unit_states_what_it_needs_of_the_machine_it_starts_on() -> None:
-    """The units carry the dependencies; the recovery script chooses no order.
+def test_a_bridged_unit_binds_to_the_bridge_it_needs() -> None:
+    """It cannot be started against a bridge that does not exist yet.
 
-    A service on the container VLAN binds to the bridge's device unit, so it
-    cannot be started against a bridge that does not exist yet — the race
-    `Restart=always` used to absorb. The overlay daemon gets an assertion
-    instead: nothing tags `/dev/net/tun` in `udev`, so its device unit can be
-    loaded but never activated, and a dependency on it would turn a working
-    service into a permanently failed one. Without the assertion the daemon
-    logs that it cannot open the device and sleeps, leaving a unit that is
-    active and doing nothing.
+    That is the race `Restart=always` used to absorb: the service came up,
+    failed to attach, and was restarted until the bridge happened to appear.
     """
     bridged = container.unit_file(declared_for('caddy'))
-    overlay = container.unit_file(declared_for('zerotier'))
     bridge_unit = container.bridge_device_unit(container.CONTAINER_BRIDGE)
 
     assert bridge_unit == 'sys-subsystem-net-devices-br5.device'
@@ -234,18 +198,43 @@ def test_a_unit_states_what_it_needs_of_the_machine_it_starts_on() -> None:
     assert f'After={bridge_unit}' in bridged
     assert 'AssertPathExists' not in bridged
 
+
+def test_the_overlay_daemon_asserts_its_device_rather_than_binding_to_it() -> None:
+    """Nothing tags `/dev/net/tun` in `udev`, so its device unit never activates.
+
+    A dependency on that unit would turn a working service into a permanently
+    failed one; without the assertion the daemon instead logs that it cannot
+    open the device and sleeps, leaving a unit that is active and doing
+    nothing.
+    """
+    overlay = container.unit_file(declared_for('zerotier'))
+    bridge_unit = container.bridge_device_unit(container.CONTAINER_BRIDGE)
+
     assert f'AssertPathExists={container.TUN_DEVICE}' in overlay
     assert f'BindsTo={bridge_unit}' not in overlay
     assert 'sys-subsystem-net-devices' not in overlay
 
+
+def test_every_unit_waits_for_the_network_to_be_up() -> None:
     for declaration in declarations():
         unit = container.unit_file(declaration)
-        assert 'After=network-online.target' in unit
-        assert 'Wants=network-online.target' in unit
-        # No unit names another: caddy proxies to the resolvers at request time
-        # and the overlay daemon carries the session, not the others' traffic.
+
+        assert 'After=network-online.target' in unit, declaration.service.name
+        assert 'Wants=network-online.target' in unit, declaration.service.name
+
+
+def test_no_unit_names_another() -> None:
+    """The recovery script chooses no order, and neither do the units.
+
+    Caddy proxies to the resolvers at request time and the overlay daemon
+    carries the session rather than the others' traffic, so there is no
+    start-up ordering between them to state.
+    """
+    for declaration in declarations():
+        unit = container.unit_file(declaration)
+
         for other in declarations():
-            assert other.unit_name not in unit
+            assert other.unit_name not in unit, f'{declaration.service.name} names {other.service.name}'
 
 
 @pytest.mark.parametrize('service', ['adguard-alice', 'adguard-bob', 'caddy'])
@@ -459,7 +448,7 @@ def stamped_arms(script: str) -> dict[str, set[str]]:
     }
 
 
-def test_the_stamped_sets_are_the_children_and_nothing_else(stack: services.DeviceServices) -> None:
+def test_the_stamped_sets_are_the_children_and_nothing_else(stack: services.DeviceServices, monitor: Recorder) -> None:
     """A stamp cannot name a file no resource declares, or miss one that does.
 
     The script is rendered from the same declarations the containers are built
@@ -474,7 +463,9 @@ def test_the_stamped_sets_are_the_children_and_nothing_else(stack: services.Devi
     assert arms == {child.unit_name: set(child.stamped_set) for child in stack.containers}
     # And every declared path is a file some child of this component owns.
     declared_paths = {
-        inputs['path'] for typ, _, inputs in declared if typ == 'pulumi-python:dynamic/device:File' and 'path' in inputs
+        declaration.inputs['path']
+        for declaration in monitor.of_type('pulumi-python:dynamic/device:File')
+        if 'path' in declaration.inputs
     }
     marker_paths = {f'{container.root_path(child_name)}.digest' for child_name in SERVICES}
     assert set().union(*arms.values()) <= declared_paths | marker_paths
@@ -568,7 +559,7 @@ def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with(
 ##
 
 
-def test_every_file_runs_the_recovery_script_as_its_hook() -> None:
+def test_every_file_runs_the_recovery_script_as_its_hook(monitor: Recorder) -> None:
     """The recovery path and the deployment path are the same path.
 
     A separate apply command would be a second way of doing the same thing, and
@@ -577,59 +568,66 @@ def test_every_file_runs_the_recovery_script_as_its_hook() -> None:
     a daemon rather than to the script, so it applies itself.
     """
     files = [
-        (name, inputs)
-        for _, name, inputs in declared
-        if name.startswith(f'{NAME}-') and name not in {f'{NAME}-recovery', f'{NAME}-routing'} and 'hook' in inputs
+        declaration
+        for declaration in monitor.declared
+        if declaration.name.startswith(f'{NAME}-')
+        and declaration.name not in {f'{NAME}-recovery', f'{NAME}-routing'}
+        and 'hook' in declaration.inputs
     ]
     assert files, 'the component declared something'
-    for name, inputs in files:
-        assert inputs['hook'] == services.RECOVERY_HOOK, name
+    for declaration in files:
+        assert declaration.inputs['hook'] == services.RECOVERY_HOOK, declaration.name
 
-    assert registered(f'{NAME}-recovery')['hook'] == services.RECOVERY_HOOK
-    assert registered(f'{NAME}-recovery')['mode'] == services.SCRIPT_MODE
-    assert registered(f'{NAME}-recovery')['path'] == services.RECOVERY_SCRIPT
-    assert registered(f'{NAME}-routing')['hook'] == services.FRR_APPLY
+    recovery = monitor.inputs_of(f'{NAME}-recovery')
+    assert recovery['hook'] == services.RECOVERY_HOOK
+    assert recovery['mode'] == services.SCRIPT_MODE
+    assert recovery['path'] == services.RECOVERY_SCRIPT
+    assert monitor.inputs_of(f'{NAME}-routing')['hook'] == services.FRR_APPLY
 
 
-def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes() -> None:
+def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder) -> None:
     """State carries the digest; the runner carries the payload, briefly.
 
     An image in state would make every preview download megabytes to compare
     them against megabytes, and would put a container's whole filesystem into
     the deployment history.
     """
-    images = [
-        (name, inputs)
-        for typ, name, inputs in declared
-        if typ == 'pulumi-python:dynamic/device:Artifact'  # noqa: S105 -- a resource type, not a credential
-    ]
-    assert sorted(name for name, _ in images) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
-    for name, inputs in images:
-        assert inputs['digest'] == DIGEST, name
-        assert inputs['tag'] == TAG, name
-        assert inputs['repository'].startswith('registry.invalid/'), name
-        assert 'content' not in inputs, name
+    images = monitor.of_type('pulumi-python:dynamic/device:Artifact')  # noqa: S105 -- a type, not a credential
 
-    # Every service's artifact owns the tree its unit boots, so a pin that moves
-    # replaces the root filesystem rather than leaving a tarball nobody unpacks.
+    assert sorted(image.name for image in images) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
+    for image in images:
+        assert image.inputs['digest'] == DIGEST, image.name
+        assert image.inputs['tag'] == TAG, image.name
+        assert image.inputs['repository'].startswith('registry.invalid/'), image.name
+        assert 'content' not in image.inputs, image.name
+
+
+def test_each_root_filesystem_owns_the_tree_its_unit_boots(monitor: Recorder) -> None:
+    """A pin that moves replaces the tree, not just the tarball beside it.
+
+    An artifact that unpacked somewhere its unit does not read would leave a
+    downloaded tarball nobody boots, and the container would go on running the
+    filesystem it already had.
+    """
     for service in SERVICES:
-        inputs = registered(f'{NAME}-{service}-image')
+        inputs = monitor.inputs_of(f'{NAME}-{service}-image')
+
         assert inputs['target'] == container.image_path(service)
         assert inputs['extract'] == container.root_path(service)
 
 
 @pytest.mark.asyncio
-async def test_the_device_secrets_are_declared_secret() -> None:
+async def test_the_device_secrets_are_declared_secret(monitor: Recorder) -> None:
     """Two files carry credentials, and neither may render in a preview.
 
     The routing configuration holds the session password and caddy's token file
     is the credential itself. Everything else is configuration one wants to
     read in a diff, which is why content is not secret by default.
     """
-    token = registered(f'{NAME}-caddy-file-cloudflare.token')
+    token = monitor.inputs_of(f'{NAME}-caddy-file-cloudflare.token')
     assert token['content'] == ACME_TOKEN
     assert token['mode'] == container.SECRET_MODE
 
-    routing = registered(f'{NAME}-routing')
+    routing = monitor.inputs_of(f'{NAME}-routing')
     assert f'password {BGP_PASSWORD}' in routing['content']
     assert routing['path'] == services.FRR_CONFIG
