@@ -8,6 +8,7 @@ any of those three slips, and it fails at exactly the moment it is needed.
 """
 
 import inspect
+from collections.abc import Sequence
 from typing import Any
 
 import pulumi
@@ -59,7 +60,7 @@ async def monitor() -> B2:
     return await run_with(B2(), stack='physical')
 
 
-def build(scopes: list[Scope] = list(CLUSTER_SCOPES)) -> BackupBucket:
+def build(scopes: Sequence[Scope] = CLUSTER_SCOPES) -> BackupBucket:
     return BackupBucket('kluster', region=REGION, scopes=scopes)
 
 
