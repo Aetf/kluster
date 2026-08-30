@@ -180,7 +180,7 @@ See also: docs/credentials.md -- §2 the seeds, §3 the derived rows, §4 this o
 """
 
 
-def _slot_source(command: argparse.ArgumentParser) -> None:
+def _add_bundle_dir(command: argparse.ArgumentParser) -> None:
     """Say where the state backend's client bundle is.
 
     Every row delivered into a Pulumi config secret needs it: the stack's
@@ -196,7 +196,7 @@ def _slot_source(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _oci_consumer(command: argparse.ArgumentParser, consumer: str) -> None:
+def _add_oci_mint_options(command: argparse.ArgumentParser, consumer: str) -> None:
     """The two arguments every minted OCI row takes.
 
     The seed the mint reads and the compartment it confines the result to are
@@ -311,7 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
     root_listing.set_defaults(action='ls')
     for account in masters.ROOTS.values():
         described = [field.describes for field in account.fields]
-        made_of = ' and '.join([', '.join(described[:-1]), described[-1]] if len(described) > 1 else described)
+        # "a, b and c": the last item joined with `and`, everything before it
+        # with commas. One `join` per separator rather than one expression
+        # doing both.
+        made_of = ' and '.join(filter(None, (', '.join(described[:-1]), described[-1])))
         root_cmd = roots.add_parser(
             account.member,
             help=account.title,
@@ -395,7 +398,7 @@ def build_parser() -> argparse.ArgumentParser:
             if seed.member == 'recovery'
             else (_CREATE_CONSOLE if seed.manual else _CREATE_MINTED),
         )
-        if seed.self_reproducing:
+        if seed.mints_own_successor:
             _ = seed_verbs.add_parser(
                 'rotate',
                 help='have the seed mint and install its successor',
@@ -607,7 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
     _ = syncing.add_argument(
         '--only', default=None, metavar='<row>', help='one row of the map; `derived ls` names them'
     )
-    _slot_source(syncing)
+    _add_bundle_dir(syncing)
 
     # In bring-up order, which is the order an operator meets them in.
     #
@@ -637,7 +640,7 @@ def build_parser() -> argparse.ArgumentParser:
             'name is retired once the new one answers, so re-running this is the rotation.'
         ),
     )
-    _oci_consumer(appliance_mint, conventions.STATE_BACKEND)
+    _add_oci_mint_options(appliance_mint, conventions.STATE_BACKEND)
 
     zones_row = rows.add_parser(
         derived.ZONES_ROW,
@@ -671,7 +674,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=derived.ZONES_STACK,
         help=f'the stack whose config takes the token (default: {derived.ZONES_STACK})',
     )
-    _slot_source(zones_mint)
+    _add_bundle_dir(zones_mint)
 
     gateway_acme = rows.add_parser(
         derived.GATEWAY_ACME_ROW,
@@ -704,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=derived.CLOUDFLARE_SEED_ENTRY,
         help=f'the kit entry the seed is read from (default: {derived.CLOUDFLARE_SEED_ENTRY})',
     )
-    _slot_source(gateway_acme_mint)
+    _add_bundle_dir(gateway_acme_mint)
 
     physical_key = rows.add_parser(
         derived.OCI_PHYSICAL_ROW,
@@ -729,8 +732,8 @@ def build_parser() -> argparse.ArgumentParser:
             'Commit the config afterwards; re-running this is the rotation.'
         ),
     )
-    _oci_consumer(physical_mint, conventions.PHYSICAL)
-    _slot_source(physical_mint)
+    _add_oci_mint_options(physical_mint, conventions.PHYSICAL)
+    _add_bundle_dir(physical_mint)
 
     management_key = rows.add_parser(
         derived.B2_MANAGEMENT_ROW,
@@ -757,7 +760,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=derived.B2_SEED_ENTRY,
         help=f'the kit entry the seed is read from (default: {derived.B2_SEED_ENTRY})',
     )
-    _slot_source(management_mint)
+    _add_bundle_dir(management_mint)
 
     # The rows whose credential is made in the console that checks it rather
     # than minted from a seed -- an appliance of the estate, or the platform
@@ -798,7 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
                     else f'{field.describes}, rather than a prompt'
                 ),
             )
-        _slot_source(record)
+        _add_bundle_dir(record)
 
     # The escrowed rows: random secrets no provider mints, whose ciphertexts
     # are committed and open with the one recovery key the kit holds.
@@ -931,11 +934,11 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str) -> pulumi_conf
     return pulumi_config.Stack(
         name=name,
         directory=pulumi_config.project_dir(),
-        env=lifecycle.environment(store, args.bundle_dir),
+        env=lifecycle.environment(store, args.bundle_dir).variables(),
     )
 
 
-def _slots(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
+def _sync_context(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
     """What `derived sync` may reach for, with everything slow left unopened.
 
     The token is fetched up front because every push needs it and the chain
@@ -944,7 +947,7 @@ def _slots(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry
     neither and a row recovered from escrow never reaches for a backend.
     """
     return slots.Context(
-        forge=github_secrets.Forge(token=lifecycle.root('github', input)['token']),
+        forge=github_secrets.Forge(token=lifecycle.root(masters.GITHUB, input)[masters.GITHUB_ADMIN_TOKEN]),
         open_vault=lambda: escrow.Vault.open(store, registry),
         open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )
@@ -978,10 +981,10 @@ def _imported(args: argparse.Namespace) -> str:
     by the time the import logs what it escrowed.
     """
     if args.from_slot:
-        slot = escrow.SLOTS.get(args.label)
+        slot = escrow.slot(args.label)
         if slot is None:
             raise EscrowError(f'{args.label} has no workstation slot; pipe the value in instead')
-        path = slot()
+        path = slot.path()
         value = path.read_text().strip()
         if not value:
             raise EscrowError(f'{path} is empty, so there is nothing to escrow as {args.label}')
@@ -998,20 +1001,18 @@ def _imported(args: argparse.Namespace) -> str:
     return value
 
 
-def _pushed(value: str, *, label: str) -> str:
+def _write_slot(label: str, value: str) -> None:
     """Put a freshly generated secret in the workstation slot its row names.
 
-    Only the passphrase has one; the rest reach their consumers through a
-    provisioning run or a seal. A label with no slot is not an error — it is
-    the ordinary case.
+    A label with no slot is not an error — it is the ordinary case, since
+    most rows reach their consumers through a provisioning run or a seal.
     """
-    slot = escrow.SLOTS.get(label)
+    slot = escrow.slot(label)
     if slot is not None:
-        _ = workstation.write(slot(), value)
-    return value
+        _ = workstation.write(slot.path(), value)
 
 
-def _recovered(args: argparse.Namespace, vault: escrow.Vault) -> int:
+def _recover(args: argparse.Namespace, vault: escrow.Vault) -> int:
     """Put one recovered secret where the operator asked for it.
 
     A label with a workstation slot goes there, so the ordinary path writes a
@@ -1021,10 +1022,10 @@ def _recovered(args: argparse.Namespace, vault: escrow.Vault) -> int:
     scrollback is a secret in the next screen-share.
     """
     value = vault.recover(args.label, args.generation)
-    slot = escrow.SLOTS.get(args.label)
+    slot = escrow.slot(args.label)
     if slot is not None and not args.stdout:
-        _ = workstation.write(slot(), value)
-        log.info('mise.toml reads it from there on every pulumi run')
+        _ = workstation.write(slot.path(), value)
+        log.info('%s', slot.read_by)
         return 0
     if sys.stdout.isatty():
         log.error('this prints a secret; pipe it somewhere')
@@ -1110,7 +1111,7 @@ def main(argv: list[str] | None = None) -> int:
             # the account root's call, so this is the only seed command that
             # borrows one.
             case ('seed', 'oci', 'domain'):
-                _ = oci_iam.adopt_domain(store, seed_entry=args.entry, root=lifecycle.root('oci', input))
+                _ = oci_iam.adopt_domain(store, seed_entry=args.entry, root=lifecycle.root(masters.OCI, input))
             case ('seed', 'b2', 'rotate'):
                 _ = b2.rotate_seed(store, seed_entry=args.entry)
             # The minted rows, one command per row (`_stack` is the slot most
@@ -1152,17 +1153,20 @@ def main(argv: list[str] | None = None) -> int:
             # the slot the map names for it in the same run, and the push lives
             # here rather than in the registry so that opening an escrow never
             # writes to a checkout.
-            case ('derived', _, 'generate'):
-                _ = _pushed(escrow.generate(registry, args.label), label=args.label)
-            case ('derived', _, 'import'):
+            # Guarded like the arms above: `args.label` exists because the
+            # escrowed row's parser put it there, so an arm reached by a row
+            # that has no label would fail on an attribute rather than by name.
+            case ('derived', row, 'generate') if row in escrow.rows():
+                _write_slot(args.label, escrow.generate(registry, args.label))
+            case ('derived', row, 'import') if row in escrow.rows():
                 _ = escrow.adopt(registry, args.label, _imported(args))
-            case ('derived', _, 'recover'):
-                return _recovered(args, escrow.Vault.open(store, registry))
+            case ('derived', row, 'recover') if row in escrow.rows():
+                return _recover(args, escrow.Vault.open(store, registry))
             # The slot map's sink: one row at a time or every row whose value
             # lives elsewhere, each resolved, pushed and verified in the same
             # run.
             case ('derived', _, 'sync'):
-                filled = slots.sync(_slots(args, store, registry), only=args.only)
+                filled = slots.sync(_sync_context(args, store, registry), only=args.only)
                 log.info('pushed %s', ', '.join(filled) if filled else 'nothing')
             case ('seed', member, action) if member in entries.SEEDS:
                 raise KdbxError(f'`seed {member} {action}` is in the register (§2) but not yet implemented')

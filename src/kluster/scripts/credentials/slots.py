@@ -71,15 +71,15 @@ the name is in the listing and its timestamp moved (`github_secrets.py`).
 from __future__ import annotations
 
 import getpass
-import json
 import logging
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import ClassVar, Protocol
 from urllib.parse import urlsplit
 
 from ... import conventions
+from ...lib import config
 from ..state_backend import config as appliance
 from ..state_backend import settings as appliance_settings
 from . import derived, devices, escrow, pki, pulumi_config
@@ -228,25 +228,24 @@ Channel = Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox 
 # --------------------------------------------------------------------------
 
 
-def _no_environment() -> Mapping[str, str]:
-    """The default state-backend environment: none, for a run that reads no state."""
-    return {}
+def _no_environment() -> pulumi_config.BackendEnvironment:
+    """The default: nothing recovered, for a run that reads no state."""
+    return pulumi_config.BackendEnvironment()
 
 
 @dataclass
 class Context:
     """What a push may reach for, each part opened only when a row needs it.
 
-    Everything here is lazy on purpose. Pushing the one manual row asks for no
-    kit, pushing an escrowed row opens no state backend, and a machine holding
-    neither can still run `derived ls`.
+    Everything here is lazy on purpose: pushing the one manual row asks for no
+    kit, and pushing an escrowed row opens no state backend.
     """
 
     forge: Forge
     #: The kit's escrow, for a derived row. Called at most once.
     open_vault: Callable[[], escrow.Vault]
-    #: `PULUMI_BACKEND_URL` and `PULUMI_CONFIG_PASSPHRASE`, for a state read.
-    open_environment: Callable[[], Mapping[str, str]] = _no_environment
+    #: The backend URL and the state passphrase, for a state read.
+    open_environment: Callable[[], pulumi_config.BackendEnvironment] = _no_environment
     #: The checkout holding `Pulumi.yaml`; a state read runs `pulumi` there.
     project: Path = field(default_factory=pulumi_config.project_dir)
     #: How that `pulumi` is invoked. A seam, so a state read is testable
@@ -255,7 +254,7 @@ class Context:
     #: How a manual row asks. `getpass`, so a typed value never echoes.
     ask: Callable[[str], str] = getpass.getpass
     _vault: escrow.Vault | None = field(default=None, init=False, repr=False)
-    _environment: Mapping[str, str] | None = field(default=None, init=False, repr=False)
+    _environment: pulumi_config.BackendEnvironment | None = field(default=None, init=False, repr=False)
 
     @property
     def vault(self) -> escrow.Vault:
@@ -264,20 +263,20 @@ class Context:
         return self._vault
 
     @property
-    def environment(self) -> Mapping[str, str]:
+    def environment(self) -> pulumi_config.BackendEnvironment:
         """What a `pulumi` run needs here, opened at most once.
 
-        Two rows read it for two things. A state read runs `pulumi` with it. The
-        client bundle takes the appliance's address out of `PULUMI_BACKEND_URL`,
-        because the one place a workstation records which box it talks to is the
-        URL beside its own certificates.
+        Two rows read it for two things. A state read runs `pulumi` with it.
+        The client bundle takes the appliance's address out of the backend
+        URL, because the one place a workstation records which box it talks to
+        is the URL beside its own certificates.
         """
         if self._environment is None:
             self._environment = self.open_environment()
         return self._environment
 
     def stack(self, name: str) -> pulumi_config.Stack:
-        return pulumi_config.Stack(name=name, directory=self.project, env=self.environment, run=self.runner)
+        return pulumi_config.Stack(name=name, directory=self.project, env=self.environment.variables(), run=self.runner)
 
 
 class Source(Protocol):
@@ -323,7 +322,7 @@ def _appliance_address(context: Context) -> str:
     where a workstation already records it, and a typed-in one is a way to hand
     CI a certificate for a box that is not the one anybody is using.
     """
-    url = context.environment.get('PULUMI_BACKEND_URL')
+    url = context.environment.url
     if not url:
         raise SlotRefused(
             'this workstation has no client bundle, so which appliance to issue for is unknown; '
@@ -453,7 +452,14 @@ class StateRead:
         outputs = stack.outputs()
         if self.output not in outputs:
             raise SlotRefused(f'the `{self.stack}` stack exports no `{self.output}`')
-        return _text(outputs[self.output])
+        # The boundary between a stack's exported state and a secret this
+        # pushes: every row read this way exports a string, and an output that
+        # stopped being one must refuse rather than be coerced into the four
+        # characters `null` or into its own JSON.
+        try:
+            return config.text(outputs[self.output], f'the `{self.stack}` stack output `{self.output}`')
+        except TypeError as exc:
+            raise SlotRefused(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -478,7 +484,7 @@ class Decided:
         return f'`{self.where}`, a decision of this repository'
 
     def value(self, context: Context) -> str:
-        del context
+        _ = context
         return self.constant
 
 
@@ -512,11 +518,6 @@ class Manual:
         if not secret:
             raise SlotRefused(f'{self.describes} is required')
         return secret
-
-
-def _text(value: Any) -> str:
-    """One stack output as the string a secret is: JSON for anything structured."""
-    return value if isinstance(value, str) else json.dumps(value)
 
 
 # --------------------------------------------------------------------------
@@ -867,18 +868,13 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     a request for a specific row that quietly does nothing is worse than a
     refusal.
 
-    **What this is for is a copy, not a delivery.** Four of the map's source
-    classes hold a value whose truth lives somewhere else. A *state-read* row is
-    generated inside a Pulumi program and read back out of the stack it belongs
-    to; a *manual* row is typed in because its slot is the only place it is
-    stored; a *derived* row has its plaintext in the escrow, and this copies the
-    generation the registry currently holds; a *decided* row is not a credential
-    at all but a constant this repository holds, copied here because the
-    workflow that needs it beside one can only take a secret. All four can be
-    obtained again, so all four can be re-filled here. The one *issued* row is
-    the exception that proves the rule -- what it copies is the CA's authority
-    rather than a value, so each run hands CI a certificate it did not have
-    before, and the one it replaces keeps working until it expires.
+    **What this is for is a copy, not a delivery.** The source classes are set
+    out in the module docstring; what decides whether a row belongs to this
+    walk is whether its value can be obtained again. Four of them can, so all
+    four are re-filled here. The *issued* row obtains a fresh certificate under
+    the same authority instead, which has the same effect: each run hands CI
+    one it did not have before, and the one it replaces keeps working until it
+    expires.
 
     **A minted row is born into its slot and is out of scope.** Such a
     credential is disclosed once, to the call that creates it, so its own

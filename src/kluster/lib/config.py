@@ -19,7 +19,19 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-__all__ = ('lines', 'strings')
+__all__ = ('lines', 'strings', 'text')
+
+
+def text(value: object, what: str) -> str:
+    """`value` as a non-empty string, or a `TypeError` saying what it is instead.
+
+    The single-value case of `strings`, for the places a structured answer
+    would otherwise be coerced into one silently — a `None` that becomes the
+    four characters `null`, an object that becomes its JSON.
+    """
+    if not isinstance(value, str) or not value:
+        raise TypeError(f'{what} must be a non-empty string, and is {value!r}')
+    return value
 
 
 def strings(value: object, what: str) -> tuple[str, ...]:

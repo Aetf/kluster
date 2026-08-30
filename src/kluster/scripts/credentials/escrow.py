@@ -16,9 +16,8 @@ consumer is rebuilt.
 **Rotation splits in two, and that is the point.** Rotating one credential is a
 new generation for its label, adopted by that one consumer. Rotating the kit is
 a new recovery keypair plus `rewrap` — pure re-encryption of the same
-plaintexts, with nothing in production touched. Under the derivation model the
-two were the same event, so a custody-hygiene rotation of the kit re-encrypted
-every stack and re-provisioned the state backend.
+plaintexts, with nothing in production touched. The second costs no downtime
+precisely because it changes no plaintext.
 
 **Labels are API.** A label names a secret across generations; renaming one
 orphans the ciphertexts filed under the old name. Add labels, never edit them.
@@ -39,6 +38,8 @@ import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from kluster.lib import config
 
 from . import age, entries, pki, workstation
 from .kdbx import KdbxStore
@@ -71,12 +72,6 @@ BACKUP = 'backup/age'
 #: Where the recovery key lives in the kit — the register's decision, not this
 #: module's (`entries.py`).
 RECOVERY_ENTRY = entries.SEEDS['recovery'].entry
-
-#: Where `recover` puts a value when nobody asked for it on stdout, so the
-#: ordinary path writes a `0600` file instead of printing a secret. Only the
-#: passphrase has a slot: it is read on every `pulumi` run by a `mise.toml`
-#: template that can neither prompt nor open a kit (credentials.md §4.4).
-SLOTS: dict[str, Callable[[], Path]] = {PASSPHRASE: workstation.passphrase_path}
 
 #: 32 bytes, in the form every consumer of a password accepts.
 TOKEN_BYTES = 32
@@ -143,6 +138,20 @@ PRIVATE_KEY = Shape('a PEM private key, which starts -----BEGIN and ends -----EN
 
 
 @dataclass(frozen=True)
+class WorkstationSlot:
+    """Where a recovered secret is written on this machine, and who reads it there.
+
+    Distinct from `slots.Slot`, which addresses a delivery channel: this one
+    is a local file under `.credentials/` (`workstation.py`). Both halves are
+    the row's own facts — the second is what `recover` says once the value has
+    landed, and it is true of the credential rather than of the command.
+    """
+
+    path: Callable[[], Path]
+    read_by: str
+
+
+@dataclass(frozen=True)
 class Label:
     """One row of the escrow register."""
 
@@ -154,6 +163,12 @@ class Label:
     mint: Callable[[], str]
     #: What a value has to look like to be this label's secret.
     shape: Shape = TEXT
+    #: Where `recover` puts the value when nobody asked for it on stdout, so
+    #: the ordinary path writes a `0600` file instead of printing a secret.
+    #: Only the passphrase has one; the rest reach their consumers through a
+    #: provisioning run or a seal. A property of the row rather than a second
+    #: table keyed by label, which could name a label the register does not.
+    slot: WorkstationSlot | None = None
 
     def validate(self, value: str) -> None:
         """Raise unless `value` could be this label's secret.
@@ -210,7 +225,17 @@ def register() -> dict[str, Label]:
     secret whose loss costs nothing.
     """
     rows = [
-        Label(PASSPHRASE, 'the Pulumi state passphrase, for every stack', _token),
+        Label(
+            PASSPHRASE,
+            'the Pulumi state passphrase, for every stack',
+            _token,
+            # Read on every `pulumi` run by a `mise.toml` template that can
+            # neither prompt nor open a kit (credentials.md §4.4).
+            slot=WorkstationSlot(
+                path=workstation.passphrase_path,
+                read_by='mise.toml reads it from there on every pulumi run',
+            ),
+        ),
         Label(CA, "the state-backend CA's private key", pki.generate_ca_key, shape=PRIVATE_KEY),
         Label(ALERTMANAGER, 'the bearer token the issue-sync poller presents', _token),
         *(
@@ -246,6 +271,11 @@ def _row(label: str) -> Label:
     return rows[label]
 
 
+def slot(label: str) -> WorkstationSlot | None:
+    """The workstation slot the register gives this label, if it gives it one."""
+    return _row(label).slot
+
+
 @dataclass(frozen=True)
 class Registry:
     """The `escrow/` directory: paths, generations and recipients, no keys.
@@ -273,15 +303,14 @@ class Registry:
         return self.directory(label) / f'{generation}{SUFFIX}'
 
     def recipients(self) -> list[str]:
-        if not self.recipients_file.is_file():
+        try:
+            return list(config.lines(self.recipients_file, 'the escrow recipients'))
+        except FileNotFoundError as exc:
             raise EscrowError(
                 f'no {self.recipients_file}; `credentials kit bootstrap` writes it while creating the recovery key'
-            )
-        lines = (line.strip() for line in self.recipients_file.read_text().splitlines())
-        values = [line for line in lines if line and not line.startswith('#')]
-        if not values:
-            raise EscrowError(f'{self.recipients_file} names no recipient')
-        return values
+            ) from exc
+        except ValueError as exc:
+            raise EscrowError(f'{self.recipients_file} names no recipient') from exc
 
     def set_recipients(self, values: Sequence[str]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -295,6 +324,16 @@ class Registry:
             return []
         found = [path.stem for path in directory.glob(f'*{SUFFIX}')]
         return sorted(int(stem) for stem in found if stem.isdigit())
+
+    def next_generation(self, label: str) -> int:
+        """The number the label's next ciphertext is filed under.
+
+        Generations are dense from `FIRST` and `check` refuses a gap, so both
+        writers -- minting a fresh secret and adopting an existing one -- have
+        to count the same way.
+        """
+        found = self.generations(label)
+        return found[-1] + 1 if found else FIRST
 
     def latest(self, label: str) -> int:
         found = self.generations(label)
@@ -377,8 +416,7 @@ def generate(registry: Registry, label: str) -> str:
     per-credential rotation a decision rather than a side effect.
     """
     row = _row(label)
-    existing = registry.generations(label)
-    generation = existing[-1] + 1 if existing else FIRST
+    generation = registry.next_generation(label)
     secret = row.mint()
     # The row's own mint against the row's own shape: the register says what a
     # label holds in one place, and a mint that stopped agreeing with it fails
@@ -410,8 +448,7 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
     """
     row = _row(label)
     row.validate(secret)
-    existing = registry.generations(label)
-    generation = existing[-1] + 1 if existing else FIRST
+    generation = registry.next_generation(label)
     path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
     log.info('escrow: adopted the existing %s as generation %d in %s', label, generation, path)
     return path

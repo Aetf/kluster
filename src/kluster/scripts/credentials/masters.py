@@ -25,13 +25,11 @@ root**, in this order, first hit wins:
 
 Three properties decide the shape:
 
--   **The estate is never opened.** An earlier design pointed the scripts at
-    the personal KeePassXC database and read one entry out of it, which means
-    typing the master password of a database holding everything the operator
-    owns so that `bootstrap` can read one row. Instead each root's fields live
-    in the desktop secret store under their own keys, put there once by
-    `credentials root <member> remember`, and a run reads exactly the fields
-    it needs.
+-   **The estate is never opened.** Each root's fields live in the desktop
+    secret store under their own keys, put there once by `credentials root
+    <member> remember`, and a run reads exactly the fields it needs — so no
+    command here asks for the master password of a personal database holding
+    everything the operator owns.
 -   **A machine without a secret store still works.** Headless and CI runs
     fall through the file and the variable to a prompt, which names the
     credential and where it is created — a headless run is exactly the case
@@ -40,9 +38,9 @@ Three properties decide the shape:
     its own, so a half-remembered root asks for the half that is missing and
     nothing else.
 
-The secret-store layer is the same door as `credentials kit password remember`, in
-other direction, and it goes through the same `kdbx` plumbing so there is one
-secret-store mechanism rather than two.
+The secret-store layer is the same door as `credentials kit password remember`,
+in the other direction, and it goes through the same `kdbx` plumbing so there
+is one secret-store mechanism rather than two.
 
 The register below is machine-readable for the same reason `entries.py` is: a
 root with no fields recorded here is a root the scripts cannot ask for, and a
@@ -58,6 +56,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from . import kdbx, workstation
 from .kdbx import KdbxError
@@ -106,9 +105,12 @@ class Field:
     file: str
     #: The environment layer: the variable a shell or a CI job hands it in.
     env: str
-    #: `secret` never echoes; `file` is read from a path, because a PEM is not
-    #: something anyone pastes into a prompt.
-    kind: str = 'secret'
+    #: `secret` never echoes; `identifier` is an OCID or an account id, which
+    #: is not secret and is worth seeing as it is typed; `file` is read from a
+    #: path, because a PEM is not something anyone pastes into a prompt. A
+    #: closed set, so that a misspelling cannot fall through to the echoing
+    #: branch and print a credential on the operator's terminal.
+    kind: Literal['secret', 'identifier', 'file'] = 'secret'
     #: Whether a tool reads the file layer without asking anybody — today,
     #: `mise.toml` building a `pulumi` run's environment. `remember` keeps
     #: these in the file rather than the secret store, because a template can
@@ -124,7 +126,7 @@ class Field:
                 return Path(raw).expanduser().read_text()
             case 'secret':
                 value = getpass.getpass(f'{title} — {self.describes}: ').strip()
-            case _:
+            case 'identifier':
                 value = prompt(f'{title} — {self.describes}: ').strip()
         if not value:
             raise KdbxError(f'{title}: {self.describes} is required')
@@ -167,11 +169,28 @@ class Credential:
         return value
 
 
+#: The members `ROOTS` is keyed by. Named because other modules ask for a
+#: root by member, and a spelling that lives in two places is a spelling that
+#: can drift into a `KeyError`.
+OCI = 'oci'
+B2 = 'b2'
+GITHUB = 'github'
+
+#: The field names other modules read a loaded root by. Same reason: the
+#: register below and the code that indexes a `Credential` share one spelling
+#: rather than agreeing by hand.
+OCI_TENANCY = 'tenancy'
+OCI_USER = 'user'
+OCI_PRIVATE_KEY = 'private-key'
+B2_ACCOUNT_ID = 'account-id'
+B2_KEY = 'key'
+GITHUB_ADMIN_TOKEN = 'token'
+
 ROOTS: dict[str, Root] = {
     root.member: root
     for root in (
         Root(
-            member='oci',
+            member=OCI,
             title='OCI account root API key',
             console=(
                 'cloud.oracle.com → Identity → Users → your own user → API keys → Add.\n'
@@ -184,21 +203,21 @@ ROOTS: dict[str, Root] = {
             ),
             fields=(
                 Field(
-                    'tenancy',
+                    OCI_TENANCY,
                     'the tenancy OCID',
                     kind='identifier',
                     file='oci.tenancy',
                     env='KLUSTER_OCI_TENANCY',
                 ),
                 Field(
-                    'user',
+                    OCI_USER,
                     'the OCID of the user the key belongs to',
                     kind='identifier',
                     file='oci.user',
                     env='KLUSTER_OCI_USER',
                 ),
                 Field(
-                    'private-key',
+                    OCI_PRIVATE_KEY,
                     'the API private key (PEM)',
                     kind='file',
                     file='oci.private-key',
@@ -207,7 +226,7 @@ ROOTS: dict[str, Root] = {
             ),
         ),
         Root(
-            member='b2',
+            member=B2,
             title='B2 account master key',
             console=(
                 'backblaze.com → Account → Application Keys → the master\n'
@@ -216,17 +235,17 @@ ROOTS: dict[str, Root] = {
             ),
             fields=(
                 Field(
-                    'account-id',
+                    B2_ACCOUNT_ID,
                     'the account id (the master key id)',
                     kind='identifier',
                     file='b2.account-id',
                     env='KLUSTER_B2_ACCOUNT_ID',
                 ),
-                Field('key', 'the master application key', file='b2.key', env='KLUSTER_B2_KEY'),
+                Field(B2_KEY, 'the master application key', file='b2.key', env='KLUSTER_B2_KEY'),
             ),
         ),
         Root(
-            member='github',
+            member=GITHUB,
             title='GitHub admin token',
             console=(
                 'github.com → Settings → Developer settings → Personal access\n'
@@ -244,7 +263,7 @@ ROOTS: dict[str, Root] = {
                 # variable name is the provider's rather than this repo's for
                 # exactly that reason.
                 Field(
-                    'token',
+                    GITHUB_ADMIN_TOKEN,
                     'the admin personal access token',
                     file='github.token',
                     env='GITHUB_TOKEN',

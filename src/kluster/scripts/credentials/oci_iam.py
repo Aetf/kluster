@@ -71,18 +71,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
-
-import time
 
 import oci
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from . import entries, masters
 from ... import conventions
 from ...conventions import CLUSTER_NAME, OCI_SEED_USER_EMAIL, Compartment
+from ...lib import templates
+from . import entries, masters
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -109,20 +109,48 @@ PROPAGATION_INTERVAL = 5.0
 #: go is an error naming the console errand rather than a quota 400.
 KEY_QUOTA = 3
 
+#: The policies, in OCI's own policy language, one statement per line. They
+#: live in files rather than in string literals for the reason every other
+#: foreign configuration language in this repository does
+#: (`docs/style/python.md`), and are rendered through the one mechanism
+#: (`kluster.lib.templates`).
+SEED_POLICY = 'templates/seed-policy.oci.j2'
+CONSUMER_POLICY = 'templates/consumer-policy.oci.j2'
+
+#: The package the two policy files sit beside, for `importlib.resources`.
+_PACKAGE = 'kluster.scripts.credentials'
+
+
+@dataclass(frozen=True)
+class _SeedPolicyParams:
+    group: str
+
+
+@dataclass(frozen=True)
+class _ConsumerPolicyParams:
+    group: str
+    compartment_id: str
+
+
+def _statements(policy: str, params: object) -> tuple[str, ...]:
+    """One rendered policy file as the statement tuple the API takes.
+
+    A statement per non-blank line, so the file reads the way the console
+    shows it and the tuple is a shape of this program rather than of the file.
+    """
+    rendered = templates.render(_PACKAGE, policy, params)
+    return tuple(line.strip() for line in rendered.splitlines() if line.strip())
+
+
 #: What the seed may do, and the whole of it. Managing users covers their API
-#: keys, which is what makes the seed self-reproducing; managing groups and
-#: policies is what lets it give a per-stack user the access its stack needs;
-#: managing compartments is what lets it create the boundary that access is
-#: confined to, so a consumer's compartment is an API call rather than a
+#: keys, which is what makes the seed mint its own successor; managing groups
+#: and policies is what lets it give a per-stack user the access its stack
+#: needs; managing compartments is what lets it create the boundary that access
+#: is confined to, so a consumer's compartment is an API call rather than a
 #: console errand. Nothing here touches compute, storage or networking -- the
 #: seed mints the credentials that do, and `manage policies in tenancy` is the
 #: ceiling anyway: a principal that can write policy can grant itself the rest.
-STATEMENTS: tuple[str, ...] = (
-    f'Allow group {SEED_NAME} to manage users in tenancy',
-    f'Allow group {SEED_NAME} to manage groups in tenancy',
-    f'Allow group {SEED_NAME} to manage policies in tenancy',
-    f'Allow group {SEED_NAME} to manage compartments in tenancy',
-)
+STATEMENTS: tuple[str, ...] = _statements(SEED_POLICY, _SeedPolicyParams(group=SEED_NAME))
 
 #: OCI requires RSA for API keys, which is why these are generated rather than
 #: derived: deterministic RSA generation was the footgun §2.2 excluded.
@@ -188,7 +216,7 @@ class Identity:
             name=name,
             email=f'{name}@{conventions.OCI_TENANCY.user_email_domain}',
             section='§3',
-            statements=(f'Allow group {name} to manage all-resources in compartment id {compartment_id}',),
+            statements=_statements(CONSUMER_POLICY, _ConsumerPolicyParams(group=name, compartment_id=compartment_id)),
         )
 
     @property
@@ -257,8 +285,20 @@ def fingerprint_of_public(public_key_pem: str) -> str:
     )
 
 
-def generate_key() -> tuple[str, str]:
-    """A fresh RSA key pair, as (private PEM, public PEM)."""
+@dataclass(frozen=True)
+class KeyPair:
+    """A fresh RSA key pair, both halves in PEM.
+
+    Two PEM strings that a signature would not distinguish: carried together
+    so that no caller can pass the private half where the public one belongs.
+    """
+
+    private_pem: str
+    public_pem: str
+
+
+def generate_key() -> KeyPair:
+    """A fresh RSA key pair."""
     private = rsa.generate_private_key(public_exponent=65537, key_size=KEY_SIZE)
     private_pem = private.private_bytes(
         encoding=serialization.Encoding.PEM,
@@ -273,7 +313,7 @@ def generate_key() -> tuple[str, str]:
         )
         .decode()
     )
-    return private_pem, public_pem
+    return KeyPair(private_pem=private_pem, public_pem=public_pem)
 
 
 def _retry() -> Any:
@@ -400,7 +440,7 @@ class Domain:
 
     # -- the self-service half: the caller's own user, no rights required ---
 
-    def my_api_keys(self) -> dict[str, str]:
+    def my_api_keys_by_fingerprint(self) -> dict[str, str]:
         """This user's API keys, as fingerprint -> the id a delete addresses.
 
         The domains API names a key by its own id and the legacy one by
@@ -512,10 +552,10 @@ class Domain:
         )
         return str(created.fingerprint)
 
-    def api_keys(self, user_ocid: str) -> dict[str, str]:
+    def api_keys_by_fingerprint(self, user_ocid: str) -> dict[str, str]:
         """Somebody else's API keys, as fingerprint -> the id a delete addresses.
 
-        The administrative counterpart of `my_api_keys`, and the reason a
+        The administrative counterpart of `my_api_keys_by_fingerprint`, and the reason a
         session that is not the key's own user need not fall back to the
         legacy listing. The subject is named by OCID because that is the name
         the row, the policy and every signing configuration carry; naming it
@@ -525,7 +565,7 @@ class Domain:
         listed = _data(self.client.list_api_keys(filter=f'user.ocid eq "{user_ocid}"'))
         return {str(key.fingerprint): str(key.id) for key in (listed.resources or [])}
 
-    def delete_api_key(self, key_id: str) -> None:
+    def delete_api_key_by_id(self, key_id: str) -> None:
         """Retire somebody else's key, named by the id the listing gave it."""
         _ = self.client.delete_api_key(key_id)
 
@@ -790,21 +830,17 @@ class Iam:
         keys.
         """
         if user_id == self.caller:
-            return domain.my_api_keys()
-        return domain.api_keys(user_id)
+            return domain.my_api_keys_by_fingerprint()
+        return domain.api_keys_by_fingerprint(user_id)
 
-    def api_keys(self, user_id: str) -> list[str]:
+    def key_fingerprints(self, user_id: str) -> list[str]:
         """The user's key fingerprints, through the domain where there is one.
 
-        Same reasoning as `delete_api_key`, hardened by observation: the
-        legacy read is not merely refused to other callers, it is refused
-        *intermittently* to the key's own user (a key listed fine for hours,
-        then 401 IdcsConversionError on the identical call), and a live
-        rotation drill has failed on exactly that. Both halves of the domains
-        API can answer this, so the subject is no reason to take the legacy
-        read: it stays as the fallback and as the whole of the call in a
-        session without a domain (a pre-attribute row, a tenancy without
-        domains).
+        Same reasoning as `retire_key`, and one degree stronger: the legacy
+        read is refused *intermittently* even to the key's own user, so the
+        subject is no reason to take it. It stays as the fallback and as the
+        whole of the call in a session without a domain -- a row written
+        before the attribute existed, or a tenancy that has no domains.
         """
         if self.domain is not None:
             try:
@@ -819,7 +855,7 @@ class Iam:
         """The identity domains of the tenancy compartment."""
         return list(_data(self.identity.list_domains(compartment_id=self.tenancy)))
 
-    def delete_api_key(self, user_id: str, key_fingerprint: str) -> None:
+    def retire_key(self, user_id: str, key_fingerprint: str) -> None:
         """Retire one key, through the identity domain where there is one.
 
         Domains first, legacy second, rather than the other way round: in a
@@ -847,7 +883,7 @@ class Iam:
                         if user_id == self.caller:
                             self.domain.delete_my_api_key(key_id)
                         else:
-                            self.domain.delete_api_key(key_id)
+                            self.domain.delete_api_key_by_id(key_id)
                     except oci.exceptions.ServiceError as exc:
                         # debug, not warning: the sweep retries through here
                         # while a refusal may still be transient, and the
@@ -872,9 +908,10 @@ def _mint_verified(iam: Iam, user: Principal, *, name: str, domain_url: str | No
     seed will use it. `name` is the identity being minted for, which appears
     in the log because a bring-up mints for more than one.
     """
-    private_pem, public_pem = generate_key()
+    pair = generate_key()
+    private_pem = pair.private_pem
     log.info('uploading a new API key for %s', name)
-    assigned = iam.upload_key(user, public_pem)
+    assigned = iam.upload_key(user, pair.public_pem)
     if assigned != fingerprint(private_pem):
         raise CredentialRejected(f'OCI registered fingerprint {assigned}, which is not the one this key computes to')
     minted = Iam.authorize(
@@ -886,7 +923,7 @@ def _mint_verified(iam: Iam, user: Principal, *, name: str, domain_url: str | No
     deadline = time.monotonic() + PROPAGATION_DEADLINE
     while True:
         try:
-            _ = minted.api_keys(user.ocid)
+            _ = minted.key_fingerprints(user.ocid)
             break
         except oci.exceptions.ServiceError as exc:
             if exc.status != 401 or time.monotonic() >= deadline:
@@ -916,7 +953,7 @@ def _retire(iam: Iam, user_id: str, key_fingerprint: str) -> None:
     waiting = False
     while True:
         try:
-            iam.delete_api_key(user_id, key_fingerprint)
+            iam.retire_key(user_id, key_fingerprint)
             return
         except oci.exceptions.ServiceError as exc:
             if time.monotonic() >= deadline:
@@ -951,7 +988,7 @@ def _sweep(iam: Iam, user_id: str, keep: str) -> None:
     because each is its own operation and one that cannot go says nothing
     about the next.
     """
-    for existing in iam.api_keys(user_id):
+    for existing in iam.key_fingerprints(user_id):
         if existing == keep:
             continue
         _retire(iam, user_id, existing)
@@ -965,7 +1002,7 @@ def _room_for_one_more(iam: Iam, user_id: str, *, name: str) -> None:
     mint would hit names neither the keys nor the fix, so this does.
     """
     try:
-        held = iam.api_keys(user_id)
+        held = iam.key_fingerprints(user_id)
     except oci.exceptions.ServiceError as exc:
         # The check exists to turn a quota 400 into an error naming the keys;
         # a caller both of whose listings are refused just loses the nicety
@@ -1029,12 +1066,25 @@ def _store(kit: KdbxStore, entry: str, *, tenancy: str, user_id: str, private_pe
         kit.set_attribute(entry, entries.OCI_DOMAIN_ATTRIBUTE, domain)
 
 
-def load_seed(store: KdbxStore, entry: str) -> tuple[str, str, str]:
-    """The row's three stored parts, as (tenancy OCID, user OCID, private PEM)."""
-    return (
-        store.attribute(entry, entries.OCI_TENANCY_ATTRIBUTE),
-        store.get(entry, attribute='UserName'),
-        store.attachment(entry, entries.OCI_KEY_ATTACHMENT).decode(),
+@dataclass(frozen=True)
+class SeedRow:
+    """The three parts of the seed row that are stored (§2).
+
+    A record rather than three strings in an order: two of them are OCIDs of
+    different kinds, and nothing downstream would notice them swapped.
+    """
+
+    tenancy: str
+    user: str
+    private_key: str
+
+
+def load_seed(store: KdbxStore, entry: str) -> SeedRow:
+    """The row's three stored parts."""
+    return SeedRow(
+        tenancy=store.attribute(entry, entries.OCI_TENANCY_ATTRIBUTE),
+        user=store.get(entry, attribute='UserName'),
+        private_key=store.attachment(entry, entries.OCI_KEY_ATTACHMENT).decode(),
     )
 
 
@@ -1050,21 +1100,23 @@ def load_domain(store: KdbxStore, entry: str) -> str | None:
 
 
 @dataclass(frozen=True)
-class _Session:
-    """The seed, authorized, together with the row it was opened from."""
+class _SeedSession:
+    """The seed, authorized, together with the row it was opened from.
+
+    Named apart from `b2.Session` and `cloudflare.Session`, which are the
+    authorized client itself: here that is `iam`, and this is the pair.
+    """
 
     iam: Iam
-    #: The tenancy the seed user belongs to, and therefore the one everything
-    #: minted from it belongs to.
-    tenancy: str
-    user: str
-    private_key: str
+    #: The stored row, whose tenancy is the one everything minted from this
+    #: seed belongs to.
+    row: SeedRow
     #: The identity domain the session is addressed at, or None where the
     #: tenancy has none and where reading it was refused.
     domain: str | None
 
 
-def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _Session:
+def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _SeedSession:
     """Read the seed row and authorize as it, repairing a pre-domain row on the way.
 
     The one preamble of every command the seed performs, its own rotation and
@@ -1079,14 +1131,14 @@ def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _Se
     the warning names the repair (`credentials seed oci domain`) and the run
     goes on through the legacy shim.
     """
-    tenancy, user_id, private_pem = load_seed(store, seed_entry)
+    row = load_seed(store, seed_entry)
     domain = load_domain(store, seed_entry)
-    iam = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
+    iam = Iam.authorize(row.tenancy, row.user, row.private_key, connect=connect, domain_url=domain)
     if domain is None:
         domain = _discovered_domain(iam, whose='seed')
         if domain is not None:
-            iam = Iam.authorize(tenancy, user_id, private_pem, connect=connect, domain_url=domain)
-    return _Session(iam=iam, tenancy=tenancy, user=user_id, private_key=private_pem, domain=domain)
+            iam = Iam.authorize(row.tenancy, row.user, row.private_key, connect=connect, domain_url=domain)
+    return _SeedSession(iam=iam, row=row, domain=domain)
 
 
 def adopt_domain(
@@ -1100,7 +1152,9 @@ def adopt_domain(
     not include it -- which is exactly why rotation warns rather than doing
     this by itself.
     """
-    iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect)
+    iam = Iam.authorize(
+        root[masters.OCI_TENANCY], root[masters.OCI_USER], root[masters.OCI_PRIVATE_KEY], connect=connect
+    )
     url = domain_url(iam)
     store.set_attribute(seed_entry, entries.OCI_DOMAIN_ATTRIBUTE, url)
     log.info('recorded the identity domain on %s', seed_entry)
@@ -1140,10 +1194,18 @@ def create_seed(
     # first, because the domain is where the user, the group and the key are
     # made -- the root is the domain administrator, and a session that does
     # not know its domain can only reach them through the legacy shim.
-    iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect)
+    iam = Iam.authorize(
+        root[masters.OCI_TENANCY], root[masters.OCI_USER], root[masters.OCI_PRIVATE_KEY], connect=connect
+    )
     domain = _discovered_domain(iam, whose='account root')
     if domain is not None:
-        iam = Iam.authorize(root['tenancy'], root['user'], root['private-key'], connect=connect, domain_url=domain)
+        iam = Iam.authorize(
+            root[masters.OCI_TENANCY],
+            root[masters.OCI_USER],
+            root[masters.OCI_PRIVATE_KEY],
+            connect=connect,
+            domain_url=domain,
+        )
 
     user = ensure(iam, SEED)
 
@@ -1176,25 +1238,25 @@ def rotate_seed(
 
     # Everything but the signing key is dead weight, and the quota (three)
     # must have room for the successor before it can be minted.
-    _sweep(seed.iam, seed.user, fingerprint(seed.private_key))
-    _room_for_one_more(seed.iam, seed.user, name=SEED.name)
+    _sweep(seed.iam, seed.row.user, fingerprint(seed.row.private_key))
+    _room_for_one_more(seed.iam, seed.row.user, name=SEED.name)
     # The row stores the OCID and nothing else, which is all a rotation needs:
     # the key it registers goes on its own user, and the self-service endpoint
     # takes no subject at all.
-    private_pem = _mint_verified(seed.iam, Principal(ocid=seed.user, handle=seed.user), name=SEED.name)
+    private_pem = _mint_verified(seed.iam, Principal(ocid=seed.row.user, handle=seed.row.user), name=SEED.name)
     _store(
         into or store,
         seed_entry,
-        tenancy=seed.tenancy,
-        user_id=seed.user,
+        tenancy=seed.row.tenancy,
+        user_id=seed.row.user,
         private_pem=private_pem,
         domain=seed.domain,
     )
 
-    previous = fingerprint(seed.private_key)
+    previous = fingerprint(seed.row.private_key)
     current = fingerprint(private_pem)
-    successor = Iam.authorize(seed.tenancy, seed.user, private_pem, connect=connect, domain_url=seed.domain)
-    _sweep(successor, seed.user, current)
+    successor = Iam.authorize(seed.row.tenancy, seed.row.user, private_pem, connect=connect, domain_url=seed.domain)
+    _sweep(successor, seed.row.user, current)
     log.info('seed rotated: %s -> %s', previous, current)
     return current
 
@@ -1351,6 +1413,6 @@ def mint_api_key(
     # on authentication alone (§4.3), so retiring what this run supersedes --
     # the predecessor on a re-run, an orphan from a run that died between
     # upload and push -- asks nothing of the seed's policy.
-    minted = Iam.authorize(seed.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
+    minted = Iam.authorize(seed.row.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
     _sweep(minted, user.ocid, fingerprint(private_pem))
-    return ApiKey(tenancy=seed.tenancy, user=user.ocid, private_key=private_pem)
+    return ApiKey(tenancy=seed.row.tenancy, user=user.ocid, private_key=private_pem)

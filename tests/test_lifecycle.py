@@ -87,7 +87,7 @@ def test_a_console_only_seed_is_stored_from_what_the_operator_pastes(
         title='Example console seed',
         identifier='the name the console shows it under',
         mints='a successor of its own class',
-        self_reproducing=False,
+        mints_own_successor=False,
         console='the provider console → API tokens → New token.',
     )
     monkeypatch.setattr('getpass.getpass', _answers('a-pasted-secret'))
@@ -182,12 +182,12 @@ def test_the_environment_recovers_the_passphrase_and_reads_the_url(
     bundle.mkdir()
     _ = (bundle / 'backend-url').write_text('postgres://operator@192.0.2.10:5432/pulumi_state\n')
 
-    values = lifecycle.environment(kit, bundle, registry)
+    found = lifecycle.environment(kit, bundle, registry)
 
     # The one place it exists outside its consumers is a committed ciphertext
     # nobody can open without the kit.
-    assert values['PULUMI_CONFIG_PASSPHRASE'] == passphrase
-    assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
+    assert found.passphrase == passphrase
+    assert found.url is not None and found.url.startswith('postgres://operator@')
 
 
 @needs_age
@@ -210,9 +210,9 @@ def test_a_bundle_left_where_it_used_to_live_is_read_once_and_loudly(
     monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
     monkeypatch.setattr(workstation, 'bundle_dir', lambda: slot)
 
-    values = lifecycle.environment(kit, slot, registry)
+    found = lifecycle.environment(kit, slot, registry)
 
-    assert values['PULUMI_BACKEND_URL'].startswith('postgres://operator@')
+    assert found.url is not None and found.url.startswith('postgres://operator@')
     assert 'state-backend bundle operator' in caplog.text
 
 
@@ -231,9 +231,9 @@ def test_the_moved_bundle_is_only_looked_for_under_the_default(
     monkeypatch.setattr(workstation, 'LEGACY_BUNDLE_DIR', legacy)
     monkeypatch.setattr(workstation, 'bundle_dir', lambda: tmp_path / '.credentials' / 'state-backend')
 
-    values = lifecycle.environment(kit, tmp_path / 'asked-for', registry)
+    found = lifecycle.environment(kit, tmp_path / 'asked-for', registry)
 
-    assert 'PULUMI_BACKEND_URL' not in values
+    assert found.url is None
 
 
 @needs_age
@@ -243,8 +243,8 @@ def test_a_missing_bundle_still_yields_the_passphrase(
     _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
     _ = escrow.generate(registry, escrow.PASSPHRASE)
 
-    values = lifecycle.environment(kit, tmp_path / 'absent', registry)
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
 
     # The appliance not existing yet is the normal case during bring-up.
-    assert 'PULUMI_CONFIG_PASSPHRASE' in values
-    assert 'PULUMI_BACKEND_URL' not in values
+    assert found.passphrase
+    assert found.url is None

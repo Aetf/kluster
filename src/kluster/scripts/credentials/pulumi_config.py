@@ -23,7 +23,7 @@ import subprocess as sp
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 log = logging.getLogger(__name__)
 
@@ -78,14 +78,44 @@ def project_dir() -> Path:
     raise SlotRefused('no Pulumi.yaml above this module; the config slots live in a checkout of this repository')
 
 
+#: The two variables a `pulumi` run in this repository is given. Named,
+#: because both the record below and the slot map spell them.
+BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
+PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
+
+
+@dataclass(frozen=True)
+class BackendEnvironment:
+    """What this machine can tell a `pulumi` run about the state backend.
+
+    A closed pair rather than a mapping, because the key set is closed and
+    because a caller reads the URL by name — a workstation without a client
+    bundle has no URL, and that is a state to be handled rather than a key
+    that happens to be missing from a bag. `variables()` is the one place the
+    pair becomes the environment a process is started with, so an absent half
+    is an absent variable rather than an empty one.
+    """
+
+    passphrase: str | None = None
+    url: str | None = None
+
+    def variables(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        if self.passphrase is not None:
+            values[PASSPHRASE_ENV] = self.passphrase
+        if self.url is not None:
+            values[BACKEND_URL_ENV] = self.url
+        return values
+
+
 @dataclass(frozen=True)
 class Stack:
     """One stack's committed configuration, as a slot that takes values."""
 
     name: str
     directory: Path
-    #: `PULUMI_BACKEND_URL` and `PULUMI_CONFIG_PASSPHRASE`, which the caller
-    #: derives from the kit rather than expecting in the ambient environment.
+    #: What `BackendEnvironment.variables()` produced, which the caller derives
+    #: from the kit rather than expecting in the ambient environment.
     env: Mapping[str, str] = field(default_factory=dict[str, str])
     run: Runner = run_pulumi
 
@@ -93,8 +123,28 @@ class Stack:
         return self.run([*args], cwd=self.directory, env=self.env, stdin=stdin)
 
     def exists(self) -> bool:
-        listing = list[dict[str, Any]](json.loads(self._pulumi('stack', 'ls', '--json')))
-        return any(str(stack.get('name')) == self.name for stack in listing)
+        return self.name in self._stack_names(self._pulumi('stack', 'ls', '--json'))
+
+    @staticmethod
+    def _stack_names(printed: str) -> set[str]:
+        """The names in `pulumi stack ls --json` output, or a refusal quoting it.
+
+        The boundary for that command. A silent empty answer here reads as "no
+        such stack", which makes `ensure` try to create one that exists.
+        """
+        try:
+            listing: object = json.loads(printed or '[]')
+        except ValueError as exc:
+            raise SlotRefused(f'`pulumi stack ls --json` did not print JSON: {printed[:120]!r}') from exc
+        if not isinstance(listing, list):
+            raise SlotRefused(f'`pulumi stack ls --json` printed a {type(listing).__name__}, not a list of stacks')
+        found: set[str] = set()
+        for index, entry in enumerate(cast('list[object]', listing)):
+            name = cast('dict[str, object]', entry).get('name') if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not name:
+                raise SlotRefused(f'`pulumi stack ls --json` entry {index} carries no name, and is {entry!r}')
+            found.add(name)
+        return found
 
     def ensure(self) -> None:
         """Create the stack if the backend has none of that name.
@@ -116,13 +166,19 @@ class Stack:
         """Every output of the stack's current state, secrets included.
 
         The other direction of this module: what a *program* generated, rather
-        than what one needs to start. The register's state-read rows are read
-        through here, and `--show-secrets` is what makes that possible at all —
-        a ZeroTier identity is a secret output, and without it the value comes
-        back as the string `[secret]`, which would be pushed as if it were one.
+        than what one needs to start. `--show-secrets` is what makes reading a
+        secret output possible at all — without it the value comes back as the
+        literal string `[secret]`, which a caller would deliver as if it were
+        the secret.
         """
         raw = self._pulumi('stack', 'output', '--json', '--show-secrets', '--stack', self.name).strip()
-        return dict[str, Any](json.loads(raw or '{}'))
+        try:
+            parsed: object = json.loads(raw or '{}')
+        except ValueError as exc:
+            raise SlotRefused(f'`pulumi stack output --json` did not print JSON: {raw[:120]!r}') from exc
+        if not isinstance(parsed, dict):
+            raise SlotRefused(f'`pulumi stack output --json` printed a {type(parsed).__name__}, not an object')
+        return cast('dict[str, Any]', parsed)
 
     def set(self, key: str, value: str) -> None:
         """Write a non-secret key, in plain text in the committed file."""

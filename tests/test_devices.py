@@ -246,6 +246,15 @@ def test_a_file_whose_producer_failed_is_refused_by_name(tmp_path: Path, typed: 
         _ = devices.deliver(UNIFI, stack=slot, given={'api-key': str(empty)})
 
 
+def test_a_value_handed_in_under_a_name_no_field_has_is_refused() -> None:
+    slot, _ = stack(UNIFI.stack)
+
+    # Dropping it silently turns a scripted run into an interactive one, at
+    # exactly the prompt the caller meant to answer.
+    with pytest.raises(KdbxError, match='no field named apikey'):
+        _ = devices.deliver(UNIFI, stack=slot, given={'apikey': 'a-value'})
+
+
 def test_the_delivery_names_the_file_to_commit(typed: None, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     slot, _ = stack(ADGUARD.stack)

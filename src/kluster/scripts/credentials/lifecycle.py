@@ -24,7 +24,7 @@ import getpass
 import logging
 from pathlib import Path
 
-from . import b2, cloudflare, entries, escrow, masters, oci_iam, workstation
+from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
 from .kdbx import KdbxError, KdbxStore
 from .masters import Prompt
 
@@ -66,8 +66,14 @@ def _read_console_token(seed: entries.Seed) -> str:
     return secret
 
 
-def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, bytes | None]:
-    """Walk the operator through a credential no API can create."""
+def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore, entry: str) -> None:
+    """Walk the operator through a credential no API can create, and write it.
+
+    Reading and writing are one function because they are one act with one
+    shape: a row's secret is either a typed token or a file the platform hands
+    over once, never both and never neither, and separating them would put
+    that either/or in a value a caller has to re-check.
+    """
     _announce(seed)
 
     # The secret comes second and is asked hidden; saying so here is what
@@ -76,16 +82,17 @@ def _read_console_seed(seed: entries.Seed, prompt: Prompt) -> tuple[str, str, by
     if not identifier:
         raise KdbxError(f'{seed.title}: {seed.identifier} is required')
 
-    payload: bytes | None = None
     if seed.attachment:
         path = Path(prompt(f'{seed.title} — path to {seed.attachment}: ').strip()).expanduser()
         payload = path.read_bytes()
-        secret = ''
-    else:
-        secret = getpass.getpass(f'{seed.title} — the token: ').strip()
-        if not secret:
-            raise KdbxError(f'{seed.title}: the token is required')
-    return identifier, secret, payload
+        into.put(entry, identifier, '')
+        into.attach(entry, seed.attachment, payload)
+        return
+
+    secret = getpass.getpass(f'{seed.title} — the token: ').strip()
+    if not secret:
+        raise KdbxError(f'{seed.title}: the token is required')
+    into.put(entry, identifier, secret)
 
 
 def create_seed(
@@ -103,24 +110,21 @@ def create_seed(
     """
     where = entry or seed.entry
     match seed.member:
-        case 'recovery':
+        case entries.RECOVERY:
             # The one row with a half that leaves the kit: the recipient is
             # committed, so creating the key and writing `escrow/RECIPIENTS`
             # is a single act rather than a step someone can forget.
             _ = escrow.init(kit, registry or escrow.Registry.open(), entry=where)
-        case 'oci':
-            _ = oci_iam.create_seed(root=root('oci', prompt), seeds=kit, seed_entry=where)
-        case 'cloudflare':
+        case entries.OCI:
+            _ = oci_iam.create_seed(root=root(masters.OCI, prompt), seeds=kit, seed_entry=where)
+        case entries.CLOUDFLARE:
             # Console-made, like the rows below, but its identifier is read
             # off the token and its template is checked before it is stored.
             _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=kit, seed_entry=where)
-        case 'b2':
-            _ = b2.create_seed(root=root('b2', prompt), seeds=kit, seed_entry=where)
+        case entries.B2:
+            _ = b2.create_seed(root=root(masters.B2, prompt), seeds=kit, seed_entry=where)
         case _ if seed.manual:
-            identifier, secret, payload = _read_console_seed(seed, prompt)
-            kit.put(where, identifier, secret)
-            if payload is not None and seed.attachment:
-                kit.attach(where, seed.attachment, payload)
+            _record_console_seed(seed, prompt, into=kit, entry=where)
         case _:  # pragma: no cover - every §2 row is one of the above
             raise KdbxError(f'minting {seed.member} is in the register (§2) but not yet implemented')
 
@@ -150,26 +154,30 @@ def backend_url_file(bundle_dir: Path) -> Path | None:
     return None
 
 
-def environment(kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None) -> dict[str, str]:
-    """The variables a Pulumi run needs, recovered and read rather than stored.
+def environment(
+    kit: KdbxStore, bundle_dir: Path, registry: escrow.Registry | None = None
+) -> pulumi_config.BackendEnvironment:
+    """What a Pulumi run needs here, recovered and read rather than stored.
 
-    `PULUMI_CONFIG_PASSPHRASE` is recovered from the escrow with the kit's
-    recovery key (§2.2), so the one place it exists outside its consumers is a
-    committed ciphertext nobody can open without the kit.
-    `PULUMI_BACKEND_URL` is read from the bundle the appliance's provisioner
-    writes, so the two halves of "log in to the backend" come from one command.
+    The passphrase is recovered from the escrow with the kit's recovery key
+    (§2.2), so the one place it exists outside its consumers is a committed
+    ciphertext nobody can open without the kit. The URL is read from the bundle
+    the appliance's provisioner writes, so the two halves of "log in to the
+    backend" come from one command — and a machine with no bundle yet answers
+    with no URL, which its caller can see rather than discover inside a
+    subprocess.
     """
     vault = escrow.Vault.open(kit, registry)
-    values = {'PULUMI_CONFIG_PASSPHRASE': vault.recover(escrow.PASSPHRASE)}
     url = backend_url_file(bundle_dir)
-    if url is not None:
-        values['PULUMI_BACKEND_URL'] = url.read_text().strip()
-    else:
+    if url is None:
         log.warning(
             'no %s; run `state-backend provision` (or `state-backend bundle operator`) first',
             bundle_dir / URL_FILE,
         )
-    return values
+    return pulumi_config.BackendEnvironment(
+        passphrase=vault.recover(escrow.PASSPHRASE),
+        url=url.read_text().strip() if url is not None else None,
+    )
 
 
 def require_member(only: str | None) -> None:
@@ -235,27 +243,26 @@ def rotate(
     for member, seed in entries.SEEDS.items():
         if only is not None and member != only:
             continue
-        if member == 'recovery':
-            # Pure re-encryption: a successor key, and every ciphertext in the
-            # registry re-wrapped to it. No production secret changes value,
-            # which is the whole reason the two rotations are separable.
-            escrow.rotate_recovery(kit, successor, registry or escrow.Registry.open(), entry=seed.entry)
-        elif member == 'oci':
-            # Reads the predecessor from the retired kit, writes the successor
-            # into the new one, and leaves the retired file untouched.
-            _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=successor)
-        elif member == 'cloudflare':
-            # The platform allows no minted successor, so rotating is the
-            # same console visit bring-up made, written into the new kit.
-            _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=successor, seed_entry=seed.entry)
-        elif member == 'b2':
-            _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=successor)
-        elif seed.manual:
-            identifier, secret, payload = _read_console_seed(seed, prompt)
-            successor.put(seed.entry, identifier, secret)
-            if payload is not None and seed.attachment:
-                successor.attach(seed.entry, seed.attachment, payload)
-        else:
-            raise KdbxError(f'rotating {member} is in the register (§2) but not yet implemented')
+        match member:
+            case entries.RECOVERY:
+                # Pure re-encryption: a successor key, and every ciphertext in
+                # the registry re-wrapped to it. No production secret changes
+                # value, which is why the two rotations are separable.
+                escrow.rotate_recovery(kit, successor, registry or escrow.Registry.open(), entry=seed.entry)
+            case entries.OCI:
+                # Reads the predecessor from the retired kit, writes the
+                # successor into the new one, and leaves the retired file
+                # untouched.
+                _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+            case entries.CLOUDFLARE:
+                # The platform allows no minted successor, so rotating is the
+                # same console visit bring-up made, written into the new kit.
+                _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=successor, seed_entry=seed.entry)
+            case entries.B2:
+                _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+            case _ if seed.manual:
+                _record_console_seed(seed, prompt, into=successor, entry=seed.entry)
+            case _:
+                raise KdbxError(f'rotating {member} is in the register (§2) but not yet implemented')
         rotated.append(member)
     return rotated

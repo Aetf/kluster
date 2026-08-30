@@ -291,11 +291,11 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     credential.
     """
     log.info('opening the B2 seed from the kit')
-    key_id, key = b2.mint_management(kit, seed_entry=seed_entry)
+    minted = b2.mint_management(kit, seed_entry=seed_entry)
 
     stack.fill(
-        secret={B2_KEY_ID_KEY: key_id, B2_KEY_KEY: key},
+        secret={B2_KEY_ID_KEY: minted.key_id, B2_KEY_KEY: minted.key},
         plain={},
-        holds=f'{b2.MANAGEMENT_KEY_NAME} ({key_id})',
+        holds=f'{b2.MANAGEMENT_KEY_NAME} ({minted.key_id})',
     )
-    return key_id
+    return minted.key_id

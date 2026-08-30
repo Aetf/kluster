@@ -90,7 +90,7 @@ class Seed:
     #: What this seed mints, in the register's words.
     mints: str
     #: Whether it can mint its own successor, or a console must.
-    self_reproducing: bool
+    mints_own_successor: bool
 
     #: What a human has to do in a console when no API can do it. Empty for
     #: everything the scripts mint themselves. Stated here rather than in a
@@ -119,22 +119,31 @@ class Seed:
         return bool(self.console)
 
 
+#: The member names `SEEDS` is keyed by that other modules ask for. The
+#: recovery row is the one every command has to treat apart -- it is the key
+#: the escrow opens with rather than a provider credential -- so its name is
+#: written once here instead of as a literal at each of those places.
+RECOVERY = 'recovery'
+OCI = 'oci'
+CLOUDFLARE = 'cloudflare'
+B2 = 'b2'
+
 SEEDS: dict[str, Seed] = {
     seed.member: seed
     for seed in (
         Seed(
-            member='recovery',
+            member=RECOVERY,
             title='Recovery key',
             identifier='the age recipient (its public half)',
             mints='nothing; it is what opens the escrowed secrets generated here',
-            self_reproducing=False,
+            mints_own_successor=False,
         ),
         Seed(
-            member='oci',
+            member=OCI,
             title='OCI seed API key',
             identifier='the user OCID',
             mints='the per-stack OCI users and their API keys',
-            self_reproducing=True,
+            mints_own_successor=True,
             attachment=OCI_KEY_ATTACHMENT,
             attributes=(OCI_TENANCY_ATTRIBUTE, OCI_DOMAIN_ATTRIBUTE),
             repair=Repair(
@@ -151,11 +160,11 @@ SEEDS: dict[str, Seed] = {
             ),
         ),
         Seed(
-            member='cloudflare',
+            member=CLOUDFLARE,
             title='Cloudflare seed token',
             identifier='the token id',
             mints='the zone-scoped provider token, the DNS-01 token, the gateway ACME token',
-            self_reproducing=False,
+            mints_own_successor=False,
             console=(
                 'dash.cloudflare.com → My Profile → API Tokens → Create Token\n'
                 '  → "Create Additional Tokens" template, named "kluster-seed".\n'
@@ -178,18 +187,18 @@ SEEDS: dict[str, Seed] = {
             ),
         ),
         Seed(
-            member='b2',
+            member=B2,
             title='B2 seed key',
             identifier='the application key id',
             mints='the management key and every prefix-scoped writer key',
-            self_reproducing=True,
+            mints_own_successor=True,
         ),
         Seed(
             member='github-dispatch',
             title='GitHub App (dispatch)',
             identifier='the client id (the JWT issuer)',
             mints='installation tokens for kluster-ops contents:write',
-            self_reproducing=False,
+            mints_own_successor=False,
             console=(
                 'github.com/settings/apps → New GitHub App named "kluster dispatch".\n'
                 '  Permissions: Repository → Contents: Read and write. No webhook.\n'
@@ -203,7 +212,7 @@ SEEDS: dict[str, Seed] = {
             title='GitHub App (trigger)',
             identifier='the client id (the JWT issuer)',
             mints='installation tokens for kluster actions:write',
-            self_reproducing=False,
+            mints_own_successor=False,
             console=(
                 'github.com/settings/apps → New GitHub App named "kluster trigger".\n'
                 '  Permissions: Repository → Actions: Read and write. No webhook.\n'
@@ -214,8 +223,3 @@ SEEDS: dict[str, Seed] = {
         ),
     )
 }
-
-#: The seeds a console must create, because their platform has no API for it
-#: (§2). `bootstrap` and `rotate` stop and print the steps rather than
-#: pretending they can be automated.
-MANUAL = tuple(seed.member for seed in SEEDS.values() if seed.manual)

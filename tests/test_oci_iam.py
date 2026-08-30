@@ -648,17 +648,22 @@ def unchecked_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def root() -> masters.Credential:
-    private_pem, _ = oci_iam.generate_key()
+    private_pem = oci_iam.generate_key().private_pem
     return masters.Credential(
-        root=masters.ROOTS['oci'],
-        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},
+        root=masters.ROOTS[masters.OCI],
+        values={
+            masters.OCI_TENANCY: TENANCY,
+            masters.OCI_USER: ROOT_USER,
+            masters.OCI_PRIVATE_KEY: private_pem,
+        },
     )
 
 
 def test_the_fingerprint_is_the_one_oci_computes() -> None:
     # Colon-grouped MD5 of the public key in DER, and a function of the key
     # alone -- which is why it is never stored (§2).
-    private_pem, public_pem = oci_iam.generate_key()
+    pair = oci_iam.generate_key()
+    private_pem, public_pem = pair.private_pem, pair.public_pem
 
     computed = oci_iam.fingerprint(private_pem)
 
@@ -704,7 +709,8 @@ def test_the_stored_row_is_what_the_minter_reads_back(
 ) -> None:
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    tenancy_ocid, stored_user, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    row = oci_iam.load_seed(kit, SEED_ENTRY)
+    tenancy_ocid, stored_user, private_pem = row.tenancy, row.user, row.private_key
 
     assert (tenancy_ocid, stored_user) == (TENANCY, user_id)
     assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
@@ -713,7 +719,7 @@ def test_the_stored_row_is_what_the_minter_reads_back(
 def test_the_minted_key_is_verified_by_being_used(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> None:
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     # A key that the control plane accepted but the signing path refuses is
     # the failure this catches, so the second connection is as the new key.
     assert tenancy.connections[-1] == (user_id, oci_iam.fingerprint(private_pem))
@@ -770,7 +776,7 @@ def test_rotation_replaces_the_key_and_retires_the_predecessor(
     kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
 ) -> None:
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
-    _, _, before = oci_iam.load_seed(kit, SEED_ENTRY)
+    before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
 
     current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
@@ -780,19 +786,19 @@ def test_rotation_replaces_the_key_and_retires_the_predecessor(
     assert tenancy.identity.keys[user_id] == [current]
     assert current != oci_iam.fingerprint(before)
     # §4.2: the retired kit is left byte-for-byte as it was.
-    assert oci_iam.load_seed(kit, SEED_ENTRY)[2] == before
-    assert oci_iam.load_seed(successor, SEED_ENTRY)[1] == user_id
+    assert oci_iam.load_seed(kit, SEED_ENTRY).private_key == before
+    assert oci_iam.load_seed(successor, SEED_ENTRY).user == user_id
 
 
 def test_rotation_defaults_to_the_database_it_read(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> None:
     _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
-    _, _, before = oci_iam.load_seed(kit, SEED_ENTRY)
+    before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
 
     current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
     # Rotating one seed on its own (`seed oci rotate`) writes back into the
     # kit; only a whole-kit rotation writes a new file.
-    _, _, after = oci_iam.load_seed(kit, SEED_ENTRY)
+    after = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     assert after != before
     assert oci_iam.fingerprint(after) == current
 
@@ -1007,7 +1013,7 @@ def test_verification_outwaits_key_propagation(
 
     # Four denials, two endpoints consulted per poll: two intervals, no more.
     assert naps == [oci_iam.PROPAGATION_INTERVAL] * 2
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
 
 
@@ -1039,7 +1045,7 @@ def test_an_orphaned_key_is_swept_when_the_seed_is_recreated(
 
     # Only the key whose private half was just stored survives; a user holds
     # at most three keys, so orphans would eventually block minting.
-    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(second, SEED_ENTRY).private_key
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
 
 
@@ -1191,7 +1197,7 @@ def test_keys_are_retired_through_the_domain_not_the_legacy_call(
     # The legacy delete is refused for everyone in this tenancy, so the
     # orphan can only have gone through the domain's self-service endpoint --
     # authorized as the seed's own new key.
-    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(second, SEED_ENTRY).private_key
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
     assert tenancy.domain_connections[-1] == (DOMAIN_URL, user_id, oci_iam.fingerprint(private_pem))
 
@@ -1262,7 +1268,7 @@ def test_a_refused_sweep_does_not_fail_the_bring_up(kit: KdbxStore, root: master
     # errand rather than a crash.
     user_id = oci_iam.create_seed(root=root, seeds=second, seed_entry=SEED_ENTRY, connect=tenancy)
 
-    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(second, SEED_ENTRY).private_key
     assert oci_iam.fingerprint(private_pem) in tenancy.identity.keys[user_id]
     assert len(tenancy.identity.keys[user_id]) == 2
 
@@ -1276,7 +1282,7 @@ def test_the_sweep_runs_as_the_seed_itself(kit: KdbxStore, root: masters.Credent
 
     # The deleting connection is the seed's own key, not the account root's:
     # an identity-domains tenancy allows self-management and refuses the root.
-    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(second, SEED_ENTRY).private_key
     assert tenancy.connections[-1] == (user_id, oci_iam.fingerprint(private_pem))
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
 
@@ -1291,7 +1297,7 @@ def test_a_refused_sweep_does_not_fail_rotation_either(
 
     # The successor is minted and stored; the predecessor survives as a
     # console errand rather than blocking the rotation.
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     assert oci_iam.fingerprint(private_pem) == current
 
 
@@ -1348,7 +1354,7 @@ def test_rotation_makes_room_before_minting(kit: KdbxStore, tenancy: Tenancy, ro
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     # Fill the quota with orphans behind the stored key's back.
     for _ in range(oci_iam.KEY_QUOTA - 1):
-        _, public_pem = oci_iam.generate_key()
+        public_pem = oci_iam.generate_key().public_pem
         _ = tenancy.identity.upload_api_key(user_id, oci.identity.models.CreateApiKeyDetails(key=public_pem))
 
     current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
@@ -1364,7 +1370,7 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     tenancy = Tenancy(identity=SealedIdentity())
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     for _ in range(oci_iam.KEY_QUOTA - 1):
-        _, public_pem = oci_iam.generate_key()
+        public_pem = oci_iam.generate_key().public_pem
         _ = tenancy.identity.upload_api_key(user_id, oci.identity.models.CreateApiKeyDetails(key=public_pem))
 
     # The sweep is refused wholesale, so rotation must refuse to mint -- with
@@ -1456,7 +1462,8 @@ def _kit_never_lies(kit: KdbxStore, identity: FakeIdentity) -> None:
     """
     if not kit.has(SEED_ENTRY):
         return
-    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    row = oci_iam.load_seed(kit, SEED_ENTRY)
+    user_id, private_pem = row.user, row.private_key
     assert oci_iam.fingerprint(private_pem) in identity.keys.get(user_id, []), 'the kit holds a key the tenancy has not'
 
 
@@ -1466,8 +1473,8 @@ def _keys_are_bounded(identity: FakeIdentity) -> None:
         assert len(held) <= oci_iam.KEY_QUOTA, f'{user_id} holds {len(held)} keys'
 
 
-def _cheap_key() -> tuple[str, str]:
-    """A key pair the sweep can afford, as (private PEM, public PEM).
+def _cheap_key() -> oci_iam.KeyPair:
+    """A key pair the sweep can afford.
 
     Short, and generated here rather than by `generate_key`, because the
     sweep's cost is dominated by *reading* a PEM back: the fingerprint is a
@@ -1478,13 +1485,13 @@ def _cheap_key() -> tuple[str, str]:
     arithmetic inside one.
     """
     private = rsa.generate_private_key(public_exponent=65537, key_size=1024)
-    return (
-        private.private_bytes(
+    return oci_iam.KeyPair(
+        private_pem=private.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         ).decode(),
-        private.public_key()
+        public_pem=private.public_key()
         .public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -1505,10 +1512,14 @@ def pooled_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _fresh_root() -> masters.Credential:
-    private_pem, _ = oci_iam.generate_key()
+    private_pem = oci_iam.generate_key().private_pem
     return masters.Credential(
-        root=masters.ROOTS['oci'],
-        values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},
+        root=masters.ROOTS[masters.OCI],
+        values={
+            masters.OCI_TENANCY: TENANCY,
+            masters.OCI_USER: ROOT_USER,
+            masters.OCI_PRIVATE_KEY: private_pem,
+        },
     )
 
 
@@ -1573,7 +1584,8 @@ def test_creating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
     _create(healed, kit)
 
     _survived(healed, kit)
-    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    row = oci_iam.load_seed(kit, SEED_ENTRY)
+    user_id, private_pem = row.user, row.private_key
     # And the orphan a lost run left behind is gone, not merely tolerated:
     # the user holds one key, the one the kit holds the private half of.
     assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
@@ -1597,7 +1609,8 @@ def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
     _rotate(healed, kit)
 
     _survived(healed, kit)
-    _, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    row = oci_iam.load_seed(kit, SEED_ENTRY)
+    user_id, private_pem = row.user, row.private_key
     assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
 
 
@@ -1633,7 +1646,7 @@ def test_the_seed_is_built_in_the_identity_domain(kit: KdbxStore, root: masters.
     assert tenancy.policy.served.count('create_api_key') == 1
     assert [user.name for user in tenancy.identity.users.values()] == [oci_iam.SEED_NAME]
     assert (user_id, next(iter(tenancy.identity.groups))) in tenancy.identity.memberships
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
     # The policy is IAM's own concept, not the domain's, and stays legacy.
     assert [policy.statements for policy in tenancy.identity.policies.values()] == [list(oci_iam.STATEMENTS)]
@@ -1705,7 +1718,7 @@ def test_a_domain_that_refuses_a_call_falls_back_to_the_legacy_one(kit: KdbxStor
     # subject, so those fall back in turn and the seed still stands.
     assert [user.name for user in tenancy.identity.users.values()] == [oci_iam.SEED_NAME]
     assert (user_id, next(iter(tenancy.identity.groups))) in tenancy.identity.memberships
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
 
 
@@ -1725,7 +1738,7 @@ def test_a_domain_that_refuses_once_is_not_given_up_on(
     # the second run found the domain willing and used it.
     assert tenancy.policy.once == set()
     assert tenancy.policy.served.count('create_api_key') == 1
-    _, _, private_pem = oci_iam.load_seed(second, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(second, SEED_ENTRY).private_key
     assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
 
 
@@ -1735,13 +1748,13 @@ def test_the_self_service_listing_is_not_used_for_another_users_keys(tenancy: Te
     # with the caller's own keys would be worse than failing: the quota check
     # would pass on the wrong user's count and the sweep would retire the
     # wrong keys.
-    private_pem, _ = oci_iam.generate_key()
+    private_pem = oci_iam.generate_key().private_pem
     tenancy.identity.keys[ROOT_USER] = ['the:root:key']
     tenancy.identity.keys['ocid1.user.oc1..kluster-seed'] = ['the:seed:key']
     iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, private_pem, connect=tenancy, domain_url=DOMAIN_URL)
 
-    assert iam.api_keys('ocid1.user.oc1..kluster-seed') == ['the:seed:key']
-    assert iam.api_keys(ROOT_USER) == ['the:root:key']
+    assert iam.key_fingerprints('ocid1.user.oc1..kluster-seed') == ['the:seed:key']
+    assert iam.key_fingerprints(ROOT_USER) == ['the:root:key']
     # Administrative for somebody else, self-service for the caller, and the
     # legacy shim for neither.
     assert tenancy.policy.served == ['list_api_keys', 'list_my_api_keys']
@@ -1757,8 +1770,8 @@ def test_another_users_keys_are_read_through_the_domain_not_the_shim(kit: KdbxSt
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy, domain_url=DOMAIN_URL)
 
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
-    assert iam.api_keys(user_id) == [oci_iam.fingerprint(private_pem)]
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
+    assert iam.key_fingerprints(user_id) == [oci_iam.fingerprint(private_pem)]
 
 
 def test_another_users_key_is_retired_through_the_domain_not_the_shim(kit: KdbxStore, root: masters.Credential) -> None:
@@ -1768,9 +1781,9 @@ def test_another_users_key_is_retired_through_the_domain_not_the_shim(kit: KdbxS
     tenancy = Tenancy(identity=RefusingIdentity())
     user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy, domain_url=DOMAIN_URL)
-    _, _, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(kit, SEED_ENTRY).private_key
 
-    iam.delete_api_key(user_id, oci_iam.fingerprint(private_pem))
+    iam.retire_key(user_id, oci_iam.fingerprint(private_pem))
 
     assert tenancy.identity.keys[user_id] == []
     assert tenancy.policy.served[-2:] == ['list_api_keys', 'delete_api_key']
@@ -1796,7 +1809,7 @@ def test_rotation_survives_a_legacy_layer_that_refuses_even_reads(
     # Listing, verification and retirement all went through the domain: the
     # legacy layer answered 401 to every read and delete throughout.
     assert tenancy.identity.keys[user_id] == [current]
-    _, _, private_pem = oci_iam.load_seed(successor, SEED_ENTRY)
+    private_pem = oci_iam.load_seed(successor, SEED_ENTRY).private_key
     assert oci_iam.fingerprint(private_pem) == current
 
 
@@ -1834,7 +1847,7 @@ def _survives_a_bring_up_and_a_rotation(tenancy: Tenancy) -> None:
     current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
 
     assert tenancy.identity.keys[user_id] == [current]
-    assert oci_iam.fingerprint(oci_iam.load_seed(kit, SEED_ENTRY)[2]) == current
+    assert oci_iam.fingerprint(oci_iam.load_seed(kit, SEED_ENTRY).private_key) == current
 
 
 @pytest.mark.parametrize('endpoint', SHIMMED_ENDPOINTS)

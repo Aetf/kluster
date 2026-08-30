@@ -67,6 +67,20 @@ CAPABILITIES: tuple[str, ...] = (
 
 
 @dataclass(frozen=True)
+class AppKey:
+    """One B2 application key: what addresses it, and what authenticates as it.
+
+    Two indistinguishable strings, so they travel together rather than as a
+    pair a caller is free to hand over the other way round. B2 discloses the
+    secret half once, at creation, which is why nothing here can recover from
+    getting them the wrong way.
+    """
+
+    key_id: str
+    key: str
+
+
+@dataclass(frozen=True)
 class Session:
     """An authorized B2 API session."""
 
@@ -115,12 +129,12 @@ class Session:
         resp.raise_for_status()
         return resp.json()
 
-    def create_key(self, name: str) -> tuple[str, str]:
+    def create_key(self, name: str) -> AppKey:
         data = self.post(
             'b2_create_key',
             {'accountId': self.account_id, 'keyName': name, 'capabilities': list(CAPABILITIES)},
         )
-        return data['applicationKeyId'], data['applicationKey']
+        return AppKey(key_id=str(data['applicationKeyId']), key=str(data['applicationKey']))
 
     def keys(self) -> list[dict[str, Any]]:
         """Every application key on the account, following the pages.
@@ -145,17 +159,25 @@ class Session:
         _ = self.post('b2_delete_key', {'applicationKeyId': key_id})
 
 
-def _mint_verified(session: Session, name: str) -> tuple[Session, str, str]:
-    """Create a key, prove it works, and hand back a session as that key.
+@dataclass(frozen=True)
+class MintedKey:
+    """A freshly created key, and a session authorized as it.
 
     The session is part of the answer because retirement has to run as a
-    credential that outlives it (`retire_others`).
+    credential that outlives the deletions (`retire_others`).
     """
-    key_id, key = session.create_key(name)
-    minted = Session.authorize(key_id, key)
+
+    session: Session
+    app_key: AppKey
+
+
+def _mint_verified(session: Session, name: str) -> MintedKey:
+    """Create a key and prove it works before anything is told to rely on it."""
+    app_key = session.create_key(name)
+    minted = Session.authorize(app_key.key_id, app_key.key)
     _ = minted.post('b2_list_buckets', {'accountId': minted.account_id})
-    log.info('minted %s (%s), verified against the API', name, key_id)
-    return minted, key_id, key
+    log.info('minted %s (%s), verified against the API', name, app_key.key_id)
+    return MintedKey(session=minted, app_key=app_key)
 
 
 def retire_others(session: Session, name: str, *, keep: str) -> None:
@@ -186,14 +208,14 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
     """
-    session = Session.authorize(root['account-id'], root['key'])
-    minted, key_id, key = _mint_verified(session, SEED_KEY_NAME)
-    seeds.put(seed_entry, key_id, key)
+    session = Session.authorize(root[masters.B2_ACCOUNT_ID], root[masters.B2_KEY])
+    minted = _mint_verified(session, SEED_KEY_NAME)
+    seeds.put(seed_entry, minted.app_key.key_id, minted.app_key.key)
     # Stored first, retired second: an interrupted run leaves a key the kit does
     # not name, and this is the only thing that can clear it -- a seed key whose
     # secret nobody holds is a live permission, not a spare.
-    retire_others(minted, SEED_KEY_NAME, keep=key_id)
-    return key_id
+    retire_others(minted.session, SEED_KEY_NAME, keep=minted.app_key.key_id)
+    return minted.app_key.key_id
 
 
 def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = None) -> str:
@@ -210,17 +232,17 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     session = Session.from_entry(store, seed_entry)
     previous = store.get(seed_entry, attribute='UserName')
 
-    minted, key_id, key = _mint_verified(session, SEED_KEY_NAME)
-    (into or store).put(seed_entry, key_id, key)
+    minted = _mint_verified(session, SEED_KEY_NAME)
+    (into or store).put(seed_entry, minted.app_key.key_id, minted.app_key.key)
 
     # As the successor, not as the predecessor: the predecessor is one of the
     # keys being deleted, and its session stops working the moment it is.
-    retire_others(minted, SEED_KEY_NAME, keep=key_id)
-    log.info('seed rotated: %s -> %s', previous, key_id)
-    return key_id
+    retire_others(minted.session, SEED_KEY_NAME, keep=minted.app_key.key_id)
+    log.info('seed rotated: %s -> %s', previous, minted.app_key.key_id)
+    return minted.app_key.key_id
 
 
-def mint_management(store: KdbxStore, *, seed_entry: str) -> tuple[str, str]:
+def mint_management(store: KdbxStore, *, seed_entry: str) -> AppKey:
     """Mint the management key for the bring-up pipeline to place in its slots.
 
     Deliberately returns the credential instead of storing it: the offline
@@ -228,12 +250,12 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> tuple[str, str]:
     (credentials.md §1 rule 2).
     """
     session = Session.from_entry(store, seed_entry)
-    _, key_id, key = _mint_verified(session, MANAGEMENT_KEY_NAME)
+    minted = _mint_verified(session, MANAGEMENT_KEY_NAME)
     # Retire predecessors only once the replacement works: a failed mint must
     # leave the running stack's credential alone. The seed signs it, and the
     # seed is not among the keys being deleted.
-    retire_others(session, MANAGEMENT_KEY_NAME, keep=key_id)
-    return key_id, key
+    retire_others(session, MANAGEMENT_KEY_NAME, keep=minted.app_key.key_id)
+    return minted.app_key
 
 
 #: The uploader's whole permission: it cannot list, read, or delete, so a
@@ -302,7 +324,7 @@ def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix
     return False
 
 
-def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> tuple[str, str]:
+def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> AppKey:
     """A write-only key confined to one prefix of one bucket."""
     data = session.post(
         'b2_create_key',
@@ -314,10 +336,10 @@ def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -
             'namePrefix': f'{prefix}/',
         },
     )
-    key_id, key = str(data['applicationKeyId']), str(data['applicationKey'])
+    minted = AppKey(key_id=str(data['applicationKeyId']), key=str(data['applicationKey']))
     # Retired by the minter rather than by the new key: a write-only key
     # carries no `deleteKeys` and could not retire anything, its predecessor
     # least of all.
-    retire_others(session, name, keep=key_id)
-    log.info('minted %s (%s)', name, key_id)
-    return key_id, key
+    retire_others(session, name, keep=minted.key_id)
+    log.info('minted %s (%s)', name, minted.key_id)
+    return minted

@@ -88,6 +88,19 @@ def _result(resp: requests.Response) -> Any:
 
 
 @dataclass(frozen=True)
+class Token:
+    """One API token: what addresses it, and what authenticates as it.
+
+    Two indistinguishable strings, so they travel together rather than as a
+    pair a caller is free to hand over the other way round. Cloudflare
+    discloses the value once, at creation, and the id is what retires it.
+    """
+
+    token_id: str
+    value: str
+
+
+@dataclass(frozen=True)
 class Session:
     """An authorized Cloudflare API session, and the token it authorized with."""
 
@@ -217,15 +230,15 @@ class Session:
             )
         return [{'id': by_name[name]} for name in names]
 
-    def create_token(self, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
+    def create_token(self, name: str, policies: list[dict[str, Any]]) -> Token:
         result = self._call('POST', '/user/tokens', {'name': name, 'policies': policies})
-        return str(result['id']), str(result['value'])
+        return Token(token_id=str(result['id']), value=str(result['value']))
 
     def delete_token(self, token_id: str) -> None:
         _ = self._call('DELETE', f'/user/tokens/{token_id}')
 
 
-def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) -> tuple[str, str]:
+def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) -> Token:
     """Create a token with the given policies and prove it authenticates.
 
     Verification is a call the new token makes as itself: a value that cannot
@@ -233,10 +246,10 @@ def _mint_verified(session: Session, name: str, policies: list[dict[str, Any]]) 
     procedure would notice.
     """
     log.info('minting %s', name)
-    token_id, token = session.create_token(name, policies)
-    minted = Session.authorize(token)
+    created = session.create_token(name, policies)
+    minted = Session.authorize(created.value)
     log.info('minted %s (%s), verified against the API', name, minted.token_id)
-    return token_id, token
+    return created
 
 
 def _retire_superseded(session: Session, name: str, keep: str) -> None:
@@ -264,8 +277,8 @@ def mint_token(
     name: str,
     policies: list[dict[str, Any]],
     confirm: Callable[[str], None] | None = None,
-) -> tuple[str, str]:
-    """Mint one §3 token from the seed, as (token id, token value).
+) -> Token:
+    """Mint one §3 token from the seed.
 
     The unit every per-stack Cloudflare credential is made of, and the reason
     the seed exists. Rotating such a token is a re-run of this: a same-named
@@ -279,11 +292,11 @@ def mint_token(
     `policies` are the caller's, and may not include token permissions: a
     sub-token carrying them is refused by the platform.
     """
-    token_id, token = _mint_verified(session, name, policies)
+    minted = _mint_verified(session, name, policies)
     if confirm is not None:
-        confirm(token)
-    _retire_superseded(session, name, keep=token_id)
-    return token_id, token
+        confirm(minted.value)
+    _retire_superseded(session, name, keep=minted.token_id)
+    return minted
 
 
 @dataclass(frozen=True)
@@ -319,7 +332,13 @@ def _resolve_zones(session: Session, names: Sequence[str]) -> tuple[str, dict[st
                 'or the seed token carries no zone read permission'
             )
         ids[name] = str(matches[0]['id'])
-        accounts.add(str(dict[str, Any](matches[0].get('account') or {}).get('id', '')))
+        account = dict[str, Any](matches[0].get('account') or {}).get('id')
+        if not isinstance(account, str) or not account:
+            # An empty string here would satisfy the single-account check
+            # below and be written into a stack's committed configuration as
+            # the account id, where nothing ever refuses it.
+            raise CredentialRejected(f'Cloudflare returned the zone {name!r} with no account id')
+        accounts.add(account)
     if len(accounts) != 1:
         raise CredentialRejected(
             f'the zones are spread over {len(accounts)} Cloudflare accounts; one token cannot be scoped to them'
@@ -364,8 +383,8 @@ def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> Zon
             'permission_groups': session.permission_groups(ZONE_PERMISSIONS),
         }
     ]
-    token_id, value = mint_token(session, name, policies, confirm=lambda minted: _confirm_scope(minted, zones))
-    return ZoneToken(token_id=token_id, value=value, account_id=account_id, zone_ids=zone_ids)
+    minted = mint_token(session, name, policies, confirm=lambda value: _confirm_scope(value, zones))
+    return ZoneToken(token_id=minted.token_id, value=minted.value, account_id=account_id, zone_ids=zone_ids)
 
 
 def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:

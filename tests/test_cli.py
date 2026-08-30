@@ -184,7 +184,7 @@ class Dispatch:
             (cli.lifecycle, 'bootstrap', []),
             (cli.lifecycle, 'rotate', []),
             (cli.lifecycle, 'create_seed', None),
-            (cli.lifecycle, 'environment', {}),
+            (cli.lifecycle, 'environment', cli.pulumi_config.BackendEnvironment()),
             (cli.escrow, 'generate', 'a-secret'),
             (cli.escrow, 'adopt', Path('placeholder')),
             (cli.escrow, 'rewrap', []),
@@ -256,7 +256,7 @@ def test_the_walk_finds_every_register_row() -> None:
 
     for member, seed in entries.SEEDS.items():
         assert ['seed', member, 'create'] in found
-        assert (['seed', member, 'rotate'] in found) == seed.self_reproducing
+        assert (['seed', member, 'rotate'] in found) == seed.mints_own_successor
         if seed.repair is not None:
             assert ['seed', member, seed.repair.verb] in found
     for member in masters.ROOTS:
@@ -477,7 +477,11 @@ def test_import_refuses_an_empty_slot(
 ) -> None:
     empty = tmp_path / 'passphrase'
     _ = empty.write_text('')
-    monkeypatch.setitem(cli.escrow.SLOTS, 'pulumi/passphrase', lambda: empty)
+
+    def slot(_label: str) -> cli.escrow.WorkstationSlot:
+        return cli.escrow.WorkstationSlot(path=lambda: empty, read_by='a test reads it')
+
+    monkeypatch.setattr(cli.escrow, 'slot', slot)
 
     assert cli.main(['derived', 'pulumi-passphrase', 'import', '--from-slot']) == 1
 

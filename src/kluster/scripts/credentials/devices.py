@@ -258,9 +258,17 @@ def deliver(
 
     Every value is collected before the first one is pushed, so an answer left
     blank at the second prompt costs a re-run rather than a half-filled slot.
+
+    `given` is keyed by field name, which is what the command line can build
+    from the same table (`cli`). A key naming no field is refused rather than
+    dropped: dropping it turns a scripted run into an interactive one at the
+    prompt it was meant to answer.
     """
     announce(device)
     handed = given or {}
+    unknown = sorted(set(handed) - {field.name for field in device.fields})
+    if unknown:
+        raise KdbxError(f'{device.title} has no field named {", ".join(unknown)}')
     values = {
         field: field.resolve(handed.get(field.name), prompt=prompt, title=device.title) for field in device.fields
     }

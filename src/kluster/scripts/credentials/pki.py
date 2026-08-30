@@ -12,10 +12,8 @@ buys back nothing. Issuing one twice therefore produces two different keys,
 which is why a caller that needs a certificate and its key takes both halves
 from a single `issue_*` call.
 
-P-256 rather than RSA: the live CA is a P-256 key and re-keying it is a
-re-provision, so the curve stays where the appliance's own history put it.
-Nothing constrains the algorithm any more — the determinism that once required
-an elliptic scalar is gone with the derivation model.
+P-256 rather than RSA: the live CA is a P-256 key, and re-keying it is a
+re-provision of the appliance rather than an edit here.
 """
 
 from __future__ import annotations
@@ -58,6 +56,15 @@ def _pem_key(key: ec.EllipticCurvePrivateKey) -> bytes:
     )
 
 
+def _at(now: dt.datetime | None) -> dt.datetime:
+    """The moment a certificate is issued at, defaulted the one way.
+
+    Every `issue_*` takes an optional clock so a test can pin validity; the
+    default belongs in one place rather than beside each of them.
+    """
+    return now or dt.datetime.now(dt.timezone.utc)
+
+
 def _name(common_name: str) -> x509.Name:
     return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
 
@@ -98,7 +105,7 @@ class Authority:
 
     def certificate(self, *, now: dt.datetime | None = None) -> Credential:
         """The self-signed CA certificate, with the key that signed it."""
-        now = now or dt.datetime.now(dt.timezone.utc)
+        now = _at(now)
         name = _name(CA_COMMON_NAME)
         cert = (
             x509.CertificateBuilder()
@@ -163,7 +170,7 @@ class Authority:
             common_name=address,
             usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             san=x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(address))]),
-            now=now or dt.datetime.now(dt.timezone.utc),
+            now=_at(now),
         )
 
     def issue_client(self, name: str, *, now: dt.datetime | None = None) -> Credential:
@@ -174,5 +181,5 @@ class Authority:
             common_name=name,
             usage=x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
             san=None,
-            now=now or dt.datetime.now(dt.timezone.utc),
+            now=_at(now),
         )

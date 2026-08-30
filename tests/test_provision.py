@@ -146,7 +146,7 @@ def slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _mint() -> Path:
     """A slot filled the way `credentials derived oci-state-backend mint` fills it."""
-    private_pem, _ = oci_iam.generate_key()
+    private_pem = oci_iam.generate_key().private_pem
     key = oci_iam.ApiKey(tenancy=APPLIANCE_TENANCY, user=APPLIANCE_USER, private_key=private_pem)
     return oci_slot.write(key)
 
@@ -251,9 +251,9 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
     from kluster.scripts.state_backend import cli, config
 
     def install(recorder: _Recorder) -> None:
-        def mint(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        def mint(*_args: object, **_kwargs: object) -> b2.AppKey:
             recorder.minted += 1
-            return ('key-id', 'key-secret')
+            return b2.AppKey(key_id='key-id', key='key-secret')
 
         def find(*_args: object, **_kwargs: object) -> Any:
             if not recorder.instance_exists:

@@ -160,7 +160,8 @@ def test_the_seed_may_not_mint_a_successor_to_itself(api: FakeApi, memory_kit: K
 def test_a_minted_token_carries_the_policies_it_was_given(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
 
-    token_id, value = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    minted = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    token_id, value = minted.token_id, minted.value
 
     # The caller states the policies; nothing is copied from the minter,
     # whose own policies are the ones a sub-token may not have.
@@ -183,10 +184,10 @@ def test_the_minted_token_is_verified_before_it_is_returned(api: FakeApi) -> Non
 
 def test_minting_retires_the_predecessor_as_the_minting_token(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
-    previous, _ = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    previous = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).token_id
     orphan = api.values[api.add(STACK_TOKEN, [ZONE_POLICY])]
 
-    current, _ = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    current = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).token_id
 
     # Two tokens to delete, and only the seed can delete either: listing and
     # deleting tokens are token permissions, which a minted §3 token may not
@@ -199,7 +200,7 @@ def test_minting_retires_the_predecessor_as_the_minting_token(api: FakeApi) -> N
 
 def test_a_minted_token_may_not_manage_tokens_at_all(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
-    _, value = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    value = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).value
 
     # The platform rule this module is shaped around, seen from the other side:
     # the class of token the seed is allowed to mint cannot even enumerate
@@ -228,6 +229,19 @@ def test_the_zones_token_is_scoped_to_exactly_the_estate_zones(api: FakeApi) -> 
     assert policy['permission_groups'] == [{'id': 'dns-write'}, {'id': 'zone-read'}]
     assert minted.account_id == ACCOUNT_ID
     assert minted.zone_ids == zone_ids
+
+
+def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
+    zones = _estate(api)
+    api.zones[conventions.ZONE_FAMILY[0]]['account'] = {}
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # The empty string satisfies "the zones are all in one account" and is
+    # then written into a stack's committed configuration as the account id,
+    # where nothing ever refuses it.
+    with pytest.raises(CredentialRejected, match='no account id'):
+        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
+    assert not _named(api, STACK_TOKEN)
 
 
 def test_a_zone_the_seed_cannot_see_is_refused_before_anything_is_minted(api: FakeApi) -> None:
@@ -439,7 +453,7 @@ def test_minting_a_token_heals_from_a_failure_at_any_call(
         _ = cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY])
 
     _ = faulty(None, when)
-    token_id, _ = cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY])
+    token_id = cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY]).token_id
 
     # One token of that name stands, and it is the one the caller was handed:
     # a token minted by the run that died is a live permission whose value
