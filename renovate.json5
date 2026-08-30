@@ -82,8 +82,14 @@
       // Outside the cluster: Talos, which reimages nodes. `physical` has no PR
       // preview by design (framework/ci.md §3), so this one is read as code
       // and approved before it is opened at all.
-      matchFileNames: [
-        'Pulumi.physical.yaml',
+      //
+      // Matched by dependency and not by file. Its pin lives in the
+      // project-level `versions:` block of `Pulumi.yaml` (rfc-002 §11.1),
+      // which is the file every other pin in the repository will share — and
+      // an in-cluster chart bump must not inherit a gate that exists because
+      // `physical` cannot be previewed.
+      matchDepNames: [
+        'siderolabs/talos',
       ],
       groupName: 'talos and the node fleet',
       groupSlug: 'physical',

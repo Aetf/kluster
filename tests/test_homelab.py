@@ -300,7 +300,7 @@ async def test_a_talos_upgrade_is_not_a_proposal_to_rewrite_the_disk() -> None:
     # `source` says what the disk was written with, and Talos upgrades itself
     # in place over its machine API — so the declaration stops describing the
     # volume as soon as the node is upgraded. Left diffable, the next
-    # `talosVersion` bump would propose replacing a running node's boot disk,
+    # `versions:talos` bump would propose replacing a running node's boot disk,
     # and `protect` would then refuse every apply until the bump was reverted.
     assert 'source' in set(request.ignoreChanges)
 
