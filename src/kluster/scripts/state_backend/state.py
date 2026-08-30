@@ -414,5 +414,9 @@ def identity_file(path: Path) -> tuple[str, ...]:
     """
     try:
         return lib_config.lines(path, 'the age identity file')
-    except (OSError, ValueError) as exc:
+    except FileNotFoundError as exc:
+        raise StateError(f'no age identity file at {path}') from exc
+    except OSError as exc:
+        raise StateError(f'{path} cannot be read: {exc}') from exc
+    except ValueError as exc:
         raise StateError(f'{path} holds no age identity') from exc

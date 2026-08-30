@@ -45,6 +45,63 @@ def _ip(name: str, address: str, state: str = 'ASSIGNED') -> Any:
     return type('PublicIp', (), {'display_name': name, 'ip_address': address, 'lifecycle_state': state})()
 
 
+class _Answer:
+    """One `urlopen` answer: a JSON body, or headers and no body."""
+
+    def __init__(self, *, body: object = None, headers: dict[str, str] | None = None) -> None:
+        self.headers: dict[str, str] = headers or {}
+        self._body: bytes = json.dumps(body).encode() if body is not None else b''
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _Answer:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def _registry(monkeypatch: pytest.MonkeyPatch, *answers: _Answer) -> None:
+    """The two calls `_image_digest` makes, in order: the token, then the manifest."""
+    remaining = list(answers)
+
+    def urlopen(*_args: object, **_kwargs: object) -> _Answer:
+        return remaining.pop(0)
+
+    monkeypatch.setattr(provision.urllib.request, 'urlopen', urlopen)
+
+
+def test_a_manifest_without_a_digest_header_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`state-backend pins` exists to catch a bad pin; an empty answer must not pass as one.
+
+    A registry that answers the HEAD without `Docker-Content-Digest` used to
+    be logged as a resolution to the empty string, so the one command whose
+    job is to fail on a bad pin reported success.
+    """
+    _registry(monkeypatch, _Answer(body={'token': 'a-pull-token'}), _Answer(headers={}))
+
+    with pytest.raises(RuntimeError, match='without a Docker-Content-Digest header'):
+        _ = provision._image_digest('docker.io/library/postgres:17')  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_token_response_without_a_token_names_the_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    _registry(monkeypatch, _Answer(body={'errors': ['nope']}))
+
+    with pytest.raises(RuntimeError, match='the registry pull token for library/postgres has no token'):
+        _ = provision._image_digest('docker.io/library/postgres:17')  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_resolved_manifest_answers_its_digest(monkeypatch: pytest.MonkeyPatch) -> None:
+    _registry(
+        monkeypatch,
+        _Answer(body={'token': 'a-pull-token'}),
+        _Answer(headers={'Docker-Content-Digest': 'sha256:abc'}),
+    )
+
+    assert provision._image_digest('docker.io/library/postgres:17') == 'sha256:abc'  # pyright: ignore[reportPrivateUsage]
+
+
 def test_the_address_is_looked_up_not_reserved() -> None:
     client = _Client([_ip('state-backend-ip', '192.0.2.10')])
 

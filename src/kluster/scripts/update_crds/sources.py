@@ -223,17 +223,26 @@ def yaml_file_urls(listing: object, *, what: str) -> list[str]:
     a listing that is not a listing — a rate-limit object, a file where a
     directory was expected — is refused by name here rather than raising a
     `KeyError` over an entry nobody can identify.
+
+    **The suffix decides before the URL is required.** A contents listing
+    holds directories and submodules as well as files, and those carry
+    `download_url: null` — a legitimate shape, and one this function wants
+    none of. So the name is what every entry must have, and the URL is
+    demanded only of the entries that survive the filter.
     """
     if not isinstance(listing, list):
         raise SourceError(f'{what}: the contents API answered a {type(listing).__name__}, not a list of entries')
     urls: list[str] = []
     for entry in cast('list[Any]', listing):
         name = entry.get('name') if isinstance(entry, dict) else None
-        url = entry.get('download_url') if isinstance(entry, dict) else None
-        if not isinstance(name, str) or not isinstance(url, str):
-            raise SourceError(f'{what}: an entry carries no name and download_url pair, and is {entry!r}')
-        if name.endswith(YAML_SUFFIXES):
-            urls.append(url)
+        if not isinstance(name, str) or not name:
+            raise SourceError(f'{what}: an entry carries no name, and is {entry!r}')
+        if not name.endswith(YAML_SUFFIXES):
+            continue
+        url = entry.get('download_url')
+        if not isinstance(url, str) or not url:
+            raise SourceError(f'{what}: the entry {name} carries no download_url, and is {entry!r}')
+        urls.append(url)
     return urls
 
 

@@ -355,6 +355,57 @@ def test_a_restore_decrypts_verifies_and_lands_the_archive(
     assert '--if-exists' in landing
 
 
+def _printing(printed: str, monkeypatch: pytest.MonkeyPatch) -> state.Connection:
+    """A backend whose `pulumi stack ls --json` prints exactly this."""
+
+    def run_pulumi(*_args: object, **_kwargs: object) -> str:
+        return printed
+
+    monkeypatch.setattr(state.pulumi_config, 'run_pulumi', run_pulumi)
+    return state.Connection(url=URL, env={})
+
+
+def test_a_stack_listing_that_is_not_json_quotes_what_was_printed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A backend that answers with a diagnosis rather than a listing: the run
+    # has to say what it got, because that text is the whole diagnosis.
+    target = _printing('error: could not read stacks from the backend', monkeypatch)
+
+    with pytest.raises(state.StateError, match='did not print JSON'):
+        _ = state.stacks(target)
+
+
+def test_a_stack_listing_that_is_not_a_list_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    target = _printing('{"message": "unauthorized"}', monkeypatch)
+
+    with pytest.raises(state.StateError, match='printed a dict, not a list of stacks'):
+        _ = state.stacks(target)
+
+
+def test_a_stack_entry_without_a_name_is_named_rather_than_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This list is what a restore is verified by and what refuses to overwrite
+    # a populated backend, so a nameless entry counted as the empty string
+    # would be a stack that exists in one direction and not the other.
+    target = _printing('[{"name": "dns"}, {"current": true}]', monkeypatch)
+
+    with pytest.raises(state.StateError, match='entry 1 carries no name'):
+        _ = state.stacks(target)
+
+
+def test_an_absent_age_identity_file_is_not_reported_as_an_empty_one(tmp_path: Path) -> None:
+    with pytest.raises(state.StateError, match='no age identity file at'):
+        _ = state.identity_file(tmp_path / 'never-written')
+
+
+def test_an_age_identity_file_holding_only_comments_is_reported_as_empty(tmp_path: Path) -> None:
+    # What `age-keygen`'s header alone looks like, and what a producer that
+    # wrote no key leaves behind.
+    path = tmp_path / 'drill.key'
+    _ = path.write_text('# created: 2026-08-29\n\n')
+
+    with pytest.raises(state.StateError, match='holds no age identity'):
+        _ = state.identity_file(path)
+
+
 def test_a_restore_refuses_a_backend_that_already_serves_stacks(
     double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
 ) -> None:

@@ -126,9 +126,25 @@ def test_yaml_file_urls_names_the_directory_when_the_answer_is_not_a_listing() -
         _ = sources.yaml_file_urls({'message': 'API rate limit exceeded'}, what='example/repo@v1:crds')
 
 
-def test_yaml_file_urls_names_the_directory_when_an_entry_has_no_download_url() -> None:
+def test_yaml_file_urls_skips_the_entries_that_are_not_files() -> None:
+    """A directory or a submodule is listed with `download_url: null`, legitimately."""
+    listing = [
+        {'name': 'subdir', 'type': 'dir', 'download_url': None},
+        {'name': 'widget.yaml', 'type': 'file', 'download_url': 'https://example.com/widget.yaml'},
+    ]
+
+    assert sources.yaml_file_urls(listing, what='example/repo@v1:crds') == ['https://example.com/widget.yaml']
+
+
+def test_yaml_file_urls_names_the_yaml_entry_that_has_no_download_url() -> None:
+    """Demanded of the files that survive the filter, and of nothing else."""
+    with pytest.raises(sources.SourceError, match='the entry widget.yaml carries no download_url'):
+        _ = sources.yaml_file_urls([{'name': 'widget.yaml', 'download_url': None}], what='example/repo@v1:crds')
+
+
+def test_yaml_file_urls_names_the_directory_when_an_entry_has_no_name() -> None:
     with pytest.raises(sources.SourceError, match='example/repo@v1:crds: an entry carries no name'):
-        _ = sources.yaml_file_urls([{'name': 'widget.yaml'}], what='example/repo@v1:crds')
+        _ = sources.yaml_file_urls([{'download_url': 'https://example.com/widget.yaml'}], what='example/repo@v1:crds')
 
 
 @pytest.mark.parametrize(

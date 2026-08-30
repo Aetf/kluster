@@ -42,7 +42,11 @@ LOGGING = {
     },
 }
 
-log = logging.getLogger(__name__)
+#: Spelled out rather than taken from `__name__`, which is `'__main__'` when
+#: this file is run directly and would then sit outside the tree configured
+#: above -- so a direct run would print nothing. Sibling modules take
+#: `__name__`, which for them is always a child of `LOG_NAME`.
+log = logging.getLogger(f'{LOG_NAME}.cli')
 
 
 def collect_documents(workdir: Path) -> list[str]:

@@ -808,6 +808,11 @@ def wait_for_backend(address: str, *, timeout: int = 900) -> bool:
     return False
 
 
+#: What a registry names a manifest by, and the whole of what this reads off
+#: the HEAD response.
+DIGEST_HEADER = 'Docker-Content-Digest'
+
+
 def _image_digest(image: str) -> str:
     """The digest `image`'s tag currently resolves to, via the registry API.
 
@@ -836,12 +841,14 @@ def _image_digest(image: str) -> str:
         },
     )
     with urllib.request.urlopen(request, timeout=60) as response:
-        digest = response.headers['Docker-Content-Digest'] or ''
+        # `.get`, because a header this asks for and does not receive is the
+        # case below rather than a `KeyError` from inside a mapping.
+        digest = response.headers.get(DIGEST_HEADER, '')
     if not digest:
-        # An empty answer would otherwise be logged as a resolution and the
+        # An empty answer would otherwise be logged as a resolution, and the
         # check that exists to catch a bad pin would report success.
-        raise RuntimeError(f'the registry answered for {image} without a Docker-Content-Digest header')
-    return digest
+        raise RuntimeError(f'the registry answered for {image} without a {DIGEST_HEADER} header')
+    return str(digest)
 
 
 def verify_pins() -> bool:
