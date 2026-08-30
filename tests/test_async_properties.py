@@ -1,54 +1,55 @@
-# Pulumi's mock monitor and its gRPC message types carry no type information,
-# and this file exists to reach inside them: it patches RegisterResource to
-# capture the dependency edges Pulumi records. The unknown-type family is
-# suppressed here rather than repo-wide.
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
-# pyright: reportUnknownParameterType=false, reportUnknownArgumentType=false
-# pyright: reportMissingParameterType=false, reportUnnecessaryIsInstance=false
-"""
-Verification suite for the native async inputs framework (RFC-001):
-`async_output`, `resolve`, and the `Component` base class.
+"""The native async inputs framework (rfc-001): `async_output`, `resolve`, `Component`.
+
+What is proven here is the part that has no equivalent in a diff: which
+dependencies an asynchronously computed input carries, what a preview does
+with one whose upstream is unknown, and that a failure inside one fails the
+run rather than hanging it.
 """
 
 import asyncio
 from typing import Any
 
+import pulumi
 import pytest
 import pytest_asyncio
-import pulumi
-import pulumi.runtime.mocks
+from mock_monitor import Recorder, declaring, run_with
 from pulumi.output import Unknown
 
 from putils import Component, async_output, resolve
 
 
-# Mock definitions
-class MyMocks(pulumi.runtime.Mocks):
-    def __init__(self, unknown_network_id: bool = False) -> None:
-        self.resources: list[pulumi.runtime.MockResourceArgs] = []
-        self.unknown_network_id = unknown_network_id
+class Engine(Recorder):
+    """A monitor that hands every resource an id derived from its name.
+
+    Unlike the estate's suites this one is about the framework, so the
+    resources are stand-ins and the only interesting answer is the id: a
+    network's is what a component's async input is computed from, and
+    withholding it is what a preview of an unbuilt stack looks like.
+    """
+
+    def __init__(self, *, network_id_unknown: bool = False) -> None:
+        super().__init__()
+        self.network_id_unknown: bool = network_id_unknown
 
     def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        self.resources.append(args)
-        if args.typ == 'gcp:compute:Network':
-            if self.unknown_network_id:
-                return '', {'id': pulumi.UNKNOWN}
-            return args.name + '_id', {'id': args.name + '_id'}
-        return args.name + '_id', {'id': args.name + '_id', **args.inputs}
-
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
-        # The failures element must be iterable: the mock monitor builds
-        # CheckFailures from it, and the stub's Optional is a lie at runtime.
-        return {}, []
+        identifier, outputs = super().new_resource(args)
+        if args.typ != 'gcp:compute:Network':
+            return identifier, {'id': identifier, **outputs}
+        if self.network_id_unknown:
+            return '', {'id': pulumi.UNKNOWN}
+        return identifier, {'id': identifier}
 
 
-# Custom Resources for testing
 class VPC(pulumi.CustomResource):
+    """A resource whose id another resource's input is computed from."""
+
     def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None) -> None:
         super().__init__('gcp:compute:Network', name, {'id': None}, opts)
 
 
 class Subnet(pulumi.CustomResource):
+    """A resource with one plainly passed input and one computed asynchronously."""
+
     network_id: pulumi.Output[str]
     cidr: pulumi.Output[str]
 
@@ -65,10 +66,10 @@ class Subnet(pulumi.CustomResource):
 class VpcSubnetComponent(Component, pulumi_type='test:VpcSubnetComponent'):
     """The canonical new-style component used across tests."""
 
-    def __init__(self, name: str, opts=None):
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None) -> None:
         super().__init__(name, opts=opts)
-        self.vpc = VPC(f'{name}-vpc', opts=self.child_opts())
-        self.subnet = Subnet(
+        self.vpc: VPC = VPC(f'{name}-vpc', opts=self.child_opts())
+        self.subnet: Subnet = Subnet(
             f'{name}-subnet',
             cidr='10.0.1.0/24',  # known value passed plainly
             network_id=async_output(self._network_id),
@@ -82,43 +83,60 @@ class VpcSubnetComponent(Component, pulumi_type='test:VpcSubnetComponent'):
 
 
 @pytest_asyncio.fixture
-async def mocks():
-    m = MyMocks()
-    pulumi.runtime.set_mocks(m, project='my-project', stack='dev', preview=False)
-    return m
+async def mocks() -> Engine:
+    return await run_with(Engine(), stack='dev', project='my-project')
+
+
+@pytest_asyncio.fixture
+async def previewing() -> Engine:
+    """A preview of a stack whose network has not been created yet."""
+    return await run_with(Engine(network_id_unknown=True), stack='dev', project='my-project', preview=True)
 
 
 @pytest.mark.asyncio
-async def test_async_input_resolution_and_parenting(mocks):
+async def test_an_async_input_resolves_beside_a_plainly_passed_one(mocks: Engine) -> None:
     comp = VpcSubnetComponent('my-comp')
 
     assert await comp.subnet.network_id.future() == 'subnet-for-my-comp-vpc_id'
     assert await comp.subnet.cidr.future() == '10.0.1.0/24'
 
-    subnet_reg = next(r for r in mocks.resources if r.typ == 'gcp:compute:Subnetwork')
-    assert subnet_reg.name == 'my-comp-subnet'
+
+@pytest.mark.asyncio
+async def test_a_components_child_is_registered_under_the_components_name(mocks: Engine) -> None:
+    async with declaring():
+        _ = VpcSubnetComponent('my-comp')
+
+    assert mocks.names('gcp:compute:Subnetwork') == {'my-comp-subnet'}
 
 
 @pytest.mark.asyncio
-async def test_resolve_single_and_multiple(mocks):
+async def test_resolving_one_output_gives_its_value(mocks: Engine) -> None:
+    vpc = VPC('vpc-a')
+
+    async def single() -> str:
+        return await resolve(vpc.id)
+
+    assert await async_output(single).future() == 'vpc-a_id'
+
+
+@pytest.mark.asyncio
+async def test_resolving_several_outputs_gives_them_in_order(mocks: Engine) -> None:
     vpc_a = VPC('vpc-a')
     vpc_b = VPC('vpc-b')
 
-    async def single():
-        return await resolve(vpc_a.id)
-
-    async def multiple():
+    async def multiple() -> tuple[str, ...]:
         return await resolve(vpc_a.id, vpc_b.id)
 
-    assert await async_output(single).future() == 'vpc-a_id'
     assert await async_output(multiple).future() == ('vpc-a_id', 'vpc-b_id')
 
+
+def test_resolving_nothing_is_refused() -> None:
     with pytest.raises(TypeError, match='at least one output'):
         resolve()
 
 
 @pytest.mark.asyncio
-async def test_dependency_tracking(mocks):
+async def test_an_async_input_carries_the_resources_it_resolved(mocks: Engine) -> None:
     comp = VpcSubnetComponent('dep-comp')
     await comp.subnet.network_id.future()
 
@@ -129,7 +147,7 @@ async def test_dependency_tracking(mocks):
 
 
 @pytest.mark.asyncio
-async def test_dependency_tracking_inside_gather(mocks):
+async def test_a_dependency_resolved_inside_a_gathered_task_is_still_carried(mocks: Engine) -> None:
     vpc = VPC('gather-vpc')
 
     async def prepare():
@@ -139,7 +157,7 @@ async def test_dependency_tracking_inside_gather(mocks):
         )
         return f'subnet-for-{results[0]}'
 
-    async def resolve_one(out):
+    async def resolve_one(out: pulumi.Output[str]) -> str:
         # Awaited inside a nested task spawned by gather; the shared mutable
         # set in the ContextVar must still capture the dependency.
         return await resolve(out)
@@ -151,13 +169,13 @@ async def test_dependency_tracking_inside_gather(mocks):
 
 
 @pytest.mark.asyncio
-async def test_external_resource_dependency_tracking(mocks):
+async def test_a_dependency_on_a_resource_outside_the_component_is_carried(mocks: Engine) -> None:
     existing_vpc = VPC('existing-vpc')
 
     class ComponentWithExternalRes(Component, pulumi_type='test:ExternalRes'):
-        def __init__(self, name: str, ext_vpc: VPC, opts=None):
+        def __init__(self, name: str, ext_vpc: VPC, opts: pulumi.ResourceOptions | None = None) -> None:
             super().__init__(name, opts=opts)
-            self.subnet = Subnet(
+            self.subnet: Subnet = Subnet(
                 f'{name}-subnet',
                 cidr='10.0.1.0/24',
                 network_id=async_output(self._network_id(ext_vpc)),
@@ -177,16 +195,9 @@ async def test_external_resource_dependency_tracking(mocks):
 
 
 @pytest.mark.asyncio
-async def test_preview_unknown_keeps_sibling_inputs_known():
-    # During preview vpc.id is unknown; the async network_id input must become
-    # unknown while the plainly-passed cidr stays concrete (fine-grained diff).
-    pulumi.runtime.set_mocks(
-        MyMocks(unknown_network_id=True),
-        project='my-project',
-        stack='dev',
-        preview=True,
-    )
-
+async def test_preview_unknown_keeps_sibling_inputs_known(previewing: Engine) -> None:
+    # The async network_id input must become unknown while the plainly-passed
+    # cidr stays concrete, which is what makes a preview's diff fine-grained.
     comp = VpcSubnetComponent('preview-comp')
 
     assert await comp.subnet.cidr.future() == '10.0.1.0/24'
@@ -195,7 +206,7 @@ async def test_preview_unknown_keeps_sibling_inputs_known():
 
 
 @pytest.mark.asyncio
-async def test_exception_in_async_input_propagates(mocks):
+async def test_a_failure_inside_an_async_input_fails_its_output(mocks: Engine) -> None:
     async def broken():
         raise RuntimeError('boom in async input')
 
@@ -205,16 +216,9 @@ async def test_exception_in_async_input_propagates(mocks):
 
 
 @pytest.mark.asyncio
-async def test_preview_unknown_abort_still_attaches_deps():
+async def test_a_preview_that_aborts_on_an_unknown_still_carries_its_dependencies(previewing: Engine) -> None:
     # RFC-001 §4.2: dependencies awaited before the unknown abort must still be
     # recorded on the resulting (unknown) output.
-    pulumi.runtime.set_mocks(
-        MyMocks(unknown_network_id=True),
-        project='my-project',
-        stack='dev',
-        preview=True,
-    )
-
     vpc = VPC('abort-vpc')
 
     async def prepare():
@@ -228,7 +232,7 @@ async def test_preview_unknown_abort_still_attaches_deps():
 
 
 @pytest.mark.asyncio
-async def test_secret_propagation(mocks):
+async def test_an_input_that_resolved_a_secret_is_itself_secret(mocks: Engine) -> None:
     secret_in = pulumi.Output.secret('s3cret')
     plain_in = pulumi.Output.from_input('plain')
 
@@ -248,7 +252,7 @@ async def test_secret_propagation(mocks):
 
 
 @pytest.mark.asyncio
-async def test_upstream_output_failure_propagates(mocks):
+async def test_an_upstream_failure_fails_the_input_rather_than_hanging_it(mocks: Engine) -> None:
     # An output whose future fails (e.g. its resource registration failed)
     # must fail the async_output instead of hanging it.
     async def fail():
@@ -268,7 +272,7 @@ async def test_upstream_output_failure_propagates(mocks):
 
 
 @pytest.mark.asyncio
-async def test_resolve_outside_async_output_raises(mocks):
+async def test_resolve_outside_an_async_input_is_refused(mocks: Engine) -> None:
     vpc = VPC('ctx-vpc')
     with pytest.raises(RuntimeError, match='async_output'):
         await resolve(vpc.id)
