@@ -186,6 +186,74 @@ already done. During a first bring-up there is no overlay to sever —
 the container that will carry it is the thing being delivered — and the
 session runs over the device's LAN address instead (§2.5).
 
+### 1.2 The persistence mechanism: the boot chain and the custom root
+
+Under everything above sits the mechanism that makes any of it survive a
+firmware update, and it is declared by this program rather than pushed
+by hand. It occupies two roots:
+
+-   **`/data/on_boot.d`**, whose path is not a choice made here: it is
+    compiled into the `ExecStart` of `udm-boot.service`, the upstream
+    unit this repository carries, which runs every file in that
+    directory in numeric order.
+-   **`/data/custom`**, which is this program's: `bin/` for
+    executables, `units/` for unit-file sources, `dpkg/` for the
+    offline package cache, plus whatever directory a layer of the
+    gateway asks for.
+
+Three files are the mechanism itself.
+
+**`udm-boot.service` is carried verbatim from upstream**, with the
+commit it is pinned at in its own header, and it is delivered as a
+*unit source* under `/data/custom/units` like any other. That makes a
+wiped `/etc` recoverable by hand: the file the device needs is already
+on the device, and copying it into place restores the chain that
+restores everything else.
+
+**`10-packages.sh` reinstalls what a firmware update wiped**, in one
+transaction, because packages version-locked to one another cannot be
+resolved a package at a time. *Which* packages is data — the union of
+what the layers above require, rendered into the script — and
+everything else about it is mechanism. When apt succeeds, the debs it
+downloaded become the offline cache in `dpkg/`, which is the fallback
+for the post-update boot where apt is unreachable. The cache is
+refreshed by replacing the whole directory in one rename, so **`dpkg/`
+is that script's alone**: a file this program wrote there would be
+deleted by the next refresh and reported as drift forever after.
+
+**`20-units.sh` converges the unit sources** into
+`/etc/systemd/system`, enables them, and restarts the ones whose file
+changed. It never restarts `udm-boot.service`, which is the unit
+running it, and it mirrors no deletion, because the live directory also
+holds units that are not this program's. Retirement happens from the
+other side instead: deleting the resource that declared a unit removes
+its source and, in the same session, disables the unit and removes the
+live copy.
+
+**The layers above reach the mechanism through it, not around it.** A
+component that needs a script in the boot chain, an executable, a unit
+or a directory asks the persistence layer for one and gets back a
+resource of its own: where the file goes, what mode it takes and what
+runs once it lands are the mechanism's decisions, while the file itself
+belongs to the component that needs it and goes away when that
+component stops declaring it. Directories are declared by a marker
+under `/data/custom/.skeleton` whose hook creates the directory it
+names — the push writes files, and the one directory that most needs
+declaring is the one nothing may write in.
+
+**New device automation is a systemd unit plus an executable in
+`bin/`**, unless the operation manipulates systemd's own configuration
+— installing its packages, its units, its nspawn files, its machines —
+in which case it is a script in the boot chain. A unit gets its own
+journal, its own failure in `systemctl status`, a restart policy, and
+it can be run again outside boot; what it cannot get is a place before
+the unit store exists, which is what the two scripts above need and
+what the numeric order of `on_boot.d` expresses.
+
+The container services of §1.1 do not go through this layer: their
+files sit under a services root of their own and are converged by their
+own recovery script.
+
 ## 2. ZeroTier network design
 
 Architecture.md §5.3 decides *where* ZT terminates (the UDM) and *what
