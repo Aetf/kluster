@@ -65,9 +65,9 @@ does, `check` adds two properties to every resource's checked inputs --
 inputs, so a rotation and a change to this module's behavior each render as a
 property diff no caller declared (rfc-002 §7.4). Neither is a change to the
 device: an update whose declared inputs all match re-stamps the resource and
-writes nothing. That whole shape is `kluster.providers.configured`, which the
-providers here share with the one that writes AdGuard rewrites; what is this
-module's own is which key holds the credential and what an endpoint is.
+writes nothing. That whole shape is `kluster.providers.configured`, which every
+custom provider here shares; what is this module's own is which key holds the
+credential and what an endpoint is.
 
 **Only the path is a replacement.** The bytes cannot be at two paths at once, so
 a moved file is created before the old one is deleted. Nothing else about a
@@ -119,15 +119,13 @@ from typing import Any, final
 
 import pulumi
 import pulumi.dynamic as dynamic
-from pulumi.runtime import rpc
 
 from kluster.providers.configured import (
-    FINGERPRINT_LENGTH,
-    PROVIDER_VERSION,
-    SESSION,
     STAMPS,
     ConfiguredProvider,
     declared_change,
+    has_unknowns,
+    is_unknown,
 )
 from kluster.providers.device_files import registry, ssh
 from kluster.providers.device_files.registry import DigestMismatch, Image
@@ -139,12 +137,8 @@ __all__ = (
     'EXTRACTING_SUFFIX',
     'FILE_COMPARED',
     'FILE_DECLARED',
-    'FINGERPRINT_LENGTH',
     'PIN',
     'PRIVATE_KEY_CONFIG',
-    'PROVIDER_VERSION',
-    'SESSION',
-    'STAMPS',
     'SUPERSEDED_SUFFIX',
     'VERSION',
     'Connection',
@@ -198,18 +192,13 @@ FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 #: silent equivalence.
 ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 
-#: The stack-configuration key the session's credential is read from, in
-#: `configure` and nowhere else. It is project-namespaced by the plugin, which
-#: also decrypts it on the way in (rfc-002 §7.5 E2), so the program neither reads
-#: it nor passes it on: this module is the only code in the repository that ever
-#: holds the device's private key.
+#: The stack-configuration key the session's credential is read from
+#: (`configured`), which makes this module the only code in the repository that
+#: ever holds the device's private key.
 PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
-#: Bumped by hand when an operation's behavior changes. Not ceremony: a provider
-#: class is pickled by reference, so editing the body of `create` changes not one
-#: byte of state and produces no diff at all, leaving every resource's outputs
-#: stale and saying nothing about it (rfc-002 §7.5 E1). This is what turns such
-#: an edit into a visible update.
+#: This module's version, bumped by hand when an operation's behavior changes
+#: (`configured`).
 VERSION = '2'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
@@ -369,21 +358,6 @@ def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coroutine)
 
 
-def is_unknown(value: Any) -> bool:
-    """Whether a property is still a preview placeholder."""
-    return isinstance(value, str) and value == rpc.UNKNOWN
-
-
-def has_unknowns(props: Mapping[str, Any]) -> bool:
-    """Whether a property bag still holds preview placeholders.
-
-    During a preview an input may be another resource's unresolved output. There
-    is nothing to compare it against and no point opening a session to try, so
-    the diff answers "unknown" and the engine plans on that basis.
-    """
-    return any(is_unknown(value) for value in props.values())
-
-
 async def run_hook(transport: ssh.Transport, props: Mapping[str, Any]) -> None:
     """Run the post-apply hook, if the resource declares one."""
     hook = props.get('hook')
@@ -460,7 +434,6 @@ class DeviceProvider(ConfiguredProvider, abc.ABC):
     agrees.
     """
 
-    #: Read in `configure`, in the plugin's process, and never serialized.
     private_key: str
 
     def _read_credential(self, config: dynamic.Config) -> None:

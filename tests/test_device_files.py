@@ -36,6 +36,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
 
+from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
 from kluster.providers.device_files import provider, registry, ssh
 
 
@@ -440,22 +441,22 @@ def test_the_session_stamp_names_the_endpoint_and_fingerprints_the_key() -> None
     clear: a truncated digest of a key is not the key, and a redacted one would
     say only that something opaque changed.
     """
-    session = checked(file_provider(), file_props())[provider.SESSION]
+    session = checked(file_provider(), file_props())[SESSION]
     endpoint, _, fingerprint = session.partition('#')
 
     assert endpoint == f'root@{HOST}:22'
-    assert len(fingerprint) == provider.FINGERPRINT_LENGTH
+    assert len(fingerprint) == FINGERPRINT_LENGTH
     assert set(fingerprint) <= set('0123456789abcdef')
     assert PRIVATE_KEY not in session
-    assert fingerprint == hashlib.sha256(PRIVATE_KEY.encode()).hexdigest()[: provider.FINGERPRINT_LENGTH]
+    assert fingerprint == hashlib.sha256(PRIVATE_KEY.encode()).hexdigest()[:FINGERPRINT_LENGTH]
 
 
 def test_two_keys_are_two_fingerprints_and_one_key_is_always_the_same_one() -> None:
     rotated = private_key()
 
-    first = checked(file_provider(), file_props())[provider.SESSION]
-    again = checked(file_provider(), file_props())[provider.SESSION]
-    after = checked(file_provider(rotated), file_props())[provider.SESSION]
+    first = checked(file_provider(), file_props())[SESSION]
+    again = checked(file_provider(), file_props())[SESSION]
+    after = checked(file_provider(rotated), file_props())[SESSION]
 
     assert first == again
     assert first != after
@@ -475,8 +476,8 @@ def test_a_change_to_this_module_is_a_change_a_reader_can_see(
     monkeypatch.setattr(provider, 'VERSION', f'{shipped}-next')
     news = checked(file_provider(), file_props())
 
-    assert olds[provider.PROVIDER_VERSION] == shipped
-    assert news[provider.PROVIDER_VERSION] == f'{shipped}-next'
+    assert olds[PROVIDER_VERSION] == shipped
+    assert news[PROVIDER_VERSION] == f'{shipped}-next'
     assert file_provider().diff('id', olds, news).changes is True
     assert device.sessions == 0
 
@@ -549,8 +550,8 @@ def test_a_rotation_restamps_the_resource_and_leaves_the_device_alone(device: De
     assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
     assert device.files[CONFIG_PATH].data == CONFIG.encode()
     assert result.outs is not None
-    assert result.outs[provider.SESSION] == news[provider.SESSION]
-    assert result.outs[provider.SESSION] != olds[provider.SESSION]
+    assert result.outs[SESSION] == news[SESSION]
+    assert result.outs[SESSION] != olds[SESSION]
 
 
 def test_an_update_still_writes_when_the_device_is_the_reason_for_it(device: Device) -> None:
@@ -778,7 +779,7 @@ def test_a_rotation_restamps_an_artifact_without_fetching_or_pushing_it(
 
     assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
     assert result.outs is not None
-    assert result.outs[provider.SESSION] == news[provider.SESSION]
+    assert result.outs[SESSION] == news[SESSION]
 
 
 def test_an_artifact_update_still_pushes_when_the_marker_disagrees(
@@ -1119,8 +1120,8 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     # What the caller declares, and no more: the credential is the provider's,
     # and the two stamps are added by `check` in the plugin's process.
     assert 'private_key' not in inputs
-    assert provider.SESSION not in inputs
-    assert provider.PROVIDER_VERSION not in inputs
+    assert SESSION not in inputs
+    assert PROVIDER_VERSION not in inputs
 
 
 def test_a_declared_artifact_carries_its_pin_and_never_its_bytes(stack: Recorder) -> None:
