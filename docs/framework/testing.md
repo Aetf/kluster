@@ -29,82 +29,92 @@ timeout 60 mise x uv -- uv run pytest
 
 ## 2. Writing Tests
 
-Tests should use `pulumi.runtime.set_mocks` to intercept resource creation and
-calls.
+A suite that declares resources starts from `tests/mock_monitor.py`, which
+carries the three pieces every such suite needs. It is a named module rather
+than a `conftest`, because test modules import it and `conftest` is not a name
+an import can aim at.
+
+-   `Recorder` is a `pulumi.runtime.Mocks` that invents nothing: it answers
+    each registration with the resource's own inputs and an id built from its
+    logical name, and remembers every declaration -- its type, its inputs and
+    the provider instance it was registered against.
+-   `run_with` points the runtime at a monitor and hands it back. It also
+    primes the parameterization feature a bridged provider reads before it may
+    register anything, and empties the registration queue left behind by
+    whichever run went before.
+-   `declaring` is the barrier. Declaring a resource only schedules its
+    registration, so without it the monitor has seen nothing and every
+    assertion about it passes vacuously.
+
+What a suite writes for itself is only the part that is its subject: an output
+the provider computes that the inputs do not carry, and the answer to an
+invoke.
 
 ### 2.1 Example Test
 
-Create a file named `test_*.py` (e.g., `test_network.py`) in a `tests`
+Create a file named `test_*.py` (e.g., `test_network.py`) in the `tests`
 directory.
 
 ```python
+from typing import Any
+
 import pulumi
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, declaring, run_with
 
-# Define the Mocks
-class MyMocks(pulumi.runtime.Mocks):
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs):
-        # Return a mock ID and the inputs as the resource state
-        outputs = args.inputs
-        return [args.name + "_id", outputs]
 
-    def call(self, args: pulumi.runtime.MockCallArgs):
+class Cloud(Recorder):
+    """The one answer this suite is about: the prefix the account assigns."""
+
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ == 'oci:Core/vcn:Vcn':
+            return {'ipv6cidrBlocks': ['2001:db8::/56']}
         return {}
 
-# Setup the test environment
-# Must be an async fixture: set_mocks needs the test's running event loop.
+
+# Must be an async fixture: `set_mocks` needs the test's running event loop.
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks():
-    pulumi.runtime.set_mocks(
-        MyMocks(),
-        project="my-project",
-        stack="dev",
-        preview=True,
-    )
+async def monitor() -> Cloud:
+    return await run_with(Cloud(), stack='physical')
 
-# Write the test
+
 @pytest.mark.asyncio
-async def test_my_component():
-    # Import your Pulumi code here
-    # from src.kluster.network import MyVpcComponent
-    # component = MyVpcComponent("test-vpc")
+async def test_the_subnet_is_carved_from_the_assigned_prefix(monitor: Cloud) -> None:
+    async with declaring():
+        network = MyVpcComponent('test-vpc')
 
-    # For now, let's just assert something simple
-    assert True
+    assert await network.subnet.ipv6cidr_block.future() == '2001:db8::/64'
+    assert monitor.names('oci:Core/subnet:Subnet') == {'test-vpc-subnet'}
 ```
+
+A case that reads the component's own outputs needs no barrier -- awaiting an
+output registers what it depends on. `declaring` is for the cases that ask the
+monitor what the run registered.
 
 ## 3. Testing Next-Gen Components (RFC-001)
 
 When writing unit tests for components using the `putils.Component` base class
 with `async_output`/`resolve` inputs:
 
-### 3.1 Mocking `propertyDependencies`
+### 3.1 What the mock monitor drops
 
-During registration, the Pulumi engine needs to know which outputs a resource
-property depends on. The SDK's `MockMonitor` drops `propertyDependencies` from
-the response, so downstream dependency assertions would always come back
-empty. The test suite patches it once at module import — before any Pulumi
-code runs (this is the actual pattern used in
-`tests/test_async_properties.py`):
+Two things a case may want are not reachable through Pulumi's own mocks, and
+`tests/mock_monitor.py` recovers both by patching `MockMonitor.RegisterResource`
+once, at import, before any Pulumi code runs:
 
-```python
-import pulumi.runtime.mocks
-from pulumi.runtime.proto import resource_pb2
+-   **`propertyDependencies`.** During registration the engine is told which
+    outputs a resource property depends on; the mock monitor's response drops
+    them, so a dependency assertion would always come back empty. The patch
+    copies them from the request onto the response.
+-   **The resource options.** `import`, `ignoreChanges`, `deleteBeforeReplace`
+    and `dependsOn` reach no output at all. The patch keeps each registration
+    request on the `Recorder` the run was built around, where
+    `Recorder.options_of(name)` and `Recorder.depends_on(name)` read them.
 
-original_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
-
-
-def patched_register_resource(self, request):
-    resp = original_register_resource(self, request)
-    if isinstance(resp, resource_pb2.RegisterResourceResponse):
-        for k, v in request.propertyDependencies.items():
-            resp.propertyDependencies[k].urns.extend(v.urns)
-    return resp
-
-
-pulumi.runtime.mocks.MockMonitor.RegisterResource = patched_register_resource
-```
+The patch belongs in one place because it does not compose: a second module
+capturing "the original" at its own import time would chain onto this one, and
+which chained onto which would be decided by collection order.
 
 ### 3.2 Asserting Dependencies via URNs
 
