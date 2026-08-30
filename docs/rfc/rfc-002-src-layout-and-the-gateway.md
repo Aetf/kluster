@@ -14,10 +14,16 @@
     the component tree, the per-node capabilities, the roster, the stack's
     configuration surface — in [declarative/physical.md](../declarative/physical.md)
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
-    design document disagree, the design document is right: two decisions moved
-    during construction, the device provider's endpoint and host-key pin staying
-    declared resource inputs rather than passing through `configure` (§7.4,
-    §11), and the pin becoming a `conventions` constant a preview shows (§11).
+    design document disagree, the design document is right. **One decision
+    moved during construction: the endpoint.** §7.4 composes the session from
+    values `configure` put on the provider, and §11 routes
+    `gatewayBootstrapHost` there beside the credential; what was built keeps the
+    address a declared resource input, because a provider imports no
+    `conventions` and has no way to reach a caller's decision. Only the
+    credential went into `configure`. The pinned host key is where §11's table
+    put it — a `conventions` constant, which is why a preview shows it — and it
+    reaches the provider the same way the endpoint does, as a declared input on
+    each resource rather than as provider-side state.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.
