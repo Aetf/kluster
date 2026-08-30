@@ -18,6 +18,10 @@ class CompartmentMissing(LookupError):
     """A consumer's compartment is named here but does not exist in the tenancy yet."""
 
 
+class TenancyUnrecorded(LookupError):
+    """The account's own OCID belongs here and has not been written down yet."""
+
+
 @dataclass(frozen=True)
 class Compartment:
     """The OCI compartment one consumer administers, under both of its names.
@@ -71,17 +75,25 @@ class Compartment:
 class OciTenancy:
     """The cloud account, as everything that declares into it has to know it.
 
-    TODO(kluster-ops#117): the tenancy OCID belongs here too, and the ruling
-    that says so is made — the OCID is public, `conventions` takes it, and the
-    mint verifies it rather than writing it. Until that is implemented it is
-    `kluster-py:ociTenancyOcid` in stack configuration, written there by the
-    mint that issues the key and read by the stack program at the line that
-    builds the cloud provider (rfc-002 §8.1).
+    The account's own identifiers are facts this file carries; the key that
+    signs for it is stack configuration, read at the line that builds the
+    provider (rfc-002 §8.1, §10.3). The tenancy OCID is on the first side of
+    that split: it names the account rather than authenticating to it, so it
+    has one home here and `credentials derived oci-physical mint` proves the
+    key it issues belongs to that account instead of copying the OCID beside
+    it.
     """
 
     #: Home region — permanent per tenancy, and where the whole free envelope
     #: (A1 OCPU-hours, the 200 GB boot+block allowance) is redeemable.
     region: str
+    #: What OCI calls the account itself. Also its root compartment, which is
+    #: why the two tenancy-level guardrail resources — the quota policy and the
+    #: budget — are declared against it rather than against a compartment.
+    #:
+    #: `None` is a state this field is passing through rather than one it
+    #: keeps: see the TODO on `OCI_TENANCY` below.
+    tenancy_ocid: str | None
     #: The mail domain every OCI user this program creates is addressed in. An
     #: identity-domains tenancy converts every legacy-IAM user into a domain
     #: user, and the conversion refuses a user without a primary address; the
@@ -91,6 +103,17 @@ class OciTenancy:
     #: One compartment per consumer, which is what makes the §3 OCI rows
     #: independent of each other.
     compartments: Mapping[str, Compartment]
+
+    def require_tenancy_ocid(self) -> str:
+        """The account's OCID, or a refusal naming what has to be written here."""
+        if self.tenancy_ocid is None:
+            raise TenancyUnrecorded(
+                'the tenancy OCID is not recorded in `conventions.OCI_TENANCY`, so nothing that declares into '
+                'the account can name it: `pulumi config get kluster-py:ociTenancyOcid --stack physical` prints '
+                'the value this estate has been using, and writing it as the `tenancy_ocid` argument is the one '
+                'line to commit'
+            )
+        return self.tenancy_ocid
 
 
 @dataclass(frozen=True)
@@ -109,8 +132,16 @@ class B2Account:
 #: hand before this program existed, so it carries the estate's own name rather
 #: than a per-consumer one, and the mint adopts it exactly as it adopts a user
 #: or a group that is already there.
+#:
+#: TODO(kluster-ops#117): `tenancy_ocid` is the literal, and it is `None` only
+#: because the value has never been written down in the clear — it lives as an
+#: encrypted `kluster-py:ociTenancyOcid` in `Pulumi.physical.yaml`, which
+#: `pulumi config get` prints and this checkout cannot. Recording it here is
+#: one line; with it, the optionality on the field and the refusal below it go
+#: away, and the stale config key can be dropped from that file.
 OCI_TENANCY = OciTenancy(
     region='us-phoenix-1',
+    tenancy_ocid=None,
     user_email_domain='unlimited-code.works',
     compartments={
         compartment.consumer: compartment

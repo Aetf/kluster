@@ -106,6 +106,7 @@ from kluster.conventions.providers import (
     Compartment,
     CompartmentMissing,
     OciTenancy,
+    TenancyUnrecorded,
 )
 from kluster.conventions.site import (
     CLUSTER_VLAN,
@@ -201,6 +202,7 @@ __all__ = (
     'OciTenancy',
     'RetentionClass',
     'SiteNetwork',
+    'TenancyUnrecorded',
     'Vip',
     'barman_repo_path',
     'gateway',

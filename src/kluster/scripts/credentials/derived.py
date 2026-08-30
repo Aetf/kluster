@@ -99,11 +99,11 @@ PHYSICAL_STACK = conventions.PHYSICAL
 #: configured by an ambient namespace (rfc-002 §8.1), so the keys belong to the
 #: program that reads them and to no provider.
 #:
-#: Neither the region nor the compartment is among them. Both are facts about
-#: the account rather than parts of the signing configuration — the region is
-#: permanent per tenancy and the compartment is a boundary this program
-#: decides — so both live in `conventions` and the stack reads them there.
-OCI_TENANCY_KEY = 'ociTenancyOcid'
+#: Neither the region, nor the tenancy, nor the compartment is among them. All
+#: three are facts about the account rather than parts of the signing
+#: configuration — the region and the tenancy OCID are permanent per account
+#: and the compartment is a boundary this program decides — so all three live
+#: in `conventions` and the stack reads them there.
 OCI_USER_KEY = 'ociUserOcid'
 OCI_FINGERPRINT_KEY = 'ociFingerprint'
 OCI_PRIVATE_KEY_KEY = 'ociPrivateKey'
@@ -187,21 +187,22 @@ def cloudflare_gateway_acme(
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:
     """Write one OCI signing configuration into a stack's committed config.
 
-    All four are secrets. The key obviously is; the tenancy and user OCIDs are
-    account identifiers, which the kit itself keeps as protected attributes
-    (§2.1) and a public repository has no reason to publish. The fingerprint is
-    written here although §2.1 declines to store one, because the provider
-    takes it as a separate input rather than deriving it — and it is computed
-    from the key at push time, so the two cannot disagree.
+    All three are secrets. The key obviously is; the user OCID is the identity
+    it signs as, which the kit itself keeps as a protected attribute (§2.1).
+    The fingerprint is written here although §2.1 declines to store one,
+    because the provider takes it as a separate input rather than deriving
+    it — and it is computed from the key at push time, so the two cannot
+    disagree.
 
-    What the push does *not* write is where the key may act, and that is two
-    things rather than one: the region is a constant of this estate
-    (`conventions`), and so is the compartment beside it. A boundary this
-    program decides is not something a credential delivery gets to restate.
+    What the push does *not* write is which account the key acts in and where
+    inside it, and that is three things: the tenancy OCID, the region and the
+    compartment are all constants of this estate (`conventions`). A fact the
+    program already holds is not something a credential delivery gets to
+    restate — the mint proves the key it issues matches it instead
+    (`oci_iam.verify_tenancy`).
     """
     stack.fill(
         secret={
-            OCI_TENANCY_KEY: key.tenancy,
             OCI_USER_KEY: key.user,
             OCI_FINGERPRINT_KEY: key.fingerprint,
             # The PEM goes in without its trailing newline: a push proves
@@ -230,10 +231,20 @@ def oci_physical(
     `conventions` gives this consumer, created here if it does not exist yet,
     and the stack reads it from the same place. `compartment_id` overrides that
     for a drill tenancy, where none of those names mean anything.
+
+    Neither is the tenancy. `conventions` names the account this program
+    declares into, so what is left for the mint is to prove that the key it
+    just issued signs for that account and to refuse if it does not — which is
+    the check that catches a seed swapped for another tenancy's before the key
+    reaches a stack that would then act in the wrong account. A run given
+    `compartment_id` is pointed at a drill tenancy and is not held to it, for
+    the reason `oci_iam.ensure_compartment` is not.
     """
     minted = oci_iam.mint_api_key(
         kit, consumer=PHYSICAL_STACK, compartment_id=compartment_id, seed_entry=seed_entry, connect=connect
     )
+    if compartment_id is None:
+        oci_iam.verify_tenancy(minted.tenancy)
 
     _push_api_key(stack, minted, holds=f'a key for {oci_iam.Identity.name_for(PHYSICAL_STACK)}')
     return minted.user

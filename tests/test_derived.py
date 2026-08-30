@@ -29,7 +29,7 @@ from fake_pulumi import RecordedPulumi
 from memory_kit import MemoryKit
 from test_oci_iam import ROOT_USER, TENANCY, Named, Tenancy
 
-from compartments import with_compartment
+from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.scripts.credentials import (
     b2,
@@ -42,6 +42,10 @@ from kluster.scripts.credentials import (
     pulumi_config,
     workstation,
 )
+
+# Aliased: `slots` is the name a fixture below gives the workstation's
+# `.credentials/` directory, and the map is a different thing entirely.
+from kluster.scripts.credentials import slots as slot_map
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 STACK = derived.ZONES_STACK
@@ -317,7 +321,14 @@ def physical_stack() -> tuple[pulumi_config.Stack, RecordedPulumi]:
 
 
 @pytest.fixture
-def tenancy() -> Tenancy:
+def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
+    """The fake account, and `conventions` recording it as this program's own.
+
+    The mint holds the account it authenticated against against the one
+    `conventions` names, so a suite that drives a fake account has to be that
+    account for the ordinary path to be the one under test.
+    """
+    with_tenancy_ocid(monkeypatch, TENANCY)
     return Tenancy()
 
 
@@ -346,16 +357,17 @@ def test_the_physical_stack_gets_the_signing_configuration_a_provider_needs(
 
     user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
-    # A provider cannot sign with three of the four: the fingerprint is
+    # A provider cannot sign with two of the three: the fingerprint is
     # computed from the key that was pushed.
-    assert runner.config[derived.OCI_TENANCY_KEY] == TENANCY
     assert runner.config[derived.OCI_USER_KEY] == user
     private = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert runner.config[derived.OCI_FINGERPRINT_KEY] == oci_iam.fingerprint(private)
     assert oci_iam.fingerprint(private) in tenancy.identity.keys[user]
-    # And nothing else. Where the key may act is a convention rather than a
-    # config key -- the region is permanent per tenancy and the compartment is
-    # a boundary this program decides -- so the delivery restates neither.
+    # And nothing else. Which account the key acts in and where inside it are
+    # conventions rather than config keys -- the tenancy OCID and the region
+    # are permanent per account and the compartment is a boundary this program
+    # decides -- so the delivery restates none of them.
+    assert 'ociTenancyOcid' not in runner.config
     assert 'compartmentId' not in runner.config
     assert not [key for key in runner.config if 'egion' in key]
     # Nor does any of it land in a provider's own namespace: the stack program
@@ -371,15 +383,13 @@ def test_every_part_of_the_signing_configuration_is_a_secret(
     _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
     # Which channel each key takes is the assertion, not merely that the value
-    # arrived. All four go in encrypted: the key obviously, the fingerprint
-    # because it identifies the key, and the tenancy and user OCIDs because
-    # they are the class of fact the kit itself keeps protected. Nothing about
-    # this credential is plain, which is why the plain half is empty rather
-    # than merely small.
+    # arrived. All three go in encrypted: the key obviously, the fingerprint
+    # because it identifies the key, and the user OCID because it is the class
+    # of fact the kit itself keeps protected. Nothing about this credential is
+    # plain, which is why the plain half is empty rather than merely small.
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
     assert set(secret) == {
-        derived.OCI_TENANCY_KEY,
         derived.OCI_USER_KEY,
         derived.OCI_FINGERPRINT_KEY,
         derived.OCI_PRIVATE_KEY_KEY,
@@ -409,6 +419,110 @@ def test_the_compartment_comes_from_conventions_when_no_flag_names_one(
     assert [policy.statements for policy in tenancy.identity.policies.values() if policy.name == name] == [
         [f'Allow group {name} to manage all-resources in compartment id {created.id}']
     ]
+
+
+#: An account this program does not declare into, in the form a stale record
+#: presents it: everything the seed mints signs for one tenancy while
+#: `conventions` names another.
+ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
+
+
+@pytest.fixture
+def recorded_compartment(tenancy: Tenancy) -> None:
+    """The `physical` compartment as `conventions` records it, present in the fake.
+
+    The state the estate is in once a consumer has been minted for: the OCID is
+    committed, so a mint that names no compartment of its own adopts that one.
+    A case about what happens after the compartment is settled does not have to
+    say any of this.
+    """
+    intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
+    assert intended.ocid is not None
+    tenancy.identity.compartments[intended.ocid] = Named(id=intended.ocid, name=intended.name)
+
+
+@pytest.mark.usefixtures('recorded_compartment')
+def test_the_mint_delivers_a_key_that_signs_for_the_account_conventions_records(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    user = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
+
+    # The tenancy is proved rather than copied: it reaches no config key, and
+    # the credential is delivered because the proof held.
+    assert runner.config[derived.OCI_USER_KEY] == user
+
+
+@pytest.mark.usefixtures('recorded_compartment')
+def test_a_key_that_signs_for_another_account_is_refused_before_it_is_delivered(
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot, runner = physical_stack
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+
+    # Both accounts are named, because which of the two is stale is the
+    # operator's question and neither one alone answers it.
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
+
+    assert runner.config == {}
+
+
+@pytest.mark.usefixtures('recorded_compartment')
+def test_an_account_conventions_has_not_recorded_refuses_to_deliver(
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot, runner = physical_stack
+    with_tenancy_ocid(monkeypatch, None)
+
+    # A refusal rather than a traceback: the exit status is what an operator
+    # reads, and the message is the line to commit.
+    with pytest.raises(oci_iam.CredentialRejected, match='tenancy_ocid'):
+        _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
+
+    assert runner.config == {}
+
+
+def test_a_drill_tenancy_is_not_held_against_the_account_conventions_records(
+    oci_kit: KdbxStore,
+    tenancy: Tenancy,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot, runner = physical_stack
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+
+    # A run that names its own compartment is pointed at a tenancy none of
+    # these names describe, which is the escape `ensure_compartment` already
+    # takes as given.
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    assert runner.config[derived.OCI_USER_KEY] == user
+
+
+def test_the_config_keys_the_mint_writes_are_the_ones_the_map_promises(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+
+    _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # §3's machine-readable half says where this row lands (`slots.py`), and a
+    # push that fills a key the map does not name -- or leaves one it does --
+    # is a register that has stopped describing the system.
+    promised = {
+        target.key
+        for target in slot_map.ROWS[derived.OCI_PHYSICAL_ROW].targets
+        if isinstance(target, slot_map.PulumiConfig)
+    }
+    assert set(runner.config) == promised
 
 
 def test_the_recorded_compartment_is_adopted_not_recreated(

@@ -572,7 +572,7 @@ the row name.
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the single zone its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. Re-running it rotates that token. |
-| `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. |
+| `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it delivers, it refuses a key that signs for an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
@@ -656,25 +656,28 @@ both resolve against the project's own name — so the committed file reads
 
 An OCI key is pushed the same way and fills more keys, because an API key
 is several things (§2.1) and a provider recovers none of them: it writes
-`ociTenancyOcid`, `ociUserOcid`, `ociFingerprint` and `ociPrivateKey`, bare
-and therefore in the project's own namespace like the account id above.
-Those four are the whole of the push, and all four are config secrets — the
-key, the fingerprint, and the two identifiers naming the tenancy and the
-user it belongs to, which are the class of fact the kit itself keeps as a
-protected attribute (§2.1). The fingerprint is written although §2.1
-declines to store one: the provider takes it as an input rather than
-deriving it, and the command computes it from the key it is pushing in the
-same breath, so the two cannot disagree.
+`ociUserOcid`, `ociFingerprint` and `ociPrivateKey`, bare and therefore in
+the project's own namespace like the account id above. Those three are the
+whole of the push, and all three are config secrets — the key, the
+fingerprint, and the identifier naming the user the key signs as, which is
+the class of fact the kit itself keeps as a protected attribute (§2.1). The
+fingerprint is written although §2.1 declines to store one: the provider
+takes it as an input rather than deriving it, and the command computes it
+from the key it is pushing in the same breath, so the two cannot disagree.
 
-Where the key may act travels with neither the credential nor the
-configuration. The region is permanent per tenancy and the compartment is a
-boundary this program decides, so both are code
+Which account the key acts in, and where inside it, travels with neither
+the credential nor the configuration. The tenancy OCID names the account
+rather than authenticating to it, the region is permanent per account, and
+the compartment is a boundary this program decides, so all three are code
 (`conventions.OCI_TENANCY`) and the stack reads them there — at the one
-line that builds the cloud provider, beside the four secrets above
-(framework/rfc-002 §8.1). The provider's own `oci:` namespace holds
-nothing: with default providers disabled there is no ambient configuration
-left for it to carry, and the same is true of `b2:`, whose two keys are
-pushed as `b2ApplicationKeyId` and `b2ApplicationKey`.
+line that builds the cloud provider, beside the three secrets above
+(framework/rfc-002 §8.1, §10.3). A fact with one home is not copied into a
+second, so the mint proves it instead: before it delivers, it holds the
+account its key signs for against the recorded one and refuses on a
+mismatch, naming both. The provider's own `oci:` namespace holds nothing:
+with default providers disabled there is no ambient configuration left for
+it to carry, and the same is true of `b2:`, whose two keys are pushed as
+`b2ApplicationKeyId` and `b2ApplicationKey`.
 
 **The slot map is checked in** (`slots.py`). One row per §3 credential,
 naming the source its value comes from — recovered from escrow, minted by

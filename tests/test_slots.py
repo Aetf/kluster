@@ -566,6 +566,27 @@ def test_an_unknown_row_name_is_refused_before_anything_is_pushed() -> None:
     assert gh.invocations == []
 
 
+def test_a_sink_that_has_been_retired_answers_with_where_the_fact_lives_now() -> None:
+    gh = RecordedGh()
+
+    # Someone working from a runbook older than the move gets the new home
+    # rather than "no such row", which is true and tells them nothing.
+    with pytest.raises(SlotRefused, match=r'conventions\.OCI_TENANCY\.tenancy_ocid'):
+        _ = slots.sync(context(gh), only='ociTenancyOcid')
+
+    assert gh.invocations == []
+
+
+def test_no_row_still_delivers_a_fact_a_convention_now_owns() -> None:
+    # The other half of a retirement: the sink is gone from the map, not merely
+    # documented as gone, so nothing pushes a second copy of the fact.
+    addressed = {
+        target.key for row in slots.ROWS.values() for target in row.targets if isinstance(target, slots.PulumiConfig)
+    }
+
+    assert not addressed & set(slots.RETIRED)
+
+
 def test_the_listing_prints_every_row_with_its_source_and_its_slots() -> None:
     printed = '\n'.join(slots.describe())
 
