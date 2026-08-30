@@ -586,7 +586,8 @@ string, and the two functions that build the block.
 
 The half of this document that says what actually needs to move. The stack is
 small, it was applied on 2026-08-25, and most of it is conformant already
-(§14). Three things are not.
+(§14). Three things are not, and one thing a workflow depends on is missing
+from it entirely (§13).
 
 ## 11. The forge census
 
@@ -618,6 +619,9 @@ class Repository:
     name: str
     public: bool
     environments: tuple[Environment, ...]
+    #: The labels a workflow branches on, which is why they are declared
+    #: rather than made by hand (§13).
+    labels: tuple[str, ...] = ()
 
     @property
     def slug(self) -> str:
@@ -702,6 +706,7 @@ ManagedRepository                 components/forge/__init__.py
 ├── github.Repository             the settings, protected against destroy
 ├── RepositoryVulnerabilityAlerts its own resource, not the deprecated field
 ├── BranchProtection              where the plan offers it, and checks are named
+├── IssueLabel × n                the labels a workflow reads
 └── RepositoryEnvironment × n     one per census entry, gated per the entry
 ```
 
@@ -711,6 +716,21 @@ with it and are invisible until they are needed — and naming it the same way i
 the *same shape for same role* rule doing what it is for. The differences
 between the two repositories are census fields and parameters, not branches:
 visibility, the Environments, and whether required checks are named.
+
+**A label a workflow reads is a declared resource.** `noop-automerge.yml`
+branches on `expect-changes`, the escape hatch that opts a pull request out of
+the zero-diff proof (ci.md §3), and that label existed in the documentation and
+in nobody's repository until it was made by hand. A workflow that reads a label
+nothing declares fails in the quietest possible way: the condition is simply
+never true, the escape hatch is unavailable at the moment somebody needs it,
+and nothing anywhere reports that the mechanism the document describes is not
+present. That is precisely the class of drift this stack exists to remove, and
+it is why the census carries the labels each repository must have and
+`ManagedRepository` declares one `IssueLabel` per entry. `expect-changes` on
+the deployment repository is the whole list today — no other workflow reads a
+label, and the ops repository's automation reads none — so the value of
+declaring it is not its size but that the list can no longer be shorter than
+what a workflow depends on.
 
 **Every URN this moves ships with an alias.** Introducing a parent changes the
 URN of every child, and this stack is applied: without aliases the preview is
@@ -790,7 +810,7 @@ stacks touches. What is deliberately not applied:
 | Document | What lands there |
 | --- | --- |
 | declarative/dns.md | §2's apex exception; §3's endpoint derivation and the retired key; the base-records vocabulary; the rewrite component's shape; §5's helper taking a census row; the status header, which still calls the stack unapplied |
-| framework/github.md | §3's declaration list as components; the provider and where its token is read |
+| framework/github.md | §3's declaration list as components; the provider and where its token is read; the labels a workflow reads |
 | declarative/README.md | the census discriminator of §3, in both directions |
 | style/pulumi.md | the three new rules: the census discriminator (§3), the credential store (§12), and that a logical name is never derived from an address (§7.3) |
 | framework/pulumi.md | §5.2 gains nothing new; it is cited here, not extended |
@@ -835,8 +855,8 @@ half the order keeps anything from being moved twice.
     input changes, so no alias is needed — the recorded user identifier is the
     one the invoke resolves today, and a preview proves it by showing nothing.
 6.  **The provider and the component** (§12, §13): the explicit provider,
-    `disable-default-providers`, `ManagedRepository`, and the aliases that keep
-    every existing URN. Verified by a preview from the operator's machine
+    `disable-default-providers`, `ManagedRepository`, the `expect-changes`
+    label it adopts, and the aliases that keep every existing URN. Verified by a preview from the operator's machine
     showing no replacement and no delete.
 
 Both stacks are applied, so no slice here is free by default. What makes the
