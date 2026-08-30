@@ -72,7 +72,8 @@ def _authorized(kit: KdbxStore) -> tuple[oci_iam.Iam, str, str]:
     conversion shim, whose intermittent 401 would fail the drill for a
     rotation that in fact succeeded.
     """
-    tenancy, user_id, private_pem = oci_iam.load_seed(kit, SEED_ENTRY)
+    row = oci_iam.load_seed(kit, SEED_ENTRY)
+    tenancy, user_id, private_pem = row.tenancy, row.user, row.private_key
     iam = oci_iam.Iam.authorize(tenancy, user_id, private_pem, domain_url=oci_iam.load_domain(kit, SEED_ENTRY))
     return iam, user_id, oci_iam.fingerprint(private_pem)
 
@@ -84,7 +85,7 @@ def _one_usable_key(iam: oci_iam.Iam, user_id: str, current: str) -> list[str]:
     the self-service endpoints act on, which is also why this call proves the
     stored key works.
     """
-    held = iam.api_keys(user_id)
+    held = iam.key_fingerprints(user_id)
     assert current in held, f'the kit holds {current}, which the tenancy does not list among {held}'
 
     refused: list[str] = []
@@ -93,7 +94,7 @@ def _one_usable_key(iam: oci_iam.Iam, user_id: str, current: str) -> list[str]:
         if extra == current:
             continue
         try:
-            iam.delete_api_key(user_id, extra)
+            iam.retire_key(user_id, extra)
         except oci.exceptions.ServiceError as exc:
             log.warning('the tenancy refuses to delete %s (%s); it stays as a console errand', extra, exc.code)
             refused.append(extra)

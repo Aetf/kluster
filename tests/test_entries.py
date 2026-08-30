@@ -38,7 +38,11 @@ def test_console_only_seeds_are_the_manual_surface() -> None:
     # carrying token permissions and so has no credential able to mint the
     # seed. The recovery key is generated rather than minted, so it is not one
     # of them.
-    assert set(entries.MANUAL) == {'cloudflare', 'github-dispatch', 'github-trigger'}
+    assert {member for member, seed in entries.SEEDS.items() if seed.manual} == {
+        'cloudflare',
+        'github-dispatch',
+        'github-trigger',
+    }
 
 
 def test_only_the_recovery_key_mints_nothing() -> None:

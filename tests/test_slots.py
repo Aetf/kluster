@@ -252,10 +252,10 @@ def context(
     open_vault: Callable[[], escrow.Vault] = unopened,
     runner: pulumi_config.Runner | None = None,
     ask: Callable[[str], str] | None = None,
-    environment: Mapping[str, str] | None = None,
+    backend_url: str | None = None,
 ) -> slots.Context:
     """A push that reaches nothing real: no kit, no backend, no forge, no terminal."""
-    resolved = dict(environment or {})
+    resolved = pulumi_config.BackendEnvironment(url=backend_url)
     return slots.Context(
         forge=Forge(token='the-account-root', run=gh),
         open_vault=open_vault,
@@ -286,7 +286,7 @@ def test_the_client_bundle_is_issued_once_and_split_across_its_carriers() -> Non
     gh = RecordedGh()
 
     pushed = slots.sync(
-        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        context(gh, open_vault=opened, backend_url=OPERATOR_URL),
         only='state-backend-certificates',
     )
 
@@ -312,7 +312,7 @@ def test_the_carried_connection_string_names_the_box_and_no_path() -> None:
     gh = RecordedGh()
 
     _ = slots.sync(
-        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        context(gh, open_vault=opened, backend_url=OPERATOR_URL),
         only='state-backend-certificates',
     )
 
@@ -329,7 +329,7 @@ def test_every_environment_receives_the_same_bundle() -> None:
     gh = RecordedGh()
 
     _ = slots.sync(
-        context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL}),
+        context(gh, open_vault=opened, backend_url=OPERATOR_URL),
         only='state-backend-certificates',
     )
 
@@ -341,7 +341,7 @@ def test_every_environment_receives_the_same_bundle() -> None:
 
 def test_pushing_the_bundle_again_issues_a_certificate_rather_than_re_reading_one() -> None:
     gh = RecordedGh()
-    pushing = context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': OPERATOR_URL})
+    pushing = context(gh, open_vault=opened, backend_url=OPERATOR_URL)
 
     _ = slots.sync(pushing, only='state-backend-certificates')
     first = pushed_bundle(gh)
@@ -374,7 +374,7 @@ def test_the_bundle_cannot_be_issued_on_a_workstation_that_has_none_itself() -> 
 
 def test_a_backend_url_that_names_no_host_is_refused() -> None:
     gh = RecordedGh()
-    broken = context(gh, open_vault=opened, environment={'PULUMI_BACKEND_URL': 'postgres:///pulumi_state'})
+    broken = context(gh, open_vault=opened, backend_url='postgres:///pulumi_state')
 
     with pytest.raises(SlotRefused, match='names no host'):
         _ = slots.sync(broken, only='state-backend-certificates')
@@ -478,6 +478,16 @@ def test_a_state_read_of_an_output_the_program_does_not_export_says_so() -> None
     # The output name is this map's half of a contract the program has to keep,
     # so an unkept one is named rather than pushed as an empty secret.
     with pytest.raises(SlotRefused, match='exports no'):
+        _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
+
+
+def test_a_state_read_of_an_output_that_is_not_a_string_says_so() -> None:
+    gh = RecordedGh()
+    pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': None})
+
+    # A `null` output would otherwise be coerced into the four characters
+    # `null` and pushed as though CI had been handed an identity.
+    with pytest.raises(SlotRefused, match='must be a non-empty string'):
         _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
 

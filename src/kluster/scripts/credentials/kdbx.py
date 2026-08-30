@@ -37,7 +37,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from pykeepass import PyKeePass, create_database
 from pykeepass.exceptions import CredentialsError
@@ -124,9 +124,24 @@ def default_path() -> Path:
     return Path(raw).expanduser() if raw else workstation.kit_path()
 
 
+_T = TypeVar('_T')
+
+
 def _path(entry: str) -> list[str]:
     """An entry path as pykeepass addresses it: `'seeds/B2 seed key'` -> `['seeds', 'B2 seed key']`."""
     return [part for part in entry.strip('/').split('/') if part]
+
+
+def _first(found: _T | list[_T] | None) -> _T | None:
+    """The one thing a path lookup found, whichever shape the library returned.
+
+    `find_entries(path=...)` and `find_groups(path=...)` match at most one, but
+    their signatures admit a list; collapsing both shapes here is what keeps
+    every caller from doing it again.
+    """
+    if isinstance(found, list):
+        return found[0] if found else None
+    return found
 
 
 @dataclass
@@ -241,11 +256,7 @@ class KdbxStore:
         return self._db
 
     def _entry(self, entry: str) -> Entry:
-        # A path lookup matches at most one entry, but the signature admits a
-        # list; collapse both shapes here so no caller has to.
-        found = cast('Entry | list[Entry] | None', self._open.find_entries(path=_path(entry)))
-        if isinstance(found, list):
-            found = found[0] if found else None
+        found = _first(cast('Entry | list[Entry] | None', self._open.find_entries(path=_path(entry))))
         if found is None:
             raise KdbxError(f'no entry {entry!r} in {self.path} (try: credentials kit ls)')
         return found
@@ -290,17 +301,15 @@ class KdbxStore:
         """The group at `parts`, creating every level that is missing."""
         group = cast('Group', self._open.root_group)
         for depth in range(1, len(parts) + 1):
-            existing = cast('Group | list[Group] | None', self._open.find_groups(path=parts[:depth]))
-            if isinstance(existing, list):
-                existing = existing[0] if existing else None
+            existing = _first(cast('Group | list[Group] | None', self._open.find_groups(path=parts[:depth])))
             group = existing if existing is not None else self._open.add_group(group, parts[depth - 1])
         return group
 
     def attach(self, entry: str, filename: str, data: bytes) -> None:
         """Attach a file to an entry, replacing one of the same name.
 
-        Key material that is a file rather than a string lives here (§2.1):
-        a GitHub App's private key is a PEM the platform hands over once.
+        Where key material that is a file rather than a string lives (§2.1),
+        because a password field holds one line.
         """
         found = self._entry(entry)
         for existing in list(found.attachments):
@@ -326,10 +335,10 @@ class KdbxStore:
     def set_attribute(self, entry: str, name: str, value: str, *, protect: bool = True) -> None:
         """Write a custom attribute, protected like the password field by default.
 
-        A row whose credential is more than an identifier and a secret records
-        the rest here: the OCI seed's tenancy OCID has nowhere else to go once
-        UserName holds the user OCID (§2). Protected because an OCID is an
-        account identifier, and a listing has no reason to hand it out.
+        Where a row whose credential is more than an identifier and a secret
+        records the rest, `UserName` and `Password` being spoken for (§2).
+        Protected by default because what lands here is account data, and a
+        listing has no reason to hand it out.
         """
         found = self._entry(entry)
         found.set_custom_property(name, value, protect=protect)
@@ -360,9 +369,7 @@ class KdbxStore:
         writes that already succeeded on disk rather than in memory.
         """
         parts = _path(entry)
-        existing = cast('Entry | list[Entry] | None', self._open.find_entries(path=parts))
-        if isinstance(existing, list):
-            existing = existing[0] if existing else None
+        existing = _first(cast('Entry | list[Entry] | None', self._open.find_entries(path=parts)))
         if existing is None:
             _ = self._open.add_entry(self._group(parts[:-1]), parts[-1], username, secret)
             verb = 'added'

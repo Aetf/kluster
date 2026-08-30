@@ -186,7 +186,8 @@ def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxSto
 def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
 
-    key_id, key = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    minted = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    key_id, key = minted.key_id, minted.key
 
     # The offline store holds seeds, never the credentials automation
     # consumes (§1 rule 2), so the only copy is the one returned here.
@@ -197,10 +198,10 @@ def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit:
 
 def test_minting_the_management_key_retires_its_predecessors(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
-    previous, _ = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    previous = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
     orphan = api.add_key(b2.MANAGEMENT_KEY_NAME)
 
-    key_id, _ = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    key_id = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
 
     # The seed signs this retirement and survives it, so both stale keys go.
     assert api.named(b2.MANAGEMENT_KEY_NAME) == [key_id]
@@ -261,7 +262,7 @@ def test_the_dump_key_is_confined_to_one_prefix_of_one_bucket(api: FakeApi, kit:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
 
-    key_id, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
 
     minted = api.keys[key_id]
     assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (
@@ -274,7 +275,8 @@ def test_the_dump_key_is_confined_to_one_prefix_of_one_bucket(api: FakeApi, kit:
 def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id, key = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    minted = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id, key = minted.key_id, minted.key
 
     uploader = b2.Session.authorize(key_id, key)
 
@@ -289,9 +291,9 @@ def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -
 def test_minting_a_dump_key_retires_the_one_the_old_box_held(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    previous, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    previous = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
 
-    key_id, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
 
     # The box's copy cannot be read back, so a replacement box means a
     # replacement key and the old one is spent.
@@ -306,7 +308,7 @@ def _current(session: b2.Session, key_id: str, bucket_id: str) -> bool:
 def test_the_key_the_box_holds_is_the_intended_one(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
 
     assert _current(session, key_id, bucket_id)
 
@@ -346,7 +348,7 @@ def test_a_key_that_is_no_longer_what_the_box_needs_is_not_current(
 ) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
 
     mutate(api, api.keys[key_id])
 
@@ -365,7 +367,7 @@ def test_a_box_that_records_no_key_is_not_current(api: FakeApi, kit: KdbxStore) 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id, _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
     api.page_limit = 2
     for _ in range(5):
         _ = api.add_key('unrelated')

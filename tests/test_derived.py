@@ -336,7 +336,7 @@ def tenancy(monkeypatch: pytest.MonkeyPatch) -> Tenancy:
 def oci_kit(tenancy: Tenancy) -> KdbxStore:
     """A kit holding the OCI seed, created the way a bring-up creates it."""
     store = MemoryKit()
-    private_pem, _ = oci_iam.generate_key()
+    private_pem = oci_iam.generate_key().private_pem
     root = masters.Credential(
         root=masters.ROOTS['oci'],
         values={'tenancy': TENANCY, 'user': ROOT_USER, 'private-key': private_pem},

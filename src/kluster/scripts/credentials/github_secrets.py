@@ -55,7 +55,7 @@ import os
 import subprocess as sp
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol, cast
 
 from .pulumi_config import SlotRefused
 
@@ -172,10 +172,22 @@ class Forge:
         """
         raw = self.run(['secret', 'list', *slot.scope, '--json', 'name,updatedAt'], token=self.token, stdin=None)
         try:
-            listed = list[dict[str, Any]](json.loads(raw.strip() or '[]'))
+            listed: object = json.loads(raw.strip() or '[]')
         except ValueError as exc:
             raise SlotRefused(f'{slot}: the secret listing was not JSON') from exc
-        return {str(entry['name']): str(entry.get('updatedAt', '')) for entry in listed}
+        # The shape is checked in the same step as the parse. Valid JSON that
+        # is not a list of objects -- which is what `gh` prints when it has
+        # something else to say -- would otherwise survive the guard above and
+        # die on an index two lines later.
+        if not isinstance(listed, list):
+            raise SlotRefused(f'{slot}: the secret listing is a {type(listed).__name__}, not a list of secrets')
+        found: dict[str, str] = {}
+        for index, entry in enumerate(cast('list[object]', listed)):
+            name = cast('dict[str, object]', entry).get('name') if isinstance(entry, dict) else None
+            if not isinstance(name, str) or not name:
+                raise SlotRefused(f'{slot}: entry {index} of the secret listing has no name, and is {entry!r}')
+            found[name] = str(cast('dict[str, object]', entry).get('updatedAt', ''))
+        return found
 
     def put(self, slot: Slot, value: str) -> None:
         """Store `value` in the slot; `gh` encrypts it on the way out.

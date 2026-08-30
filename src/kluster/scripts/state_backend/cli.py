@@ -217,12 +217,16 @@ def _provision(
         # the nightly dump silently, until it next fires. The key's lifetime
         # is the instance's.
         log.info('minting the dump key the new box will hold')
-        dump_key_id, dump_key = b2.mint_dump_key(
+        dump_key = b2.mint_dump_key(
             session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
         )
         log.info('rendering the Ignition config for %s', reserved.address)
         ignition = config.render_ignition(
-            roots, address=reserved.address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id
+            roots,
+            address=reserved.address,
+            dump_key_id=dump_key.key_id,
+            dump_key=dump_key.key,
+            bucket_id=bucket_id,
         )
         log.info('[5/6] converging the custom image — a release not imported yet takes the better part of an hour')
         image_id = provision.ensure_image(clients)
@@ -233,8 +237,8 @@ def _provision(
             nsg_id=nsg_id,
             image_id=image_id,
             ignition=ignition,
-            digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key_id, bucket_id=bucket_id),
-            dump_key_id=dump_key_id,
+            digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key.key_id, bucket_id=bucket_id),
+            dump_key_id=dump_key.key_id,
         )
     provision.attach_reserved_ip(clients, instance_id=instance_id, public_ip_id=reserved.id)
 
