@@ -41,15 +41,33 @@ provider rule and §18's sequencing to say four things with them. What the two h
 sequencing, so §18 keeps them apart there.
 
 **One difference from rfc-002 runs through everything below.** rfc-002 could
-rename freely because the `physical` stack had no state. That is true here of
-`dns`, which has never been applied, and **false of `github`, which was applied
-on 2026-08-25** (github.md §2). A logical name or a parent changed in the
-`github` stack is a replacement of a live resource, and both repositories carry
-`protect`, so the replacement is refused rather than performed — the same trap
-github.md §3.1 already records for an unparented import. Every URN this
-document moves in that stack therefore ships with an `aliases` option, and the
-slice is done when a preview shows no replacement. Nothing in the `dns` half
-needs one.
+rename freely because the `physical` stack had no state. **Both stacks here
+have one.** `dns` holds the zones, their DNSSEC state and the records pushed on
+2026-08-26; `github` holds what was applied on 2026-08-25 (github.md §2). A
+logical name or a parent that moves in either stack is a replacement of a live
+resource, and the zones and both repositories carry `protect`, so such a
+replacement is refused rather than performed — the same trap github.md §3.1
+records for an unparented import.
+
+That makes "does this move a live URN" a question every slice below has to
+answer rather than a property either stack grants for free:
+
+*   **The `dns` renames do not move one, by construction.** A resource's URN is
+    its type, its parent and its logical name, and none of the three moves.
+    `ManagedZone` stays in `zone.py` under its own name, so the component's
+    type token is untouched, and the module renames of §10 — `zones.py`,
+    `model.py` and `adguard.py` — carry no resource class between them. The
+    zone and record logical names are built from the zone name and the record's
+    state key, neither of which changes, and the published `zt` label stays on
+    the wire (§10). The rewrites are the one place a logical name changes
+    (§7.3), and there is no rewrite in state to move: the route census is
+    empty. **Still a done-condition, not an assumption**: each `dns` slice is
+    finished when its preview shows no replacement and no delete, and any
+    rename found to move a live URN either ships an `aliases` option or is
+    dropped.
+*   **The `github` component does move URNs** (§13), because introducing a
+    parent changes every child's. That slice ships aliases, and its
+    done-condition is the same preview.
 
 --------------------------------------------------------------------------------
 
@@ -334,12 +352,14 @@ untidiness.
     `UpdateResult()` with no outs. The dynamic-provider host writes `{}` plus
     the provider blob in that case, so the resource's stored properties are
     replaced by nothing, and the next `delete` or `read` has no `domain` and no
-    `answer` to work from. It is latent because the stack has never been
-    applied.
+    `answer` to work from. It is latent because the route census is empty:
+    the stack holds zones and records in state and not one rewrite.
 3.  **Every resource is named after an address.** The logical name comes from
     `instance_label(endpoint)`, so `alice-lan-photos.ucw.phd-v4` changes if the
     instance is ever addressed differently — and a changed logical name is a
-    delete and a create of every rewrite in the estate.
+    delete and a create of every rewrite there is. Nothing is at risk while the
+    census is empty, which is exactly why the name is fixed before the first
+    row lands.
 
 ### 7.2 The shape
 
@@ -374,9 +394,10 @@ did not already settle.
     positive form of the defect in §7.1: the method exists, and what it does is
     exactly nothing to the instance.
 
-One correction rides along with the rewrite of that module. Its documentation
-names the accepted residual behind the credential as L11; the audit's list ends
-at L10, and the finding is M6, which is how dns.md and ci.md already spell it.
+One correction rides along inside this module and goes no further. Its own
+documentation names the accepted residual behind the credential as L11; the
+audit's list ends at L10, and the finding is M6, which is how dns.md and ci.md
+already spell it. Only this module's line is this document's to fix.
 
 ### 7.3 The endpoint, the identity, and the credential
 
@@ -415,10 +436,16 @@ takes the resolver's census name as an input; the identifier is
 `<instance>|<domain>|<answer>` and the replacement triggers are those three.
 The endpoint converges the way the device's address does: a new address is
 dialed, the same row is written at the same instance, and nothing is deleted at
-the old one.
-The logical name is built from the census name for the same reason —
-`rewrites-adguard-alice-photos.ucw.phd-v4` — so an address that moves renames
+the old one. The logical name is built from the census name for the same reason
+— `rewrites-adguard-alice-photos.ucw.phd-v4` — so an address that moves renames
 nothing.
+
+**New rule**, which the style rules imply and nowhere state:
+
+> A resource's logical name is chosen, never derived from a value that can
+> move. A name derived from an address or an endpoint makes relocating the
+> target a delete and a create of everything declared against it, and a
+> logical name is half of the URN that state is keyed by.
 
 ### 7.4 `diff` does not read the instance, and that is deliberate
 
@@ -427,10 +454,13 @@ appears in a preview without a refresh. This provider does not, and the
 asymmetry is a decision rather than an omission:
 
 *   **A preview must not need the UDM.** Every pull request touching this stack
-    runs `preview (dns)`. A `diff` that dials would make an unreachable
-    appliance fail the preview and therefore the merge gate, in a stack where
-    every other resource is at Cloudflare. ci.md §2's property — the rewrites
-    fail their own resources and nothing else — would become the opposite.
+    runs `preview (dns)`, and a `diff` that dials fails all of it whenever the
+    appliance is unreachable, in a stack where every other resource is at
+    Cloudflare. That check is not a required one, so a human can still merge
+    past it; what it does block is the unattended path — noop-automerge's
+    zero-diff proof is a preview of its own, and a preview that cannot complete
+    proves nothing. Either way it inverts ci.md §2's property, which is that an
+    unreachable UDM costs these resources and nothing else.
 *   **Drift is already covered where it is affordable.** The weekly drift
     matrix runs `preview --refresh`, which calls `read`, and `read` reports a
     rewrite removed in the interface as gone (ci.md §3). What `--refresh` is
@@ -479,8 +509,11 @@ disabled for that package. Every other provider credential in the repository is
 a `kluster-py:` key read at the line that builds its provider; this one joins
 them, as `cloudflareApiToken`, beside the account it opens.
 
-The cost is one `pulumi config set --secret` and the removal of the old entry,
-in the slice that does it. `pulumi:disable-default-providers` keeps listing
+The move costs nothing but the edit. **The ciphertext is carried across byte
+for byte**, because a passphrase-encrypted configuration value is not bound to
+the key it is stored under — which is how the `oci:` and `b2:` namespaces were
+retired in slice 5, in one edit each and with no value re-encrypted and no
+credential handled. `pulumi:disable-default-providers` keeps listing
 `cloudflare` and never becomes `*`: the dynamic rewrites depend on the
 `pulumi-python` default provider (rfc-002 §8.1).
 
@@ -534,11 +567,12 @@ is still in use across `docs/credentials.md`, the README, the import contract
 and several components' own documentation, and that sense is the one with no
 plain replacement.
 
-**Sequenced with ops#122**, which decides what happens to that other sense. The
-rename here holds either way — if the operator ratifies "estate" as the
-deployment-wide word, the DNS sense must move regardless; if the operator
-retires it there too, this is one sweep instead of two. So the slice waits for
-that ruling rather than depending on its outcome.
+**Sequenced with the pending ruling on that other sense.** What becomes of the
+deployment-wide meaning is an operator decision still open, and the rename here
+holds either way: if "estate" is ratified as the deployment-wide word, the DNS
+sense must move regardless; if it is retired there too, this is one sweep
+instead of two. So the slice waits for that ruling rather than depending on its
+outcome.
 
 **`zt` stays on the wire.** `*.zt.<zone>` is a published DNS label, and
 renaming it renames live records for a code-hygiene reason. The rule rfc-002
@@ -727,8 +761,9 @@ stacks touches. What is deliberately not applied:
     the audit records as M6, and not this document's to change.
 *   **The vocabulary of the device** — gateway, device, UDM, overlay, site.
     Only the overlay half reaches these stacks, in §10.
-*   **Aliases**, in the `dns` half. That stack has no state, so its renames are
-    renames.
+*   **Aliases**, in the `dns` half — not because that stack is empty, which it
+    is not, but because none of its renames moves a live URN (§1). The
+    condition is checked in each slice's preview rather than assumed.
 
 ## 16. What the tests look like after
 
@@ -754,7 +789,7 @@ stacks touches. What is deliberately not applied:
 
 | Document | What lands there |
 | --- | --- |
-| declarative/dns.md | §2's apex exception; §3's endpoint derivation and the retired key; the base-records vocabulary; the rewrite component's shape; §5's helper taking a census row |
+| declarative/dns.md | §2's apex exception; §3's endpoint derivation and the retired key; the base-records vocabulary; the rewrite component's shape; §5's helper taking a census row; the status header, which still calls the stack unapplied |
 | framework/github.md | §3's declaration list as components; the provider and where its token is read |
 | declarative/README.md | the census discriminator of §3, in both directions |
 | style/pulumi.md | the three new rules: the census discriminator (§3), the credential store (§12), and that a logical name is never derived from an address (§7.3) |
@@ -773,18 +808,25 @@ half the order keeps anything from being moved twice.
 
 1.  **The route census moves to `conventions`** (§5.1–§5.4): `Route`,
     `Exposure` and `ROUTES`, the typed answer, and the invariants test. Nothing
-    declares from it yet, so the diff is mechanical.
+    declares from it yet, so the diff is mechanical. One line rides along:
+    dns.md's status header still says the stack is not yet applied, and it is —
+    the zones and their records went in on 2026-08-26.
 2.  **The record tables** (§4, §10): the module renames, `zone_records`, the
     import direction between base and legacy, the overlay identifiers, and the
-    apex exception in dns.md. **Sequenced after ops#122**, so that one sweep
-    settles the word.
+    apex exception in dns.md. **Sequenced after the pending ruling on
+    "estate"**, so that one sweep settles the word. It is the slice with the
+    most renames in it and the stack is applied, so its done-condition is a
+    preview with no replacement and no delete (§1).
 3.  **The Cloudflare provider's namespace and account fact** (§8): a
-    configuration move and a constant. One `pulumi config set --secret`, and
-    the old entry removed in the same commit.
+    configuration move and a constant. The encrypted value moves to its new key
+    unchanged, as slice 5's did; no resource is touched, so the preview is
+    empty.
 4.  **The rewrite provider and its component** (§6, §7): the stateless
     provider, `configure`, the two stamps, the re-stamping update, the instance
     identity, the endpoints from `conventions`, and `ResolverRewrites`. This is
-    the one slice with a live drill (§7.5).
+    the one slice with a live drill (§7.5). It renames the rewrite resources,
+    which exist in no state today; the same preview condition applies, and if
+    the census is no longer empty when it lands, the renames ship aliases.
 
 **The `github` half:**
 
@@ -797,6 +839,8 @@ half the order keeps anything from being moved twice.
     every existing URN. Verified by a preview from the operator's machine
     showing no replacement and no delete.
 
-None of the six is a migration in the `dns` half: that stack has no state, so
-every rename is a rename. Slice 6 is the only one that touches a live
-declaration, and the alias is what keeps it a rename there too.
+Both stacks are applied, so no slice here is free by default. What makes the
+`dns` half a set of renames rather than migrations is that none of them moves a
+live URN, and every one of those slices proves it with a preview rather than
+asserting it. Slice 6 is the one that does move URNs, and the alias is what
+keeps it a rename there too.
