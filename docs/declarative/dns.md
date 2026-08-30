@@ -170,6 +170,15 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
 -   **Mechanism**: a dynamic-provider resource wrapping the AdGuard
     rewrite API (the legacy golinks work established the technique),
     applied **directly to both instances** — idempotent diff/apply.
+    What a dynamic provider is, and the rules a `diff` here obeys —
+    among them that its two property bags are not symmetrical, so the
+    comparison names its keys instead of walking a bag — are
+    [framework/pulumi.md](../framework/pulumi.md) §5. The instance's
+    credential is still an input on every rewrite, which is the one
+    place this repository has not applied that section's rule that a
+    provider's own credential is read where the provider is
+    configured; AdGuard has no scoped API token, and the residual is
+    on record as M6 (cluster/security-audit.md).
 -   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
     the AdGuard pair is on the UDM: putting the rewrites here keeps the
     LAN reachability requirement — the ZeroTier join, and its
@@ -256,7 +265,17 @@ plane names:
     consuming cert-manager's: the gateway's TLS must keep renewing
     when the cluster is down or mid-rebuild, and pushing certs from
     the cluster to the device would invert that survival dependency.
-    Same wildcard discipline as item 2 (CT hygiene).
+    Same wildcard discipline as item 2 (CT hygiene), and one site
+    block for `*.<zone>` with the three vhosts matched inside it — so
+    one certificate, for one identifier set. **The gateway asks for
+    the wildcard alone and never the apex**: Let's Encrypt counts its
+    duplicate-certificate limit by identifier set across accounts, so
+    two issuers requesting the same set share one weekly window and a
+    crash-looping renewal on either side can lock the other out. The
+    cluster's issuer serves the apex publicly and its certificate
+    carries apex and wildcard together; the gateway serves none of
+    those public names, so the way to keep the two sets apart is for
+    it to ask for less.
 
 ## 5. The one-line helpers
 
