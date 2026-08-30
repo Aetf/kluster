@@ -23,7 +23,7 @@ import pytest
 import pytest_asyncio
 from pulumi.runtime.stack import wait_for_rpcs
 
-from compartments import with_compartment
+from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.cloud import nodes
@@ -89,7 +89,6 @@ VERSIONS_CONFIG = {
 #: what the suite is for is that each is read at the line that builds its
 #: provider and that everything below that line inherits the result.
 ACCOUNT_CONFIG = {
-    'kluster:ociTenancyOcid': TENANCY_ID,
     'kluster:ociUserOcid': 'ocid1.user.oc1..test',
     'kluster:ociFingerprint': ':'.join(['ab'] * 16),
     'kluster:ociPrivateKey': '-----BEGIN PRIVATE KEY-----\nexample\n-----END PRIVATE KEY-----',
@@ -218,6 +217,7 @@ STACK_CONFIG = {
 @pytest_asyncio.fixture(autouse=True)
 async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Mocks:
     with_compartment(monkeypatch, COMPARTMENT)
+    with_tenancy_ocid(monkeypatch, TENANCY_ID)
     # The run materializes the libvirt session's credential into the checkout's
     # `.credentials/`, so every test here is pointed at a directory of its own:
     # a test suite that wrote into the tree it runs from would leave a key
@@ -489,6 +489,19 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
 
 
 @pytest.mark.asyncio
+async def test_a_tenancy_nobody_has_written_down_refuses_by_naming_the_line_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The account's OCID is a convention rather than a config key, so the state
+    # it can be missing in is "not committed" rather than "not configured", and
+    # a lookup failure here would say nothing at all about what to do.
+    with_tenancy_ocid(monkeypatch, None)
+
+    with pytest.raises(conventions.TenancyUnrecorded, match=r'tenancy_ocid'):
+        await physical.main()
+
+
+@pytest.mark.asyncio
 async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -720,7 +733,7 @@ async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> 
 
 
 def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> None:
-    """Four values, written by one command and read at one line.
+    """Three values, written by one command and read at one line.
 
     None of them is configuration of this program's own: they are the signing
     configuration the credential mint installs, and the stack program reads
@@ -729,7 +742,6 @@ def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> No
     """
     from kluster.scripts.credentials import derived
 
-    assert physical.OCI_TENANCY_OCID == derived.OCI_TENANCY_KEY
     assert physical.OCI_USER_OCID == derived.OCI_USER_KEY
     assert physical.OCI_FINGERPRINT == derived.OCI_FINGERPRINT_KEY
     assert physical.OCI_PRIVATE_KEY == derived.OCI_PRIVATE_KEY_KEY
@@ -908,21 +920,24 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Moc
 
     A provider built inside any one of them would be reached into by the other
     five, which is the test rfc-002 §8.1 gives for what the stack program owns.
-    Its region is not configuration: it is a permanent property of the account
-    and lives in `conventions`, so the line that builds it reads exactly the
-    four secrets -- which is also the whole of what the committed file has to
-    carry for this account.
+    Neither its region nor its tenancy is configuration: both are permanent
+    properties of the account and live in `conventions`, so the line that
+    builds it reads exactly the three secrets -- which is also the whole of
+    what the committed file has to carry for this account.
     """
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
     built = setup.inputs[f'{conventions.CLUSTER_NAME}-oci']
     assert built['region'] == conventions.OCI_TENANCY.region
-    # All four arrive wrapped: the engine sees a marked value, which is what
-    # keeps a signing key -- and the three identifiers that say whose it is --
-    # out of a preview and out of a log. `_unwrapped` asserts the marking, so
-    # a value that lost it fails here rather than reaching a diff in the clear.
-    assert _unwrapped(built['tenancyOcid']) == TENANCY_ID
+    # The account's own identifiers arrive in the clear because they identify
+    # rather than authenticate.
+    assert built['tenancyOcid'] == TENANCY_ID
+    # The three secrets arrive wrapped: the engine sees a marked value, which
+    # is what keeps a signing key -- and the identifier that says whose it is
+    # -- out of a preview and out of a log. `_unwrapped` asserts the marking,
+    # so a value that lost it fails here rather than reaching a diff in the
+    # clear.
     assert _unwrapped(built['userOcid']) == ACCOUNT_CONFIG['kluster:ociUserOcid']
     assert _unwrapped(built['fingerprint']) == ACCOUNT_CONFIG['kluster:ociFingerprint']
     assert _unwrapped(built['privateKey']) == ACCOUNT_CONFIG['kluster:ociPrivateKey']

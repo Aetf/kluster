@@ -58,19 +58,10 @@ from putils import async_output
 #: Talos' own API port, and the endpoint scheme the machine config expects.
 KUBE_API_PORT = 6443
 
-#: What the cloud provider is built from. Its region is a fact about the
-#: account and lives in `conventions`; these four are the secrets, and they are
-#: read at the line that builds the provider and nowhere else (rfc-002 §8.1).
-#:
-#: The tenancy is among them because it is the account the key signs for,
-#: written beside the key by the mint that issued it (credentials.md §3), and
-#: because the two guardrail resources need it: both are tenancy-level objects
-#: that *name* a compartment rather than living in one — the quota policy and
-#: the budget. TODO(kluster-ops#117): it is an identity rather than a secret
-#: and belongs in `conventions` beside the region — that is ruled, and what is
-#: left is implementing it: the mint stops writing this key and verifies the
-#: recorded OCID instead.
-OCI_TENANCY_OCID = 'ociTenancyOcid'
+#: What the cloud provider is built from. The account's own identifiers — its
+#: region and its tenancy OCID — are facts and live in `conventions`; these
+#: three are the secrets, and they are read at the line that builds the
+#: provider and nowhere else (rfc-002 §8.1, §10.3).
 OCI_USER_OCID = 'ociUserOcid'
 OCI_FINGERPRINT = 'ociFingerprint'
 OCI_PRIVATE_KEY = 'ociPrivateKey'
@@ -104,7 +95,11 @@ async def main() -> None:
     # compartment does not exist yet refuses by naming that command.
     compartment = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
     compartment_id = compartment.require()
-    tenancy_id = config.require_secret(OCI_TENANCY_OCID)
+    # A convention for the same reason: the OCID names the account rather than
+    # authenticating to it, and the mint that issues this stack's key proves
+    # the key belongs to that account instead of writing the OCID beside it
+    # (credentials.md §3). A tenancy nobody has written down refuses here.
+    tenancy_id = conventions.OCI_TENANCY.require_tenancy_ocid()
     # One pin for the fleet, in the namespace every version pin shares
     # (rfc-002 §11.1). Three declarations read it — the machine configurations,
     # the cloud image imported from the factory, and the worker's own disk
@@ -115,9 +110,9 @@ async def main() -> None:
     # program builds (rfc-002 §8.1): six components declare against this
     # account — the network, the balancer, the nodes, the guardrails, the block
     # volumes and the image import — and a provider built inside any of them
-    # would be reached into by the rest. Its region comes from `conventions`
-    # because it is a permanent property of the account, so what is read here
-    # is exactly the secrets.
+    # would be reached into by the rest. Its region and its tenancy come from
+    # `conventions` because both are permanent properties of the account, so
+    # what is read here is exactly the secrets.
     cloud = oci.Provider(
         f'{conventions.CLUSTER_NAME}-oci',
         region=conventions.OCI_TENANCY.region,

@@ -25,7 +25,7 @@ from memory_kit import MemoryKit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from compartments import with_compartment
+from oci_conventions import with_compartment
 from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore

@@ -598,6 +598,20 @@ _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so 
 #: controller arrives with `k8s-base`.
 _CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
 
+#: Sinks this map used to carry, and where the fact each one delivered lives
+#: now. Retiring a sink moves a fact rather than deleting it, so the name that
+#: addressed the old home answers with the new one instead of with "no such
+#: row" -- the same courtesy `pending` pays a slot that does not exist yet.
+#: Keyed by the name the sink was addressed as, which for a Pulumi config sink
+#: is its key.
+RETIRED: Mapping[str, str] = {
+    'ociTenancyOcid': (
+        "the tenancy OCID is no longer delivered anywhere: it names this program's account rather than "
+        'authenticating to it, so it is `conventions.OCI_TENANCY.tenancy_ocid` and `credentials derived '
+        'oci-physical mint` verifies the key it issues against that instead of writing a copy beside it'
+    ),
+}
+
 #: The map, in §3's own order. Keys are the `credentials derived` row names:
 #: the same string the command tree gives the row, so a row has one spelling.
 ROWS: dict[str, Row] = {
@@ -605,7 +619,6 @@ ROWS: dict[str, Row] = {
         register='OCI API key (`physical`)',
         source=Minted(f'credentials derived {derived.OCI_PHYSICAL_ROW} mint'),
         targets=(
-            PulumiConfig(PHYSICAL_STACK, derived.OCI_TENANCY_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_USER_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_FINGERPRINT_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_PRIVATE_KEY_KEY),
@@ -875,6 +888,10 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     naming one is refused, so the operator hears which command owns it instead
     of watching a run do nothing.
 
+    **A name this map used to carry answers with where the fact went**
+    (`RETIRED`), because "no slot map row named that" is true and useless to
+    someone reading a runbook written before the move.
+
     **A row that cannot produce its value does not stop the walk.** Most of the
     map is waiting on something -- a stack that has not run, a value nobody has
     typed in -- and a whole-map run is how an operator finds out what is left,
@@ -886,6 +903,8 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
     """
     table = rows if rows is not None else ROWS
     if only is not None and only not in table:
+        if only in RETIRED:
+            raise SlotRefused(f'{only}: {RETIRED[only]}')
         raise SlotRefused(f'no slot map row named {only!r}; `credentials derived ls` lists them')
 
     pushed: list[str] = []

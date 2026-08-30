@@ -1226,6 +1226,35 @@ class ApiKey:
         return fingerprint(self.private_key)
 
 
+def verify_tenancy(tenancy: str) -> None:
+    """Hold a minted key's account against the one `conventions` records.
+
+    The tenancy OCID is a fact rather than a credential, so it has one home
+    (`conventions.OCI_TENANCY`) and a mint copies nothing: it authenticated as
+    a seed that belongs to some account, and all that is left is to prove the
+    account is this estate's. The two ways it can fail to be are the ways the
+    fact goes stale — a kit re-seeded from a different tenancy, and an OCID
+    recorded wrong — and both would deliver a key that signs somewhere the
+    stack does not act, so both are worth stopping over.
+
+    A tenancy the convention has not recorded yet is the third failure, and it
+    arrives here as a refusal to deliver rather than as a traceback: the
+    command's exit status is what an operator reads, and the message names the
+    line to write.
+    """
+    try:
+        intended = conventions.OCI_TENANCY.require_tenancy_ocid()
+    except conventions.TenancyUnrecorded as unrecorded:
+        raise CredentialRejected(str(unrecorded)) from unrecorded
+    if tenancy != intended:
+        raise CredentialRejected(
+            f'this key signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the account '
+            'this program declares into: one of the two is stale, and delivering the key would point the '
+            'stack at an account it does not act in'
+        )
+    log.info('the minted key signs for %s, which is the tenancy `conventions` records', tenancy)
+
+
 def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) -> str:
     """The compartment one consumer's key is confined to, created if it is not there.
 
