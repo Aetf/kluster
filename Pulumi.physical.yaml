@@ -8,19 +8,13 @@ config:
     - libvirt
   kluster-py:gatewayPrivateKey:
     secure: v1:IiNCHzpXB1P7+5GL:lgSLi+JTUntccMKRFVA/NVUhSkvkkL5qodpjtwnaaeOkcZ08OJIP1Ps1klSAlPToKboo9kMsq6bTsVr8rFd/585UYoeTBhKknNDgjZ/Cy531kMnJI6rmjlYNvbPwmHh1o+2JJ5kabawEvFx7O57ZF5CHCzDXZBWy8+hgYneUFv9rsTwfmBVMpRWp6E8/zeWJVAISq6/6dvcdc07qgdrAty8u99oygYV37NdUcRZ+CfR5XXfcDqFjP5oub+ZxJl51lAtBERuhpf5bWGvZSTdvW7ANh1//zPjhwufz5L3GLevwtRK1PPG+XGMhiobbXPhw7XTrgCNeprqCUrFj8Aza4CytOJ3BfhlagamXtsN0pHGT68fPX2mWZdDYT39UAu+a+hcbbSMH0NI15fr3NS7bA1ylKfGhRc10xcS9EKQ/rqNbUiCwsGC8nC08JHGY1o5/vYXWFfqb3qRoQNdFq39VBi0kP4Q2X7Q+eSHKMLV+sp+RR10uvCMV5nSvjh6AigIUMUPO6tRNuAsP9u7TmMkEUGn4enpbpRo+VIzT1tM8FQQuBdrOGv1eBy7+
-  kluster-py:gatewayHostKey:
-    secure: v1:WQAIzLqkw4Wq0CCO:tlOuaP37aUlj4ZvoGgibVI1Ej+pgNTshrPqq99iDsKmw9VmhSMxDyPiw6SBzbkypIrmXym3Q5RKNB/efsR07pW0GvZZGTAVtz522js+8fh01hMAYVttFOS2uY7lc65zf
   kluster-py:libvirtPrivateKey:
     secure: v1:IQ2HXHNaJp73eoRk:VrNFyWkzwHmQH29mJ2+1jYWujKLKXScgGShPHSfZHUm6+lZKDczr2CkafQR+gmkFu7uejO0lX3FqR398KyqaxSB95pVDA/XNlMZTFLfL728iV78sf+IibBN6wJ2GAJ1WOJBBZzUa840wvFGWpxK/5NsxWhVSn+8G/XCV28jv1l3V7XDH61rHR12Q/N4Qri2Q4Iz++bXhv+KdXD61O8H8AtKynmhDzjI4RGoqQ4JL0OVEkDRUfGv2zTqRcfEhDHeOlnmSi+XX6VBAiK4zq42ztPVXo/YpyVyB/OcAxaMXfUyjD93sDoy/nMXs8oYBkW8dU5QetUyPBsGz+8W2cxGCex9HhNjeRZKTud8d+bq98CCKQyioidc5dBsVA4Or5/aOA1XRwKY6RPRVpFTGIFvGWyZv10B816Gg6A6z0O8GPPt+N+SmaPrDMGwABf4iHQWJO0vGtwmRSyMpo+E4bVeBbwcEcyps9Dw/M7dYF75wnIvRtOnXxgoDaiv39VA0MpyhWSmcrmAIE7mCJYfJadwxUpxsNkpe8kDiuX+tv9eoK9BQPD4ont0G/t4clnOCcFPa0hA=
-  kluster-py:talosVersion: v1.13.9
   kluster-py:unifiApiKey:
     secure: v1:G8s8IlA98mNsmmH0:TIsSpQQ4A9yddYX+PArOPYhetkJZesk0ifds525LI4Em71voPpptqq2ryVFJmDD2
   kluster-py:zerotierApiToken:
     secure: v1:mPQdF7Bt/dIs+Zk2:kUnNwex6+nJqdcxCP4+Epj9hStliiNwgbyJO0xDTdy09nZEqDhSlloUB/hB2lQ7x
-  kluster-py:zerotierNetworkId: 83048a0632b6ba9b
   kluster-py:haosDomainUuid: 5e10948c-8934-4239-849c-b6b9104bfe3f
-  kluster-py:libvirtStorageDir: /var/lib/libvirt/kluster
-  kluster-py:qbittorrentPeerPort: "53363"
   kluster-py:ociTenancyOcid:
     secure: v1:5lNlymAfQtnZM0pK:oOI2Noh0K68WtbpS7XX2AfEL6dtA75jOAXwEzuIAXt99gGWpIY6Ou/5poPcSgwwaBHDKA/2uf1UEauoEJ2MgDcsCUHRJBmni4SdbYpTxt9agmcV6bDrgci3O9bM9tWs=
   kluster-py:ociUserOcid:
@@ -33,12 +27,5 @@ config:
     secure: v1:nZYApv0IPqqPmA8v:gq8KLjzOm+VF9L9fEfqBuP6weEuhkqTjagVcx8RP4+9HT7tWLY0l5W72xmA1MA==
   kluster-py:gatewayBgpPassword:
     secure: v1:wBdxusHiDpECsu68:foOGUk8WIHDIwueFbHlYXIFkpStxgkHQiqZHOppNjDfgUlt1L9PGhmwX7UKuk5Un
-  kluster-py:gatewayRootfs: |-
-    {
-      "caddy": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/caddy-arm64.tar.zst", "sha256": "e154a141364c60ccd0ac0dd1a7711b2f975ad6fc0fa469201002ea22540f5511"},
-      "adguard-alice": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/adguard-arm64.tar.zst", "sha256": "051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910"},
-      "adguard-bob": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/adguard-arm64.tar.zst", "sha256": "051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910"},
-      "zerotier": {"url": "https://github.com/Aetf/homelab-containers/releases/download/rootfs-1/zerotier-arm64.tar.zst", "sha256": "ba74ae49ae729e79c2bcf7b2c770fdb03b19862b188350ab88166e1a3faaadf1"}
-    }
   kluster-py:gatewayAcmeToken:
     secure: v1:KlvldEZM7HYUinCo:IQIPROFu/59AEb2CFy7dYsJlQW5haxYJF0Dau5INfxDj0Qkm/3LDkX2pK/i5iAh8hTka4lw4abIKnn7inrpkre2haUJH

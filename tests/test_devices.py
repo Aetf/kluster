@@ -25,7 +25,6 @@ from kluster.scripts.credentials.kdbx import KdbxError
 UNIFI = devices.DEVICES['unifi']
 ADGUARD = devices.DEVICES['adguard']
 ZEROTIER = devices.DEVICES['zerotier']
-NETWORK_ID = '0123456789abcdef'
 
 
 def refuses(prompt: str) -> str:
@@ -164,18 +163,20 @@ def test_the_typed_values_land_in_the_stack_the_row_names(typed: None) -> None:
     assert runner.config == {'adguardUsername': 'a-typed-secret', 'adguardPassword': 'a-typed-secret'}
 
 
-def test_a_secret_field_is_encrypted_and_a_plain_one_is_not(typed: None) -> None:
+def test_every_delivered_field_takes_the_encrypted_channel(typed: None) -> None:
     slot, runner = stack(ZEROTIER.stack)
 
-    _ = devices.deliver(ZEROTIER, stack=slot, given={'network-id': NETWORK_ID})
+    _ = devices.deliver(ZEROTIER, stack=slot)
 
     # Which channel each key takes is the assertion, not merely that the value
-    # arrived: the network id is an identifier the committed file may carry in
-    # the clear, and the token it travels with is not.
+    # arrived: a value pushed in the clear and read as a secret agrees only by
+    # way of an upstream defect. Every field on every row today is a
+    # credential -- the one identifier a row used to carry beside one, the
+    # overlay network's id, is a constant in `conventions` (rfc-002 §11).
     secret = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' in args]
     plain = [args[2] for args in runner.invocations if args[:2] == ['config', 'set'] and '--secret' not in args]
     assert secret == ['zerotierApiToken']
-    assert plain == ['zerotierNetworkId']
+    assert plain == []
 
 
 def test_the_stack_is_created_when_the_backend_has_none(typed: None) -> None:

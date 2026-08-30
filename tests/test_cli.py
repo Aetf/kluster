@@ -390,16 +390,20 @@ def test_a_device_row_takes_no_stack_of_its_own() -> None:
 
 
 def test_what_a_device_run_is_handed_reaches_the_delivery(dispatch: Dispatch, tmp_path: Path) -> None:
-    token = tmp_path / 'api-token'
-    _ = token.write_text('a-central-token\n')
+    username = tmp_path / 'username'
+    password = tmp_path / 'password'
+    _ = username.write_text('an-admin\n')
+    _ = password.write_text('a-password\n')
 
-    assert cli.main(['derived', 'zerotier', 'record', '--api-token-file', str(token), '--network-id', 'abc']) == 0
+    argv = ['derived', 'adguard', 'record', '--username-file', str(username), '--password-file', str(password)]
+    assert cli.main(argv) == 0
 
-    # A secret is named as a file and a plain field as its value, and both
-    # arrive addressed by the field name the table gives them.
+    # A secret is named as a file rather than as a value, and each one arrives
+    # addressed by the field name the table gives it: a row with two of them
+    # is exactly where a mix-up would otherwise go unnoticed.
     (_, _, kwargs), *rest = [call for call in dispatch.calls if call[0] == 'devices.deliver']
     assert not rest
-    assert kwargs['given'] == {'api-token': str(token), 'network-id': 'abc'}
+    assert kwargs['given'] == {'username': str(username), 'password': str(password)}
 
 
 def test_the_controller_row_records_the_key_and_no_address(dispatch: Dispatch, tmp_path: Path) -> None:

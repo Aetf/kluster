@@ -54,6 +54,14 @@ PUBLIC_PORT_CENSUS: tuple[tuple[int, str], ...] = (
     (60011, 'tcp'),  # hath, on the dedicated VIP
 )
 
+#: The bulk-transfer peer port, which the *site* gateway terminates rather than
+#: the balancer above: inbound peer traffic reaches the worker VM through the
+#: home site, and the census above is the cloud half of the same subject. Two
+#: firewall declarations name it — the IPv6 pinhole and the IPv4 forward
+#: (physical/gateway.md §4.2) — and they have to agree, which is what makes it a
+#: convention rather than a setting (rfc-002 §11).
+QBITTORRENT_PEER_PORT = 53363
+
 SC_LOCAL_PATH = 'local-path'
 SC_NAS = 'nas'
 SC_CLOUD_BLOCK = 'cloud-block'

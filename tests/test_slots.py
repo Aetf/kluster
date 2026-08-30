@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
 from test_cli import commands as cli_commands
 
+from kluster import conventions
 from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slots
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
@@ -480,16 +481,17 @@ def test_a_state_read_of_an_output_the_program_does_not_export_says_so() -> None
         _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
 
-def test_the_network_id_is_read_from_the_stack_that_declares_it() -> None:
+def test_the_network_id_is_pushed_from_the_constant_that_decides_it() -> None:
     gh = RecordedGh()
-    pulumi = RecordedPulumi(stacks=['physical'], config={'zerotierNetworkId': 'a-network'})
 
-    pushed = slots.sync(context(gh, runner=pulumi), only='zerotier-network')
+    pushed = slots.sync(context(gh), only='zerotier-network')
 
     # Not a credential, but a workflow input that has nowhere else to come from
-    # and can only be passed as a secret.
+    # and can only be passed as a secret. Its value is the adopted network's
+    # identity, which is a constant rather than a configured one, so this row
+    # opens no stack at all.
     assert len(pushed) == len(slots.ZEROTIER_PHYSICAL) + len(slots.ZEROTIER_DNS)
-    assert gh.values[(REPOSITORY, 'dns', 'ZEROTIER_NETWORK_ID')] == 'a-network'
+    assert gh.values[(REPOSITORY, 'dns', 'ZEROTIER_NETWORK_ID')] == conventions.overlay.NETWORK_ID
 
 
 def test_a_minted_row_refuses_by_naming_the_command_that_delivers_it() -> None:

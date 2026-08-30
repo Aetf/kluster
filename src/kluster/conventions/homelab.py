@@ -38,6 +38,14 @@ HOMELAB_MEMORY_GIB = 10
 #: where a cluster node does not (physical/homelab-host.md §2).
 HOMELAB_BRIDGE = 'kvmbr1'
 
+#: The directory the libvirt pool points at, holding the worker's disk image
+#: and its seed. A convention rather than a setting because both sides have to
+#: name the same path: this program declares the pool, and the host's own
+#: configuration management creates the nodatacow subvolume under it
+#: (physical/homelab-host.md §4). An operator who changed one alone would have
+#: a pool over a directory nobody prepared.
+HOMELAB_STORAGE_DIR = '/var/lib/libvirt/kluster'
+
 #: The host's SSH host key, pinned. It is code rather than configuration for
 #: two reasons: a public key is not a secret, and a pin typed in beside the
 #: client credential could be replaced by whoever could already replace the

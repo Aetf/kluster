@@ -14,7 +14,6 @@ leave a stack that comes up looking whole.
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -28,8 +27,6 @@ from compartments import with_compartment
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.cloud import nodes
-from kluster.components.cloud.guardrails import Guardrails
-from kluster.components.gateway import Rootfs
 from kluster.components.overlay import flow_rules
 from kluster.lib import workstation
 from kluster.stacks import physical
@@ -56,29 +53,36 @@ TALOSCONFIG = 'context: kluster\n'
 #: path — so its shape only has to be something no test could mistake for real.
 LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 
-#: A hex SHA-256 digest, as an image pin carries one. Nothing here checks the
-#: bytes behind it; the shape is what the reader is checked against.
+#: A hex SHA-256 digest, as a root filesystem pin carries one. Nothing here
+#: checks the bytes behind it; the shape is what the reader is checked against.
 DIGEST = 'f' * 64
+#: The release the pins below name. Invented, like the digest: what matters is
+#: that the convention turns the pair into the URL and digest a push carries.
+ROOTFS_RELEASE = 'rootfs-7'
 
-#: What the gateway reads out of stack configuration: the site facts the
-#: program cannot derive. Every value here is invented; what the test is for is
-#: that the keys line up and the values reach the right resource.
+#: What the gateway reads out of stack configuration: two secrets a file's
+#: content is rendered from, the controller's key, and one measurement. Every
+#: value here is invented; what the test is for is that the keys line up and the
+#: values reach the right resource.
 GATEWAY_CONFIG = {
-    'kluster:gatewayHostKey': 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample',
     'kluster:gatewayPrivateKey': '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n',
     'kluster:gatewayBgpPassword': 'a-session-password',
     'kluster:gatewayAcmeToken': 'a-zone-scoped-token',
-    'kluster:gatewayRootfs': json.dumps(
-        {
-            service.name: {'url': f'https://example.invalid/{service.name}.raw', 'sha256': 'f' * 64}
-            for service in conventions.gateway.SERVICES
-        }
-    ),
     'kluster:unifiApiKey': 'a-controller-key',
     'kluster:workerGua': WORKER_GUA,
-    'kluster:qbittorrentPeerPort': '51413',
     'kluster:zerotierApiToken': 'a-central-token',
-    'kluster:zerotierNetworkId': ZT_NETWORK_ID,
+}
+
+#: The version pins, in the namespace they share (rfc-002 §11.1). They are
+#: project-level configuration in the committed tree — one copy for five stacks
+#: — and the runtime cannot tell that from a stack's own key, which is exactly
+#: why one namespace works.
+VERSIONS_CONFIG = {
+    'versions:talos': 'v1.11.0',
+    **{
+        f'versions:rootfs-{conventions.gateway.rootfs_pin(service)}': f'{ROOTFS_RELEASE}:{DIGEST}'
+        for service in conventions.gateway.SERVICES
+    },
 }
 
 #: What the two accounts' providers are built from. Every value is invented;
@@ -193,19 +197,20 @@ COMPARTMENT = conventions.Compartment(
 )
 
 
-#: The whole of what the stack reads out of configuration: site facts the
-#: program cannot derive, and the secrets that configure the two accounts'
-#: providers. Nothing here names a provider namespace — with every provider
-#: explicit there is nothing left to configure through one (rfc-002 §8.1).
+#: The whole of what the stack reads out of configuration: the version pins,
+#: the secrets that configure the two accounts' providers, and the handful of
+#: values an operator supplies or a booted machine reports. Nothing here names
+#: a provider namespace — with every provider explicit there is nothing left to
+#: configure through one (rfc-002 §8.1).
 STACK_CONFIG = {
-    'kluster:talosVersion': 'v1.11.0',
     'kluster:budgetAlertRecipients': json.dumps(BUDGET_RECIPIENTS),
-    # The §3 domain: the credential the host is reached with, where the
-    # worker's image and seed are written, and which domain is adopted rather
-    # than built. There is no endpoint among them — it is derived.
+    # The §3 domain: the credential the host is reached with, and which domain
+    # is adopted rather than built. There is no endpoint among them — it is
+    # derived — and no storage directory either: the host's own configuration
+    # management has to name the same one, which makes it a convention.
     'kluster:libvirtPrivateKey': LIBVIRT_KEY,
-    'kluster:libvirtStorageDir': '/var/lib/libvirt/kluster',
     'kluster:haosDomainUuid': '00000000-0000-0000-0000-000000000000',
+    **VERSIONS_CONFIG,
     **ACCOUNT_CONFIG,
     **GATEWAY_CONFIG,
 }
@@ -410,6 +415,23 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
 
 
 @pytest.mark.asyncio
+async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Mocks) -> None:
+    """A pin nobody can read is a pin nobody reviews (rfc-002 §11).
+
+    The key the device must present is a public key and a decision of this
+    repository, so it is a constant rather than a configuration secret — which
+    is what puts it in the preview a reviewer reads, in the clear, instead of
+    behind the redaction a secret-typed value carries wherever it goes.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    declared = setup.inputs[f'{conventions.CLUSTER_NAME}-services-routing']['host_key']
+    assert declared == conventions.gateway.HOST_KEY
+    assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
+
+
+@pytest.mark.asyncio
 async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Mocks) -> None:
     """The second nested egg: the address is SLAAC off a network this run makes.
 
@@ -440,16 +462,17 @@ async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup:
     """And with the address configured, the rule is back and carries it.
 
     Step three of the bring-up ceremony is writing the key, so what follows it
-    has to be the pinhole itself — the configured address on the configured
-    port, into the zone the worker moved to.
+    has to be the pinhole itself — the configured address, on the port the
+    census holds, into the zone the worker moved to. The port is not configured beside
+    it: two firewall rules name it and they have to agree, so it sits with the
+    public port census in `conventions` (rfc-002 §11).
     """
     await physical.main()
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
     destination = setup.inputs[f'{conventions.CLUSTER_NAME}-firewall-peer-v6']['destination']
     assert destination['ips'] == [WORKER_GUA]
-    # A number over the wire arrives as one, whatever configuration spelled it.
-    assert int(destination['port']) == int(GATEWAY_CONFIG['kluster:qbittorrentPeerPort'])
+    assert int(destination['port']) == conventions.QBITTORRENT_PEER_PORT
 
 
 @pytest.mark.asyncio
@@ -594,79 +617,34 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Mock
     assert 50000 in nodes.MANAGEMENT_PORTS
 
 
-#: The instance id each node's stub answers with, so an attachment can be
-#: asserted to have landed on the node the volume table names.
-INSTANCE_IDS = {node: f'ocid1.instance.oc1.phx.{node}' for node in conventions.CLOUD_NODES}
-
-
-def declare_storage() -> physical.Storage:
-    """§1 and §5 on their own, against stubs of the nodes they read.
-
-    An instance is the whole of what this domain needs from the fleet: the
-    availability domain a volume may be attached within, and the instance it
-    attaches to. Stubbing them keeps the assertions below about the wiring
-    rather than about the fleet, which `test_cloud_nodes` already holds.
-    """
-    nodes = SimpleNamespace(
-        instances={
-            node: SimpleNamespace(
-                availability_domain=pulumi.Output.from_input(AVAILABILITY_DOMAIN),
-                id=pulumi.Output.from_input(instance_id),
-            )
-            for node, instance_id in INSTANCE_IDS.items()
-        }
-    )
-    return physical._declare_storage(  # pyright: ignore[reportPrivateUsage]
-        compartment_id=COMPARTMENT.require(),
-        nodes=cast('Any', nodes),
-        on_cloud=pulumi.ResourceOptions(),
-    )
-
-
-def declare_guardrails() -> Guardrails:
-    return physical._declare_guardrails(  # pyright: ignore[reportPrivateUsage]
-        config=pulumi.Config(),
-        compartment_id=COMPARTMENT.require(),
-        tenancy_id=TENANCY_ID,
-        on_cloud=pulumi.ResourceOptions(),
-    )
+#: The instance id the mock answers a node's declaration with, which is how an
+#: attachment can be asserted to have landed on the node the volume table names.
+INSTANCE_IDS = {node: f'{conventions.CLUSTER_NAME}-{node}_id' for node in conventions.CLOUD_NODES}
 
 
 @pytest.mark.asyncio
-async def test_every_volume_is_attached_to_the_node_the_table_names() -> None:
+async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Mocks) -> None:
     """A block volume attaches only within its own availability domain.
 
     Both halves come off the instance rather than out of a constant, because
     the domain a node lands in is itself decided at apply time from what the
-    region offers — a volume pinned to a remembered domain would fail to
+    region offers - a volume pinned to a remembered domain would fail to
     attach the first time the placement list came back in another order. Which
     instance each one lands on is the table's answer, and for the following
     volume that answer is the node holding the dedicated VIP.
     """
-    declared = declare_storage()
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
 
     for name, volume in conventions.NODE_VOLUMES.items():
-        component = declared.volumes[name]
-        assert await component.volume.availability_domain.future() == AVAILABILITY_DOMAIN
-        assert await component.volume.size_in_gbs.future() == str(volume.size_gb)
-        assert await component.attachment.instance_id.future() == INSTANCE_IDS[volume.attached_node]
+        declared = setup.inputs[f'{conventions.CLUSTER_NAME}-{name}-volume']
+        attachment = setup.inputs[f'{conventions.CLUSTER_NAME}-{name}-attachment']
+        assert declared['availabilityDomain'] == AVAILABILITY_DOMAIN
+        assert int(declared['sizeInGbs']) == volume.size_gb
+        assert attachment['instanceId'] == INSTANCE_IDS[volume.attached_node]
 
-    following = declared.volumes['hath-cache']
-    assert await following.attachment.instance_id.future() == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
-
-
-@pytest.mark.asyncio
-async def test_the_backup_bucket_is_not_hosted_by_the_provider_it_insures() -> None:
-    """The placement rule, as the endpoint a consumer is handed.
-
-    Tenancy loss is an enumerated risk, so the bucket the cluster is rebuilt
-    from answers on another provider entirely (storage.md §4). Its region is an
-    account property rather than stack configuration, so the endpoint is
-    derivable from `conventions` alone.
-    """
-    declared = declare_storage()
-
-    assert declared.backup.endpoint == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
+    following = setup.inputs[f'{conventions.CLUSTER_NAME}-hath-cache-attachment']
+    assert following['instanceId'] == INSTANCE_IDS[conventions.DEDICATED_VIP_NODE]
 
 
 @pytest.mark.asyncio
@@ -699,43 +677,47 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
 
 @pytest.mark.asyncio
-async def test_the_quota_zeroes_a_family_before_it_allows_a_shape_in_it() -> None:
-    """Statement order is the default-deny.
+async def test_the_quota_names_the_compartment_this_program_decided(setup: Mocks) -> None:
+    """A quota statement has no OCID form and names its compartment by name.
 
-    A later statement supersedes an earlier one for the same quota, so the
-    wildcard `zero` has to come first: reversed, the policy would end up
-    allowing nothing at all, and a fleet that cannot replace a node is exactly
-    what the envelope must not forbid.
+    Which is why that name is a convention rather than something read back from
+    the tenancy, and why the stack hands the component both halves: the budget
+    beside it targets the same compartment by OCID. The statements' own
+    content - deny before allow, every family capped - is `test_guardrails`.
     """
-    guardrails = declare_guardrails()
-    statements = guardrails.statements
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
 
-    for family in ('compute-core', 'compute-memory'):
-        zeroed = next(index for index, text in enumerate(statements) if text.startswith(f'zero {family}'))
-        allowed = next(index for index, text in enumerate(statements) if text.startswith(f'set {family}'))
-        assert zeroed < allowed, family
-
-    # Quota statements have no OCID form: the compartment appears by the name
-    # this program gave it, which is why that name is a convention.
+    statements = cast('list[str]', setup.inputs[f'{conventions.CLUSTER_NAME}-quota']['statements'])
+    assert statements
     assert all(text.endswith(f'in compartment {COMPARTMENT.name}') for text in statements)
 
 
 @pytest.mark.asyncio
-async def test_the_budget_alerts_reach_the_addresses_configuration_names() -> None:
-    """The only signal this stack raises that does not go through the cluster."""
-    guardrails = declare_guardrails()
+async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Mocks) -> None:
+    """The only signal this stack raises that does not go through the cluster.
 
-    for rule in guardrails.alerts.values():
-        assert await rule.recipients.future() == ','.join(BUDGET_RECIPIENTS)
+    The addresses are the one thing about the guardrails an operator supplies,
+    so what this holds is the path from the configuration key to the rule.
+    """
+    await physical.main()
+    await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+    alerts = [inputs for name, inputs in setup.inputs.items() if name.startswith(f'{conventions.CLUSTER_NAME}-budget-')]
+    assert alerts
+    for alert in alerts:
+        assert alert['recipients'] == ','.join(BUDGET_RECIPIENTS)
 
 
-def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> None:
+@pytest.mark.asyncio
+async def test_a_recipient_list_that_is_not_a_list_of_addresses_is_refused() -> None:
+    """Named at the boundary, so the operator is told which key to fix."""
     pulumi.runtime.set_all_config(
         dict(STACK_CONFIG) | {'kluster:budgetAlertRecipients': json.dumps('one@example.invalid')}
     )
 
-    with pytest.raises(TypeError, match='list of email addresses'):
-        declare_guardrails()
+    with pytest.raises(TypeError, match='budgetAlertRecipients must be a list'):
+        await physical.main()
 
 
 def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> None:
@@ -760,15 +742,18 @@ def test_the_signing_configuration_is_read_from_the_keys_the_mint_writes() -> No
 
 
 def test_no_provider_namespace_is_read_at_all() -> None:
-    """Every key this stack reads is its own (rfc-002 §8.1, §10.3).
+    """Every key this stack reads belongs to this repository (rfc-002 §8.1, §10.3).
 
     A provider namespace is configuration acting at a distance: the same
     program run somewhere else declares against a different account, and
     nothing in the program says so. With every provider built explicitly there
     is nothing left for one to carry, so the committed file holds none.
+
+    Two namespaces, not one: `versions:` is this repository's own, holding the
+    pins every stack shares (§11.1).
     """
     namespaces = {key.partition(':')[0] for key in STACK_CONFIG}
-    assert namespaces == {'kluster'}
+    assert namespaces == {'kluster', 'versions'}
 
 
 #: Every site fact the stack takes as configuration, and every secret its two
@@ -779,9 +764,9 @@ def test_no_provider_namespace_is_read_at_all() -> None:
 SITE_FACTS = [
     'kluster:budgetAlertRecipients',
     'kluster:libvirtPrivateKey',
-    'kluster:libvirtStorageDir',
     'kluster:haosDomainUuid',
     *ACCOUNT_CONFIG,
+    *VERSIONS_CONFIG,
 ]
 
 
@@ -790,7 +775,10 @@ SITE_FACTS = [
 async def test_a_site_fact_the_configuration_lacks_refuses_by_name(key: str) -> None:
     pulumi.runtime.set_all_config({name: value for name, value in STACK_CONFIG.items() if name != key})
 
-    with pytest.raises(pulumi.ConfigMissingError, match=key.partition(':')[2]):
+    # A version pin is refused by its accessor rather than by Pulumi, because
+    # the accessor is what knows the kind and can name the whole key.
+    expected = KeyError if key.startswith('versions:') else pulumi.ConfigMissingError
+    with pytest.raises(expected, match=key):
         await physical.main()
 
 
@@ -808,53 +796,40 @@ async def test_the_program_never_reads_the_devices_own_credential() -> None:
         {name: value for name, value in STACK_CONFIG.items() if name != 'kluster:gatewayPrivateKey'}
     )
 
-    physical.declare_gateway(pulumi.Config())
+    physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
 @pytest.mark.asyncio
 async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> None:
-    """The gateway and the overlay, exercised without the rest of the stack.
+    """The gateway, exercised without the rest of the stack.
 
-    `main` reaches them now, but a failure there names the whole program; this
+    `main` reaches it now, but a failure there names the whole program; this
     isolates the arm whose wiring is entirely configuration — every key, and
     which of them is a secret — so a missing one is reported against the
     gateway rather than against a run of everything.
     """
-    config = pulumi.Config()
-    physical.declare_gateway(config)
+    physical._gateway(pulumi.Config())  # pyright: ignore[reportPrivateUsage]
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
-def test_an_image_pin_is_checked_where_it_crosses_into_the_program() -> None:
-    """A digest is a site fact: whatever the build produced.
+def test_a_root_filesystem_pin_becomes_the_url_and_digest_a_push_carries() -> None:
+    """The pin is a release and a digest; the rest of the URL is a convention.
 
-    It is checked as it is read, so a truncated paste is a named configuration
-    error rather than a push that reaches the device and is refused there. The
-    set is checked both ways too, because the device runs the census and
-    nothing else: a service with no pin would be a container that never starts,
-    and a pin for a service nobody declares would be a payload pushed for no
-    reason at all.
+    So an operator maintains four scalars and not four URLs, and moving
+    publication is an edit to one rule (rfc-002 §11.1). The two resolvers have
+    a key each even though one build serves both, which is what lets a new
+    resolver be proven on one instance before the other.
     """
-    url = 'https://example.invalid/caddy.tar.zst'
-    complete = {
-        service.name: {'url': f'https://example.invalid/{service.name}.tar.zst', 'sha256': DIGEST.upper()}
-        for service in conventions.gateway.SERVICES
-    }
+    caddy = conventions.gateway.CADDY
+    pin = physical._rootfs(caddy)  # pyright: ignore[reportPrivateUsage]
 
-    pins = physical._rootfs_pins(complete)  # pyright: ignore[reportPrivateUsage]
-    assert pins['caddy'] == Rootfs(url='https://example.invalid/caddy.tar.zst', sha256=DIGEST)
+    assert pin.sha256 == DIGEST
+    assert pin.url == f'{conventions.gateway.ROOTFS_RELEASES}/{ROOTFS_RELEASE}/caddy-arm64.tar.zst'
 
-    with pytest.raises(ValueError, match='is not a hex sha256 digest'):
-        physical._rootfs_pins({**complete, 'caddy': {'url': url, 'sha256': 'abc'}})  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(ValueError, match='carries no url'):
-        physical._rootfs_pins({**complete, 'caddy': {'sha256': DIGEST}})  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(TypeError, match='must be a mapping'):
-        physical._rootfs_pins(['caddy'])  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(ValueError, match='pins no image for zerotier'):
-        physical._rootfs_pins({name: entry for name, entry in complete.items() if name != 'zerotier'})  # pyright: ignore[reportPrivateUsage]
-    with pytest.raises(ValueError, match='thermostat, which the device does not run'):
-        physical._rootfs_pins({**complete, 'thermostat': {'url': url, 'sha256': DIGEST}})  # pyright: ignore[reportPrivateUsage]
+    alice, bob = conventions.gateway.RESOLVERS
+    assert conventions.gateway.rootfs_pin(alice) != conventions.gateway.rootfs_pin(bob)
+    assert physical._rootfs(alice).url == physical._rootfs(bob).url  # pyright: ignore[reportPrivateUsage]
 
 
 def test_the_provider_sdks_import() -> None:

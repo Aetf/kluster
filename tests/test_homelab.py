@@ -595,10 +595,11 @@ def test_the_paths_in_the_uri_are_relative_to_the_checkout(tmp_path: Path) -> No
 async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_path: Path) -> None:
     """The key configures this provider and reaches nothing else.
 
-    It is not a parameter of the component and not one of the stack seam
-    either: a credential that exists only to open a connection is read at the
-    line that opens it (rfc-002 §8.1). What the seam still passes is what the
-    host is, not how to reach it.
+    It is not a parameter of the component, and neither is the endpoint: a
+    credential that exists only to open a connection is read at the line that
+    opens it (rfc-002 §8.1), and where that connection goes is derived from the
+    roster. What the stack program passes is what the host *is*, not how to
+    reach it.
     """
     from kluster.components import homelab
 
@@ -610,8 +611,9 @@ async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_pa
     keyfile: str = parse_qs(urlsplit(uri).query)['keyfile'][0]
     assert _opened(tmp_path, keyfile).read_text() == IDENTITY
 
-    assert 'private_key' not in inspect.signature(homelab.HomelabHost.__init__).parameters
-    assert 'connection_uri' not in inspect.signature(homelab.declare).parameters
+    parameters = inspect.signature(homelab.HomelabHost.__init__).parameters
+    assert 'private_key' not in parameters
+    assert 'uri' not in parameters
 
 
 @pytest.mark.asyncio

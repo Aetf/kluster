@@ -5,3 +5,32 @@ runtime:
     toolchain: uv
     virtualenv: .venv
 description: Kluster configurations
+
+# Project-level configuration: values that apply to every stack, which a
+# stack's own file overrides only where it deliberately runs something
+# different from the rest (rfc-002 §11.1).
+#
+# The `versions:` namespace is what this is for. Every pin the repository
+# holds lives here, one kind per key prefix, so that five stack programs read
+# one copy instead of five files drifting apart -- Pulumi has no include
+# between stack configurations, and this is the mechanism that does not need
+# one. `pulumi config set` cannot write project-level values, so these are
+# hand-edited YAML, which is what a renovate-maintained pin wants anyway; a
+# key in someone else's namespace may carry a value and neither a type nor a
+# default. `lib/versions.py` is what reads them.
+config:
+  # The whole fleet's Talos release: machine configurations, the cloud image
+  # imported from the factory, and the worker's `nocloud` disk image.
+  versions:talos: v1.13.9
+
+  # The gateway's container root filesystems, one pin per service and not one
+  # per build -- the two resolvers run the same archive, and separate keys are
+  # what let one of them be proven before the other. `<release>:<sha256>`: the
+  # digest is the pin and the release is where the bytes were found. The rest
+  # of the URL is `conventions.gateway.rootfs_url`, because who publishes
+  # these and what a release calls each asset is a decision rather than four
+  # values to maintain.
+  versions:rootfs-gateway-caddy: rootfs-1:e154a141364c60ccd0ac0dd1a7711b2f975ad6fc0fa469201002ea22540f5511
+  versions:rootfs-gateway-adguard-alice: rootfs-1:051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910
+  versions:rootfs-gateway-adguard-bob: rootfs-1:051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910
+  versions:rootfs-gateway-zerotier: rootfs-1:ba74ae49ae729e79c2bcf7b2c770fdb03b19862b188350ab88166e1a3faaadf1

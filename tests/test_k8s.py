@@ -19,9 +19,11 @@ from pulumi.runtime.stack import wait_for_rpcs
 
 from kluster import conventions
 
+#: Chart pins, in the namespace every version pin shares: the kind is the key's
+#: prefix rather than a namespace of its own (rfc-002 §11.1).
 CHART_CONFIG = {
-    'chart:cilium': 'https://helm.cilium.io/:1.20.0',
-    'chart:registry-only': 'oci://example.invalid/charts/thing:0.4.0',
+    'versions:chart-cilium': 'https://helm.cilium.io/:1.20.0',
+    'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
 }
 
 #: Every resource declared below: (type, logical name, inputs).
