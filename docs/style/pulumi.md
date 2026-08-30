@@ -98,7 +98,7 @@ shared, one per repository, not re-invented per component.
 ## Review questions
 
 The architecture reviewer's standing questions, for the review stage
-(AGENTS.md):
+([framework/dispatch.md](../framework/dispatch.md) §3):
 
 -   Is every new config key read at the right layer, and is every new
     constant a decision in the right home?

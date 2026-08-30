@@ -1,8 +1,8 @@
 # Style Rules
 
 How code and prose in this repository are written, whatever the
-language. The review gate in AGENTS.md holds every change to it.
-Topics:
+language. The review gate holds every change to it
+([framework/dispatch.md](../framework/dispatch.md) §3). Topics:
 
 -   **[python.md](python.md)** — general Python readability, on top of
     the Google Python Style Guide.
@@ -53,8 +53,8 @@ as-built: comments, commit messages, docs describe what is, without the
 story of how it got there.
 
 **Docs layer like the code.** `docs/framework/` documents mechanisms
-(how this repo does Pulumi, CI, testing) and names no kluster design
-decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own
+(how this repo does Pulumi, CI, testing, and how work is dispatched)
+and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own
 the design; `docs/rfc/` holds the accepted proposals those documents
 were changed by, as history rather than as reference; this directory
 owns how things are written.
@@ -62,7 +62,8 @@ owns how things are written.
 ## Review gate
 
 Every pull request passes an independent review against these rules
-before merge — see AGENTS.md "Review stage". Major structural changes
-go the other way around: an RFC in [`docs/rfc/`](../rfc/) states the
-desired end state, names the design documents its content must land in
-once built, and is approved before implementation starts.
+before merge; how that review is run and by whom is
+[framework/dispatch.md](../framework/dispatch.md) §3. Major structural
+changes go the other way around: an RFC in [`docs/rfc/`](../rfc/)
+states the desired end state, names the design documents its content
+must land in once built, and is approved before implementation starts.
