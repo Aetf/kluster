@@ -16,11 +16,12 @@ forge changes a few times a year, while the credential would sit in CI
 permanently. CI may still *preview* this stack to detect drift; it may not
 apply it.
 
-The Apps themselves are console-created (their private keys are §2 seeds,
-credentials.md), and their *installations* stay console state as well: the
-API that manages them takes no personal access token, only a user-to-server
-token from an App's own OAuth flow (kluster-ops#11). What is declared here is
-the repository state around them.
+The Apps themselves are console-created (their private keys are §3 rows,
+escrowed rather than held in the seed kit — credentials.md), and their
+*installations* stay console state as well: the API that manages them takes
+no personal access token, only a user-to-server token from an App's own OAuth
+flow (kluster-ops#11). What is declared here is the repository state around
+them.
 """
 
 from __future__ import annotations
