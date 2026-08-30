@@ -9,7 +9,7 @@ and this module owns it:
     header. It is a oneshot that runs every file in `/data/on_boot.d` in
     numeric order, and it is delivered as a *unit source* under the custom root
     like any other unit, so a device whose `/etc` was wiped is recovered by one
-    manual copy of a file it already holds (the README runbook).
+    manual copy of a file it already holds (physical/gateway.md §1.2).
 -   **`10-packages.sh`**, which reinstalls the packages a firmware update took
     away, in one transaction, and keeps an offline deb cache for the boot where
     apt is unreachable. Which packages is data (`packages=`); everything else
@@ -20,15 +20,13 @@ and this module owns it:
 -   **The skeleton of the custom root** — `bin/`, `dpkg/`, `units/`.
 
 **The layers above reach the mechanism through methods here, and the resource
-they get back is theirs.** `NspawnRuntime` needs on_boot scripts, a unit and an
-executable; `AuthorizedKeys` needs a unit, an executable and a directory. Each
-of those is one `DeviceFile` at a path this module decides, with the mode and
-the post-apply hook that path implies, parented to the component that asked for
-it: the path and hook discipline belong to this layer, the resource belongs to
-the layer that needs it. That is why they are methods returning a child rather
-than constructor parameters — a sibling layer would otherwise have to re-learn
-the path rules, or hand its content down to a component that has no idea what
-it is.
+they get back is theirs.** Each call is one `DeviceFile` at a path this module
+decides, with the mode and the post-apply hook that path implies, parented to
+the component that asked for it: the path and hook discipline belong to this
+layer, the resource belongs to the layer that needs it. That is why they are
+methods returning a child rather than constructor parameters — a caller would
+otherwise have to re-learn the path rules, or hand its content down to a
+component that has no idea what it is.
 
 **The package list is the exception, and is constructor data.**
 `10-packages.sh` is one rendered file whose content has to be complete when the
@@ -55,16 +53,9 @@ is that a directory somebody removed by hand is not drift the next preview sees
 — the marker is still there — and the mechanism that closes that gap is a
 directory resource in the device provider, which does not exist yet.
 
-**The local rule for new device automation: a systemd unit plus an executable
-under `bin/`, unless the operation manipulates systemd's own configuration** —
-installing its packages, its unit files, its nspawn files, its machines — in
-which case it is an on_boot script. A unit gets its own journal, its own
-failure in `systemctl status`, a restart policy and re-runnability outside
-boot. What it cannot get is a place before the unit store exists: a converger
-that installs units cannot itself be a unit the store does not hold yet, and
-the package step has to precede everything that needs what it installs. The
-numeric order of `on_boot.d` is the total order those bootstrap steps need and
-units deliberately do not express.
+**New device automation is a unit plus an executable unless it manipulates
+systemd's own configuration**, in which case it is an on_boot script; the rule
+and its reasons are physical/gateway.md §1.2.
 """
 
 from __future__ import annotations
@@ -94,6 +85,7 @@ __all__ = (
     'UDM_BOOT_UNIT',
     'UNITS_SCRIPT',
     'UNIT_SOURCE_DIR',
+    'UNIT_SUFFIX',
     'DevicePersistence',
     'executable_path',
     'on_boot_hook',
@@ -142,6 +134,11 @@ LIVE_UNIT_DIR = '/etc/systemd/system'
 PACKAGES_SCRIPT = '10-packages.sh'
 UNITS_SCRIPT = '20-units.sh'
 UDM_BOOT_UNIT = 'udm-boot.service'
+
+#: The unit kind `20-units.sh` converges, which is the one glob it walks. A
+#: source of any other kind would land on the device and be installed by
+#: nothing, so `unit` refuses it rather than delivering a file with no effect.
+UNIT_SUFFIX = '.service'
 
 #: A script and an executable are run; a unit file and a marker are read.
 SCRIPT_MODE = '0755'
@@ -248,14 +245,16 @@ def packages_script(packages: Sequence[str]) -> str:
 
     The set is sorted and deduplicated here, so the file the device holds is a
     function of what the estate requires rather than of the order the callers
-    happened to state it in.
+    happened to state it in, and each name is quoted for the shell that reads
+    the array — a package name is a caller's string, and one carrying a space
+    would otherwise become two entries the device cannot install.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
         f'templates/{PACKAGES_SCRIPT}.j2',
         _PackagesParams(
             cluster=conventions.CLUSTER_NAME,
-            packages=tuple(sorted(set(packages))),
+            packages=tuple(shlex.quote(package) for package in sorted(set(packages))),
             cache=DPKG_DIR,
         ),
     )
@@ -304,14 +303,16 @@ class DevicePersistence(Component):
         `packages` is the union of what the layers above require. An empty set
         is refused rather than rendered: the script expands the set into one
         `apt-get install`, and an empty expansion under `set -u` fails the boot
-        it was supposed to repair.
+        it was supposed to repair. The refusal comes before the registration, so
+        a rejected argument leaves no half-built component behind for the parent
+        backstop to blame the next resource on (framework/pulumi.md §1.3).
         """
-        super().__init__(name, opts=opts)
         if not packages:
             raise ValueError(
                 'DevicePersistence needs at least one package: the device holds none of its own, and an '
                 'empty set renders a script that fails on the boot it exists to repair'
             )
+        super().__init__(name, opts=opts)
         self._connection: Connection = connection
 
         # The unit converger comes first because every unit delivered through
@@ -374,7 +375,18 @@ class DevicePersistence(Component):
         it, and the hook is `20-units.sh`: installed, enabled, and restarted if
         its file changed. The delete of this resource is what retires the unit,
         in the same session (`unit_hook`).
+
+        Only a `.service` is accepted, because that is the one glob the
+        converger walks: a timer or a mount delivered here would sit on the
+        device installed by nothing, which is the one failure this mechanism
+        cannot report. Extending the kinds is a change to `20-units.sh` and to
+        `UNIT_SUFFIX` together.
         """
+        if not name.endswith(UNIT_SUFFIX):
+            raise ValueError(
+                f'{name!r} is not a {UNIT_SUFFIX} unit, and {UNITS_SCRIPT} converges no other kind: '
+                f'a source it does not walk would land on the device and be installed by nothing'
+            )
         return self._declare(
             'unit',
             name,
@@ -418,13 +430,14 @@ class DevicePersistence(Component):
     ) -> DeviceFile:
         """One file of the mechanism, however it was asked for.
 
-        The device path is what names the resource, because two layers cannot
-        put two different files at one path anyway: a collision in this name is
-        a collision on the device, reported at declaration time instead of on
-        the box.
+        The kind and the file's own name — suffix included — are what name the
+        resource, exactly as they are what decide the path. So two callers
+        asking for one path collide on one Pulumi name and are refused at
+        declaration time, while two files that merely share a stem stay two
+        resources.
         """
         return DeviceFile(
-            f'{self.pulumi_resource_name}-{kind}-{name.partition(".")[0]}',
+            f'{self.pulumi_resource_name}-{kind}-{name}',
             connection=self._connection,
             path=path,
             content=content,

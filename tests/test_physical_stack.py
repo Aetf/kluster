@@ -423,7 +423,7 @@ async def test_the_device_is_given_the_packages_its_container_runtime_needs(setu
     async with declaring():
         await physical.main()
 
-    script = setup.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-10-packages')
+    script = setup.inputs_of(f'{conventions.CLUSTER_NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}')
 
     assert script['path'] == f'{conventions.gateway.ON_BOOT_D}/{persistence.PACKAGES_SCRIPT}'
     assert script['host'] == str(conventions.overlay.UDM)
