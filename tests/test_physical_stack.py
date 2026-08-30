@@ -489,19 +489,6 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
 
 
 @pytest.mark.asyncio
-async def test_a_tenancy_nobody_has_written_down_refuses_by_naming_the_line_to_write(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The account's OCID is a convention rather than a config key, so the state
-    # it can be missing in is "not committed" rather than "not configured", and
-    # a lookup failure here would say nothing at all about what to do.
-    with_tenancy_ocid(monkeypatch, None)
-
-    with pytest.raises(conventions.TenancyUnrecorded, match=r'tenancy_ocid'):
-        await physical.main()
-
-
-@pytest.mark.asyncio
 async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

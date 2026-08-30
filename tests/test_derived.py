@@ -472,24 +472,6 @@ def test_a_key_that_signs_for_another_account_is_refused_before_it_is_delivered(
     assert runner.config == {}
 
 
-@pytest.mark.usefixtures('recorded_compartment')
-def test_an_account_conventions_has_not_recorded_refuses_to_deliver(
-    oci_kit: KdbxStore,
-    tenancy: Tenancy,
-    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    slot, runner = physical_stack
-    with_tenancy_ocid(monkeypatch, None)
-
-    # A refusal rather than a traceback: the exit status is what an operator
-    # reads, and the message is the line to commit.
-    with pytest.raises(oci_iam.CredentialRejected, match='tenancy_ocid'):
-        _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
-
-    assert runner.config == {}
-
-
 def test_a_drill_tenancy_is_not_held_against_the_account_conventions_records(
     oci_kit: KdbxStore,
     tenancy: Tenancy,

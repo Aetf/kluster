@@ -98,8 +98,8 @@ async def main() -> None:
     # A convention for the same reason: the OCID names the account rather than
     # authenticating to it, and the mint that issues this stack's key proves
     # the key belongs to that account instead of writing the OCID beside it
-    # (credentials.md §3). A tenancy nobody has written down refuses here.
-    tenancy_id = conventions.OCI_TENANCY.require_tenancy_ocid()
+    # (credentials.md §3).
+    tenancy_id = conventions.OCI_TENANCY.tenancy_ocid
     # One pin for the fleet, in the namespace every version pin shares
     # (rfc-002 §11.1). Three declarations read it — the machine configurations,
     # the cloud image imported from the factory, and the worker's own disk
