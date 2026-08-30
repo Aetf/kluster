@@ -270,8 +270,10 @@ output of the libvirt resource: the worker's address is written statically into
 its machine config, and everything that names it — the routing session, the
 peer-port forward, day 1's apid dial — reads that same constant, so no session
 depends on a lease), the nspawn container services
-(units + digest-pinned rootfs from homelab-containers CI via
-`DeviceArtifact` (architecture.md §5.2) — including
+(units + digest-pinned rootfs images from homelab-containers CI via
+`DeviceArtifact` (architecture.md §5.2), pulled from the registry and
+flattened on the runner because the device boots a directory and has
+no container engine — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
 `/data`-persisted identity, architecture.md §5.3), the recovery script
 in `on_boot.d` that re-establishes all of it after a firmware update

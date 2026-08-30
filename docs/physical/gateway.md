@@ -34,17 +34,27 @@ declarative/physical.md §4.
 -   **nspawn container services** (units + digest-pinned rootfs pushed
     by the gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
     **ZeroTier member container** (§2) as the fourth. A pin names a
-    published root filesystem **archive**: the runner verifies its
-    digest and decompresses it, the push unpacks it into a per-service
-    directory tree, and the unit boots that tree with
-    `systemd-nspawn --directory=`. The tree is derived state the push
-    replaces whole and never edits, so nothing worth keeping lives in
-    it — a service's writable state is bind-mounted from `/data`
-    instead, which is also what makes a rootfs bump a software swap
-    rather than a new identity. Decompressing on the runner rather
-    than on the device is deliberate: the box's userland is the
-    cut-down one a router ships, where `tar` can be relied on and a
-    zstd binary cannot.
+    published **container image** as `<tag>@sha256:<digest>`: the
+    runner pulls that manifest by its digest and hashes it against the
+    pin, hashes every layer against the digest the manifest gives for
+    it, and flattens the layers into one plain archive; the push
+    unpacks that into a per-service directory tree, and the unit boots
+    the tree with `systemd-nspawn --directory=`. The tree is derived
+    state the push replaces whole and never edits, so nothing worth
+    keeping lives in it — a service's writable state is bind-mounted
+    from `/data` instead, which is also what makes a rootfs bump a
+    software swap rather than a new identity. Doing the pull and the
+    flattening on the runner is deliberate: the device boots a
+    directory rather than running a container engine, and its userland
+    is the cut-down one a router ships, where `tar` can be relied on
+    and little else can.
+
+    **The marker beside each tree names the manifest digest**, which
+    is the pin and not a checksum of the archive lying next to it. A
+    reviewer running `sha256sum` on the device should expect the two
+    to differ: what the marker asserts is provenance — these bytes
+    came from that image — and the flattening is content-equivalent to
+    `podman export` rather than byte-identical to anything.
 
     **Each unit states its own requirements**, and nothing chooses a
     start order for it: the three services on the container VLAN bind
