@@ -110,6 +110,11 @@ class Recorder(pulumi.runtime.Mocks):
         """Every resource type the run registered."""
         return {declaration.typ for declaration in self.declared}
 
+    @property
+    def names_declared(self) -> set[str]:
+        """Every logical name the run registered."""
+        return {declaration.name for declaration in self.declared}
+
     def of_type(self, typ: str) -> list[Declaration]:
         """Every declaration of one type, in registration order."""
         return [declaration for declaration in self.declared if declaration.typ == typ]
