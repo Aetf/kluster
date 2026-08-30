@@ -42,7 +42,7 @@ import pulumi
 import pulumi.dynamic as dynamic
 import requests
 
-from kluster.providers.configured import STAMPS, ConfiguredProvider, declared_change
+from kluster.providers.configured import STAMPS, ConfiguredProvider, declared_change, has_unknowns
 
 __all__ = (
     'COMPARED',
@@ -59,10 +59,8 @@ __all__ = (
 #: fails the resource instead of hanging the stack.
 TIMEOUT = 15
 
-#: The stack-configuration keys the admin login is read from, in `configure`
-#: and nowhere else. They are project-namespaced by the plugin, which also
-#: decrypts them on the way in (rfc-002 §7.5 E2), so the program neither reads
-#: them nor passes them on.
+#: The stack-configuration keys the admin login is read from (`configured`).
+#: Both halves, because an admin login is a pair.
 USERNAME_CONFIG = 'adguardUsername'
 PASSWORD_CONFIG = 'adguardPassword'
 
@@ -74,9 +72,8 @@ DECLARED = ('endpoint', 'domain', 'answer')
 #: the two `check` stamps.
 COMPARED = (*DECLARED, *STAMPS)
 
-#: Bumped by hand when an operation's behavior changes, because a provider
-#: class is pickled by reference and editing an operation is otherwise a
-#: silent no-op (rfc-002 §7.5 E1).
+#: This module's version, bumped by hand when an operation's behavior changes
+#: (`configured`).
 VERSION = '1'
 
 
@@ -94,7 +91,6 @@ def _entry(props: Mapping[str, Any]) -> dict[str, str]:
 class AdGuardRewriteProvider(ConfiguredProvider):
     """CRUD against one instance's `/control/rewrite/*` endpoints."""
 
-    #: Read in `configure`, in the plugin's process, and never serialized.
     username: str
     password: str
 
@@ -140,6 +136,12 @@ class AdGuardRewriteProvider(ConfiguredProvider):
         return dynamic.ReadResult(id_=id_, outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
+        if has_unknowns(news):
+            # Answered before anything is compared, because every declared
+            # property here is a replacement: a value nobody knows yet, read as
+            # a difference, would plan a delete and a create of a row that is
+            # about to be identical.
+            return dynamic.DiffResult(changes=None)
         replaces = [key for key in DECLARED if olds.get(key) != news.get(key)]
         return dynamic.DiffResult(
             changes=declared_change(olds, news, COMPARED),

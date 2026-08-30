@@ -12,10 +12,11 @@ module is that shape with the parts that differ left abstract:
     unchanged by a rotation.
 -   **The credential is read in `configure`**, which runs inside the
     resource-provider process, once, before any operation, and receives the
-    stack's configuration with secrets already decrypted. A credential that
-    only opens the provider's own session therefore lives in stack
-    configuration and nowhere else: not on a resource, not in a pickle, not in
-    any component's signature.
+    stack's configuration project-namespaced and with secrets already
+    decrypted (rfc-002 §7.5 E2). A credential that only opens the provider's
+    own session therefore lives in stack configuration and nowhere else: not on
+    a resource, not in a pickle, not in any component's signature, and read by
+    no program.
 -   **`check` stamps what the pickle no longer shows.** With an inert pickle
     nothing would render a rotation or a change to the provider's own code as a
     diff, so `check` adds two properties no caller declared: `session`, the
@@ -43,6 +44,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pulumi.dynamic as dynamic
+from pulumi.runtime import rpc
 
 __all__ = (
     'FINGERPRINT_LENGTH',
@@ -52,6 +54,8 @@ __all__ = (
     'ConfiguredProvider',
     'declared_change',
     'fingerprint',
+    'has_unknowns',
+    'is_unknown',
 )
 
 #: Which door a resource was last written through: the endpoint, and a short
@@ -85,17 +89,31 @@ def declared_change(olds: Mapping[str, Any], news: Mapping[str, Any], keys: tupl
     return any(olds.get(key) != news.get(key) for key in keys)
 
 
+def is_unknown(value: Any) -> bool:
+    """Whether a property is still a preview placeholder."""
+    return isinstance(value, str) and value == rpc.UNKNOWN
+
+
+def has_unknowns(props: Mapping[str, Any]) -> bool:
+    """Whether a property bag still holds preview placeholders.
+
+    During a preview an input may be another resource's unresolved output.
+    There is nothing to compare it against and no point reaching the far side
+    to try, so the diff answers "unknown" and the engine plans on that basis --
+    before any comparison, because a value nobody knows yet cannot have been
+    shown to differ and so is never a reason to plan a replacement.
+    """
+    return any(is_unknown(value) for value in props.values())
+
+
 class ConfiguredProvider(dynamic.ResourceProvider, abc.ABC):
     """A provider whose connection state is configuration rather than state.
 
-    **The credential is not an attribute until `configure` has run**, and that
-    is the design rather than an oversight. What lands in state is a pickle of
-    the provider instance, so an attribute set where the program builds it
-    would be a copy of the credential on every resource. `__getstate__` returns
-    an empty bag instead, and the plugin deserializes and configures the
-    provider before any operation reaches it (rfc-002 §7.5 E2, E3) -- which is
-    what makes reading the credential in an operation safe. Giving it a default
-    would not make anything safer: it would turn a provider that was never
+    **The credential is not an attribute until `configure` has run**, which is
+    the module docstring's first bullet seen from the inside: the plugin
+    deserializes and configures the provider before any operation reaches it
+    (rfc-002 §7.5 E2, E3), so an operation may read it. Giving it a default
+    would not make anything safer -- it would turn a provider that was never
     configured into one that dials with the wrong credential.
     """
 
@@ -136,18 +154,12 @@ class ConfiguredProvider(dynamic.ResourceProvider, abc.ABC):
         """
 
     def _stamp(self, news: Mapping[str, Any], failures: list[dynamic.CheckFailure]) -> dynamic.CheckResult:
-        """The checked inputs, plus the two properties the provider itself decides.
-
-        `check` is the one hook that runs before every diff, and what it returns
-        is what the engine stores and compares -- so a property added here is a
-        property whose change is a visible diff (rfc-002 §7.5 E8). Nothing a
-        caller declares would show a credential rotation or a change to the
-        provider's own code.
+        """The checked inputs, plus the two stamps of the module docstring's third bullet.
 
         A preview may hand this an endpoint that is still a placeholder, which
         the rendered session string then carries. Nothing reads it: the raw
-        property is in the bag too, so a `diff` that answers "unknown" does so
-        before any comparison of the stamps happens.
+        property is in the bag too, so `has_unknowns` answers first and no
+        comparison of the stamps happens.
         """
         return dynamic.CheckResult({**news, SESSION: self._session(news), PROVIDER_VERSION: self._version()}, failures)
 

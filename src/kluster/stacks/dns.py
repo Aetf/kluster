@@ -98,10 +98,10 @@ async def main() -> None:
 
     # The rewrites the routes imply, on both AdGuard instances. Reading their
     # address only when there is something to write keeps the stack deployable
-    # before the key exists, which is the state it is in until the first app
-    # declares a LAN-side route. The login is not read here at all: it opens
-    # the rewrite provider and nothing else, so the provider reads it in
-    # `configure` (rfc-002 §7.4).
+    # before `adguardEndpoints` exists, which is the state it is in until the
+    # first app declares a LAN-side route. The login is not read here at all:
+    # it opens the rewrite provider and nothing else, so the provider reads it
+    # in `configure` (rfc-002 §7.4).
     entries = rewrites(ROUTES)
     if entries:
         _ = declare_rewrites(entries, endpoints=config.require_object('adguardEndpoints'))

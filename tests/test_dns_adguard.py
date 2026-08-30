@@ -21,6 +21,7 @@ import requests
 # The engine's own provider serialization, which is what a `__provider` property
 # holds. It lives beside the base class rather than in the package's exports.
 from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
+from pulumi.runtime import rpc
 
 from kluster.components.dns import adguard
 from kluster.providers import adguard_rewrites, configured
@@ -152,8 +153,6 @@ def test_a_write_authenticates_as_the_configured_login(instance: Instance) -> No
     _ = provider().create(dict(PROPS))
 
     assert [opened.auth for opened in instance.opened] == [(USERNAME, PASSWORD)]
-    assert 'username' not in PROPS
-    assert 'password' not in PROPS
 
 
 def test_read_reports_a_hand_removed_rewrite_as_gone() -> None:
@@ -186,6 +185,22 @@ def test_a_changed_answer_replaces_without_a_gap() -> None:
     assert result.changes is True
     assert result.replaces == ['answer']
     assert result.delete_before_replace is False
+
+
+def test_an_input_that_is_still_unknown_is_an_unknown_diff_and_plans_no_replacement(instance: Instance) -> None:
+    """Every declared property is a replacement, so an unknown one must not be read.
+
+    During a preview an answer may be another resource's unresolved output. A
+    placeholder compared as a value differs from whatever is stored, which here
+    would plan a delete and a create of a row about to be identical.
+    """
+    news = checked(dict(PROPS) | {'answer': rpc.UNKNOWN})
+
+    result = provider().diff('an-id', checked(dict(PROPS)), news)
+
+    assert result.changes is None
+    assert not result.replaces
+    assert instance.opened == []
 
 
 def test_a_rotated_login_is_a_change_nobody_declared() -> None:
