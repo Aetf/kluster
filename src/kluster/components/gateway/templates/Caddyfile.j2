@@ -1,19 +1,25 @@
-{{ controller }} {
+*.{{ zone }} {
 	tls {
 		dns cloudflare {file.{{ token_path }}}
 	}
-	reverse_proxy https://127.0.0.1:443 {
-		transport http {
-			tls_insecure_skip_verify
+
+	@controller host {{ controller }}
+	handle @controller {
+		reverse_proxy https://127.0.0.1:443 {
+			transport http {
+				tls_insecure_skip_verify
+			}
 		}
 	}
-}
 {%- for resolver in resolvers %}
 
-{{ resolver.vhost }} {
-	tls {
-		dns cloudflare {file.{{ token_path }}}
+	@{{ resolver.name }} host {{ resolver.vhost }}
+	handle @{{ resolver.name }} {
+		reverse_proxy http://{{ resolver.address }}:{{ api_port }}
 	}
-	reverse_proxy http://{{ resolver.address }}:{{ api_port }}
-}
 {%- endfor %}
+
+	handle {
+		abort
+	}
+}

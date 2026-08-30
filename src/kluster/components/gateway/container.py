@@ -605,6 +605,7 @@ class _CaddyParams:
     vhost and address without a second list to keep in step.
     """
 
+    zone: str
     controller: str
     token_path: str
     api_port: int
@@ -612,12 +613,32 @@ class _CaddyParams:
 
 
 def caddyfile() -> str:
-    """The gateway's own vhosts, with certificates it issues for itself.
+    """The gateway's vhosts, under one wildcard certificate it issues itself.
 
-    Each name is served over TLS the gateway obtains through a DNS-01 challenge
-    with a token of its own — separate from the cluster's issuer on purpose, so
+    The certificate is obtained through a DNS-01 challenge with a token that
+    lives on the device — separate from the cluster's issuer on purpose, so
     that two issuers which must survive each other's outage do not share a
-    credential (gateway.md §1).
+    credential (gateway.md §1). Two properties of *which* certificate follow
+    from that separation (rfc-002 §9.3):
+
+    -   **One wildcard, not three per-name certificates.** These names resolve
+        nowhere publicly (dns.md §4), and every issued certificate is published
+        in Certificate Transparency logs, so per-name issuance would republish
+        exactly the census that resolving nowhere hides.
+    -   **The wildcard alone, never the apex.** Let's Encrypt counts its
+        duplicate-certificate limit by identifier set across accounts, so two
+        issuers asking for the same set share one weekly window and a
+        crash-looping renewal on either side locks the other out. The cluster
+        issuer's certificate carries the apex and the wildcard together; the
+        gateway serves none of the public names the apex answers for, so it
+        asks for less and the two sets stay different.
+
+    One site block therefore serves every name, matching the three vhosts
+    inside it by host and refusing everything else — a name under the zone that
+    nothing here serves gets the connection closed rather than an answer from
+    whichever block happened to be first. A wildcard covers one label, so every
+    name the gateway serves has to be one label under the zone; that is a
+    property of the census and `test_conventions` holds it there.
 
     The controller console is reverse-proxied to the device's own port 443 over
     a connection whose certificate cannot be verified, because the certificate
@@ -628,6 +649,7 @@ def caddyfile() -> str:
         TEMPLATE_PACKAGE,
         'templates/Caddyfile.j2',
         _CaddyParams(
+            zone=conventions.ZONE_PRIMARY,
             controller=conventions.gateway.VHOST_CONTROLLER,
             token_path=CADDY_TOKEN_PATH,
             api_port=conventions.gateway.ADGUARD_API_PORT,
