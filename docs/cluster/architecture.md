@@ -704,15 +704,22 @@ drives gw-config**:
     content against the device over SSH; `create/update` writes to `/data`
     (surviving firmware updates) and runs the hook. This is exactly
     aconfmgr-style convergence, previewable in `pulumi preview`.
-    Bulk artifacts get their own resource, **`DeviceArtifact`**
-    (2026-08-24): inputs `{repository, tag, digest, target path, hook}`
-    — state carries the reference and the manifest digest, **never
-    bytes**; `diff` compares the pin against a device-side marker file
-    (`/data/…/<name>.digest`); `create/update` pulls the image on the
-    runner, verifies the manifest against the pin and every layer
-    against that manifest, flattens the layers into one archive,
-    streams it over SSH, writes the marker, runs the hook. Rootfs
-    images ride this, keeping preview cheap and state small. Implementation
+    Bulk artifacts get their own resource, **`DeviceArtifact`**:
+    inputs `{repository, tag, digest, root directory, hook}` — state
+    carries the reference and the manifest digest, **never bytes**;
+    `diff` compares the pin against a device-side marker file
+    (`/data/…/<name>.digest`); `create/update` has **the device pull
+    the image itself** over the session already open, with
+    `skopeo copy docker://<repository>@<digest>` into a staging OCI
+    layout beside the tree and `umoci raw unpack` out of it into a
+    staging tree, swaps that tree into place with two renames, deletes
+    the layout, writes the marker and runs the hook. The runner never
+    carries the bytes and never decodes an image: digest verification
+    belongs to `skopeo` and the overlay filesystem semantics to
+    `umoci`, both stock packages of the Debian release UniFi OS is
+    built on, reaching the device through the same package list as the
+    rest of its user space. Rootfs images ride this, keeping preview
+    cheap and state small. Implementation
     rule for both resources: secret-bearing inputs (device secrets in
     `DeviceFile` content) are declared secret
     (`Output.secret`/`additional_secret_outputs`) so they never
