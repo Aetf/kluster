@@ -49,7 +49,7 @@ def typed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def required(name: str) -> dict[str, bool]:
-    """Every config key that stack's declaration requires, and whether it reads it as a secret.
+    """Every config key that stack's declaration requires, and whether it must travel encrypted.
 
     Parsed rather than imported: importing a stack program drags in the
     provider SDKs, and what this needs to know is a property of the source.
@@ -57,27 +57,39 @@ def required(name: str) -> dict[str, bool]:
     The stack program is not the whole of the declaration. A credential that
     exists only to configure a provider is read at the line that builds that
     provider, which for a provider a single component owns is inside the
-    component (rfc-002 §8.1) -- so the components are searched too. That makes
-    the answer the union over the tree rather than per stack, which is exact
-    enough here because no two stacks name a key the same way and each device
-    row asks only about its own keys.
+    component (rfc-002 §8.1) and for a dynamic provider is its `configure`
+    (§7.4) -- so the components and the custom providers are searched too. That
+    makes the answer the union over the tree rather than per stack, which is
+    exact enough here because no two stacks name a key the same way and each
+    device row asks only about its own keys.
+
+    The two readers say "encrypted" differently. A stack program or a component
+    holds a `pulumi.Config` and chooses the channel by which method it calls, so
+    `require_secret` is the answer. A dynamic provider's `configure` receives
+    the stack's configuration already decrypted and has no such choice -- and
+    every key it may read is a credential by construction, everything a caller
+    decides being a declared resource input instead, so a key read there is one
+    that must travel encrypted.
     """
     root = pulumi_config.project_dir() / 'src' / 'kluster'
-    sources = [root / 'stacks' / f'{name}.py', *sorted((root / 'components').rglob('*.py'))]
+    programs = [root / 'stacks' / f'{name}.py', *sorted((root / 'components').rglob('*.py'))]
+    providers = sorted((root / 'providers').rglob('*.py'))
     found: dict[str, bool] = {}
-    for path in sources:
+    for path in [*programs, *providers]:
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
             if not node.func.attr.startswith('require') or not node.args:
                 continue
+            secret = path in providers or node.func.attr == 'require_secret'
             key = node.args[0]
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                found[key.value] = node.func.attr == 'require_secret'
+                found[key.value] = secret
             elif isinstance(key, ast.Name):
-                # The key is a module constant, which is how a component names
-                # the one credential it reads. Resolve it in that module.
-                found[_constant(path, key.id)] = node.func.attr == 'require_secret'
+                # The key is a module constant, which is how a component or a
+                # provider names the credential it reads. Resolve it in that
+                # module.
+                found[_constant(path, key.id)] = secret
     return found
 
 
