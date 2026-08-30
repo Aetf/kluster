@@ -337,8 +337,8 @@ def _opened(tmp_path: Path, value: str) -> Path:
 def test_the_endpoint_names_the_service_user_and_the_privileged_daemon(tmp_path: Path) -> None:
     parts, _ = _dial(tmp_path)
 
-    # `/system` is the daemon that owns the storage pool and the adopted
-    # domain; a session instance would see neither.
+    # `/system` is the daemon that owns the storage pool and the domains on
+    # this host; a session instance would see neither.
     assert (parts.scheme, parts.netloc, parts.path) == ('qemu+ssh', f'virt@{HOST}', '/system')
 
 

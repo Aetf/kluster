@@ -12,9 +12,11 @@ itself must provide. Sizing and the host inventory live in
 > `src/kluster/components/homelab/` declares the storage pool and the
 > worker's volume, seed and domain, and nothing else on this host — the
 > HAOS domain beside it belongs to the host's own configuration
-> management (declarative/physical.md §3). What this document describes
-> of the *host* is not in place — §4's change-set is a precondition of
-> the first `pulumi up`, and §3's passthrough is a Wave C step by design.
+> management (declarative/physical.md §3). The host side is in place too:
+> §4's change-set is applied, so the cluster VLAN and its bridge, the
+> nodatacow subvolume, the libvirt service user, the NFS exports and the
+> HAOS domain's XML are all live. §3's GPU passthrough is the one item
+> still ahead, and deliberately so — it is a Wave C step.
 
 ## 1. VM disk: raw sparse file on the root btrfs, nodatacow, virtio-blk
 
