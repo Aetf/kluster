@@ -16,12 +16,13 @@ import pytest
 from kluster.lib.versions import ChartVersion, ImagePin, versions
 
 DIGEST = f'sha256:{"a" * 64}'
+REPOSITORY = 'ghcr.io/aetf/homelab-containers/caddy'
 
 PINS = {
     'versions:talos': 'v1.13.9',
     'versions:chart-cert-manager': 'https://charts.jetstack.io:v1.19.1',
     'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
-    'versions:image-gateway-caddy': f'3@{DIGEST}',
+    'versions:image-gateway-caddy': f'{REPOSITORY}:3@{DIGEST}',
 }
 
 
@@ -41,7 +42,7 @@ def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     """
     assert versions.talos == 'v1.13.9'
     assert versions.chart['cert-manager'] == ChartVersion('https://charts.jetstack.io', 'v1.19.1')
-    assert versions.image['gateway-caddy'] == ImagePin('3', DIGEST)
+    assert versions.image['gateway-caddy'] == ImagePin(REPOSITORY, '3', DIGEST)
 
 
 def test_a_chart_pinned_from_a_registry_keeps_the_scheme_in_its_repository() -> None:
@@ -73,10 +74,17 @@ def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callabl
 
 @pytest.mark.parametrize(
     'value',
-    ['3', f'3@{DIGEST[:16]}', f'3@{DIGEST.upper()}', f'@{DIGEST}', f'3@{"a" * 64}'],
-    ids=['no digest', 'truncated', 'upper case', 'no tag', 'unqualified digest'],
+    [
+        f'{REPOSITORY}:3',
+        f'{REPOSITORY}:3@{DIGEST[:16]}',
+        f'{REPOSITORY}:3@{DIGEST.upper()}',
+        f'{REPOSITORY}@{DIGEST}',
+        f'{REPOSITORY}:3@{"a" * 64}',
+        f':3@{DIGEST}',
+    ],
+    ids=['no digest', 'truncated', 'upper case', 'no tag', 'unqualified digest', 'no repository'],
 )
-def test_an_image_pin_that_is_not_a_tag_and_a_digest_is_refused(value: str) -> None:
+def test_an_image_pin_that_is_not_a_whole_reference_is_refused(value: str) -> None:
     """Checked here rather than at apply time.
 
     A truncated paste is then a configuration error with a key on it, instead
@@ -89,6 +97,15 @@ def test_an_image_pin_that_is_not_a_tag_and_a_digest_is_refused(value: str) -> N
 
     with pytest.raises(ValueError, match='versions:image-gateway-caddy'):
         _ = versions.image['gateway-caddy']
+
+
+def test_a_registry_named_with_a_port_keeps_it_out_of_the_tag() -> None:
+    """The tag is what follows the *last* colon, and never contains a slash."""
+    pulumi.runtime.set_all_config(
+        dict(PINS) | {'versions:image-gateway-caddy': f'registry.invalid:5000/estate/caddy:3@{DIGEST}'}
+    )
+
+    assert versions.image['gateway-caddy'] == ImagePin('registry.invalid:5000/estate/caddy', '3', DIGEST)
 
 
 def test_a_chart_pin_that_names_no_version_at_all_is_refused_by_name() -> None:

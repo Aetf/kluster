@@ -25,19 +25,16 @@ config:
 
   # The gateway's container root filesystems, one pin per service and not one
   # per build -- the two resolvers run the same image, and separate keys are
-  # what let one of them be proven before the other. `<tag>@sha256:<digest>`:
-  # the digest is the pin and the tag is where those bytes were found, and one
-  # renovate data source moves the pair together. The repository is
-  # `conventions.gateway.image_repository`, because who publishes these is a
-  # decision rather than four values to maintain; the `# renovate:` comment
-  # above each pin is how the bot is told the same thing, in the shape the
-  # build-arg pins in `docker/` already use.
+  # what let one of them be proven before the other. Each is a whole reference,
+  # `<repository>:<tag>@sha256:<digest>`: the digest is the identity, the tag is
+  # where those bytes were found, and one renovate data source reads all three
+  # off the line and moves the tag and the digest together.
   #
-  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/caddy
-  versions:image-gateway-caddy: 3@sha256:8258d234b66696ef52b34e9cb5b73ca6af4dfcc0fc91c25e894374753e50780c
-  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/adguard
-  versions:image-gateway-adguard-alice: 3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
-  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/adguard
-  versions:image-gateway-adguard-bob: 3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
-  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/zerotier
-  versions:image-gateway-zerotier: 3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7
+  # Which repository publishes a given build is still this repository's
+  # decision, held as `conventions.gateway.image_repository` -- the stack checks
+  # each pin against it and refuses a mismatch by key, so the two resolvers
+  # cannot drift onto two different images.
+  versions:image-gateway-caddy: ghcr.io/aetf/homelab-containers/caddy:3@sha256:8258d234b66696ef52b34e9cb5b73ca6af4dfcc0fc91c25e894374753e50780c
+  versions:image-gateway-adguard-alice: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
+  versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
+  versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7

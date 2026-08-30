@@ -33,13 +33,16 @@ declarative/physical.md §4.
     legible at a glance.
 -   **nspawn container services** (units + digest-pinned rootfs pushed
     by the gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
-    **ZeroTier member container** (§2) as the fourth. A pin names a
-    published **container image** as `<tag>@sha256:<digest>`: the
-    runner pulls that manifest by its digest and hashes it against the
-    pin, hashes every layer against the digest the manifest gives for
-    it, and flattens the layers into one plain archive; the push
-    unpacks that into a per-service directory tree, and the unit boots
-    the tree with `systemd-nspawn --directory=`. The tree is derived
+    **ZeroTier member container** (§2) as the fourth. A pin is a whole
+    image reference, `<repository>:<tag>@sha256:<digest>`: the runner
+    pulls that manifest by its digest and hashes it against the pin,
+    hashes every layer against the digest the manifest gives for it,
+    and flattens the layers into one plain archive; the push unpacks
+    that into a per-service directory tree, and the unit boots the tree
+    with `systemd-nspawn --directory=`. Which repository publishes a
+    given build stays this repository's decision — the stack checks
+    each pin against it and refuses a mismatch by key, so the two
+    resolvers cannot drift onto two different images. The tree is derived
     state the push replaces whole and never edits, so nothing worth
     keeping lives in it — a service's writable state is bind-mounted
     from `/data` instead, which is also what makes a rootfs bump a

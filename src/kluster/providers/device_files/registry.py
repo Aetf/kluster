@@ -3,8 +3,7 @@
 The device this package writes to cannot pull from a registry: it runs
 `systemd-nspawn` over a directory, not a container engine, and its user space
 is the cut-down one a router ships. So the runner does the pulling and hands
-the device a plain archive — which is the same division of labour a release
-tarball got, with the archive now assembled here instead of downloaded whole.
+the device a plain archive.
 
 **The reference is the pin, and the pin verifies everything.** An image is
 named by its manifest digest, and every byte below it is reachable only through
@@ -19,9 +18,6 @@ content this module has already checked:
 3.  nothing else is read at all — the image configuration is not fetched,
     because a root filesystem is the layers and nothing in the configuration
     changes what is on disk.
-
-That chain is what a URL plus a `sha256` bought before, one link longer and
-maintained by the same machinery that maintains any other image pin.
 
 **Flattening is `podman export` in Python.** Layers are applied in order and
 the result is one tar: a path a later layer carries replaces the same path in
@@ -58,10 +54,12 @@ import re
 import tarfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, final
+from typing import Any, NamedTuple, final
 
 import requests
 import zstandard
+
+from kluster.lib.versions import is_digest
 
 __all__ = (
     'ACCEPT',
@@ -72,6 +70,7 @@ __all__ = (
     'OPAQUE_WHITEOUT',
     'TOKEN_ACCEPT',
     'WHITEOUT_PREFIX',
+    'DanglingHardLink',
     'DigestMismatch',
     'Image',
     'UnsupportedImage',
@@ -136,9 +135,6 @@ OPAQUE_WHITEOUT = '.wh..wh..opq'
 MANIFEST_TIMEOUT = 60
 BLOB_TIMEOUT = 300
 
-#: A registry reference's digest, in the one form registries use.
-_DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
-
 #: One `key="value"` of a `WWW-Authenticate` challenge.
 _CHALLENGE = re.compile(r'(?P<key>[a-z_]+)="(?P<value>[^"]*)"')
 
@@ -152,6 +148,16 @@ class DigestMismatch(Exception):
         self.what: str = what
         self.expected: str = expected
         self.actual: str = actual
+
+
+@final
+class DanglingHardLink(Exception):
+    """A hard link's target is not in the flattened tree ahead of it."""
+
+    def __init__(self, name: str, linkname: str) -> None:
+        super().__init__(f'{name} is a hard link to {linkname}, which the flattened image does not place before it')
+        self.name: str = name
+        self.linkname: str = linkname
 
 
 @final
@@ -190,7 +196,7 @@ class Image:
     def __post_init__(self) -> None:
         if '/' not in self.repository or not _is_registry(self.repository.split('/', 1)[0]):
             raise ValueError(f'{self.repository!r} does not begin with a registry host')
-        if not _DIGEST.fullmatch(self.digest):
+        if not is_digest(self.digest):
             raise ValueError(f'{self.digest!r} is not a `sha256:<hex>` digest')
 
     def __str__(self) -> str:
@@ -268,7 +274,7 @@ def rootfs(image: Image) -> bytes:
         _verify(f'{image} layer {digest}', digest, blob)
         # Decompressed only after the manifest's digest for it has been
         # checked, so what is unpacked is a function of bytes already vouched
-        # for -- the same ordering the device push has always used.
+        # for.
         layers.append(decompress(blob))
     return flatten(layers)
 
@@ -277,10 +283,17 @@ def flatten(layers: Sequence[bytes]) -> bytes:
     """Apply layer archives in order and write the result as one archive.
 
     A path in a later layer replaces the same path in an earlier one, and a
-    whiteout removes what it names instead of being carried through: the device
+    whiteout removes what it hides instead of being carried through: the device
     unpacks this with `tar`, which has no notion of a deletion, so a marker
     that reached it would appear inside the container as a file the image meant
     to have removed.
+
+    **A layer is applied in two passes**, its whiteouts before its entries. A
+    marker hides what the layers *below* it put there and never its own layer's
+    content, so a single pass in archive order would let a marker delete a path
+    the same layer had already contributed — and the order entries appear in
+    within one layer is the image builder's business, not a promise this can
+    read semantics out of.
 
     Entries keep their own metadata, PAX headers included, so file
     capabilities and long names survive; the output is written as PAX for the
@@ -289,14 +302,23 @@ def flatten(layers: Sequence[bytes]) -> bytes:
     """
     entries: dict[str, tuple[tarfile.TarInfo, bytes | None]] = {}
     for layer in layers:
+        hidden: list[_Whiteout] = []
+        contributed: list[tuple[tarfile.TarInfo, bytes | None]] = []
         with tarfile.open(fileobj=io.BytesIO(layer), mode='r:') as archive:
             for member in archive:
-                covered = _whiteout(member.name)
-                if covered is not None:
-                    _erase(entries, covered)
+                whiteout = _whiteout(member.name)
+                if whiteout is not None:
+                    hidden.append(whiteout)
                     continue
                 extracted = archive.extractfile(member) if member.isreg() else None
-                entries[member.name] = (member, None if extracted is None else extracted.read())
+                contributed.append((member, None if extracted is None else extracted.read()))
+        for marker in hidden:
+            if marker.hides is not None:
+                _erase(entries, marker.hides, opaque=marker.opaque)
+        for member, data in contributed:
+            entries[member.name] = (member, data)
+
+    _refuse_dangling_links(entries)
 
     sink = io.BytesIO()
     with tarfile.open(fileobj=sink, mode='w', format=tarfile.PAX_FORMAT) as out:
@@ -352,36 +374,85 @@ def _verify(what: str, expected: str, data: bytes) -> None:
         raise DigestMismatch(what, expected, actual)
 
 
-def _whiteout(name: str) -> str | None:
-    """What this entry deletes, if it is a whiteout rather than a file.
+@final
+class _Whiteout(NamedTuple):
+    """A marker entry: never content, and what it hides where it names anything."""
 
-    A marker `.wh.x` beside `x` removes `x`; the opaque marker removes
-    everything the directory holding it accumulated. Both answer with a path
-    prefix, since removing a directory removes what is under it.
+    #: The path hidden, or `None` for a marker that names nothing.
+    hides: str | None
+    opaque: bool
+
+
+def _whiteout(name: str) -> _Whiteout | None:
+    """Whether this entry is a marker rather than content, and what it hides.
+
+    Two kinds, and they hide different things. A marker `.wh.x` beside `x`
+    hides `x` itself along with anything under it. The opaque marker hides the
+    *children* the lower layers put in the directory holding it and **not that
+    directory**, which keeps the mode, ownership and attributes its own layer
+    gives it.
+
+    A bare `.wh.` names nothing, and is a marker that hides nothing rather than
+    content: it is not shipped, because a `.wh.` file reaching the device would
+    show up inside the container, and it erases nothing either, because reading
+    it as "the whole directory" is what the opaque marker means and far too
+    much to infer from a name the specification gives no meaning.
     """
     directory, _, base = name.rpartition('/')
     if base == OPAQUE_WHITEOUT:
-        return directory
+        return _Whiteout(directory, opaque=True)
+    if base == WHITEOUT_PREFIX:
+        return _Whiteout(None, opaque=False)
     if base.startswith(WHITEOUT_PREFIX):
         covered = base[len(WHITEOUT_PREFIX) :]
-        return f'{directory}/{covered}' if directory else covered
+        return _Whiteout(f'{directory}/{covered}' if directory else covered, opaque=False)
     return None
 
 
-def _erase(entries: dict[str, tuple[tarfile.TarInfo, bytes | None]], covered: str) -> None:
-    """Drop a path and everything beneath it.
+def _erase(entries: dict[str, tuple[tarfile.TarInfo, bytes | None]], covered: str, *, opaque: bool) -> None:
+    """Drop what a whiteout hides, which is not the same set for the two kinds.
+
+    An opaque marker drops the strict children of `covered` and leaves the
+    directory entry itself standing: dropping it too would leave the device's
+    `tar` to invent that directory at whatever mode and owner the extraction
+    happens to run under, silently losing what the image declared. A plain
+    whiteout drops the path as well, because that is what it names.
 
     An empty `covered` is an opaque marker at the archive's root, which empties
-    the whole tree accumulated so far -- rare, legal, and the reason the prefix
-    test is written as it is rather than as a bare `startswith`.
+    everything accumulated so far -- rare, legal, and why the prefix is
+    computed rather than assumed non-empty.
     """
     prefix = f'{covered}/' if covered else ''
-    for name in _doomed(entries, covered, prefix):
+    for name in _doomed(entries, covered, prefix, opaque=opaque):
         del entries[name]
 
 
-def _doomed(entries: Mapping[str, object], covered: str, prefix: str) -> Iterable[str]:
+def _doomed(entries: Mapping[str, object], covered: str, prefix: str, *, opaque: bool) -> Iterable[str]:
+    if opaque:
+        return [name for name in entries if name.startswith(prefix)]
     return [name for name in entries if name == covered or name.startswith(prefix)]
+
+
+def _refuse_dangling_links(entries: Mapping[str, tuple[tarfile.TarInfo, bytes | None]]) -> None:
+    """Refuse a flattening in which a hard link would not extract.
+
+    A hard link carries no content of its own: it names an entry that has to
+    already exist when `tar` reaches it. Layering can break that in a way no
+    single layer does -- a whiteout hides the target and a later layer puts it
+    back, which appends it *after* the link that names it -- and the result is
+    an archive the device fails to unpack, at the end of a push, with the tree
+    already staged.
+
+    So it is refused here instead, where the message can say which entry and
+    which target. Reordering to fix it is not attempted: the entry order is
+    what carries directories ahead of their contents, and rearranging it to
+    satisfy a link is the kind of guess this module does not make.
+    """
+    placed: set[str] = set()
+    for name, (member, _) in entries.items():
+        if member.islnk() and member.linkname not in placed:
+            raise DanglingHardLink(name, member.linkname)
+        placed.add(name)
 
 
 def _is_registry(candidate: str) -> bool:
