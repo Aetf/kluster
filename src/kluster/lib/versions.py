@@ -1,14 +1,18 @@
 """Version pins: one configuration namespace, the kind in the key.
 
 Everything this repository pins is the same kind of fact — a build somebody
-else produced, selected by version — so the Talos release, the Helm charts, the
-container images and the gateway's container root filesystems share one
-`versions:` namespace and differ by a prefix on the key (rfc-002 §11.1):
+else produced, selected by version — so the Talos release, the Helm charts and
+the container images share one `versions:` namespace and differ by a prefix on
+the key (rfc-002 §11.1):
 
     versions:talos: v1.13.9
     versions:chart-cert-manager: https://charts.jetstack.io:v1.19.1
-    versions:image-adguard: docker.io/adguard/adguardhome:v0.107.68
-    versions:rootfs-gateway-caddy: rootfs-1:e154a141364c60cc…
+    versions:image-gateway-caddy: 3@sha256:8258d234b66696ef…
+
+The gateway's container root filesystems are in that third kind rather than a
+kind of their own: they are published as registry images, so an image reference
+is what pins them and there is nothing left that made them special (rfc-002
+§11.1).
 
 The prefix is what lets one renovate manager per kind match its own entries and
 nothing else. The keys live in the project-level `config:` block of
@@ -34,8 +38,10 @@ NAMESPACE = 'versions'
 #: The whole key of the one pin there is exactly one of.
 TALOS = 'talos'
 
-#: A hex-encoded SHA-256 digest, which is what a root filesystem is pinned by.
-_DIGEST = re.compile(r'[0-9a-f]{64}')
+#: A registry digest, in the one form a reference carries it: algorithm-qualified
+#: and lower case, because that is what a registry serves and what a comparison
+#: against a device's marker is made byte for byte against.
+_DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 
 #: The namespace, read once: a `Config` holds a name and reads the runtime at
 #: every call, so one is all the accessors below need between them.
@@ -49,16 +55,17 @@ class ChartVersion(NamedTuple):
     version: str
 
 
-class RootfsPin(NamedTuple):
-    """A container root filesystem: the release that published it, and its digest.
+class ImagePin(NamedTuple):
+    """A container image: the tag it was published under, and its manifest digest.
 
-    The digest is the pin and the release is only where the bytes were found;
-    the URL the two produce is a rule in `conventions`, so a change of
-    publisher is an edit to that rule rather than to four configured URLs.
+    The digest is the pin and the tag is only where those bytes were found;
+    which repository serves them is a rule in `conventions`, so a change of
+    publisher is an edit to that rule rather than to as many configured
+    references as there are pins.
     """
 
-    release: str
-    sha256: str
+    tag: str
+    digest: str
 
 
 class _Kind:
@@ -82,13 +89,34 @@ class _Kind:
 
 @final
 class ImageVersions(_Kind):
-    """Container images, pinned as a full reference: registry, repository, tag."""
+    """Container images, pinned as `<tag>@sha256:<digest>`.
+
+    Both halves, because a digest is the only identity renovate maintains end
+    to end while a tag is what a human reads and what a data source bumps; one
+    data source moves the pair together (rfc-002 §11.1). A tag alone would be a
+    moving pin, and a digest alone would be a pin nobody can read.
+
+    What is *not* here is the repository. Which registry publishes a build is a
+    decision of the estate rather than a value repeated in every pin that names
+    the same publisher, so it is a rule in `conventions` applied to this pin —
+    the same ruling that kept the release URL out of configuration before these
+    became registry images.
+
+    The digest's shape is checked here, at the boundary, so a truncated paste
+    is a configuration error naming its key instead of a pull that reaches a
+    registry and is refused there.
+    """
 
     def __init__(self) -> None:
         super().__init__('image')
 
-    def __getitem__(self, name: str) -> str:
-        return self.raw(name)
+    def __getitem__(self, name: str) -> ImagePin:
+        tag, separator, digest = self.raw(name).partition('@')
+        if not separator or not tag:
+            raise self.malformed(name, 'is not a `<tag>@sha256:<digest>` pin')
+        if not _DIGEST.fullmatch(digest):
+            raise self.malformed(name, 'does not end in a lower-case `sha256:` digest')
+        return ImagePin(tag, digest)
 
 
 @final
@@ -106,36 +134,11 @@ class ChartVersions(_Kind):
 
 
 @final
-class RootfsVersions(_Kind):
-    """Container root filesystems, pinned as `<release>:<sha256>`.
-
-    A scalar rather than the structure this used to be: a pin is a scalar
-    everywhere else in the repository, and what a release calls its assets is a
-    convention rather than a URL beside every digest (rfc-002 §11.1). The
-    digest's shape is checked here, at the boundary, so a truncated paste is a
-    configuration error naming its key instead of a push that reaches the
-    device and fails there.
-    """
-
-    def __init__(self) -> None:
-        super().__init__('rootfs')
-
-    def __getitem__(self, name: str) -> RootfsPin:
-        release, separator, digest = self.raw(name).rpartition(':')
-        if not separator or not release:
-            raise self.malformed(name, 'is not a `<release>:<sha256>` pin')
-        if not _DIGEST.fullmatch(digest):
-            raise self.malformed(name, 'does not end in a hex sha256 digest')
-        return RootfsPin(release, digest)
-
-
-@final
 class Versions:
     """Every pin the repository holds, by kind."""
 
     chart = ChartVersions()
     image = ImageVersions()
-    rootfs = RootfsVersions()
 
     @property
     def talos(self) -> str:

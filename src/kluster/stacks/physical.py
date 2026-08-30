@@ -422,15 +422,15 @@ def _gateway(config: pulumi.Config) -> Gateway:
 def _rootfs(service: conventions.gateway.ContainerService) -> Rootfs:
     """The root filesystem one service boots, from the pin that selects it.
 
-    The pin is a release and a digest (`versions:rootfs-gateway-…`); which
-    repository publishes the archives and what a release calls each asset is a
-    rule in `conventions`, so the URL is derived here rather than configured
-    four times over (rfc-002 §11.1).
+    The pin is a tag and a manifest digest (`versions:image-gateway-…`); which
+    registry publishes the images is a rule in `conventions`, so the repository
+    is derived here rather than configured once per pin (rfc-002 §11.1).
     """
-    pin = versions.rootfs[conventions.gateway.rootfs_pin(service)]
+    pin = versions.image[conventions.gateway.image_pin(service)]
     return Rootfs(
-        url=conventions.gateway.rootfs_url(release=pin.release, artifact=service.artifact),
-        sha256=pin.sha256,
+        repository=conventions.gateway.image_repository(service.artifact),
+        tag=pin.tag,
+        digest=pin.digest,
     )
 
 

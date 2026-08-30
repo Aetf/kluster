@@ -24,13 +24,20 @@ config:
   versions:talos: v1.13.9
 
   # The gateway's container root filesystems, one pin per service and not one
-  # per build -- the two resolvers run the same archive, and separate keys are
-  # what let one of them be proven before the other. `<release>:<sha256>`: the
-  # digest is the pin and the release is where the bytes were found. The rest
-  # of the URL is `conventions.gateway.rootfs_url`, because who publishes
-  # these and what a release calls each asset is a decision rather than four
-  # values to maintain.
-  versions:rootfs-gateway-caddy: rootfs-1:e154a141364c60ccd0ac0dd1a7711b2f975ad6fc0fa469201002ea22540f5511
-  versions:rootfs-gateway-adguard-alice: rootfs-1:051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910
-  versions:rootfs-gateway-adguard-bob: rootfs-1:051ab35069306138f930984a561e602f2ad21271d764482f578f0d15f7695910
-  versions:rootfs-gateway-zerotier: rootfs-1:ba74ae49ae729e79c2bcf7b2c770fdb03b19862b188350ab88166e1a3faaadf1
+  # per build -- the two resolvers run the same image, and separate keys are
+  # what let one of them be proven before the other. `<tag>@sha256:<digest>`:
+  # the digest is the pin and the tag is where those bytes were found, and one
+  # renovate data source moves the pair together. The repository is
+  # `conventions.gateway.image_repository`, because who publishes these is a
+  # decision rather than four values to maintain; the `# renovate:` comment
+  # above each pin is how the bot is told the same thing, in the shape the
+  # build-arg pins in `docker/` already use.
+  #
+  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/caddy
+  versions:image-gateway-caddy: 3@sha256:8258d234b66696ef52b34e9cb5b73ca6af4dfcc0fc91c25e894374753e50780c
+  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/adguard
+  versions:image-gateway-adguard-alice: 3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
+  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/adguard
+  versions:image-gateway-adguard-bob: 3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
+  # renovate: datasource=docker depName=ghcr.io/aetf/homelab-containers/zerotier
+  versions:image-gateway-zerotier: 3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7

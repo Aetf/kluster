@@ -78,9 +78,9 @@ class BridgedService:
     #: assigns it: the resolvers take it from the environment their unit
     #: injects, and the LAN's leases already name them.
     address: IPv4Address
-    #: The build the service runs, as the release publishes it (`rootfs_url`).
-    #: Distinct from the name because two services may be two instances of one
-    #: build: the resolvers are.
+    #: The build the service runs, named as its registry repository names it
+    #: (`image_repository`). Distinct from the service's own name because two
+    #: services may be two instances of one build: the resolvers are.
     artifact: str
     #: The public name the gateway serves the service under, where it serves
     #: one. It is a name in a public zone that public resolvers do not answer
@@ -99,7 +99,8 @@ class HostNetworkService:
     """
 
     name: str
-    #: The build the service runs, as the release publishes it (`rootfs_url`).
+    #: The build the service runs, named as its registry repository names it
+    #: (`image_repository`).
     artifact: str
 
 
@@ -140,28 +141,27 @@ OVERLAY = HostNetworkService(name='zerotier', artifact='zerotier')
 #: the roster of unit names, the configuration completeness check.
 SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 
-#: Where the container root filesystems are published, and what a release calls
-#: each asset. A pin says which release and which digest and nothing more
-#: (`versions:rootfs-…`), because who publishes the artifacts and how they are
-#: named is a decision rather than a value an operator maintains four copies of
-#: (rfc-002 §11.1): moving publication elsewhere is an edit here and a review of
-#: it. The device is the site's UDM and there is one of it, so one architecture
-#: is the whole of the matrix.
-ROOTFS_RELEASES = 'https://github.com/Aetf/homelab-containers/releases/download'
-ROOTFS_ARCH = 'arm64'
+#: Where the container root filesystems are published: one registry repository
+#: per build, under a namespace of this estate's own. A pin says which tag and
+#: which digest and nothing more (`versions:image-gateway-…`), because who
+#: publishes the images is a decision rather than a value an operator maintains
+#: four copies of (rfc-002 §11.1): moving publication elsewhere is an edit here
+#: and a review of it. The device is the site's UDM and there is one of it, and
+#: each repository holds that one architecture, so a pin names no platform.
+IMAGE_NAMESPACE = 'ghcr.io/aetf/homelab-containers'
 
 
-def rootfs_url(*, release: str, artifact: str) -> str:
-    """Where the archive one service boots from is published."""
-    return f'{ROOTFS_RELEASES}/{release}/{artifact}-{ROOTFS_ARCH}.tar.zst'
+def image_repository(artifact: str) -> str:
+    """The registry repository one service's build is published to."""
+    return f'{IMAGE_NAMESPACE}/{artifact}'
 
 
-def rootfs_pin(service: ContainerService) -> str:
-    """The name one service's root filesystem is pinned under, in the `rootfs` kind.
+def image_pin(service: ContainerService) -> str:
+    """The name one service's root filesystem is pinned under, in the `image` kind.
 
     One key per service and not one per build: the resolvers run the same
-    archive, and separate keys are what let one of them move first
-    (`versions.rootfs`, rfc-002 §11.1). The device is in the name because the
+    image, and separate keys are what let one of them move first
+    (`versions.image`, rfc-002 §11.1). The device is in the name because the
     `versions:` namespace is the whole repository's.
     """
     return f'gateway-{service.name}'

@@ -13,16 +13,15 @@ from collections.abc import Callable
 import pulumi
 import pytest
 
-from kluster.lib.versions import ChartVersion, RootfsPin, versions
+from kluster.lib.versions import ChartVersion, ImagePin, versions
 
-DIGEST = 'a' * 64
+DIGEST = f'sha256:{"a" * 64}'
 
 PINS = {
     'versions:talos': 'v1.13.9',
     'versions:chart-cert-manager': 'https://charts.jetstack.io:v1.19.1',
     'versions:chart-registry-only': 'oci://example.invalid/charts/thing:0.4.0',
-    'versions:image-adguard': 'docker.io/adguard/adguardhome:v0.107.68',
-    'versions:rootfs-gateway-caddy': f'rootfs-1:{DIGEST}',
+    'versions:image-gateway-caddy': f'3@{DIGEST}',
 }
 
 
@@ -34,14 +33,15 @@ def pinned() -> None:
 def test_every_kind_shares_one_namespace_and_differs_by_key_prefix() -> None:
     """Which is what lets one renovate manager per kind match its own entries.
 
-    Four kinds and one `versions:` namespace, read the same way from any stack
+    Three kinds and one `versions:` namespace, read the same way from any stack
     because the keys are project-level configuration rather than five stacks'
-    copies of the same value.
+    copies of the same value. The gateway's root filesystems are in the `image`
+    kind and not one of their own: they are registry images, so an image
+    reference is what pins them (rfc-002 §11.1).
     """
     assert versions.talos == 'v1.13.9'
     assert versions.chart['cert-manager'] == ChartVersion('https://charts.jetstack.io', 'v1.19.1')
-    assert versions.image['adguard'] == 'docker.io/adguard/adguardhome:v0.107.68'
-    assert versions.rootfs['gateway-caddy'] == RootfsPin('rootfs-1', DIGEST)
+    assert versions.image['gateway-caddy'] == ImagePin('3', DIGEST)
 
 
 def test_a_chart_pinned_from_a_registry_keeps_the_scheme_in_its_repository() -> None:
@@ -56,9 +56,8 @@ def test_a_chart_pinned_from_a_registry_keeps_the_scheme_in_its_repository() -> 
         ('the Talos release', lambda: versions.talos),
         ('versions:chart-nowhere', lambda: versions.chart['nowhere']),
         ('versions:image-nowhere', lambda: versions.image['nowhere']),
-        ('versions:rootfs-nowhere', lambda: versions.rootfs['nowhere']),
     ],
-    ids=['talos', 'chart', 'image', 'rootfs'],
+    ids=['talos', 'chart', 'image'],
 )
 def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callable[[], object]) -> None:
     """A half-filled configuration is the ordinary state of a first run.
@@ -74,21 +73,22 @@ def test_a_pin_nothing_configures_is_refused_by_name(missing: str, read: Callabl
 
 @pytest.mark.parametrize(
     'value',
-    ['rootfs-1', f'rootfs-1:{DIGEST[:8]}', f'rootfs-1:{DIGEST.upper()}', f':{DIGEST}'],
-    ids=['no digest', 'truncated', 'upper case', 'no release'],
+    ['3', f'3@{DIGEST[:16]}', f'3@{DIGEST.upper()}', f'@{DIGEST}', f'3@{"a" * 64}'],
+    ids=['no digest', 'truncated', 'upper case', 'no tag', 'unqualified digest'],
 )
-def test_a_root_filesystem_pin_that_is_not_a_release_and_a_digest_is_refused(value: str) -> None:
+def test_an_image_pin_that_is_not_a_tag_and_a_digest_is_refused(value: str) -> None:
     """Checked here rather than at apply time.
 
     A truncated paste is then a configuration error with a key on it, instead
-    of a payload that reaches the device and is refused there — and the digest
-    is compared byte for byte on the device, so a differently-cased one is a
-    pin that never matches.
+    of a pull that reaches a registry and is refused there. The digest has to
+    carry its algorithm and be lower case, because that is the spelling a
+    registry serves and the one a device's marker is compared byte for byte
+    against — a differently-spelled digest is a pin that never matches.
     """
-    pulumi.runtime.set_all_config(dict(PINS) | {'versions:rootfs-gateway-caddy': value})
+    pulumi.runtime.set_all_config(dict(PINS) | {'versions:image-gateway-caddy': value})
 
-    with pytest.raises(ValueError, match='versions:rootfs-gateway-caddy'):
-        _ = versions.rootfs['gateway-caddy']
+    with pytest.raises(ValueError, match='versions:image-gateway-caddy'):
+        _ = versions.image['gateway-caddy']
 
 
 def test_a_chart_pin_that_names_no_version_at_all_is_refused_by_name() -> None:

@@ -53,12 +53,12 @@ TALOSCONFIG = 'context: kluster\n'
 #: path — so its shape only has to be something no test could mistake for real.
 LIBVIRT_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\nexample\n-----END OPENSSH PRIVATE KEY-----\n'
 
-#: A hex SHA-256 digest, as a root filesystem pin carries one. Nothing here
-#: checks the bytes behind it; the shape is what the reader is checked against.
-DIGEST = 'f' * 64
-#: The release the pins below name. Invented, like the digest: what matters is
-#: that the convention turns the pair into the URL and digest a push carries.
-ROOTFS_RELEASE = 'rootfs-7'
+#: A manifest digest, as a root filesystem pin carries one. Nothing here checks
+#: the bytes behind it; the shape is what the reader is checked against.
+DIGEST = f'sha256:{"f" * 64}'
+#: The tag the pins below name. Invented, like the digest: what matters is that
+#: the convention turns the pair into the reference a push pulls by.
+ROOTFS_TAG = '7'
 
 #: What the gateway reads out of stack configuration: two secrets a file's
 #: content is rendered from, the controller's key, and one measurement. Every
@@ -80,7 +80,7 @@ GATEWAY_CONFIG = {
 VERSIONS_CONFIG = {
     'versions:talos': 'v1.11.0',
     **{
-        f'versions:rootfs-{conventions.gateway.rootfs_pin(service)}': f'{ROOTFS_RELEASE}:{DIGEST}'
+        f'versions:image-{conventions.gateway.image_pin(service)}': f'{ROOTFS_TAG}@{DIGEST}'
         for service in conventions.gateway.SERVICES
     },
 }
@@ -810,10 +810,10 @@ async def test_the_gateway_arm_reads_the_configuration_its_channels_need() -> No
     await wait_for_rpcs(await_all_outstanding_tasks=False)
 
 
-def test_a_root_filesystem_pin_becomes_the_url_and_digest_a_push_carries() -> None:
-    """The pin is a release and a digest; the rest of the URL is a convention.
+def test_a_root_filesystem_pin_becomes_the_reference_a_push_pulls_by() -> None:
+    """The pin is a tag and a digest; the repository is a convention.
 
-    So an operator maintains four scalars and not four URLs, and moving
+    So an operator maintains four scalars and not four references, and moving
     publication is an edit to one rule (rfc-002 §11.1). The two resolvers have
     a key each even though one build serves both, which is what lets a new
     resolver be proven on one instance before the other.
@@ -821,12 +821,13 @@ def test_a_root_filesystem_pin_becomes_the_url_and_digest_a_push_carries() -> No
     caddy = conventions.gateway.CADDY
     pin = physical._rootfs(caddy)  # pyright: ignore[reportPrivateUsage]
 
-    assert pin.sha256 == DIGEST
-    assert pin.url == f'{conventions.gateway.ROOTFS_RELEASES}/{ROOTFS_RELEASE}/caddy-arm64.tar.zst'
+    assert pin.digest == DIGEST
+    assert pin.tag == ROOTFS_TAG
+    assert pin.repository == f'{conventions.gateway.IMAGE_NAMESPACE}/caddy'
 
     alice, bob = conventions.gateway.RESOLVERS
-    assert conventions.gateway.rootfs_pin(alice) != conventions.gateway.rootfs_pin(bob)
-    assert physical._rootfs(alice).url == physical._rootfs(bob).url  # pyright: ignore[reportPrivateUsage]
+    assert conventions.gateway.image_pin(alice) != conventions.gateway.image_pin(bob)
+    assert physical._rootfs(alice).repository == physical._rootfs(bob).repository  # pyright: ignore[reportPrivateUsage]
 
 
 def test_the_provider_sdks_import() -> None:

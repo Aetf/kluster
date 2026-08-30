@@ -215,13 +215,17 @@ ENV_IPV6_TOKEN = 'IPV6_TOKEN'
 class Rootfs:
     """A root filesystem built by continuous integration, pinned by digest.
 
-    The digest is the pin and the URL is only where the bytes were found:
-    bumping either is a previewed, reviewable deployment event, which is the
-    whole reason images are built elsewhere and referenced here.
+    The digest is the pin, and the repository and tag are only where those
+    bytes were found: bumping any of them is a previewed, reviewable deployment
+    event, which is the whole reason images are built elsewhere and referenced
+    here. What the device receives is still a flat archive — it boots a
+    directory under `systemd-nspawn` and pulls nothing itself — so the pull and
+    the flattening are the runner's work (`device_files.registry`).
     """
 
-    url: str
-    sha256: str
+    repository: str
+    tag: str
+    digest: str
 
 
 @final
@@ -366,14 +370,17 @@ class CaddyService(BridgedDeclaration):
     that two issuers which must survive each other's outage do not share a
     credential (gateway.md §1).
 
-    Its address is *not* injected: this image asks for a lease
-    (`/etc/network/interfaces`), and the lease is also where its resolver comes
-    from, so an address injected the way the resolvers take theirs would be read
-    by nothing and a static one imposed over that file would take the name
-    service with it. The address the census holds for caddy is therefore the
-    address the design intends — the one a rewrite has to name — and delivering
-    it is work in the image, which needs the `net-setup` the AdGuard pair
-    already has plus a resolver that does not depend on these services.
+    Its address is injected, the same way the resolvers take theirs: the image
+    carries the `net-setup` the AdGuard pair has, the proxy is ordered after it,
+    and that oneshot exits non-zero when the addressing is not in its
+    environment. So the address the census holds for caddy is the address it
+    holds — the one a rewrite has to name — rather than one the design merely
+    intends, and a unit that failed to deliver it stops the proxy instead of
+    starting it somewhere else.
+
+    Two directories come with it, and they are the image's names rather than
+    paths chosen here: `XDG_CONFIG_HOME` is where it reads its `Caddyfile` and
+    `XDG_DATA_HOME` where it keeps the certificates it must not lose.
     """
 
     acme_token: pulumi.Input[str]
@@ -388,6 +395,7 @@ class CaddyService(BridgedDeclaration):
             'XDG_CONFIG_HOME': CADDY_CONFIG_HOME,
             'XDG_DATA_HOME': CADDY_STATE,
             'HOME': CADDY_STATE,
+            **net_setup_environment(self.service.address),
         }
 
     @property
@@ -731,8 +739,9 @@ class Container(Component):
         self.image = DeviceArtifact(
             f'{name}-image',
             connection=connection,
-            url=declaration.pin.url,
-            sha256=declaration.pin.sha256,
+            repository=declaration.pin.repository,
+            tag=declaration.pin.tag,
+            digest=declaration.pin.digest,
             target=image_path(service),
             extract=root_path(service),
             mode=IMAGE_MODE,
