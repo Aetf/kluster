@@ -63,6 +63,8 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
+from kluster.components.cloud import CloudNetwork
+
 
 class Cloud(Recorder):
     """The one answer this suite is about: the prefix the account assigns."""
@@ -82,7 +84,7 @@ async def monitor() -> Cloud:
 @pytest.mark.asyncio
 async def test_the_subnet_is_carved_from_the_assigned_prefix(monitor: Cloud) -> None:
     async with declaring():
-        network = MyVpcComponent('test-vpc')
+        network = CloudNetwork('test-vpc', compartment_id='ocid1.compartment.test')
 
     assert await network.subnet.ipv6cidr_block.future() == '2001:db8::/64'
     assert monitor.names('oci:Core/subnet:Subnet') == {'test-vpc-subnet'}
