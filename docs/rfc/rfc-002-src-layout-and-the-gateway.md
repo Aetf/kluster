@@ -1,7 +1,23 @@
 # RFC 002: Source Layout, and the Gateway as a Component Tree
 
-*   **Status:** Proposed. It is approved before implementation starts, and the
-    implementation issues are cut from the accepted text.
+*   **Status:** Implemented, 2026-08-29. All eleven slices of §15 are merged,
+    and the text below is kept as the accepted proposal rather than as a
+    description of the system. What the system *is* lives in the design
+    documents: the device's own mechanism and the units it runs in
+    [physical/gateway.md](../physical/gateway.md) §1, the libvirt transport in
+    [physical/homelab-host.md](../physical/homelab-host.md) §6, the
+    dynamic-provider mechanism and its measured semantics in
+    [framework/pulumi.md](../framework/pulumi.md) §5 with the rendered-configuration
+    and version-pin mechanisms in §6 and §3.2, the provider, configuration and
+    data rules in [style/pulumi.md](../style/pulumi.md), the source layering in
+    AGENTS.md and `pyproject.toml`'s import contract, and everything declared —
+    the component tree, the per-node capabilities, the roster, the stack's
+    configuration surface — in [declarative/physical.md](../declarative/physical.md)
+    and [physical/gateway.md](../physical/gateway.md). Where this text and a
+    design document disagree, the design document is right: two decisions moved
+    during construction, the device provider's endpoint and host-key pin staying
+    declared resource inputs rather than travelling through `configure` (§7.4,
+    §11), and the pin becoming a `conventions` constant a preview shows (§11).
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

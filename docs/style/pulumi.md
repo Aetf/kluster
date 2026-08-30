@@ -45,7 +45,8 @@ a provider and is read by nothing else. Everything else still arrives as
 a parameter, and no such credential reaches any component's signature.
 A program that follows this rule disables default providers for the
 packages it builds providers for, which turns a forgotten one into an
-error rather than a silent fallback. See framework/rfc-002 §8.
+error rather than a silent fallback. See
+[rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md) §8.
 
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each

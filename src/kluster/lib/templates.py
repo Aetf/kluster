@@ -3,7 +3,7 @@
 Another program's configuration language belongs in a file beside the module
 that declares it, not in a Python string literal (`docs/style/python.md`), and
 this is the mechanism that brings such a file back
-(`docs/framework/rfc-002-src-layout-and-the-gateway.md` §9.1). It works on
+(`docs/rfc/rfc-002-src-layout-and-the-gateway.md` §9.1). It works on
 directories as well as on single files, because a directory is the shape the
 callers after the first ones need: an application's configuration is a tree that
 becomes a config map or the plaintext half of a sealed secret.

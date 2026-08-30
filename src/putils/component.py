@@ -5,7 +5,7 @@ sub-resources attached to it.
 
 Sub-resources are created synchronously in ``__init__`` like plain Pulumi
 code; inputs that need async preparation are wrapped with `putils.async_output`.
-See docs/rfc-001-native-async-inputs.md.
+See docs/rfc/rfc-001-native-async-inputs.md.
 """
 
 from __future__ import annotations
