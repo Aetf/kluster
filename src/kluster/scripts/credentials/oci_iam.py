@@ -1236,16 +1236,8 @@ def verify_tenancy(tenancy: str) -> None:
     fact goes stale — a kit re-seeded from a different tenancy, and an OCID
     recorded wrong — and both would deliver a key that signs somewhere the
     stack does not act, so both are worth stopping over.
-
-    A tenancy the convention has not recorded yet is the third failure, and it
-    arrives here as a refusal to deliver rather than as a traceback: the
-    command's exit status is what an operator reads, and the message names the
-    line to write.
     """
-    try:
-        intended = conventions.OCI_TENANCY.require_tenancy_ocid()
-    except conventions.TenancyUnrecorded as unrecorded:
-        raise CredentialRejected(str(unrecorded)) from unrecorded
+    intended = conventions.OCI_TENANCY.tenancy_ocid
     if tenancy != intended:
         raise CredentialRejected(
             f'this key signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the account '

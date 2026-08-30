@@ -18,10 +18,6 @@ class CompartmentMissing(LookupError):
     """A consumer's compartment is named here but does not exist in the tenancy yet."""
 
 
-class TenancyUnrecorded(LookupError):
-    """The account's own OCID belongs here and has not been written down yet."""
-
-
 @dataclass(frozen=True)
 class Compartment:
     """The OCI compartment one consumer administers, under both of its names.
@@ -90,10 +86,7 @@ class OciTenancy:
     #: What OCI calls the account itself. Also its root compartment, which is
     #: why the two tenancy-level guardrail resources — the quota policy and the
     #: budget — are declared against it rather than against a compartment.
-    #:
-    #: `None` is a state this field is passing through rather than one it
-    #: keeps: see the TODO on `OCI_TENANCY` below.
-    tenancy_ocid: str | None
+    tenancy_ocid: str
     #: The mail domain every OCI user this program creates is addressed in. An
     #: identity-domains tenancy converts every legacy-IAM user into a domain
     #: user, and the conversion refuses a user without a primary address; the
@@ -103,17 +96,6 @@ class OciTenancy:
     #: One compartment per consumer, which is what makes the §3 OCI rows
     #: independent of each other.
     compartments: Mapping[str, Compartment]
-
-    def require_tenancy_ocid(self) -> str:
-        """The account's OCID, or a refusal naming what has to be written here."""
-        if self.tenancy_ocid is None:
-            raise TenancyUnrecorded(
-                'the tenancy OCID is not recorded in `conventions.OCI_TENANCY`, so nothing that declares into '
-                'the account can name it: `pulumi config get kluster-py:ociTenancyOcid --stack physical` prints '
-                'the value this estate has been using, and writing it as the `tenancy_ocid` argument is the one '
-                'line to commit'
-            )
-        return self.tenancy_ocid
 
 
 @dataclass(frozen=True)
@@ -132,31 +114,9 @@ class B2Account:
 #: hand before this program existed, so it carries the estate's own name rather
 #: than a per-consumer one, and the mint adopts it exactly as it adopts a user
 #: or a group that is already there.
-#:
-#: TODO(kluster-ops#117): `tenancy_ocid` is the literal, and it is `None` only
-#: because the value has never been written down in the clear — it lives as an
-#: encrypted `kluster-py:ociTenancyOcid` in `Pulumi.physical.yaml`, which
-#: `pulumi config get` prints and this checkout cannot.
-#:
-#: Writing it here is one line, and it makes the whole unrecorded state
-#: unreachable — so the same commit deletes all of it, or the tree is left
-#: carrying machinery for a case that can no longer happen:
-#:
-#: - this comment, the `| None` on the field above and the note under it;
-#: - `require_tenancy_ocid` and its two callers' use of it — `stacks/physical.py`
-#:   and `oci_iam.verify_tenancy` read the field directly;
-#: - the `TenancyUnrecorded` class, its `except` arm in `oci_iam.verify_tenancy`,
-#:   and its import and `__all__` entry in `conventions/__init__.py`;
-#: - `with_tenancy_ocid`'s `None` mode (`tests/oci_conventions.py`), and the two
-#:   cases that are the only callers of it —
-#:   `test_derived.py::test_an_account_conventions_has_not_recorded_refuses_to_deliver`
-#:   and
-#:   `test_physical_stack.py::test_a_tenancy_nobody_has_written_down_refuses_by_naming_the_line_to_write`;
-#: - the `kluster-py:ociTenancyOcid` entry in `Pulumi.physical.yaml`, which
-#:   nothing reads once the field carries the value.
 OCI_TENANCY = OciTenancy(
     region='us-phoenix-1',
-    tenancy_ocid=None,
+    tenancy_ocid='ocid1.tenancy.oc1..aaaaaaaaoomhmb7xh4l2xwe3wsnik24hflgpfwxl44m7vsg6repjhufueufq',
     user_email_domain='unlimited-code.works',
     compartments={
         compartment.consumer: compartment
