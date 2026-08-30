@@ -1,9 +1,10 @@
 """The gw-config provider: convergence against a device that is not there.
 
 Every test below runs the provider's real code against a fake device. What is
-doubled is the wire -- the SSH session, and the registry pull of an image -- and
-nothing above it: the shell one-liners, the quoting, the digest arithmetic, the
-key parsing and the diff logic are the shipped ones. No test opens a socket.
+doubled is the wire -- the SSH session -- and nothing above it: the shell
+one-liners, the quoting, the key parsing and the diff logic are the shipped
+ones. The device pulls its own images, so a suite that has replaced the session
+has replaced everything that leaves the runner, and no test opens a socket.
 
 **A provider under test is configured first**, because a provider in production
 is: the plugin deserializes it out of a resource's `__provider` property and
@@ -37,7 +38,7 @@ from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportU
 from pulumi.runtime import rpc
 
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
-from kluster.providers.device_files import provider, registry, ssh
+from kluster.providers.device_files import provider, ssh
 
 
 def private_key() -> str:
@@ -76,15 +77,22 @@ CONFIG = 'router bgp 65000\n'
 HOOK = "vtysh -c 'configure terminal'"
 
 ROOTFS_REPOSITORY = 'registry.invalid/estate/adguard'
-ROOTFS_TAG = '7'
-#: The manifest digest that is the pin. It is deliberately *not* the hash of the
-#: payload below: what the runner pushes is the image flattened into an archive,
-#: and no digest of that archive appears anywhere in the design -- see
-#: `test_the_marker_names_the_pin_and_not_the_bytes_lying_beside_it`.
+#: Deliberately unlike everything else here, so that a test asserting the pull
+#: does not name the tag can tell the difference.
+ROOTFS_TAG = 'v7.2.1'
+#: The manifest digest that is the pin, and the only thing a pull is performed
+#: by. Nothing on the runner ever hashes anything to compare against it: the
+#: verification belongs to the device's own `skopeo`.
 ROOTFS_DIGEST = f'sha256:{"e" * 64}'
-ROOTFS = b'a root filesystem, in miniature'
-ROOTFS_TARGET = '/data/services/images/adguard.tar'
+ROOTFS_REFERENCE = f'{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}'
 ROOTFS_TREE = '/data/services/roots/adguard'
+#: What the device's `stat` sees where a tree is. The fake keeps files, and a
+#: directory is a file whose contents nothing reads.
+TREE_ENTRY = b'a directory, as far as `stat` is concerned'
+#: The command fragments a test refuses to make one step of a push fail.
+SKOPEO = 'skopeo copy'
+UMOCI = 'umoci raw unpack'
+HOOK_COMMAND = 'systemctl restart adguard'
 
 
 @final
@@ -176,26 +184,6 @@ def device(monkeypatch: pytest.MonkeyPatch) -> Device:
     return fake
 
 
-@pytest.fixture
-def pulls(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
-    """What the runner gets when it pulls an image, by the reference it pulled.
-
-    The pull's own verification is `registry`'s and is under test there; what
-    this suite needs of it is that it happened, that its result is what reaches
-    the device, and that a refusal there is a refusal here.
-    """
-    served = {f'{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}': ROOTFS}
-
-    def fetch(image: provider.Image) -> bytes:
-        payload = served.get(str(image))
-        if payload is None:
-            raise registry.DigestMismatch(str(image), image.digest, f'sha256:{"0" * 64}')
-        return payload
-
-    monkeypatch.setattr(provider, 'fetch', fetch)
-    return served
-
-
 #: The project the configuration keys below are namespaced by, and the one this
 #: module's declarations are mocked under. An unqualified key is resolved
 #: against the running project, which is how the plugin finds it (rfc-002 §7.5
@@ -242,6 +230,7 @@ def file_props(**overrides: Any) -> dict[str, Any]:
 
 
 def artifact_props(**overrides: Any) -> dict[str, Any]:
+    """An artifact as a container service declares one: a pin and a tree."""
     return {
         'host': HOST,
         'port': 22,
@@ -250,17 +239,9 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
         'repository': ROOTFS_REPOSITORY,
         'tag': ROOTFS_TAG,
         'digest': ROOTFS_DIGEST,
-        'target': ROOTFS_TARGET,
-        'extract': None,
-        'mode': '0600',
-        'owner': 'root:root',
-        'hook': 'systemctl restart adguard',
+        'root': ROOTFS_TREE,
+        'hook': HOOK_COMMAND,
     } | overrides
-
-
-def unpacking_props(**overrides: Any) -> dict[str, Any]:
-    """An artifact as a container service declares one: an archive and a tree."""
-    return artifact_props(extract=ROOTFS_TREE) | overrides
 
 
 def converged(device: Device, props: Mapping[str, Any]) -> None:
@@ -274,22 +255,16 @@ def converged(device: Device, props: Mapping[str, Any]) -> None:
     )
 
 
-def landed(device: Device, props: Mapping[str, Any], payload: bytes = ROOTFS, digest: str | None = None) -> None:
-    """Put the device in the state an artifact bag declares, markers and all.
+def landed(device: Device, props: Mapping[str, Any], digest: str | None = None) -> None:
+    """Put the device in the state an artifact bag declares, marker and all.
 
-    `digest` is what the markers claim, which is the *manifest* digest of the
-    image and therefore never the digest of the flattened payload lying beside
-    them on the device.
+    `digest` is what the marker claims, which is the *manifest* digest of the
+    image the tree was unpacked from and never a checksum of the tree itself.
     """
-    user, _, group = str(props['owner']).partition(':')
-    target = str(props['target'])
+    root = str(props['root'])
     claimed = digest if digest is not None else str(props['digest'])
-    device.files[target] = Entry(data=payload, mode=str(props['mode']), owner=user, group=group)
-    device.files[provider.marker_path(target)] = Entry(data=f'{claimed}\n'.encode())
-    tree = props.get('extract')
-    if tree:
-        device.files[str(tree)] = Entry(data=b'a directory, as far as `stat` is concerned')
-        device.files[provider.marker_path(str(tree))] = Entry(data=f'{claimed}\n'.encode())
+    device.files[root] = Entry(data=TREE_ENTRY)
+    device.files[provider.marker_path(root)] = Entry(data=f'{claimed}\n'.encode())
 
 
 ##
@@ -680,73 +655,142 @@ def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
 ##
 
 
-def test_an_artifact_lands_then_the_hook_runs_then_the_marker_is_written(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """The marker is a claim, so it is made only once the claim is true."""
-    assert pulls
+def test_the_device_pulls_the_pin_itself_and_the_marker_precedes_the_hook(device: Device) -> None:
+    """The whole apply, in order, and every step of it a command the device ran.
+
+    Nothing here streams a payload: the runner hands over a reference and the
+    device does the fetching. The marker is written before the hook because the
+    hook is what notices -- the gateway's hook restarts a container when a file
+    it reads has changed, and the marker beside the tree is that file.
+    """
     result = artifact_provider().create(artifact_props())
 
     assert device.log == [
-        f'write {ROOTFS_TARGET}',
-        'run systemctl restart adguard',
-        f'write {provider.marker_path(ROOTFS_TARGET)}',
+        f'run {provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE)}',
+        f'run {provider.unpack_script(ROOTFS_TREE)}',
+        f'write {provider.marker_path(ROOTFS_TREE)}',
+        f'run {HOOK_COMMAND}',
     ]
-    assert device.files[ROOTFS_TARGET].data == ROOTFS
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
-    assert result.id == ROOTFS_TARGET
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_DIGEST}\n'.encode()
+    assert result.id == ROOTFS_TREE
 
 
-def test_bytes_that_do_not_match_their_pin_never_reach_the_device(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """Verification precedes the session, so a substituted release cannot land.
+def test_one_session_carries_the_whole_push(device: Device) -> None:
+    """The pull is a command on the far end, so it rides the session already open."""
+    _ = artifact_provider().create(artifact_props())
 
-    The pull is what refuses -- the pin names a manifest and the manifest names
-    the layers (`registry`) -- and what matters here is that the refusal ends
-    the push before a session is opened.
+    assert device.sessions == 1
+
+
+def test_the_pull_names_the_digest_and_never_the_tag(device: Device) -> None:
+    """A tag is a name somebody else can move, so it is declared and not resolved."""
+    _ = artifact_provider().create(artifact_props())
+    pull = device.commands[0]
+
+    assert f'docker://{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}' in pull
+    assert ROOTFS_TAG not in pull
+
+
+def test_the_marker_names_the_pin_and_not_the_bytes_lying_beside_it(device: Device) -> None:
+    """What the device holds is a tree; what it records is where the tree came from.
+
+    The pin verifies the manifest and the manifest verifies the layers, all of
+    it inside the device's own `skopeo`. So the marker is deliberately not a
+    checksum of anything on the device -- it is a claim about provenance, and
+    nothing on either end computes a digest to write it.
     """
-    pulls.clear()
+    _ = artifact_provider().create(artifact_props(digest=ROOTFS_DIGEST))
 
-    with pytest.raises(registry.DigestMismatch) as raised:
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_DIGEST}\n'.encode()
+    assert not any('sha256sum' in command or 'cksum' in command for command in device.commands)
+
+
+def test_a_pull_that_fails_leaves_the_live_tree_untouched(device: Device) -> None:
+    """The registry is unreachable, or serves something else, or refuses: the
+    container goes on running exactly what it was running."""
+    landed(device, artifact_props(), digest=f'sha256:{"a" * 64}')
+    device.refuse = (SKOPEO,)
+
+    with pytest.raises(provider.PullFailed) as raised:
         _ = artifact_provider().create(artifact_props())
 
-    assert ROOTFS_DIGEST in str(raised.value)
-    assert device.sessions == 0
-    assert device.files == {}
+    assert ROOTFS_REFERENCE in str(raised.value)
+    assert 'refused' in str(raised.value), 'the device said why, and the error carries it'
+    assert device.files[ROOTFS_TREE].data == TREE_ENTRY
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'sha256:{"a" * 64}\n'.encode()
+    assert not any(UMOCI in command or HOOK_COMMAND in command for command in device.commands)
+
+
+def test_an_unpack_that_fails_leaves_the_live_tree_untouched(device: Device) -> None:
+    """The swap is the last thing the unpack does, so a failure before it is invisible
+    to the running container, and the marker still names the pin it was unpacked from."""
+    landed(device, artifact_props(), digest=f'sha256:{"a" * 64}')
+    device.refuse = (UMOCI,)
+
+    with pytest.raises(provider.ExtractFailed) as raised:
+        _ = artifact_provider().create(artifact_props())
+
+    assert ROOTFS_TREE in str(raised.value)
+    assert 'refused' in str(raised.value)
+    assert device.files[ROOTFS_TREE].data == TREE_ENTRY
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'sha256:{"a" * 64}\n'.encode()
+    assert HOOK_COMMAND not in device.commands
+
+
+def test_a_hook_that_refuses_withdraws_the_marker_it_was_about_to_be_told_about(device: Device) -> None:
+    """The marker has to precede the hook and must not survive one that failed.
+
+    It is the claim that this tree came from this pin *and* that the device has
+    acted on it. Leaving it behind would leave the next preview with nothing to
+    notice, and a container running an old image nobody is told about.
+    """
+    device.refuse = (HOOK_COMMAND,)
+
+    with pytest.raises(provider.HookFailed):
+        _ = artifact_provider().create(artifact_props())
+
+    assert provider.marker_path(ROOTFS_TREE) not in device.files
+    assert device.log[-2:] == [
+        f'run {HOOK_COMMAND}',
+        f'remove {provider.marker_path(ROOTFS_TREE)}',
+    ]
 
 
 def test_a_marker_naming_the_pinned_digest_is_no_change(device: Device) -> None:
-    """A preview compares two hashes; it does not fetch or stream the payload."""
+    """A preview compares two hashes; it does not pull or unpack anything."""
     props = artifact_props()
     landed(device, props)
 
     result = artifact_provider().diff('id', props, props)
 
     assert result.changes is False
+    assert device.commands == []
 
 
 def test_a_marker_naming_other_bytes_is_a_change(device: Device) -> None:
     props = artifact_props()
     landed(device, props)
-    device.files[provider.marker_path(ROOTFS_TARGET)].data = b'0' * 64 + b'\n'
+    device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
 
-    result = artifact_provider().diff('id', props, props)
-
-    assert result.changes is True
+    assert artifact_provider().diff('id', props, props).changes is True
 
 
-def test_a_payload_with_no_marker_beside_it_is_a_change(device: Device) -> None:
-    """Bytes of unknown provenance are treated as bytes that are not there."""
+def test_a_tree_with_no_marker_beside_it_is_a_change(device: Device) -> None:
+    """A tree of unknown provenance is treated as a tree that is not there."""
     props = artifact_props()
     landed(device, props)
-    del device.files[provider.marker_path(ROOTFS_TARGET)]
+    del device.files[provider.marker_path(ROOTFS_TREE)]
 
-    result = artifact_provider().diff('id', props, props)
+    assert artifact_provider().diff('id', props, props).changes is True
 
-    assert result.changes is True
+
+def test_a_tree_someone_removed_is_a_change(device: Device) -> None:
+    """A firmware update takes the tree and leaves the marker; both are asked about."""
+    props = artifact_props()
+    landed(device, props)
+    del device.files[ROOTFS_TREE]
+
+    assert artifact_provider().diff('id', props, props).changes is True
 
 
 def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device) -> None:
@@ -759,48 +803,41 @@ def test_a_new_pin_is_a_change_the_device_is_not_consulted_about(device: Device)
     assert device.sessions == 0
 
 
-def test_a_rotation_restamps_an_artifact_without_fetching_or_pushing_it(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """Megabytes are not moved because a credential changed.
+def test_a_rotation_restamps_an_artifact_without_pulling_it_again(device: Device) -> None:
+    """Nothing is fetched because a credential changed.
 
-    Nothing is pulled either: the marker on the device already names the pin,
-    and the runner has no reason to pull the image to find that out.
+    The marker on the device already names the pin, and neither end has a
+    reason to go and get the image to find that out.
     """
     olds = checked(artifact_provider(), artifact_props())
     landed(device, olds)
     device.log.clear()
-    pulls.clear()
     rotated = artifact_provider(private_key())
     news = checked(rotated, artifact_props())
 
     result = rotated.update('id', olds, news)
 
     assert [line for line in device.log if line.startswith(('write', 'remove'))] == []
+    assert not any(SKOPEO in command for command in device.commands)
     assert result.outs is not None
     assert result.outs[SESSION] == news[SESSION]
 
 
-def test_an_artifact_update_still_pushes_when_the_marker_disagrees(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
+def test_an_artifact_update_still_pushes_when_the_marker_disagrees(device: Device) -> None:
     """A stamp does not excuse a device that no longer holds what it claimed."""
-    assert pulls
     olds = checked(artifact_provider(), artifact_props())
     landed(device, olds)
-    del device.files[provider.marker_path(ROOTFS_TARGET)]
+    del device.files[provider.marker_path(ROOTFS_TREE)]
     rotated = artifact_provider(private_key())
 
     _ = rotated.update('id', olds, checked(rotated, artifact_props()))
 
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
+    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_DIGEST}\n'.encode()
 
 
 def test_reading_an_artifact_reports_the_digest_the_device_claims(device: Device) -> None:
     props = artifact_props()
-    landed(device, props, payload=b'a different release', digest=f'sha256:{"d" * 64}')
+    landed(device, props, digest=f'sha256:{"d" * 64}')
 
     result = artifact_provider().read('id', props)
 
@@ -811,26 +848,39 @@ def test_reading_an_artifact_reports_the_digest_the_device_claims(device: Device
 def test_reading_an_artifact_with_no_marker_drops_the_identifier(device: Device) -> None:
     props = artifact_props()
     landed(device, props)
-    del device.files[provider.marker_path(ROOTFS_TARGET)]
+    del device.files[provider.marker_path(ROOTFS_TREE)]
 
-    result = artifact_provider().read('id', props)
-
-    assert result.id is None
+    assert artifact_provider().read('id', props).id is None
 
 
-def test_deleting_an_artifact_takes_the_marker_with_it(device: Device) -> None:
+def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
+    """A refresh reports what the device can actually run, which is the tree."""
+    props = artifact_props()
+    landed(device, props)
+    del device.files[ROOTFS_TREE]
+
+    assert artifact_provider().read('id', props).id is None
+
+
+def test_deleting_an_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
+    """Derived state the push created is state the push removes, leftovers of an
+    interrupted pull or unpack included."""
     props = artifact_props()
     landed(device, props)
     device.log.clear()
 
     artifact_provider().delete('id', props)
 
-    assert device.files == {}
     assert device.log == [
-        f'remove {provider.marker_path(ROOTFS_TARGET)}',
-        f'remove {ROOTFS_TARGET}',
-        'run systemctl restart adguard',
+        f'remove {provider.marker_path(ROOTFS_TREE)}',
+        f'run {provider.purge_script(ROOTFS_TREE)}',
+        f'run {HOOK_COMMAND}',
     ]
+    purge = provider.purge_script(ROOTFS_TREE)
+    assert ROOTFS_TREE in purge
+    assert f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}' in purge
+    assert f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}' in purge
+    assert f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}' in purge
 
 
 @pytest.mark.parametrize(
@@ -845,175 +895,89 @@ def test_a_digest_that_is_not_a_registry_digest_is_refused(value: str) -> None:
     assert [failure.property for failure in result.failures] == ['digest']
 
 
-def test_a_relative_extraction_directory_is_refused_before_anything_is_pushed() -> None:
-    result = artifact_provider().check({}, unpacking_props(extract='services/roots/adguard'))
+def test_a_relative_tree_is_refused_before_anything_is_pushed() -> None:
+    result = artifact_provider().check({}, artifact_props(root='services/roots/adguard'))
 
-    assert [failure.property for failure in result.failures] == ['extract']
+    assert [failure.property for failure in result.failures] == ['root']
+
+
+@pytest.mark.parametrize(
+    'value',
+    ['alpine', 'library/alpine', 'estate/adguard'],
+    ids=['bare name', 'namespaced name', 'two components, no host'],
+)
+def test_a_repository_that_does_not_name_its_registry_is_refused(value: str) -> None:
+    """The device resolves the reference now, so an unqualified one would be
+    resolved against whatever default that device is configured with -- which is
+    exactly the decision a pin exists to take away from it."""
+    result = artifact_provider().check({}, artifact_props(repository=value))
+
+    assert [failure.property for failure in result.failures] == ['repository']
+
+
+def test_a_repository_on_a_registry_with_a_port_is_accepted() -> None:
+    result = artifact_provider().check({}, artifact_props(repository='registry.invalid:5000/estate/adguard'))
+
+    assert result.failures == []
 
 
 ##
-## Unpacking an artifact into a tree
+## The commands the device runs
 ##
 
 
-def test_the_marker_names_the_pin_and_not_the_bytes_lying_beside_it(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """What the device holds is the image flattened; what it records is the pin.
-
-    The chain that makes this safe is in `registry`: the pin verifies the
-    manifest, the manifest verifies every layer, and the archive is assembled
-    from bytes already vouched for. So the marker is deliberately *not* the
-    checksum of the file beside it — it is a claim about provenance, and a
-    reviewer running `sha256sum` on the device should expect the two to differ.
-    """
-    assert pulls[f'{ROOTFS_REPOSITORY}@{ROOTFS_DIGEST}'] == ROOTFS
-    assert hashlib.sha256(ROOTFS).hexdigest() not in ROOTFS_DIGEST, 'the pin is the manifest, not the payload'
-
-    _ = artifact_provider().create(unpacking_props())
-
-    assert device.files[ROOTFS_TARGET].data == ROOTFS
-    assert device.files[provider.marker_path(ROOTFS_TARGET)].data == f'{ROOTFS_DIGEST}\n'.encode()
-    assert device.files[provider.marker_path(ROOTFS_TREE)].data == f'{ROOTFS_DIGEST}\n'.encode()
-
-
-def test_a_pull_that_refuses_its_pin_unpacks_nothing_anywhere(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """Verification comes first, so no unverified bytes are handed to a decoder."""
-    pulls.clear()
-
-    with pytest.raises(registry.DigestMismatch):
-        _ = artifact_provider().create(unpacking_props())
-
-    assert device.sessions == 0
-
-
-def test_the_tree_is_replaced_by_renames_so_a_half_extracted_root_never_runs(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """A container's root is either the previous tree or the new one.
-
-    The archive is unpacked into a sibling staging directory and moved into
-    place, and what it displaced is left beside it: at this point the container
-    is still running on those files, because the hook that restarts it has not
-    run yet. Clearing them is the next push's first act.
-    """
-    assert pulls
-    _ = artifact_provider().create(unpacking_props())
-
-    unpack = next(command for command in device.commands if 'tar -xf' in command)
+def test_the_pull_clears_the_last_push_before_it_asks_for_room() -> None:
+    """Three siblings can be lying there: the tree the last swap displaced, a
+    staging tree an interrupted unpack left, and a layout an interrupted pull
+    left. Clearing them first is what keeps a bumped pin from needing room for
+    every copy at once."""
+    script = provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE)
+    layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
     staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
     superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
-    assert unpack.startswith(f'rm -rf {staging} {superseded}')
-    assert f'tar -xf {ROOTFS_TARGET} -C {staging}' in unpack
-    assert f'mv {ROOTFS_TREE} {superseded}' in unpack
-    assert unpack.endswith(f'mv {staging} {ROOTFS_TREE}')
-    assert f'rm -rf {ROOTFS_TREE} ' not in unpack, 'the live tree is renamed, never deleted in place'
+    assert script.startswith(f'rm -rf {layout} {staging} {superseded}')
+    assert f'mkdir -p {layout}' in script, 'which is also how the directory above the tree gets made'
+    assert f'skopeo copy --quiet docker://{ROOTFS_REFERENCE} oci:{layout}:{provider.LAYOUT_TAG}' in script
 
 
-def test_the_trees_marker_is_written_before_the_hook_and_the_archives_after(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """The hook is what notices a new root filesystem, so it has to see it.
+def test_the_unpack_is_two_renames_so_a_half_unpacked_root_never_boots() -> None:
+    """A container's root is either the previous tree or the new one.
 
-    The gateway's hook restarts a container when a file it reads has changed,
-    and the marker beside the tree is that file. The marker beside the archive
-    stays last, because it is the claim that the whole sequence succeeded.
+    What the swap displaced is left beside it: at this point the container is
+    still running on those files, because the hook that restarts it has not run
+    yet. Clearing them is the next push's first act.
     """
-    assert pulls
-    _ = artifact_provider().create(unpacking_props())
+    script = provider.unpack_script(ROOTFS_TREE)
+    layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
+    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
+    superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
-    assert device.log == [
-        f'write {ROOTFS_TARGET}',
-        f'run {provider.unpack_script(ROOTFS_TARGET, ROOTFS_TREE)}',
-        f'write {provider.marker_path(ROOTFS_TREE)}',
-        'run systemctl restart adguard',
-        f'write {provider.marker_path(ROOTFS_TARGET)}',
-    ]
-
-
-def test_an_extraction_that_fails_leaves_no_marker_claiming_it_succeeded(
-    device: Device,
-    pulls: dict[str, bytes],
-) -> None:
-    """The hook never runs and neither marker is written, so the next preview
-    still has work to do — and the tree the container boots is untouched."""
-    assert pulls
-    device.refuse = ('tar -xf',)
-
-    with pytest.raises(provider.ExtractFailed):
-        _ = artifact_provider().create(unpacking_props())
-
-    assert provider.marker_path(ROOTFS_TREE) not in device.files
-    assert provider.marker_path(ROOTFS_TARGET) not in device.files
-    assert 'systemctl restart adguard' not in device.commands
+    assert script.startswith(f'umoci raw unpack --image {layout}:{provider.LAYOUT_TAG} {staging}')
+    assert f'mv {ROOTFS_TREE} {superseded}' in script
+    assert script.endswith(f'mv {staging} {ROOTFS_TREE}')
+    assert f'rm -rf {ROOTFS_TREE} ' not in script, 'the live tree is renamed, never deleted in place'
 
 
-def test_a_tree_someone_removed_is_a_change_even_though_the_archive_is_intact(device: Device) -> None:
-    """What the device runs is the tree; the archive is only how it got there."""
-    props = unpacking_props()
-    landed(device, props)
-    del device.files[ROOTFS_TREE]
+def test_the_staging_layout_goes_as_soon_as_the_unpack_has_read_it() -> None:
+    """`/data` is a few gigabytes, and the image is on it twice until this runs."""
+    script = provider.unpack_script(ROOTFS_TREE)
+    layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
+    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
 
-    assert artifact_provider().diff('id', props, props).changes is True
-
-
-def test_a_tree_unpacked_from_another_pin_is_a_change(device: Device) -> None:
-    props = unpacking_props()
-    landed(device, props)
-    device.files[provider.marker_path(ROOTFS_TREE)].data = b'0' * 64 + b'\n'
-
-    assert artifact_provider().diff('id', props, props).changes is True
+    assert script.index(f'rm -rf {layout}') > script.index('umoci raw unpack')
+    assert script.index(f'rm -rf {layout}') < script.index(f'mv {staging} {ROOTFS_TREE}')
 
 
-def test_an_archive_and_tree_that_both_name_the_pin_are_no_change(device: Device) -> None:
-    props = unpacking_props()
-    landed(device, props)
+def test_a_path_a_shell_would_mangle_is_quoted_in_the_pull_and_the_unpack() -> None:
+    """Both commands take the tree's path, so both quote it."""
+    pull = provider.pull_script(ROOTFS_REFERENCE, '/data/roots/a tree')
+    unpack = provider.unpack_script('/data/roots/a tree')
 
-    assert artifact_provider().diff('id', props, props).changes is False
-
-
-def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Device) -> None:
-    """A refresh reports what the device can actually run, which is the tree."""
-    props = unpacking_props()
-    landed(device, props)
-    del device.files[ROOTFS_TREE]
-
-    assert artifact_provider().read('id', props).id is None
-
-
-def test_deleting_an_extracted_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
-    """Derived state the push created is state the push removes, leftovers of an
-    interrupted extraction included."""
-    props = unpacking_props()
-    landed(device, props)
-    device.log.clear()
-
-    artifact_provider().delete('id', props)
-
-    assert device.log == [
-        f'remove {provider.marker_path(ROOTFS_TARGET)}',
-        f'remove {ROOTFS_TARGET}',
-        f'remove {provider.marker_path(ROOTFS_TREE)}',
-        f'run {provider.purge_script(ROOTFS_TREE)}',
-        'run systemctl restart adguard',
-    ]
-    assert ROOTFS_TREE in provider.purge_script(ROOTFS_TREE)
-    assert f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}' in provider.purge_script(ROOTFS_TREE)
-
-
-def test_a_path_a_shell_would_mangle_is_quoted_in_the_extraction_too() -> None:
-    """The archive and the directory both reach a shell, so both are quoted."""
-    script = provider.unpack_script('/data/a file.tar', '/data/roots/a tree')
-
-    assert "'/data/a file.tar'" in script
-    assert "'/data/roots/a tree'" in script
+    assert "'/data/roots/a tree.kluster-oci'" in pull
+    assert "'oci:/data/roots/a tree.kluster-oci:pinned'" in pull
+    assert "'/data/roots/a tree.kluster-oci:pinned'" in unpack
+    assert "'/data/roots/a tree'" in unpack
 
 
 ##
@@ -1098,8 +1062,7 @@ async def stack() -> Recorder:
             repository=ROOTFS_REPOSITORY,
             tag=ROOTFS_TAG,
             digest=ROOTFS_DIGEST,
-            target=ROOTFS_TARGET,
-            extract=ROOTFS_TREE,
+            root=ROOTFS_TREE,
         )
     return monitor
 
@@ -1132,8 +1095,7 @@ def test_a_declared_artifact_carries_its_pin_and_never_its_bytes(stack: Recorder
     assert inputs['repository'] == ROOTFS_REPOSITORY
     assert inputs['tag'] == ROOTFS_TAG
     assert inputs['digest'] == ROOTFS_DIGEST
-    assert inputs['target'] == ROOTFS_TARGET
-    assert inputs['extract'] == ROOTFS_TREE
+    assert inputs['root'] == ROOTFS_TREE
     assert 'content' not in inputs
 
 

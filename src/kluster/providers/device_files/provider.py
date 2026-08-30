@@ -10,35 +10,39 @@ into two Pulumi resources (architecture.md §5.2):
     hook. Its content lives in state, because a configuration file is small
     and its diff is the reason to have a preview at all.
 -   `DeviceArtifact` is a payload too big for state: a container image, the
-    manifest digest that pins it, and where it lands. The image is pulled on
-    the runner, verified against the pin, flattened into one archive and
-    streamed to the device; what state carries is the pin, and what the device
-    carries is a marker file beside the payload naming the digest it holds. A
-    preview compares two hashes, never megabytes. An artifact may also name a
-    directory to `extract` into, for the payloads that are root filesystem
-    archives rather than single files.
+    manifest digest that pins it, and the directory on the device its root
+    filesystem is unpacked into. What state carries is the pin, and what the
+    device carries is a marker file beside the tree naming the digest it holds.
+    A preview compares two hashes, never megabytes.
 
-**An extracted artifact owns two things on the device**: the archive at
-`target`, and the tree unpacked from it. The tree is derived state -- the push
-puts it there, the push replaces it, and the push takes it away -- so it is
-never edited in place: the archive is unpacked into a sibling staging directory
-and moved into position with two renames, and no moment passes in which a
-half-extracted tree is the one a container boots. The tree it displaced is left
-behind until the *next* push clears it, because at the moment of the swap the
-container is still running on it and has not yet been restarted.
+**The device pulls its own root filesystems.** The runner hands it the pinned
+reference and nothing else: over the same session, the device runs `skopeo copy`
+from the registry into a staging OCI layout beside the tree, then
+`umoci raw unpack` out of that layout into a staging tree. Neither the bytes nor
+the code that understands them passes through the runner -- digest verification
+is skopeo's, and whiteout, hard link and extended-attribute semantics are
+umoci's. The two packages are stock Debian bullseye, which is what UniFi OS 4.x
+is built on, and they arrive through the same package list as the rest of the
+device's user space.
 
-**The digest pins the artifact as published, not the bytes on the wire.** The
-gateway's container root filesystems are published as registry images; the
-runner verifies the manifest against the pin, verifies every layer against that
-manifest, flattens them into one plain archive and pushes that, because the
-device runs `systemd-nspawn` over a directory rather than a container engine and
-`tar` is the floor every such system clears (`registry`). So the chain is: the
-pin verifies the manifest, the manifest verifies the layers, flattening is a
-function of bytes already verified, the session that carries them is pinned by
-host key, and the markers the device keeps record *the pin* -- which is
-therefore the manifest's digest and not a checksum of the file lying beside the
-marker. A marker is the device's claim about provenance, not a checksum of its
-neighbour.
+**The tree is derived state** -- the push puts it there, the push replaces it,
+and the push takes it away -- so it is never edited in place: the unpack lands
+in a sibling staging directory and the tree moves into position with two
+renames, and no moment passes in which a half-unpacked tree is the one a
+container boots. The tree it displaced is left behind until the *next* push
+clears it, because at the moment of the swap the container is still running on
+it and has not yet been restarted. The staging layout goes as soon as the
+unpack has read it: `/data` is a few gigabytes, and a copy of every image in
+two forms is not a thing to leave lying there.
+
+**The digest pins the artifact as published.** The pull is by manifest digest,
+so the registry's answer is checked against the pin before anything is written,
+and every layer under it is checked against that verified manifest. A pin that
+names a multi-platform index resolves through the device's own architecture,
+which is the one answer that can be right for the machine unpacking it. The
+marker the device keeps records *the pin* -- the manifest's digest, not a
+checksum of the tree beside it. A marker is the device's claim about
+provenance, not a checksum of its neighbour.
 
 **Both resources diff against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
@@ -82,13 +86,15 @@ failed create raises, which means the resource is not recorded -- the file may
 already exist on the device, and the retry rewrites the same bytes, both
 operations being idempotent by construction.
 
-An extracted artifact adds two steps inside that order: the tree is replaced
-after the archive lands and *before* the hook, and the marker beside the tree is
-written in that same window. That is what lets a hook notice the tree changed --
-the gateway's hook is a script that restarts a container only when a file
-it reads has changed, and a marker written after the hook would be a change the
-hook could never see. The marker beside the archive stays last, because it is
-the claim that the whole sequence succeeded.
+An artifact meets that requirement from the other side, because its marker
+cannot be written last. The gateway's hook is a script that restarts a container
+only when a file it reads has changed, and the marker beside the tree is that
+file, so a marker written after the hook would be a change the hook could never
+see -- the container would learn of a new root filesystem one deployment late.
+The marker therefore precedes the hook, and **a hook that fails withdraws it**:
+the marker is the claim that this tree came from this pin and that the device
+has acted on it, and half of that claim being false makes the whole of it false.
+What the next preview sees is a tree of unknown provenance, which is work to do.
 
 A file's content is declared secret on request (`secret=True`), for the files
 that carry device credentials, and not by default: a secret input renders as a
@@ -101,10 +107,12 @@ every resource it manages, so what these classes serialize to is what state
 holds: their own module and class name and an empty bag -- inert, identical for
 every resource, and unchanged by a credential rotation. They are revived in a
 separate process where each call arrives on a thread with no event loop, so every
-operation runs its own loop, opens its own session and closes both. The two seams
-a test replaces -- how a session is opened, how an image is pulled -- are
-module-level functions looked up when they are called rather than attributes
-captured at construction, which keeps the pickled provider a constant.
+operation runs its own loop, opens its own session and closes both. The one seam
+a test replaces -- how a session is opened -- is a module-level function looked
+up when it is called rather than an attribute captured at construction, which
+keeps the pickled provider a constant. There is no second seam any more: the
+device does the pulling, so a test that has replaced the session has replaced
+everything that leaves the runner.
 """
 
 from __future__ import annotations
@@ -127,8 +135,7 @@ from kluster.providers.configured import (
     has_unknowns,
     is_unknown,
 )
-from kluster.providers.device_files import registry, ssh
-from kluster.providers.device_files.registry import DigestMismatch, Image
+from kluster.providers.device_files import ssh
 
 __all__ = (
     'ADDRESS',
@@ -137,12 +144,13 @@ __all__ = (
     'EXTRACTING_SUFFIX',
     'FILE_COMPARED',
     'FILE_DECLARED',
+    'LAYOUT_SUFFIX',
+    'LAYOUT_TAG',
     'PIN',
     'PRIVATE_KEY_CONFIG',
     'SUPERSEDED_SUFFIX',
     'VERSION',
     'Connection',
-    'DigestMismatch',
     'ExtractFailed',
     'DeviceArtifact',
     'DeviceArtifactProvider',
@@ -150,13 +158,14 @@ __all__ = (
     'DeviceFileProvider',
     'DeviceProvider',
     'HookFailed',
-    'Image',
+    'PullFailed',
     'endpoint',
-    'fetch',
     'gone',
     'marker_path',
     'open_transport',
+    'pull_script',
     'purge_script',
+    'reference',
     'secret_outputs',
     'unpack_script',
 )
@@ -189,8 +198,11 @@ FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 #: repository and tag are only where those bytes were found -- but all three are
 #: declared, so moving publication to another registry, or a tag that moved onto
 #: a digest the device already holds, is a diff a reviewer sees rather than a
-#: silent equivalence.
-ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'extract', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
+#: silent equivalence. Ownership and mode are declared by neither: what a root
+#: filesystem's files belong to and what they may do is the image's statement
+#: about itself, and a push that overrode it would be pushing something other
+#: than the image the pin names.
+ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'hook', *ADDRESS, *PIN)
 
 #: The stack-configuration key the session's credential is read from
 #: (`configured`), which makes this module the only code in the repository that
@@ -198,8 +210,10 @@ ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'extract', 'mode', 'owner', 
 PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
 #: This module's version, bumped by hand when an operation's behavior changes
-#: (`configured`).
-VERSION = '2'
+#: (`configured`). At `3` because an artifact's apply changed shape: the device
+#: pulls the image itself instead of receiving a flattened archive over the
+#: session, and the archive it used to receive no longer exists.
+VERSION = '3'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
@@ -220,6 +234,18 @@ MARKER_MODE = '0644'
 EXTRACTING_SUFFIX = '.kluster-extracting'
 SUPERSEDED_SUFFIX = '.kluster-superseded'
 
+#: Where the pulled image waits between the two device-side commands, as an OCI
+#: layout. Beside the tree for the same reason the other two are: whatever
+#: filesystem holds the tree is the one with room for it, and a temporary
+#: directory on a router is likely to be a small `tmpfs`.
+LAYOUT_SUFFIX = '.kluster-oci'
+
+#: What the image is called inside that layout. An OCI layout indexes its
+#: contents by reference name, and both commands have to agree on one; which
+#: name it is means nothing, because the layout holds exactly one image and is
+#: deleted as soon as it has been read.
+LAYOUT_TAG = 'pinned'
+
 
 @final
 class HookFailed(Exception):
@@ -228,6 +254,24 @@ class HookFailed(Exception):
     def __init__(self, command: str, exit_status: int, stderr: str) -> None:
         super().__init__(f'post-apply hook `{command}` exited {exit_status}: {stderr.strip() or "(no output)"}')
         self.command: str = command
+        self.exit_status: int = exit_status
+        self.stderr: str = stderr
+
+
+@final
+class PullFailed(Exception):
+    """The device could not fetch the pinned image, so nothing was unpacked.
+
+    Everything between the device and the registry lands here -- name
+    resolution, the outbound connection, the signature policy skopeo reads, a
+    digest the registry does not serve -- because all of it is one command's
+    exit status and one command's standard error, and the device is the only
+    place that knows which it was.
+    """
+
+    def __init__(self, image: str, exit_status: int, stderr: str) -> None:
+        super().__init__(f'pulling {image} on the device exited {exit_status}: {stderr.strip() or "(no output)"}')
+        self.image: str = image
         self.exit_status: int = exit_status
         self.stderr: str = stderr
 
@@ -281,36 +325,76 @@ def open_transport(device: ssh.Device) -> AbstractAsyncContextManager[ssh.Transp
     return ssh.connect(device)
 
 
-def fetch(image: Image) -> bytes:
-    """Pull an image on the runner and flatten it. The other seam a test replaces.
+def reference(repository: str, digest: str) -> str:
+    """The image as a pull names it: a repository and the digest that pins it.
 
-    The verification is `registry`'s and the flattening is too; what this line
-    is, is the seam. The payload is held in memory for the moment between
-    pulling and streaming it, which suits the root filesystems this exists for
-    and would not suit a disk image.
+    A tag never appears in it. The tag is declared so that moving publication is
+    a diff a reviewer sees, but a name somebody else can move is not what a pull
+    resolves.
     """
-    return registry.rootfs(image)
+    return f'{repository}@{digest}'
 
 
-def unpack_script(archive: str, directory: str) -> str:
-    """The commands that make `directory` the contents of `archive`, atomically.
+def pull_script(image: str, directory: str) -> str:
+    """The command that puts the pinned image beside `directory`, as a layout.
 
-    Unpacked into a sibling staging directory and moved into place with two
-    renames, so the tree a container boots is either the previous one or the new
-    one and never a partial one. What the swap displaced is left as a sibling
-    too: the container is still running on those files at this point in the
-    sequence -- the hook that restarts it has not run yet -- so it is cleared at
-    the start of the *next* push instead, along with any staging directory a
-    failed run left behind.
+    Its first act is to clear what the last push left: the tree the last swap
+    displaced, any staging tree a failed run abandoned, and any layout a failed
+    pull abandoned. That is the moment to do it -- disk on the device is
+    measured in gigabytes, and reclaiming it before pulling is what keeps a
+    bumped pin from needing room for three copies at once.
+
+    `skopeo copy` is given a `docker://` source carrying the digest, so the
+    registry's answer is verified against the pin before a byte is written, and
+    an `oci:` destination, which is the only form `umoci` reads. Nothing here
+    names a credential or a policy file: the pull is anonymous and skopeo reads
+    the device's own `/etc/containers/policy.json`, which is the permissive
+    default its package ships.
     """
-    quoted_archive, quoted_directory = shlex.quote(archive), shlex.quote(directory)
+    layout = shlex.quote(f'{directory}{LAYOUT_SUFFIX}')
     staging = shlex.quote(f'{directory}{EXTRACTING_SUFFIX}')
     superseded = shlex.quote(f'{directory}{SUPERSEDED_SUFFIX}')
+    source = shlex.quote(f'docker://{image}')
+    destination = shlex.quote(f'oci:{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
     return ' && '.join(
         (
-            f'rm -rf {staging} {superseded}',
-            f'mkdir -p {staging}',
-            f'tar -xf {quoted_archive} -C {staging}',
+            f'rm -rf {layout} {staging} {superseded}',
+            # Making the layout also makes the directory holding it, which is
+            # the directory the tree and the staging tree go in: `umoci` creates
+            # the tree it unpacks into but not the one above it, and a device
+            # that has never held this service has neither.
+            f'mkdir -p {layout}',
+            f'skopeo copy --quiet {source} {destination}',
+        )
+    )
+
+
+def unpack_script(directory: str) -> str:
+    """The commands that make `directory` the root filesystem in the layout.
+
+    Unpacked into a sibling staging tree and moved into place with two renames,
+    so the tree a container boots is either the previous one or the new one and
+    never a partial one. What the swap displaced is left as a sibling: the
+    container is still running on those files at this point in the sequence --
+    the hook that restarts it has not run yet -- so it is cleared at the start
+    of the *next* push instead.
+
+    `umoci raw unpack` rather than `umoci unpack`, because the latter writes an
+    OCI *bundle* -- a `config.json` beside a `rootfs/` directory -- and what
+    boots here is a root filesystem, not a runtime bundle. The layout goes the
+    moment `umoci` has finished reading it, before the swap rather than after
+    it, so the image stops occupying the device in two forms at the earliest
+    point where deleting one of them is safe.
+    """
+    quoted_directory = shlex.quote(directory)
+    layout = shlex.quote(f'{directory}{LAYOUT_SUFFIX}')
+    staging = shlex.quote(f'{directory}{EXTRACTING_SUFFIX}')
+    superseded = shlex.quote(f'{directory}{SUPERSEDED_SUFFIX}')
+    tagged = shlex.quote(f'{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
+    return ' && '.join(
+        (
+            f'umoci raw unpack --image {tagged} {staging}',
+            f'rm -rf {layout}',
             f'if [ -e {quoted_directory} ]; then mv {quoted_directory} {superseded}; fi',
             f'mv {staging} {quoted_directory}',
         )
@@ -318,17 +402,22 @@ def unpack_script(archive: str, directory: str) -> str:
 
 
 def purge_script(directory: str) -> str:
-    """The command that removes a tree and every sibling the swap uses."""
-    paths = (directory, f'{directory}{EXTRACTING_SUFFIX}', f'{directory}{SUPERSEDED_SUFFIX}')
+    """The command that removes a tree and every sibling the push uses."""
+    paths = (
+        directory,
+        f'{directory}{EXTRACTING_SUFFIX}',
+        f'{directory}{SUPERSEDED_SUFFIX}',
+        f'{directory}{LAYOUT_SUFFIX}',
+    )
     return 'rm -rf ' + ' '.join(shlex.quote(path) for path in paths)
 
 
 def marker_path(target: str) -> str:
     """Where the digest of the payload at `target` is recorded on the device.
 
-    A tree gets one of these too, beside it rather than inside it: a file the
-    push wrote into the tree would be a file inside the container's root
-    filesystem, and the tree is the image, not the push's bookkeeping.
+    Beside a tree rather than inside it: a file the push wrote into the tree
+    would be a file inside the container's root filesystem, and the tree is the
+    image, not the push's bookkeeping.
     """
     return f'{target}.digest'
 
@@ -398,6 +487,24 @@ def _absolute(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
         return []
     if not str(value).startswith('/'):
         return [dynamic.CheckFailure(key, f'must be an absolute path on the device, got {value!r}')]
+    return []
+
+
+def _registry_qualified(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
+    """Refuse a repository that does not begin with the registry to ask.
+
+    The pull happens on the device now, so an unqualified reference would be
+    resolved by the device's own short-name configuration -- a default this
+    declaration never named, reached over the network, and exactly what a pin
+    exists to prevent. The registry world's own rule decides: a first component
+    with a dot or a port in it is a host, and `localhost` is one by exception.
+    """
+    value = props.get(key)
+    if value is None or is_unknown(value):
+        return []
+    first, separator, _ = str(value).partition('/')
+    if not separator or not (first == 'localhost' or '.' in first or ':' in first):
+        return [dynamic.CheckFailure(key, f'must begin with a registry host, got {value!r}')]
     return []
 
 
@@ -563,21 +670,21 @@ class DeviceFileProvider(DeviceProvider):
 
 @final
 class DeviceArtifactProvider(DeviceProvider):
-    """A digest-pinned payload on the device, tracked by a marker file."""
+    """A digest-pinned root filesystem on the device, tracked by a marker file."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        failures = [*_absolute(news, 'target'), *_absolute(news, 'extract'), *_octal(news, 'mode')]
+        failures = [*_absolute(news, 'root'), *_registry_qualified(news, 'repository')]
         digest = news.get('digest')
         if digest is not None and not is_unknown(digest) and not _is_digest(str(digest)):
             failures.append(dynamic.CheckFailure('digest', f'must be a `sha256:<hex>` manifest digest, got {digest!r}'))
         return self._stamp(news, failures)
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
-        self._push(props)
-        return dynamic.CreateResult(id_=str(props['target']), outs=props)
+        run_sync(self._land(props))
+        return dynamic.CreateResult(id_=str(props['root']), outs=props)
 
     def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
-        replaces = replacements(olds, news, 'target')
+        replaces = replacements(olds, news, 'root')
         if replaces:
             return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=False)
         if has_unknowns(news):
@@ -587,11 +694,11 @@ class DeviceArtifactProvider(DeviceProvider):
         return dynamic.DiffResult(changes=run_sync(self._drifted(news)), replaces=[])
 
     def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
-        # A re-stamp fetches nothing either: the payload the device holds is the
-        # payload the pin names, and the runner has no reason to download it
-        # again to find that out.
+        # A re-stamp pulls nothing either: the tree the device holds is the
+        # image the pin names, and neither end has a reason to fetch it again to
+        # find that out.
         if not run_sync(self._restamp_only(olds, news, ARTIFACT_DECLARED)):
-            self._push(news)
+            run_sync(self._land(news))
         return dynamic.UpdateResult(outs=news)
 
     def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
@@ -600,89 +707,61 @@ class DeviceArtifactProvider(DeviceProvider):
     def delete(self, _id: str, props: dict[str, Any]) -> None:
         run_sync(self._delete(props))
 
-    def _push(self, props: Mapping[str, Any]) -> None:
-        """Pull, verify, then land. Nothing reaches the device unverified.
+    async def _land(self, props: Mapping[str, Any]) -> None:
+        """Pull, unpack, claim, notify -- all of it on the far end of one session.
 
-        The verification is inside the pull rather than repeated out here: the
-        pin names a manifest, the manifest names the layers, and the archive
-        that comes back is assembled from bytes each of those digests already
-        vouched for. What lands is therefore not something this runner can hash
-        against the pin -- which is the same relationship the marker on the
-        device has to the payload beside it.
+        Every step is a command the device runs, and a step that fails ends the
+        operation with what the device said about it. Nothing before the second
+        rename touches the live tree, so a pull that could not reach the
+        registry and an unpack that ran out of disk both leave the container
+        running exactly what it was running.
         """
+        root = str(props['root'])
         digest = str(props['digest'])
-        data = fetch(Image(repository=str(props['repository']), digest=digest))
-        run_sync(self._land(props, data, digest))
-
-    async def _land(self, props: Mapping[str, Any], data: bytes, digest: str) -> None:
-        target = str(props['target'])
-        tree = _extract(props)
+        image = reference(str(props['repository']), digest)
         async with open_transport(self._device(props)) as transport:
-            await transport.write(target, data, mode=str(props['mode']), owner=_owner(props))
-            if tree:
-                await self._unpack(transport, target, tree)
-                # Before the hook, because the hook is what notices: the
-                # hook restarts a container when a file it reads has changed, and
-                # this marker is that file.
-                await _mark(transport, tree, digest)
-            await run_hook(transport, props)
-            # Written last, and only once everything else has succeeded: the
-            # marker is the claim that this device holds these bytes and has
-            # acted on them.
-            await _mark(transport, target, digest)
-
-    async def _unpack(self, transport: ssh.Transport, archive: str, directory: str) -> None:
-        result = await transport.run(unpack_script(archive, directory))
-        if not result.ok:
-            raise ExtractFailed(directory, result.exit_status, result.stderr)
+            pull = await transport.run(pull_script(image, root))
+            if not pull.ok:
+                raise PullFailed(image, pull.exit_status, pull.stderr)
+            unpack = await transport.run(unpack_script(root))
+            if not unpack.ok:
+                raise ExtractFailed(root, unpack.exit_status, unpack.stderr)
+            # Before the hook, because the hook is what notices: it restarts a
+            # container when a file it reads has changed, and this marker is
+            # that file.
+            await _mark(transport, root, digest)
+            try:
+                await run_hook(transport, props)
+            except HookFailed:
+                # And withdrawn if the hook refused, because the marker claims
+                # the whole sequence succeeded. Leaving it would leave the next
+                # preview with nothing to notice.
+                await transport.remove(marker_path(root))
+                raise
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
-        target = str(props['target'])
-        tree = _extract(props)
+        root = str(props['root'])
         pinned = str(props['digest'])
         async with open_transport(self._device(props)) as transport:
-            stat = await transport.stat(target)
-            if stat is None:
-                return True
-            if not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat):
-                return True
-            if tree and not await _tree_holds(transport, tree, pinned):
-                return True
-            marker = await transport.read(marker_path(target))
-            return marker is None or marker.decode(errors='replace').strip() != pinned
+            return not await _tree_holds(transport, root, pinned)
 
     async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
-        target = str(props['target'])
-        tree = _extract(props)
+        root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
-            stat = await transport.stat(target)
-            marker = None if stat is None else await transport.read(marker_path(target))
+            stat = await transport.stat(root)
+            marker = None if stat is None else await transport.read(marker_path(root))
             if stat is None or marker is None:
-                # A payload with no marker is a payload of unknown provenance,
-                # which is the same situation as no payload at all.
+                # A tree with no marker is a tree of unknown provenance, which
+                # is the same situation as no tree at all.
                 return gone()
-            claimed = marker.decode(errors='replace').strip()
-            if tree and not await _tree_holds(transport, tree, claimed):
-                # The archive alone is not the resource: what the device runs is
-                # the tree, and a tree someone removed is a resource to create.
-                return gone()
-            outs = {
-                **props,
-                'digest': claimed,
-                'mode': stat.mode,
-                'owner': _observed_owner(props.get('owner'), stat),
-            }
+            outs = {**props, 'digest': marker.decode(errors='replace').strip()}
         return dynamic.ReadResult(id_=id_, outs=outs)
 
     async def _delete(self, props: Mapping[str, Any]) -> None:
-        target = str(props['target'])
-        tree = _extract(props)
+        root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
-            await transport.remove(marker_path(target))
-            await transport.remove(target)
-            if tree:
-                await transport.remove(marker_path(tree))
-                _ = await transport.run(purge_script(tree))
+            await transport.remove(marker_path(root))
+            _ = await transport.run(purge_script(root))
             await run_hook(transport, props)
 
 
@@ -736,15 +815,12 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
 
 @final
 class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
-    """A digest-pinned container image, landed on the device as a flat archive."""
+    """A digest-pinned container image, unpacked on the device as a tree."""
 
     repository: pulumi.Output[str]
     tag: pulumi.Output[str]
     digest: pulumi.Output[str]
-    target: pulumi.Output[str]
-    extract: pulumi.Output[str | None]
-    mode: pulumi.Output[str]
-    owner: pulumi.Output[str | None]
+    root: pulumi.Output[str]
     hook: pulumi.Output[str | None]
 
     def __init__(
@@ -755,28 +831,27 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
         repository: pulumi.Input[str],
         tag: pulumi.Input[str],
         digest: pulumi.Input[str],
-        target: pulumi.Input[str],
-        extract: pulumi.Input[str] | None = None,
-        mode: pulumi.Input[str] = '0644',
-        owner: pulumi.Input[str] | None = None,
+        root: pulumi.Input[str],
         hook: pulumi.Input[str] | None = None,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare that `target` holds the root filesystem `digest` names.
+        """Declare that `root` holds the root filesystem `digest` names.
 
-        The bytes never enter state: the image is pulled from `repository` on
-        the runner at apply time, verified against `digest` and flattened, then
-        streamed to the device, which keeps a marker beside the payload naming
-        what it holds. `tag` is where the digest was found and is declared
-        rather than used -- the pull is by digest, because a tag is a name
-        somebody else can move.
+        The bytes never enter state and never cross the runner: at apply time
+        the device is handed `repository@digest` and pulls it itself, and it
+        keeps a marker beside the tree naming what it holds. `tag` is where the
+        digest was found and is declared rather than used -- the pull is by
+        digest, because a tag is a name somebody else can move.
 
-        `extract` names a directory the payload is unpacked into, for an archive
-        rather than a single file, and the resource owns that directory: it
-        replaces it whole on a new pin and removes it on a delete. Only `target`
-        is a replacement, so a caller that moves the tree is expected to move the
-        archive with it -- both are named after the same thing, and a tree left
-        at the old path would be an orphan nothing declares.
+        The resource owns the directory whole: it replaces it on a new pin and
+        removes it on a delete, along with the staging siblings the push works
+        through. `root` is therefore the only replacement -- the tree cannot be
+        in two places, and one left at the old path would be an orphan nothing
+        declares.
+
+        Ownership and mode are not among the inputs. What a root filesystem's
+        files belong to and what they may do is the image's own statement, and
+        it is `umoci` on the device that restores it.
         """
         super().__init__(
             DeviceArtifactProvider(),
@@ -786,10 +861,7 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
                 'repository': repository,
                 'tag': tag,
                 'digest': digest,
-                'target': target,
-                'extract': extract,
-                'mode': mode,
-                'owner': owner,
+                'root': root,
                 'hook': hook,
             },
             # No property of an artifact is a secret: a reference, a digest and
@@ -798,14 +870,8 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
         )
 
 
-def _extract(props: Mapping[str, Any]) -> str | None:
-    """The directory this artifact is unpacked into, if it is unpacked at all."""
-    directory = props.get('extract')
-    return str(directory) if directory else None
-
-
 async def _mark(transport: ssh.Transport, location: str, digest: str) -> None:
-    """Record which published artifact the payload or tree at `location` came from."""
+    """Record which published artifact the tree at `location` came from."""
     await transport.write(marker_path(location), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
 
 

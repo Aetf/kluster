@@ -1,10 +1,10 @@
 """One container service on the device: its root filesystem, unit, and files.
 
 Everything a service is made of lives under `/data`, the one directory a
-firmware update leaves alone (architecture.md §5.2): the root filesystem
-archive and the tree unpacked from it, the unit, the configuration the image
-reads, the per-service writable state, and — where the software behind it
-rewrites its own configuration — one initial-state file.
+firmware update leaves alone (architecture.md §5.2): the root filesystem tree,
+the unit, the configuration the image reads, the per-service writable state,
+and — where the software behind it rewrites its own configuration — one
+initial-state file.
 
 **A service is declared by its own type.** What a service *is* — where it keeps
 state, which device nodes it needs, which environment its image reads — is a
@@ -59,8 +59,6 @@ __all__ = (
     'ENV_IPV4_CIDR',
     'ENV_IPV4_GATEWAY',
     'ENV_IPV6_TOKEN',
-    'IMAGE_DIR',
-    'IMAGE_MODE',
     'KILL_SIGNAL',
     'OVERLAY_STATE',
     'ROOT_DIR',
@@ -87,7 +85,6 @@ __all__ = (
     'bridge_device_unit',
     'caddyfile',
     'config_path',
-    'image_path',
     'mounted_path',
     'net_setup_environment',
     'root_path',
@@ -109,13 +106,11 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 #: The services' root. Everything below it survives a firmware update because
 #: `/data` does; everything outside it is re-materialized from here at boot.
 SERVICES_ROOT = f'{conventions.gateway.DATA_ROOT}/services'
-#: The pinned artifacts as they are published: one root filesystem tarball per
-#: service, with the digest marker the artifact resource keeps beside each.
-IMAGE_DIR = f'{SERVICES_ROOT}/images'
-#: The trees unpacked from those tarballs, which are what the units boot. A tree
-#: is derived state the push owns: it is replaced whole when the pin moves and
-#: nothing in it is worth keeping, which is why per-service writable state is
-#: bind-mounted from `STATE_DIR` instead of living here.
+#: The root filesystems the units boot, one directory per service, each with the
+#: digest marker the artifact resource keeps beside it. A tree is derived state
+#: the push owns: it is replaced whole when the pin moves and nothing in it is
+#: worth keeping, which is why per-service writable state is bind-mounted from
+#: `STATE_DIR` instead of living here.
 ROOT_DIR = f'{SERVICES_ROOT}/roots'
 UNIT_DIR = f'{SERVICES_ROOT}/units'
 CONFIG_DIR = f'{SERVICES_ROOT}/config'
@@ -131,10 +126,6 @@ UNIT_PREFIX = 'kluster-'
 
 CONFIG_MODE = '0644'
 SECRET_MODE = '0600'
-#: A root filesystem is not secret, but it is also nobody's to read. This is the
-#: mode of the tarball; what the tree gets is whatever the archive carries, which
-#: is the container's own idea of its permissions and not this program's.
-IMAGE_MODE = '0600'
 
 # ---------------------------------------------------------------------------
 # What the images are
@@ -218,9 +209,9 @@ class Rootfs:
     The digest is the pin, and the repository and tag are only where those
     bytes were found: bumping any of them is a previewed, reviewable deployment
     event, which is the whole reason images are built elsewhere and referenced
-    here. What the device receives is still a flat archive — it boots a
-    directory under `systemd-nspawn` and pulls nothing itself — so the pull and
-    the flattening are the runner's work (`device_files.registry`).
+    here. What the device receives is the reference and nothing else — it pulls
+    the image itself and unpacks it into the directory `systemd-nspawn` boots
+    (`device_files.provider`).
     """
 
     repository: str
@@ -333,12 +324,11 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
         the container mounts: change one of them and the recovery script
         restarts the service, change nothing and it does not.
 
-        The root filesystem is represented by the marker beside its *tree*
-        rather than by the tree itself: walking a root filesystem to notice it
-        is unchanged would cost more than the restart it saves. The tree's
-        marker rather than the archive's, because the archive's is written
-        after the hook has already run — a service that waited for it would
-        learn of a new root filesystem one deployment late.
+        The root filesystem is represented by the marker beside it rather than
+        by the tree itself: walking a root filesystem to notice it is unchanged
+        would cost more than the restart it saves. The artifact resource writes
+        that marker before it runs this script, which is what makes it a change
+        the script can see.
         """
         return (
             f'{UNIT_DIR}/{self.unit_name}',
@@ -482,13 +472,8 @@ ServiceDeclaration = CaddyService | ResolverService | OverlayDaemon
 # ---------------------------------------------------------------------------
 
 
-def image_path(service: str) -> str:
-    """Where the service's root filesystem tarball lands, as published."""
-    return f'{IMAGE_DIR}/{service}.tar'
-
-
 def root_path(service: str) -> str:
-    """The tree unpacked from that tarball, which is what the unit boots."""
+    """The root filesystem the unit boots, unpacked from the pin on the device."""
     return f'{ROOT_DIR}/{service}'
 
 
@@ -742,10 +727,7 @@ class Container(Component):
             repository=declaration.pin.repository,
             tag=declaration.pin.tag,
             digest=declaration.pin.digest,
-            target=image_path(service),
-            extract=root_path(service),
-            mode=IMAGE_MODE,
-            owner=owner,
+            root=root_path(service),
             hook=hook,
             opts=child,
         )

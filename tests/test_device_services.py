@@ -306,20 +306,16 @@ def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it
     assert f'--bind={container.state_path("caddy")}:{container.CADDY_STATE}' in unit
 
 
-def test_a_unit_boots_the_unpacked_tree_and_not_the_tarball_that_carried_it() -> None:
-    """The pins are root filesystem archives, and `--image=` cannot boot one.
+def test_a_unit_boots_the_unpacked_tree() -> None:
+    """The pins are container images, and `--image=` cannot boot one.
 
-    So the artifact lands as a tarball and the push unpacks it into a tree the
-    unit names with `--directory=`. The two paths are distinct on purpose: the
-    tarball is what the digest pins, the tree is derived state the push
-    replaces, and a unit pointed at the archive would not start at all.
+    `systemd-nspawn`'s `--image=` wants a disk image with a partition table, so
+    what a unit names is the directory the push unpacked the image into.
     """
     unit = container.unit_file(declared_for('caddy'))
 
     assert f'--directory={container.root_path("caddy")}' in unit
     assert '--image=' not in unit
-    assert container.image_path('caddy').endswith('.tar')
-    assert container.root_path('caddy') != container.image_path('caddy')
 
 
 def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() -> None:
@@ -472,17 +468,15 @@ def test_the_stamped_sets_are_the_children_and_nothing_else(stack: services.Devi
 
 
 def test_a_new_root_filesystem_is_noticed_through_the_marker_beside_the_tree() -> None:
-    """The tarball's own marker is written after this script has already run.
+    """Walking a root filesystem would cost more than the restart it saves.
 
-    The artifact resource writes it last, as the claim that the whole push
-    succeeded, so a stamp built from it would compare equal on the very run
-    that installed the new tree and the service would keep running the old one
-    until some unrelated file changed. The marker beside the tree is written
-    before the hook, which is why it is the one the stamp reads.
+    So what the stamp reads is the one-line marker the artifact resource writes
+    beside the tree, naming the pin the tree was unpacked from. The resource
+    writes it *before* running this script, which is what makes a new root
+    filesystem a change this script can still see.
     """
     script = services.recovery_script(declarations())
 
-    assert f'{container.image_path("caddy")}.digest' not in script
     assert f'{container.root_path("caddy")}.digest' in script
 
 
@@ -603,17 +597,15 @@ def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder
 
 
 def test_each_root_filesystem_owns_the_tree_its_unit_boots(monitor: Recorder) -> None:
-    """A pin that moves replaces the tree, not just the tarball beside it.
+    """A pin that moves replaces the tree the unit names, and no other.
 
-    An artifact that unpacked somewhere its unit does not read would leave a
-    downloaded tarball nobody boots, and the container would go on running the
-    filesystem it already had.
+    An artifact that unpacked somewhere its unit does not read would leave the
+    container running the filesystem it already had, with nothing to say so.
     """
     for service in SERVICES:
         inputs = monitor.inputs_of(f'{NAME}-{service}-image')
 
-        assert inputs['target'] == container.image_path(service)
-        assert inputs['extract'] == container.root_path(service)
+        assert inputs['root'] == container.root_path(service)
 
 
 @pytest.mark.asyncio
