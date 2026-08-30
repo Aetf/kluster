@@ -1,8 +1,3 @@
-# Pulumi's mock monitor and its gRPC message types carry no type information,
-# and this file reaches inside them to read the dependency edges Pulumi
-# records. The unknown-type family is suppressed here rather than repo-wide.
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
-# pyright: reportUnnecessaryIsInstance=false
 """The day-1 chain: apply, bootstrap, credentials, and the health gate.
 
 Day 1 is the part of the Talos design that cannot be re-run casually — a
@@ -23,31 +18,11 @@ from ipaddress import IPv4Interface
 from typing import Any, cast
 
 import pulumi
-import pulumi.runtime.mocks
 import pytest
 import pytest_asyncio
-from pulumi.runtime.proto import resource_pb2
+from mock_monitor import Recorder, run_with
 
-# The mock monitor drops propertyDependencies, so dependency assertions would
-# always come back empty (framework/testing.md §3.1). It also keeps no record
-# of `depends_on`, which is not reachable from any output — and `depends_on`
-# is exactly what serializes the apply chain. Both are recovered here, before
-# any Pulumi code runs.
-DEPENDS_ON: dict[str, list[str]] = {}
-
-_original_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
-
-
-def _patched_register_resource(self: Any, request: Any) -> Any:
-    response = _original_register_resource(self, request)
-    DEPENDS_ON[request.name] = list(request.dependencies)
-    if isinstance(response, resource_pb2.RegisterResourceResponse):
-        for key, value in request.propertyDependencies.items():
-            response.propertyDependencies[key].urns.extend(value.urns)
-    return response
-
-
-pulumi.runtime.mocks.MockMonitor.RegisterResource = _patched_register_resource
+from kluster.components.talos import TalosCluster, TalosDay1
 
 #: The balancer in front of the control planes, in the two spellings the two
 #: ports are named with: a URL for the Kubernetes endpoint, a bare address for
@@ -61,7 +36,7 @@ ADDRESSES = {'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13', 'hom
 SECONDARY = '10.20.0.42'
 
 
-class Fake(pulumi.runtime.Mocks):
+class Talos(Recorder):
     """A Talos provider that answers like the real one, minus a cluster.
 
     It carries the two behaviours the chain depends on: a secrets bundle that
@@ -70,59 +45,52 @@ class Fake(pulumi.runtime.Mocks):
     """
 
     def __init__(self, *, secretbox: str | None = SECRETBOX) -> None:
+        super().__init__()
         self.secretbox: str | None = secretbox
         #: Every invoke the program made, so a test can read what the health
         #: check and the client configuration were asked for.
         self.calls: dict[str, dict[str, Any]] = {}
 
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        if args.typ == 'talos:machine/secrets:Secrets':
-            secrets: dict[str, Any] = {'bootstrapToken': 'bootstrap.token'}
-            if self.secretbox is not None:
-                secrets['secretboxEncryptionSecret'] = self.secretbox
-            outputs['machineSecrets'] = {
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
+            return {'kubeconfigRaw': KUBECONFIG}
+        if args.typ != 'talos:machine/secrets:Secrets':
+            return {}
+        secrets: dict[str, Any] = {'bootstrapToken': 'bootstrap.token'}
+        if self.secretbox is not None:
+            secrets['secretboxEncryptionSecret'] = self.secretbox
+        return {
+            'machineSecrets': {
                 'certs': {},
                 'cluster': {'id': 'kluster', 'secret': 'cluster.secret'},
                 'secrets': secrets,
                 'trustdinfo': {'token': 'trustd.token'},
-            }
-            outputs['clientConfiguration'] = {
-                'caCertificate': 'ca',
-                'clientCertificate': 'crt',
-                'clientKey': 'key',
-            }
-        if args.typ == 'talos:cluster/kubeconfig:Kubeconfig':
-            outputs['kubeconfigRaw'] = KUBECONFIG
-        return args.name + '_id', outputs
+            },
+            'clientConfiguration': {'caCertificate': 'ca', 'clientCertificate': 'crt', 'clientKey': 'key'},
+        }
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         arguments = dict(cast('dict[str, Any]', args.args))
         self.calls[args.token] = arguments
         match args.token:
             case 'talos:machine/getConfiguration:getConfiguration':
                 # The data source keeps its inputs, patches included.
-                return {'machineConfiguration': 'machine: {}', 'configPatches': arguments.get('configPatches')}, []
+                return {'machineConfiguration': 'machine: {}', 'configPatches': arguments.get('configPatches')}
             case 'talos:client/getConfiguration:getConfiguration':
-                return {'talosConfig': TALOSCONFIG}, []
+                return {'talosConfig': TALOSCONFIG}
             case 'talos:cluster/getHealth:getHealth':
-                return {'id': 'healthy'}, []
+                return {'id': 'healthy'}
             case _:
-                return {}, []
+                return {}
 
 
 @pytest_asyncio.fixture
-async def fake() -> Fake:
-    DEPENDS_ON.clear()
-    mocks = Fake()
-    pulumi.runtime.set_mocks(mocks, project='kluster', stack='physical', preview=False)
-    return mocks
+async def fake() -> Talos:
+    return await run_with(Talos(), stack='physical')
 
 
-def build_cluster(**kwargs: Any) -> Any:
+def build_cluster(**kwargs: Any) -> TalosCluster:
     """Day 0: the PKI and the configuration each machine boots with."""
-    from kluster.components.talos import TalosCluster
-
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
     kwargs.setdefault('bgp_peers', {'homelab': '192.168.70.1/32'})
@@ -136,10 +104,8 @@ def build_cluster(**kwargs: Any) -> Any:
     )
 
 
-def build(**kwargs: Any) -> Any:
+def build(**kwargs: Any) -> TalosDay1:
     """Day 1, on top of a day 0 the caller may hand in to inspect."""
-    from kluster.components.talos import TalosDay1
-
     kwargs.setdefault('cluster', build_cluster())
     kwargs.setdefault('addresses', ADDRESSES)
     kwargs.setdefault('secondary_addresses', {'cp1': SECONDARY})
@@ -151,7 +117,7 @@ async def urns_of(output: pulumi.Output[Any]) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_every_node_gets_the_role_it_was_declared_with(fake: Fake) -> None:
+async def test_every_node_gets_the_role_it_was_declared_with(fake: Talos) -> None:
     cluster = build_cluster()
     assert cluster.roles == {
         'cp1': 'controlplane',
@@ -163,30 +129,30 @@ async def test_every_node_gets_the_role_it_was_declared_with(fake: Fake) -> None
 
 
 @pytest.mark.asyncio
-async def test_a_node_cannot_be_both_roles(fake: Fake) -> None:
+async def test_a_node_cannot_be_both_roles(fake: Talos) -> None:
     with pytest.raises(ValueError, match='both a control plane and a worker'):
         build_cluster(worker_nodes=('cp1',))
 
 
 @pytest.mark.asyncio
-async def test_day_one_needs_an_address_for_every_node(fake: Fake) -> None:
+async def test_day_one_needs_an_address_for_every_node(fake: Talos) -> None:
     # A cluster is not healthy because the nodes somebody listed are.
     with pytest.raises(ValueError, match=r'an address for every node.*homelab'):
         build(addresses={'cp1': '10.20.0.11', 'cp2': '10.20.0.12', 'cp3': '10.20.0.13'})
 
 
 @pytest.mark.asyncio
-async def test_day_zero_stands_on_its_own(fake: Fake) -> None:
+async def test_day_zero_stands_on_its_own(fake: Talos) -> None:
     # Day 0 delivers the configuration out of band (instance metadata, a seed
     # ISO); day 1 needs machines that answer, which the stack only has later.
     cluster = build_cluster()
     await asyncio.gather(*(config.future() for config in cluster.machine_configs.values()))
-    assert 'kluster-bootstrap' not in DEPENDS_ON
-    assert not [name for name in DEPENDS_ON if name.endswith('-config')]
+    assert 'kluster-bootstrap' not in fake.registrations
+    assert not [name for name in fake.registrations if name.endswith('-config')]
 
 
 @pytest.mark.asyncio
-async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(fake: Fake) -> None:
+async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(fake: Talos) -> None:
     day1 = build()
     for node, applied in day1.applies.items():
         assert await applied.node.future() == ADDRESSES[node]
@@ -196,7 +162,7 @@ async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(f
 
 
 @pytest.mark.asyncio
-async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Fake) -> None:
+async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Talos) -> None:
     # The ordinary case, and the one the cloud nodes are in: the address that
     # names the node is also the address that reaches it.
     day1 = build()
@@ -205,7 +171,7 @@ async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Fak
 
 
 @pytest.mark.asyncio
-async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialled_elsewhere(fake: Fake) -> None:
+async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialled_elsewhere(fake: Talos) -> None:
     # apid routes by the node a call names, so a node that nothing outside the
     # site can open a connection to is still administered: it is named by its
     # own address and dialled at one that answers, and whichever member that
@@ -220,7 +186,7 @@ async def test_a_node_behind_the_mesh_is_named_by_its_own_address_and_dialled_el
 
 
 @pytest.mark.asyncio
-async def test_the_bootstrap_dials_the_node_it_names_whatever_it_was_given(fake: Fake) -> None:
+async def test_the_bootstrap_dials_the_node_it_names_whatever_it_was_given(fake: Talos) -> None:
     # Bootstrap and the kubeconfig read behind it are the calls with nothing to
     # route through — there is no cluster yet — so they never take a proxy,
     # even for a node the caller handed an endpoint for.
@@ -233,7 +199,7 @@ async def test_the_bootstrap_dials_the_node_it_names_whatever_it_was_given(fake:
 
 
 @pytest.mark.asyncio
-async def test_destroying_an_apply_never_wipes_the_disk(fake: Fake) -> None:
+async def test_destroying_an_apply_never_wipes_the_disk(fake: Talos) -> None:
     # `reset` wipes STATE and EPHEMERAL — every partition (provider issue
     # #205). Node replacement is an explicit procedure, never a side effect.
     day1 = build()
@@ -244,7 +210,7 @@ async def test_destroying_an_apply_never_wipes_the_disk(fake: Fake) -> None:
 
 
 @pytest.mark.asyncio
-async def test_nodes_are_applied_one_after_another(fake: Fake) -> None:
+async def test_nodes_are_applied_one_after_another(fake: Talos) -> None:
     # A configuration change that reboots the machine is applied to one node
     # at a time, so the quorum never goes down together.
     day1 = build()
@@ -252,27 +218,27 @@ async def test_nodes_are_applied_one_after_another(fake: Fake) -> None:
     # Registration is asynchronous; the graph is only complete once it is.
     await asyncio.gather(*(applied.urn.future() for applied in day1.applies.values()))
     for earlier, later in zip(order, order[1:]):
-        waits_for = DEPENDS_ON[f'kluster-{later}-config']
+        waits_for = fake.depends_on(f'kluster-{later}-config')
         assert await day1.applies[earlier].urn.future() in waits_for, f'{later} does not wait for {earlier}'
 
 
 @pytest.mark.asyncio
-async def test_only_the_first_control_plane_bootstraps(fake: Fake) -> None:
+async def test_only_the_first_control_plane_bootstraps(fake: Talos) -> None:
     # A second bootstrap does not join etcd, it starts a second etcd cluster.
     day1 = build()
     assert await day1.bootstrap.node.future() == ADDRESSES['cp1']
-    assert await day1.applies['cp1'].urn.future() in DEPENDS_ON['kluster-bootstrap']
+    assert await day1.applies['cp1'].urn.future() in fake.depends_on('kluster-bootstrap')
 
 
 @pytest.mark.asyncio
-async def test_the_kubeconfig_comes_from_the_bootstrapped_node(fake: Fake) -> None:
+async def test_the_kubeconfig_comes_from_the_bootstrapped_node(fake: Talos) -> None:
     day1 = build()
     assert await day1.kubeconfig_source.node.future() == ADDRESSES['cp1']
-    assert await day1.bootstrap.urn.future() in DEPENDS_ON['kluster-kubeconfig']
+    assert await day1.bootstrap.urn.future() in fake.depends_on('kluster-kubeconfig')
 
 
 @pytest.mark.asyncio
-async def test_the_health_check_knows_which_node_is_which(fake: Fake) -> None:
+async def test_the_health_check_knows_which_node_is_which(fake: Talos) -> None:
     day1 = build()
     _ = await day1.health.future()
     health = fake.calls['talos:cluster/getHealth:getHealth']
@@ -284,7 +250,7 @@ async def test_the_health_check_knows_which_node_is_which(fake: Fake) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Fake) -> None:
+async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Talos) -> None:
     day1 = build()
     assert await day1.kubeconfig.future() == KUBECONFIG
     # The gate is the dependency: whatever consumes the kubeconfig is ordered
@@ -295,7 +261,7 @@ async def test_the_kubeconfig_is_gated_on_the_health_check(fake: Fake) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_credentials_are_secret(fake: Fake) -> None:
+async def test_the_credentials_are_secret(fake: Talos) -> None:
     # Both are cluster-admin: a stack export must not print them.
     day1 = build()
     assert await day1.kubeconfig.is_secret()
@@ -303,7 +269,7 @@ async def test_the_credentials_are_secret(fake: Fake) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_talosconfig_names_every_node_and_the_control_plane_endpoints(fake: Fake) -> None:
+async def test_the_talosconfig_names_every_node_and_the_control_plane_endpoints(fake: Talos) -> None:
     day1 = build()
     assert await day1.talosconfig.future() == TALOSCONFIG
     configuration = fake.calls['talos:client/getConfiguration:getConfiguration']
@@ -320,7 +286,7 @@ async def patches_of(component: Any, node: str) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_the_generated_secretbox_key_reaches_the_control_planes(fake: Fake) -> None:
+async def test_the_generated_secretbox_key_reaches_the_control_planes(fake: Talos) -> None:
     cluster = build_cluster()
     for node in ('cp1', 'cp2', 'cp3'):
         sections = [patch['cluster'] for patch in await patches_of(cluster, node) if 'cluster' in patch]
@@ -328,7 +294,7 @@ async def test_the_generated_secretbox_key_reaches_the_control_planes(fake: Fake
 
 
 @pytest.mark.asyncio
-async def test_a_bundle_without_a_secretbox_key_is_an_error(fake: Fake, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_bundle_without_a_secretbox_key_is_an_error(fake: Talos, caplog: pytest.LogCaptureFixture) -> None:
     # Talos generates one for every new cluster. A bundle that arrives without
     # one would bring the cluster up with its secrets readable in every etcd
     # snapshot, so an error diagnostic is raised — which fails the deployment
@@ -350,7 +316,7 @@ def interfaces(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_the_second_address_is_applied_and_never_booted_with(fake: Fake) -> None:
+async def test_the_second_address_is_applied_and_never_booted_with(fake: Talos) -> None:
     # The address is assigned by OCI to the VNIC of an instance whose user_data
     # *is* the booted configuration. Naming it there would make the instance
     # wait on an address that waits on the instance, so it arrives on day 1.
@@ -361,7 +327,7 @@ async def test_the_second_address_is_applied_and_never_booted_with(fake: Fake) -
 
 
 @pytest.mark.asyncio
-async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake: Fake) -> None:
+async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake: Talos) -> None:
     from kluster import conventions
     from kluster.components.talos import STATIC_ADDRESSES
 
@@ -384,7 +350,7 @@ async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake
 
 
 @pytest.mark.asyncio
-async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake: Fake) -> None:
+async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake: Talos) -> None:
     # Every other node is applied the very configuration it booted, rather than
     # a second rendering of it that happens to come out the same.
     cluster = build_cluster()
@@ -395,7 +361,7 @@ async def test_only_the_node_holding_the_dedicated_vip_is_configured_twice(fake:
 
 
 @pytest.mark.asyncio
-async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
+async def test_only_the_worker_takes_bgp(fake: Talos) -> None:
     from kluster.components.talos import BGP_PORT
 
     cluster = build_cluster()
@@ -413,7 +379,7 @@ async def test_only_the_worker_takes_bgp(fake: Fake) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_stranger_cannot_be_named_by_either_component(fake: Fake) -> None:
+async def test_a_stranger_cannot_be_named_by_either_component(fake: Talos) -> None:
     with pytest.raises(ValueError, match='BGP peers name nodes that are not in the cluster'):
         build_cluster(bgp_peers={'nowhere': '192.168.70.1/32'})
     with pytest.raises(ValueError, match='secondary addresses name nodes that are not in the cluster'):

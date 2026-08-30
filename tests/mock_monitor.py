@@ -198,6 +198,12 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
     in whichever suite declares it.
     """
     pulumi.runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
+    # Registrations are dispatched onto a queue that lives in module state and
+    # so outlives the event loop of whichever test made them. Emptying it as a
+    # run begins is what lets `declaring` mean "what this run declared" rather
+    # than "everything any run ever declared", half of it owned by loops that
+    # are closed.
+    pulumi.runtime.settings._get_rpc_manager().clear()  # pyright: ignore[reportPrivateUsage]
     _ = await pulumi.runtime.settings.monitor_supports_feature('parameterization')
     return monitor
 

@@ -1,7 +1,3 @@
-# Pulumi's mock monitor and its gRPC message types carry no type information,
-# and this file reaches inside them to read the resource options Pulumi
-# records. The unknown-type family is suppressed here rather than repo-wide.
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 """The worker VM under libvirt, and the session that declares it.
 
 The worker is ordinary infrastructure — it can be rebuilt — but the disk
@@ -22,28 +18,11 @@ from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pulumi
-import pulumi.runtime.mocks
-import pulumi.runtime.stack
 import pytest
 import pytest_asyncio
+from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-
-# The mock monitor keeps no record of the options a resource was registered
-# with — `import`, `ignoreChanges` and `deleteBeforeReplace` are exactly what
-# this module is about, and none of them is reachable from an output. They are
-# recovered here, before any Pulumi code runs (framework/testing.md §3.1).
-REQUESTS: dict[str, Any] = {}
-
-_original_register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
-
-
-def _patched_register_resource(self: Any, request: Any) -> Any:
-    REQUESTS[request.name] = request
-    return _original_register_resource(self, request)
-
-
-pulumi.runtime.mocks.MockMonitor.RegisterResource = _patched_register_resource
 
 CLUSTER = 'kluster'
 WORKER = 'worker'
@@ -79,7 +58,7 @@ PROVIDER_DOMAIN_XML = """<domain type='kvm'>
 """
 
 
-class Fake(pulumi.runtime.Mocks):
+class Providers(Recorder):
     """Enough of the Talos and libvirt providers to declare the host.
 
     The Talos half answers with a secrets bundle and a rendered machine
@@ -88,49 +67,36 @@ class Fake(pulumi.runtime.Mocks):
     definition-only provider does.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        #: The type each resource was registered as, and the provider instance
-        #: it was registered against, by name. The engine hands a mock the
-        #: reference of the provider that would manage the resource, which is
-        #: how a case can ask what a declaration authenticates as.
-        self.types: dict[str, str] = {}
-        self.providers: dict[str, str] = {}
-
-    def new_resource(self, args: pulumi.runtime.MockResourceArgs) -> tuple[str | None, dict[str, Any]]:
-        self.types[args.name] = args.typ
-        self.providers[args.name] = args.provider or ''
-        outputs: dict[str, Any] = dict(cast('dict[str, Any]', args.inputs))
-        if args.typ == 'talos:machine/secrets:Secrets':
-            outputs['machineSecrets'] = {
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ != 'talos:machine/secrets:Secrets':
+            return {}
+        return {
+            'machineSecrets': {
                 'certs': {},
                 'cluster': {'id': CLUSTER},
                 'secrets': {'secretboxEncryptionSecret': 'c2VjcmV0Ym94'},
-            }
-            outputs['clientConfiguration'] = {'caCertificate': 'ca', 'clientCertificate': 'crt', 'clientKey': 'key'}
-        return args.name + '_id', outputs
+            },
+            'clientConfiguration': {'caCertificate': 'ca', 'clientCertificate': 'crt', 'clientKey': 'key'},
+        }
 
-    def call(self, args: pulumi.runtime.MockCallArgs) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
         if args.token == 'talos:machine/getConfiguration:getConfiguration':
-            return {'machineConfiguration': MACHINE_CONFIG}, []
-        return {}, []
+            return {'machineConfiguration': MACHINE_CONFIG}
+        return {}
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_mocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Fake:
+async def monitor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Providers:
     from kluster.components.homelab import PRIVATE_KEY
     from kluster.lib import workstation
 
-    REQUESTS.clear()
     # The component materializes the session's credential into the checkout's
     # `.credentials/`, so every case here is pointed at a checkout of its own:
     # a suite that wrote into the tree it runs from would leave a key behind
     # and, worse, overwrite the operator's.
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config({f'kluster:{PRIVATE_KEY}': IDENTITY})
-    fake = Fake()
-    pulumi.runtime.set_mocks(fake, project='kluster', stack='physical', preview=False)
-    return fake
+    return await run_with(Providers(), stack='physical')
 
 
 def build_cluster(worker_nodes: tuple[str, ...] = (WORKER,)) -> Any:
@@ -186,9 +152,9 @@ async def test_the_worker_boots_because_the_volume_is_created_from_the_talos_ima
 
 
 @pytest.mark.asyncio
-async def test_the_disk_is_not_sized_by_the_declaration() -> None:
+async def test_the_disk_is_not_sized_by_the_declaration(monitor: Providers) -> None:
     host = build()
-    request = await registration(host.volume)
+    request = await registration(monitor, host.volume)
 
     # The provider refuses `size` beside `source` outright — it takes the
     # volume's capacity from the image — so stating the worker's intended disk
@@ -198,9 +164,9 @@ async def test_the_disk_is_not_sized_by_the_declaration() -> None:
 
 
 @pytest.mark.asyncio
-async def test_growing_the_disk_is_a_host_operation_not_a_diff() -> None:
+async def test_growing_the_disk_is_a_host_operation_not_a_diff(monitor: Providers) -> None:
     host = build()
-    request = await registration(host.volume)
+    request = await registration(monitor, host.volume)
 
     # The volume is created at the image's size and grown on the host with
     # `truncate` plus `virsh blockresize`, so the file and the state part
@@ -212,8 +178,8 @@ async def test_growing_the_disk_is_a_host_operation_not_a_diff() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_talos_upgrade_is_not_a_proposal_to_rewrite_the_disk() -> None:
-    request = await registration(build().volume)
+async def test_a_talos_upgrade_is_not_a_proposal_to_rewrite_the_disk(monitor: Providers) -> None:
+    request = await registration(monitor, build().volume)
 
     # `source` says what the disk was written with, and Talos upgrades itself
     # in place over its machine API — so the declaration stops describing the
@@ -267,8 +233,8 @@ async def test_the_worker_comes_back_from_a_host_reboot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_resized_worker_is_undefined_before_it_is_redefined() -> None:
-    request = await registration(build().domain)
+async def test_a_resized_worker_is_undefined_before_it_is_redefined(monitor: Providers) -> None:
+    request = await registration(monitor, build().domain)
 
     # `vcpu` and `memory` replace the domain rather than update it, and the
     # domain's name is stated rather than generated — so a replacement that
@@ -278,7 +244,7 @@ async def test_a_resized_worker_is_undefined_before_it_is_redefined() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_only_domain_on_this_host_the_program_declares_is_the_worker(setup_mocks: Fake) -> None:
+async def test_the_only_domain_on_this_host_the_program_declares_is_the_worker(monitor: Providers) -> None:
     """The home-automation domain beside it is nobody's declaration here.
 
     It predates this program and outlives it, its full definition is the
@@ -287,11 +253,10 @@ async def test_the_only_domain_on_this_host_the_program_declares_is_the_worker(s
     appearing under this component is that decision being undone, so the count
     is asserted rather than left to a reader of the constructor.
     """
-    _ = build()
-    await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        _ = build()
 
-    domains = [name for name, typ in setup_mocks.types.items() if typ == 'libvirt:index/domain:Domain']
-    assert domains == [DOMAIN]
+    assert sorted(monitor.names('libvirt:index/domain:Domain')) == [DOMAIN]
 
 
 @pytest.mark.asyncio
@@ -471,13 +436,13 @@ def test_the_seed_is_left_exactly_as_the_provider_wrote_it() -> None:
     assert 'cache' not in cdrom.attrib
 
 
-async def registration(resource: pulumi.Resource) -> Any:
-    """The request a resource was registered with, once it has been.
+async def registration(monitor: Providers, resource: pulumi.Resource) -> Any:
+    """The options a resource was registered with, once it has been.
 
     Registration is a background task, so a component's constructor returning
     is not the moment its resources reached the monitor; resolving the URN is.
     """
-    return REQUESTS[str(await resource.urn.future()).rsplit('::', 1)[-1]]
+    return monitor.options_of(str(await resource.urn.future()).rsplit('::', 1)[-1])
 
 
 def _transformed_disk(selector: str) -> Any:
@@ -537,17 +502,17 @@ async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_every_domain_and_volume_is_signed_by_the_hosts_own_provider(setup_mocks: Fake) -> None:
+async def test_every_domain_and_volume_is_signed_by_the_hosts_own_provider(monitor: Providers) -> None:
     """Inherited from the component, not re-plumbed onto each child.
 
     The pool, the disk, the seed and the worker domain are all children of the
     component that built the provider, so each takes it from its parent\'s
     provider map.
     """
-    _ = build()
-    await pulumi.runtime.stack.wait_for_rpcs(await_all_outstanding_tasks=False)
+    async with declaring():
+        _ = build()
 
-    libvirt_resources = [name for name, typ in setup_mocks.types.items() if typ.startswith('libvirt:')]
-    assert libvirt_resources, 'the build declared no libvirt resources at all'
-    for name in libvirt_resources:
-        assert f'{CLUSTER}-libvirt' in setup_mocks.providers[name], f'{name} is not signed by the host provider'
+    libvirt = [d for d in monitor.declared if d.typ.startswith('libvirt:')]
+    assert libvirt, 'the build declared no libvirt resources at all'
+    for declaration in libvirt:
+        assert f'{CLUSTER}-libvirt' in declaration.provider, f'{declaration.name} is not signed by the host provider'
