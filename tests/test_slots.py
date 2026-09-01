@@ -18,6 +18,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from cryptography import x509
@@ -192,8 +193,9 @@ def test_an_environment_is_held_against_the_repository_its_sink_names() -> None:
 CHANNEL_SEPARATOR = '·'
 
 #: The word in an entry's qualifier that marks a channel the register promises
-#: and nothing addresses yet -- the cell's half of a map row's `pending`.
-PENDING = 'pending'
+#: and nothing addresses yet -- the cell's half of a map row's `pending`. Whole
+#: word, so that a qualifier reading "depending on" is not a promise deferred.
+PENDING = re.compile(r'\bpending\b')
 
 
 def promised_channels(cell: str) -> dict[str, bool]:
@@ -201,25 +203,56 @@ def promised_channels(cell: str) -> dict[str, bool]:
     promised: dict[str, bool] = {}
     for entry in cell.split(CHANNEL_SEPARATOR):
         text = entry.strip()
-        terms = [term for term in slots.REGISTER_COLUMNS if text.startswith(term)]
+        # The term has to end where a word ends: `escrowed copy` begins with the
+        # letters of `escrow` and is not that channel.
+        terms = [term for term in slots.REGISTER_COLUMNS if re.match(f'{re.escape(term)}\\b', text)]
         assert len(terms) == 1, f'{text!r} begins with no channel term: {sorted(slots.REGISTER_COLUMNS)}'
         assert terms[0] not in promised, f'{cell!r} names {terms[0]!r} twice'
-        promised[terms[0]] = PENDING in text
+        promised[terms[0]] = PENDING.search(text) is not None
     return promised
 
 
-def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], set[str]]:
+def channels_of_every_kind() -> tuple[slots.Channel, ...]:
+    """One channel of each kind the map may deliver into, `Slot` in all four of its guises."""
+    return (
+        Slot(repository=REPOSITORY, name='A_SECRET'),
+        Slot(repository=REPOSITORY, name='A_SECRET', environment=slots.ENVIRONMENTS[0]),
+        Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET'),
+        Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT),
+        slots.PulumiConfig('a-stack', 'aKey'),
+        slots.PulumiState('a-stack', 'a value'),
+        slots.EscrowCopy('a-label'),
+        slots.SealedSecret('a manifest'),
+        slots.OnBox('a file'),
+        slots.WorkstationSlot('a-file'),
+        slots.GwConfigSecret('a value'),
+    )
+
+
+def test_the_vocabulary_names_every_channel_of_the_closed_set() -> None:
+    channels = channels_of_every_kind()
+
+    # Rule 6's set of channels is closed, and §3 has to be able to say every
+    # member of it: one added to the union with no term of its own is a delivery
+    # the register can only describe in words nothing checks.
+    assert {type(channel) for channel in channels} == set(get_args(slots.Channel))
+    assert {slots.register_column(channel) for channel in channels} == slots.REGISTER_COLUMNS
+
+
+def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], set[str], set[str]]:
     """Where a §3 Slot cell and the rows implementing that credential disagree.
 
-    Two ways to disagree, and the pair separates them: a channel the cell hands
-    out as delivered that no row addresses, and a channel a row addresses that
-    the cell does not name. A cell may still name a channel that has no
-    address, which is what `pending` says.
+    Three ways to disagree, and the triple separates them: a channel the cell
+    hands out as delivered that no row addresses, a channel a row addresses that
+    the cell does not name, and a channel the cell calls `pending` that is in
+    fact filled -- which sends its reader looking for what stands in the way of
+    a slot nothing is waiting on.
     """
     promised = promised_channels(cell)
     delivered = {term for term, waiting in promised.items() if not waiting}
+    waiting = promised.keys() - delivered
     addressed = {slots.register_column(target) for row in rows for target in row.targets}
-    return delivered - addressed, addressed - promised.keys()
+    return delivered - addressed, addressed - promised.keys(), waiting & addressed
 
 
 def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
@@ -230,7 +263,7 @@ def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
     for credential, cell in register_table().items():
         rows = [row for row in slots.ROWS.values() if row.register == credential]
 
-        assert drifted_channels(cell, rows) == (set(), set()), credential
+        assert drifted_channels(cell, rows) == (set(), set(), set()), credential
         # A channel the register promises without an address is what a row's
         # `pending` is for, so the cell may say `pending` only where a row says
         # what stands in the way.
@@ -251,13 +284,16 @@ def test_a_cell_promising_a_channel_no_row_delivers_is_drift() -> None:
         )
     ]
 
-    assert drifted_channels('Pulumi state · CI env', stated) == ({'CI env'}, set())
+    assert drifted_channels('Pulumi state · CI env', stated) == ({'CI env'}, set(), set())
     # Saying it is pending is how the register promises a channel honestly: the
     # row then has to carry the reason.
-    assert drifted_channels('Pulumi state · CI env (pending)', stated) == (set(), set())
-    # And the other direction: a slot the map fills that the register does not
+    assert drifted_channels('Pulumi state · CI env (pending)', stated) == (set(), set(), set())
+    # The other direction: a slot the map fills that the register does not
     # mention is a delivery its reader cannot know about.
-    assert drifted_channels('CI env (pending)', stated) == (set(), {'Pulumi state'})
+    assert drifted_channels('CI env (pending)', stated) == (set(), {'Pulumi state'}, set())
+    # And a filled channel the cell calls pending, which reads as work left to
+    # do on a slot that already holds the credential.
+    assert drifted_channels('Pulumi state (pending)', stated) == (set(), set(), {'Pulumi state'})
 
 
 def test_the_passphrase_reaches_every_environment() -> None:

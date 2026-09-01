@@ -617,21 +617,15 @@ def _device(member: str) -> Row:
     rows follow by importing their key names.
     """
     device = devices.DEVICES[member]
+    # No `pending`: the stack reads the credential out of its own committed
+    # configuration, so the register names no channel for it that is missing.
+    # A device row's slots are the keys below and nothing else.
     return Row(
         register=device.register,
         source=Manual(device.title, device.console, command=f'credentials derived {device.member} record'),
         targets=tuple(PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields),
-        pending=_IN_STACK_CONFIG,
     )
 
-
-#: Why a provider credential CI *uses* is nonetheless not a CI secret today: it
-#: reaches the job through the stack's committed configuration, which the
-#: program reads for itself.
-_IN_STACK_CONFIG = (
-    '§3 names a CI Environment secret beside the config secret; no workflow reads one, because the stack '
-    'takes the credential from its committed configuration (ci.md §3)'
-)
 
 #: Why an ops-repository row has no address: `kluster-ops` carries the issues
 #: this register cites and no workflow, so nothing there names a secret yet
@@ -681,7 +675,6 @@ ROWS: dict[str, Row] = {
             PulumiConfig(PHYSICAL_STACK, derived.OCI_FINGERPRINT_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.OCI_PRIVATE_KEY_KEY),
         ),
-        pending=_IN_STACK_CONFIG,
     ),
     derived.OCI_STATE_BACKEND_ROW: Row(
         register='OCI API key (state backend)',
@@ -695,7 +688,6 @@ ROWS: dict[str, Row] = {
             PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY),
             PulumiConfig(DNS_STACK, derived.ACCOUNT_KEY, secret=False),
         ),
-        pending=_IN_STACK_CONFIG,
     ),
     'cloudflare-dns01': Row(
         register='Cloudflare token (DNS-01)',
@@ -721,7 +713,6 @@ ROWS: dict[str, Row] = {
             PulumiConfig(PHYSICAL_STACK, derived.B2_KEY_ID_KEY),
             PulumiConfig(PHYSICAL_STACK, derived.B2_KEY_KEY),
         ),
-        pending=_IN_STACK_CONFIG,
     ),
     'b2-writer': Row(
         register='B2 writer keys',
@@ -848,7 +839,6 @@ ROWS: dict[str, Row] = {
             PulumiConfig(PHYSICAL_STACK, 'gatewayPrivateKey'),
             PulumiConfig(PHYSICAL_STACK, 'libvirtPrivateKey'),
         ),
-        pending=_IN_STACK_CONFIG,
     ),
     'unifi': _device('unifi'),
     'adguard': _device('adguard'),
