@@ -1,13 +1,23 @@
 """The register and the selection rule behind `packages/crds`.
 
 Nothing here reaches the network: what is worth holding still is which CRDs
-survive the filter, and that every pin still clears the floor its design doc
-put under it.
+survive the filter, that every pin still clears the floor its design doc put
+under it, and that a tool download nothing vouches for is refused. The one
+case that downloads at all is handed its bytes by a stand-in.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
+import tarfile
+from io import BytesIO
+from pathlib import Path
+from typing import cast
+
 import pytest
+import requests
 
 from kluster.scripts.update_crds import pins, sources
 
@@ -193,3 +203,114 @@ def test_cilium_crds_come_from_the_source_tree_at_the_pinned_chart_version() -> 
 
     assert not cilium_chart.crds
     assert cilium_tree.ref == f'v{cilium_chart.version}'
+
+
+# -- the crd2pulumi pin -------------------------------------------------------
+
+
+#: What `renovate.json5` matches the pin with, spelled exactly as that file
+#: holds it. Both constants are captured by one pattern because a bump has to
+#: move them together.
+CRD2PULUMI_MATCH_STRING = (
+    "CRD2PULUMI_VERSION = '(?<currentValue>v[\\d.]+)'[\\s\\S]*?CRD2PULUMI_SHA256 = '(?<currentDigest>[0-9a-f]{64})'"
+)
+
+#: Contents for the one file the fetch cares about. Nothing runs it.
+TOOL = b'#!/bin/sh\nexit 0\n'
+
+
+def archive() -> bytes:
+    """A tar.gz holding one executable called `crd2pulumi`, and nothing else."""
+    buffer = BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w:gz') as tarobj:
+        entry = tarfile.TarInfo('crd2pulumi')
+        entry.size = len(TOOL)
+        entry.mode = 0o755
+        tarobj.addfile(entry, BytesIO(TOOL))
+    return buffer.getvalue()
+
+
+class FakeDownload:
+    """A streamed response that hands back the bytes it was given."""
+
+    def __init__(self, payload: bytes) -> None:
+        self.headers: dict[str, str] = {'content-length': str(len(payload))}
+        self.raw: BytesIO = BytesIO(payload)
+
+    def __enter__(self) -> FakeDownload:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+def serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[str]:
+    """Replace the download seam, and hand back the list of URLs it was asked for."""
+    requested: list[str] = []
+
+    def get(url: str, **_: object) -> requests.Response:
+        requested.append(url)
+        return cast('requests.Response', FakeDownload(payload))
+
+    monkeypatch.setattr(sources.requests, 'get', get)
+    return requested
+
+
+def test_fetch_crd2pulumi_refuses_an_archive_that_is_not_the_pinned_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed tarball that is not the pinned release is refused by digest.
+
+    Refused *before* it is unpacked, which the empty directory is the claim
+    about: an archive already extracted has had its say whatever the digest
+    turns out to be.
+    """
+    _ = serve(monkeypatch, archive())
+
+    with pytest.raises(ValueError, match=pins.CRD2PULUMI_SHA256):
+        _ = sources.fetch_crd2pulumi(tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_fetch_crd2pulumi_unpacks_the_archive_whose_digest_matches_the_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = archive()
+    monkeypatch.setattr(pins, 'CRD2PULUMI_SHA256', hashlib.sha256(payload).hexdigest())
+    requested = serve(monkeypatch, payload)
+
+    binary = sources.fetch_crd2pulumi(tmp_path)
+
+    assert requested == [pins.CRD2PULUMI_URL]
+    assert binary == (tmp_path / 'crd2pulumi').resolve()
+
+
+def test_the_pinned_asset_is_named_after_the_pinned_version() -> None:
+    """What renovate substitutes into to find the next release's asset and checksum."""
+    assert pins.CRD2PULUMI_URL.endswith(f'crd2pulumi-{pins.CRD2PULUMI_VERSION}-linux-amd64.tar.gz')
+
+
+def test_renovate_moves_the_crd2pulumi_version_and_digest_together() -> None:
+    """The manager's pattern is the one this module answers to.
+
+    A stale digest cannot be caught by the next `update_crds` run alone — that
+    run is what the pin exists to stop — so the link between the file and the
+    manager is held here: a rename, or a line inserted between the two
+    constants, fails here rather than in a pull request nobody can merge.
+    """
+    config = (Path(__file__).parent.parent / 'renovate.json5').read_text()
+    module = Path(pins.__file__).read_text()
+
+    # `json.dumps` is the escaping renovate.json5 holds the pattern in.
+    assert json.dumps(CRD2PULUMI_MATCH_STRING) in config
+
+    # Python spells a named group `(?P<...>`, renovate's regex engine `(?<...>`.
+    found = re.search(CRD2PULUMI_MATCH_STRING.replace('(?<', '(?P<'), module)
+
+    assert found is not None
+    assert found.group('currentValue') == pins.CRD2PULUMI_VERSION
+    assert found.group('currentDigest') == pins.CRD2PULUMI_SHA256
