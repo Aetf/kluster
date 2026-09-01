@@ -20,9 +20,9 @@ and this module owns it:
 -   **The skeleton of the custom root** — `bin/`, `dpkg/`, `units/`.
 
 **The layers above reach the mechanism through methods here, and the resource
-they get back is theirs.** Each call is one `DeviceFile` at a path this module
-decides, with the mode and the post-apply hook that path implies, parented to
-the component that asked for it: the path and hook discipline belong to this
+they get back is theirs.** Each call is one device resource at a path this
+module decides, with the mode and the post-apply hook that path implies, parented
+to the component that asked for it: the path and hook discipline belong to this
 layer, the resource belongs to the layer that needs it. That is why they are
 methods returning a child rather than constructor parameters — a caller would
 otherwise have to re-learn the path rules, or hand its content down to a
@@ -45,13 +45,13 @@ whole directory in one rename, so any file Pulumi wrote in it would be deleted
 by the next refresh and reported as drift forever. This layer declares that the
 directory exists and never what is in it.
 
-**A directory is declared by a marker beside it, not by a file inside it.** The
-device provider writes files; the shape of the custom root is nonetheless part
-of the desired state, so `skeleton_dir` declares one file per directory under
-`{custom root}/.skeleton/` whose hook creates the directory it names. The cost
-is that a directory somebody removed by hand is not drift the next preview sees
-— the marker is still there — and the mechanism that closes that gap is a
-directory resource in the device provider, which does not exist yet.
+**A directory is a resource, not a file that stands for one.** `skeleton_dir`
+declares a `DeviceDirectory`, whose existence, mode and ownership are compared
+against the device like a file's content is — so a directory somebody removed by
+hand is drift the next preview sees. Nothing is declared about the contents,
+which is what `dpkg/` requires and what makes the method serve any directory a
+layer fills at runtime; the delete that stops declaring one takes it away only
+while it is empty.
 
 **New device automation is a unit plus an executable unless it manipulates
 systemd's own configuration**, in which case it is an on_boot script; the rule
@@ -69,18 +69,18 @@ import pulumi
 
 from kluster import conventions
 from kluster.lib import templates
-from kluster.providers.device_files.provider import Connection, DeviceFile
+from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
 
 __all__ = (
     'BIN_DIR',
+    'DIRECTORY_MODE',
     'DPKG_DIR',
     'FILE_MODE',
     'LIVE_UNIT_DIR',
     'PACKAGES_SCRIPT',
     'SCRIPT_MODE',
     'SKELETON',
-    'SKELETON_DIR',
     'TEMPLATE_PACKAGE',
     'UDM_BOOT_UNIT',
     'UNITS_SCRIPT',
@@ -92,8 +92,6 @@ __all__ = (
     'on_boot_hook',
     'on_boot_path',
     'packages_script',
-    'skeleton_hook',
-    'skeleton_marker',
     'skeleton_path',
     'udm_boot_unit',
     'unit_hook',
@@ -120,11 +118,6 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 SKELETON = ('bin', 'dpkg', 'units')
 BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in SKELETON)
 
-#: Where the marker that declares a directory sits. Beside the directories
-#: rather than inside them, because the one directory that most needs declaring
-#: is the one no file may live in (`DPKG_DIR`).
-SKELETON_DIR = f'{conventions.gateway.CUSTOM_ROOT}/.skeleton'
-
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
 #: and therefore what a firmware update takes away.
 LIVE_UNIT_DIR = '/etc/systemd/system'
@@ -141,9 +134,12 @@ UDM_BOOT_UNIT = 'udm-boot.service'
 #: nothing, so `unit` refuses it rather than delivering a file with no effect.
 UNIT_SUFFIX = '.service'
 
-#: A script and an executable are run; a unit file and a marker are read.
+#: A script and an executable are run; a unit file is read; a directory is
+#: entered and written in, which is the same bit a script needs for a different
+#: reason and so is a mode of its own.
 SCRIPT_MODE = '0755'
 FILE_MODE = '0644'
+DIRECTORY_MODE = '0755'
 
 
 def on_boot_path(name: str) -> str:
@@ -164,11 +160,6 @@ def unit_source(name: str) -> str:
 def skeleton_path(name: str) -> str:
     """One directory of the custom root, by its name under that root."""
     return f'{conventions.gateway.CUSTOM_ROOT}/{name}'
-
-
-def skeleton_marker(name: str) -> str:
-    """The file that declares that directory, which is not inside it."""
-    return f'{SKELETON_DIR}/{name}'
 
 
 def on_boot_hook(name: str) -> str:
@@ -211,17 +202,6 @@ def unit_hook(name: str) -> str:
         f'if [ -e {source} ]; then {on_boot_hook(UNITS_SCRIPT)}; '
         f'else systemctl disable --now {unit} || true; rm -f {live}; systemctl daemon-reload; fi'
     )
-
-
-def skeleton_hook(name: str) -> str:
-    """Create the directory the marker names, or take it away with the marker.
-
-    `rmdir` rather than `rm -r`: a directory this program stops declaring but
-    something on the device still fills is not this program's to empty.
-    """
-    marker = shlex.quote(skeleton_marker(name))
-    directory = shlex.quote(skeleton_path(name))
-    return f'if [ -e {marker} ]; then mkdir -p {directory}; else rmdir {directory} 2>/dev/null || true; fi'
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +316,7 @@ class DevicePersistence(Component):
         self.packages: DeviceFile = self.on_boot_script(
             PACKAGES_SCRIPT, packages_script(packages), opts=self.child_opts()
         )
-        self.skeleton: dict[str, DeviceFile] = {
+        self.skeleton: dict[str, DeviceDirectory] = {
             directory: self.skeleton_dir(directory, opts=self.child_opts()) for directory in SKELETON
         }
         # The anchor of the chain, delivered as a unit source like any other:
@@ -412,21 +392,25 @@ class DevicePersistence(Component):
             after=(self.units,),
         )
 
-    def skeleton_dir(self, name: str, *, opts: pulumi.ResourceOptions) -> DeviceFile:
+    def skeleton_dir(self, name: str, *, opts: pulumi.ResourceOptions) -> DeviceDirectory:
         """One directory under the custom root, whose contents are the caller's.
 
-        What is declared is the directory, by a marker beside it whose hook
-        creates it; nothing here ever writes inside it. That is what a layer
-        needs for a directory it fills at runtime — the offline deb cache, a
-        machine's state — rather than one whose every file is a resource.
+        What is declared is the directory itself and nothing inside it. That is
+        what a layer needs for a directory it fills at runtime — the offline deb
+        cache, a machine's state — rather than one whose every file is a
+        resource, and it is why a directory this program stops declaring is
+        removed only while it is empty.
+
+        No hook: a directory appearing is not an event anything on the device has
+        to be told about, and the layer that fills it is the one that knows
+        otherwise.
         """
-        return self._declare(
-            'skeleton',
-            name,
-            path=skeleton_marker(name),
-            content=f'{skeleton_path(name)}\n',
-            mode=FILE_MODE,
-            hook=skeleton_hook(name),
+        return DeviceDirectory(
+            f'{self.pulumi_resource_name}-skeleton-{name}',
+            connection=self._connection,
+            path=skeleton_path(name),
+            mode=DIRECTORY_MODE,
+            owner=conventions.gateway.SSH_USER,
             opts=opts,
         )
 

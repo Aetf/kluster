@@ -21,11 +21,12 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.gateway import persistence
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.providers.device_files.provider import Connection, DeviceFile
+from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
 
-#: The one dynamic resource type this suite is about.
+#: The two dynamic resource types this suite is about.
 DEVICE_FILE = 'pulumi-python:dynamic/device:File'
+DEVICE_DIRECTORY = 'pulumi-python:dynamic/device:Directory'
 
 NAME = 'mechanism'
 CONSUMER = 'consumer'
@@ -57,7 +58,7 @@ class Layer(Component, pulumi_type='test:gateway:Layer'):
         self.script: DeviceFile = mechanism.on_boot_script(SCRIPT, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.program: DeviceFile = mechanism.executable(PROGRAM, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.unit: DeviceFile = mechanism.unit(UNIT, '[Unit]\nDescription=Example\n', opts=self.child_opts())
-        self.directory: DeviceFile = mechanism.skeleton_dir(DIRECTORY, opts=self.child_opts())
+        self.directory: DeviceDirectory = mechanism.skeleton_dir(DIRECTORY, opts=self.child_opts())
         self.register_outputs({})
 
 
@@ -134,20 +135,33 @@ def test_the_anchor_of_the_chain_is_delivered_as_a_unit_source(monitor: Recorder
 
 
 def test_the_custom_root_has_its_shape_before_anything_fills_it(monitor: Recorder) -> None:
-    """The skeleton is declared, and declared beside itself rather than inside.
+    """The skeleton is declared as directories, at the paths it names.
 
-    A directory is desired state like a file is, but the provider writes files —
-    so what is declared is a marker whose hook creates the directory. That is
-    the only shape available for the one directory nothing may write in.
+    A directory is desired state like a file is, and it is a resource of its own:
+    what the device is asked for is the directory itself, so one removed by hand
+    is a change the next preview reports.
     """
     for directory in persistence.SKELETON:
-        inputs = monitor.inputs_of(f'{NAME}-skeleton-{directory}')
+        declaration = monitor.one(f'{NAME}-skeleton-{directory}')
 
-        assert inputs['path'] == f'{persistence.SKELETON_DIR}/{directory}'
-        assert inputs['content'].strip() == f'{conventions.gateway.CUSTOM_ROOT}/{directory}'
-        assert f'mkdir -p {conventions.gateway.CUSTOM_ROOT}/{directory}' in inputs['hook']
+        assert declaration.typ == DEVICE_DIRECTORY
+        assert declaration.inputs['path'] == f'{conventions.gateway.CUSTOM_ROOT}/{directory}'
+        assert declaration.inputs['mode'] == persistence.DIRECTORY_MODE
+        assert declaration.inputs['owner'] == conventions.gateway.SSH_USER
 
     assert set(persistence.SKELETON) == {'bin', 'dpkg', 'units'}
+
+
+def test_no_file_stands_in_for_a_directory_anywhere_under_the_custom_root(monitor: Recorder) -> None:
+    """A directory is declared by asking for a directory, and by nothing else.
+
+    The marker convention this replaced could not report a directory somebody
+    removed — the marker was still there — so a marker file left behind anywhere
+    would be a second, blind way of declaring the same thing.
+    """
+    declared = [str(declaration.inputs.get('path', '')) for declaration in monitor.of_type(DEVICE_FILE)]
+
+    assert [path for path in declared if '.skeleton' in path] == []
 
 
 def test_nothing_is_ever_written_inside_the_offline_package_cache(monitor: Recorder) -> None:
@@ -155,8 +169,8 @@ def test_nothing_is_ever_written_inside_the_offline_package_cache(monitor: Recor
 
     The script refreshes it by replacing the whole directory in one rename, so a
     file this program wrote in it would be deleted by the next refresh and
-    reported as drift on every preview afterwards. The directory is still
-    declared — by a marker outside it.
+    reported as drift on every preview afterwards. The directory itself is still
+    declared, and a directory resource says nothing about what is inside it.
     """
     written = [
         declaration.inputs['path']
@@ -165,7 +179,7 @@ def test_nothing_is_ever_written_inside_the_offline_package_cache(monitor: Recor
     ]
 
     assert written == []
-    assert monitor.inputs_of(f'{NAME}-skeleton-dpkg')['path'] == f'{persistence.SKELETON_DIR}/dpkg'
+    assert monitor.inputs_of(f'{NAME}-skeleton-dpkg')['path'] == persistence.DPKG_DIR
 
 
 ##
@@ -292,16 +306,15 @@ def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Record
     assert 'systemctl daemon-reload' in hook
 
 
-def test_a_skeleton_directory_is_taken_away_only_while_it_is_empty() -> None:
-    """Undeclaring a directory is not a licence to delete what is in it.
+def test_a_directory_arriving_is_not_an_event_anything_is_told_about(monitor: Recorder) -> None:
+    """The layer that fills a directory is the one that knows what to run.
 
-    The delete branch is `rmdir`, so a directory something on the device still
-    fills stays, and one nothing filled goes with the marker that declared it.
+    Making it is the resource's own business now, so there is no command left
+    for the mechanism to attach — where the marker convention needed one to
+    create the directory at all. Refusing to remove a directory somebody filled
+    is the provider's, and is asserted there.
     """
-    hook = persistence.skeleton_hook(DIRECTORY)
-
-    assert f'rmdir {persistence.skeleton_path(DIRECTORY)}' in hook
-    assert 'rm -r' not in hook
+    assert monitor.inputs_of(f'{NAME}-skeleton-{DIRECTORY}').get('hook') is None
 
 
 ##
