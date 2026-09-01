@@ -289,10 +289,13 @@ or a directory asks the persistence layer for one and gets back a
 resource of its own: where the file goes, what mode it takes and what
 runs once it lands are the mechanism's decisions, while the file itself
 belongs to the component that needs it and goes away when that
-component stops declaring it. Directories are declared by a marker
-under `/data/custom/.skeleton` whose hook creates the directory it
-names — the push writes files, and the one directory that most needs
-declaring is the one nothing may write in.
+component stops declaring it. A directory is asked for the same way and
+is a resource of the same kind: its existence, mode and ownership are
+compared against the device, so one removed there is a change the next
+preview reports, while nothing about its contents is ever declared —
+which is what lets the layer that fills it own everything inside, and
+why a directory this program stops declaring is removed only while it
+is empty.
 
 **New device automation is a systemd unit plus an executable in
 `bin/`**, unless the operation manipulates systemd's own configuration
