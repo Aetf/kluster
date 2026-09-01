@@ -79,6 +79,23 @@ gives, not because the plan forbids it.
 
 ## 3. What is declared
 
+**The roll of it lives in `conventions/forge.py`.** Which repositories
+exist, whether each is public, which Environments each carries and in
+what order the merge chain runs them, and which of those a reviewer
+gates are one table there rather than in the stack program, because a
+second program reads the same table: the `credentials` command pushes a
+secret into every Environment the register names (credentials.md §3),
+and a script may import `conventions` and nothing a stack declares
+from. Two things follow. Whether the plan offers a repository the
+public-only features of §2 is *derived* from its visibility rather than
+written beside it, so the two cannot be left disagreeing. And the
+operator's GitHub user identifier — what the reviewer gate below names
+— is a constant in that table: a user id is minted once and never
+changes, so it is recorded rather than asked for on every run.
+
+What the stack program keeps is what nothing else reads: the required
+check names, the repository descriptions, and the merge-strategy flags.
+
 -   **Repositories**: `kluster` (public) and `kluster-ops` (private;
     the notification and drill repo, ci.md §3) — visibility, the merge
     strategy, issue/wiki/project surface, vulnerability alerts, and
@@ -168,5 +185,15 @@ adopt.
 -   **Environment secret *values*.** Those are the `credentials`
     scripts' job, pushed into slots the register names. This stack
     creates the environment; the register fills it.
+-   **The labels a workflow branches on**, though the census in
+    `conventions/forge.py` already carries them — `expect-changes` on
+    `kluster`, the escape hatch that opts a pull request out of the
+    zero-diff proof (ci.md §3), and nothing on `kluster-ops`. A label a
+    workflow reads and nobody declares fails in the quietest way there
+    is: the condition is simply never true, so the escape hatch is
+    missing at the moment somebody needs it and nothing reports that.
+    Writing the set down is half of the answer; declaring a label
+    resource per entry is the half that stops the set being shorter
+    than what a workflow depends on.
 -   **The account roots.** They are a precondition of the system, held
     in the personal estate (credentials.md §2).
