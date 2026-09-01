@@ -423,9 +423,63 @@ class Principal:
         return cls(ocid=str(ocid), handle=str(resource.id))
 
 
-@dataclass
+@dataclass(frozen=True)
+class Policy:
+    """One IAM policy, under the three things converging it takes.
+
+    Read into a record rather than handed on as the SDK answered, so that what
+    the tenancy holds and what the register describes are the same shape and
+    the drift between them is a comparison of two tuples.
+    """
+
+    #: The tenancy-wide identifier: `ocid1.policy.oc1..`.
+    ocid: str
+    #: The name the identity's user, group and policy all carry.
+    name: str
+    #: What the group this policy empowers may do.
+    statements: tuple[str, ...]
+
+    @classmethod
+    def of(cls, resource: Any) -> Policy:
+        """One policy as the legacy client answered with it."""
+        return cls(
+            ocid=str(resource.id),
+            name=str(resource.name),
+            statements=tuple(str(statement) for statement in resource.statements),
+        )
+
+
+@dataclass(frozen=True)
+class TenancyDomain:
+    """One row of the tenancy's identity-domain listing.
+
+    Not `Domain`, which is a domain already opened with a key: this is what
+    the listing says about one, carrying the three things picking one takes --
+    the endpoint to address it at, whether it is the default, and a name to
+    put in the error that names the ones there are.
+    """
+
+    #: The per-tenancy endpoint the domains API is addressed at.
+    url: str
+    #: What a console shows the domain as.
+    display_name: str
+    #: `DEFAULT` for the domain a user the legacy API created lands in.
+    kind: str
+
+    @classmethod
+    def of(cls, resource: Any) -> TenancyDomain:
+        """One domain as `list_domains` answered with it.
+
+        The type is upper-cased here because it is compared against the SDK's
+        own constant, which is upper case, and the comparison belongs with the
+        value rather than at every use of it.
+        """
+        return cls(url=str(resource.url), display_name=str(resource.display_name), kind=str(resource.type).upper())
+
+
+@dataclass(frozen=True)
 class Domain:
-    """One identity domain, seen through one API key.
+    """One identity domain, opened with one API key.
 
     Two halves, told apart by whose resources they touch. The self-service
     (`Me`) endpoints act on the caller's own user and authorize on
@@ -437,6 +491,11 @@ class Domain:
     """
 
     client: Any
+    #: The endpoint `client` is addressed at, carried with it rather than
+    #: beside it: a session hands its domain on to the session of a key it has
+    #: just minted, and a client whose endpoint is unknown -- or an endpoint
+    #: with no client opened at it -- is half of a domain.
+    url: str
 
     # -- the self-service half: the caller's own user, no rights required ---
 
@@ -570,26 +629,31 @@ class Domain:
         _ = self.client.delete_api_key(key_id)
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class Iam:
     """The tenancy's IAM, as seen through one API key."""
 
     tenancy: str
     identity: Any
+    #: The OCID this session signs as. It decides which half of the domains
+    #: API a call belongs to: its own user is self-service, anyone else's is
+    #: administrative -- so it has no default. A session that did not know
+    #: whose it was would match no subject at all, and would send the calls
+    #: that authorize on authentication alone to the endpoints that need
+    #: domain-admin rights instead.
+    caller: str
     #: How to build a client for a *different* key -- verification connects as
     #: the key it just minted, which is the only proof that it works.
     connect: Connect = identity_client
-    #: The identity-domains view of the same key, where the row knows the
-    #: tenancy's domain. Absent in a tenancy without domains, and for a row
-    #: written before the attribute existed.
+    #: The identity-domains view of the same key, endpoint and all, where the
+    #: row knows the tenancy's domain. Absent in a tenancy without domains,
+    #: and for a row written before the attribute existed.
     domain: Domain | None = None
-    #: The URL `domain` was built from, kept so a session can hand its domain
-    #: on to the session of a key it just minted.
-    domain_url: str | None = None
-    #: The OCID this session signs as. It decides which half of the domains
-    #: API a call belongs to: its own user is self-service, anyone else's is
-    #: administrative.
-    caller: str = ''
+
+    @property
+    def domain_url(self) -> str | None:
+        """Where this session's domain is, or None if it has none."""
+        return self.domain.url if self.domain is not None else None
 
     @classmethod
     def authorize(
@@ -601,13 +665,23 @@ class Iam:
         connect: Connect = identity_client,
         domain_url: str | None = None,
     ) -> Iam:
+        """A session for one key, speaking the tenancy's domain where one is known.
+
+        `domain_url` is what the row records, which is nothing at all in a
+        tenancy without domains and in a row written before the attribute
+        existed; the session either has the domain and its endpoint, or has
+        neither.
+        """
         return cls(
             tenancy=tenancy,
             identity=connect(tenancy, user, private_key_pem),
-            connect=connect,
-            domain=Domain(connect(tenancy, user, private_key_pem, domain_url=domain_url)) if domain_url else None,
-            domain_url=domain_url,
             caller=user,
+            connect=connect,
+            domain=(
+                Domain(client=connect(tenancy, user, private_key_pem, domain_url=domain_url), url=domain_url)
+                if domain_url
+                else None
+            ),
         )
 
     def group(self, identity: Identity) -> Principal:
@@ -708,7 +782,7 @@ class Iam:
         )
         log.info('added %s to the %s group', identity.name, identity.name)
 
-    def policy(self, identity: Identity) -> Any:
+    def policy(self, identity: Identity) -> Policy:
         """The identity's policy, created if absent and corrected if it has drifted.
 
         Corrected rather than left alone: the statements are what the group
@@ -726,18 +800,19 @@ class Iam:
         # created a second time -- which the service answers with a 409 rather
         # than with a second policy. The name is compared again below because
         # the filter is the service's promise rather than this code's.
-        for existing in _data(self.identity.list_policies(compartment_id=self.tenancy, name=identity.name)):
+        for listed in _data(self.identity.list_policies(compartment_id=self.tenancy, name=identity.name)):
+            existing = Policy.of(listed)
             if existing.name != identity.name:
                 continue
-            if list(existing.statements) != list(identity.statements):
+            if existing.statements != identity.statements:
                 updated = _data(
                     self.identity.update_policy(
-                        existing.id,
+                        existing.ocid,
                         oci.identity.models.UpdatePolicyDetails(statements=list(identity.statements)),
                     )
                 )
                 log.info("policy %s: statements set to the register's", identity.name)
-                return updated
+                return Policy.of(updated)
             return existing
         created = _data(
             self.identity.create_policy(
@@ -750,7 +825,7 @@ class Iam:
             )
         )
         log.info('created policy %s', identity.name)
-        return created
+        return Policy.of(created)
 
     def find_compartment(self, name: str) -> str | None:
         """The OCID of the tenancy's compartment of that name, or None.
@@ -851,9 +926,9 @@ class Iam:
                 log.debug('the identity domain refused to list keys (%s); trying the legacy call', _why(exc))
         return [str(key.fingerprint) for key in _data(self.identity.list_api_keys(user_id))]
 
-    def domains(self) -> list[Any]:
+    def domains(self) -> list[TenancyDomain]:
         """The identity domains of the tenancy compartment."""
-        return list(_data(self.identity.list_domains(compartment_id=self.tenancy)))
+        return [TenancyDomain.of(listed) for listed in _data(self.identity.list_domains(compartment_id=self.tenancy))]
 
     def retire_key(self, user_id: str, key_fingerprint: str) -> None:
         """Retire one key, through the identity domain where there is one.
@@ -899,14 +974,14 @@ class Iam:
         log.info('deleted superseded API key %s', key_fingerprint)
 
 
-def _mint_verified(iam: Iam, user: Principal, *, name: str, domain_url: str | None = None) -> str:
+def _mint_verified(iam: Iam, user: Principal, *, name: str) -> str:
     """Put a new key on the user and prove it signs before anything depends on it.
 
-    Returns the private key PEM; the fingerprint is a function of it.
-    `domain_url` gives the *minted* session its domain when `iam` itself has
-    none -- the root minting the seed's key must still verify it the way the
-    seed will use it. `name` is the identity being minted for, which appears
-    in the log because a bring-up mints for more than one.
+    Returns the private key PEM; the fingerprint is a function of it. The
+    verifying session is opened at the same domain as `iam`, because a key
+    must be verified the way it will be used. `name` is the identity being
+    minted for, which appears in the log because a bring-up mints for more
+    than one.
     """
     pair = generate_key()
     private_pem = pair.private_pem
@@ -914,9 +989,7 @@ def _mint_verified(iam: Iam, user: Principal, *, name: str, domain_url: str | No
     assigned = iam.upload_key(user, pair.public_pem)
     if assigned != fingerprint(private_pem):
         raise CredentialRejected(f'OCI registered fingerprint {assigned}, which is not the one this key computes to')
-    minted = Iam.authorize(
-        iam.tenancy, user.ocid, private_pem, connect=iam.connect, domain_url=domain_url or iam.domain_url
-    )
+    minted = Iam.authorize(iam.tenancy, user.ocid, private_pem, connect=iam.connect, domain_url=iam.domain_url)
     log.info(
         'waiting for %s to authenticate (propagation is eventually consistent, usually well under a minute)', assigned
     )
@@ -1026,13 +1099,13 @@ def domain_url(iam: Iam) -> str:
     """
     found = iam.domains()
     if len(found) == 1:
-        return str(found[0].url)
+        return found[0].url
     for candidate in found:
-        if str(candidate.type).upper() == oci.identity.models.Domain.TYPE_DEFAULT:
-            return str(candidate.url)
+        if candidate.kind == oci.identity.models.Domain.TYPE_DEFAULT:
+            return candidate.url
     raise CredentialRejected(
         'the tenancy has no default identity domain to retire API keys through '
-        f'(it has: {", ".join(str(candidate.display_name) for candidate in found) or "none"})'
+        f'(it has: {", ".join(candidate.display_name for candidate in found) or "none"})'
     )
 
 
@@ -1111,9 +1184,16 @@ class _SeedSession:
     #: The stored row, whose tenancy is the one everything minted from this
     #: seed belongs to.
     row: SeedRow
-    #: The identity domain the session is addressed at, or None where the
-    #: tenancy has none and where reading it was refused.
-    domain: str | None
+
+    @property
+    def domain(self) -> str | None:
+        """The identity domain the session is addressed at, or None.
+
+        The session's own, rather than a second copy of it: None here is a
+        tenancy that has no domain and one whose domains this key may not
+        read, both of which authorize the same way.
+        """
+        return self.iam.domain_url
 
 
 def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _SeedSession:
@@ -1138,7 +1218,7 @@ def _seed_session(store: KdbxStore, seed_entry: str, *, connect: Connect) -> _Se
         domain = _discovered_domain(iam, whose='seed')
         if domain is not None:
             iam = Iam.authorize(row.tenancy, row.user, row.private_key, connect=connect, domain_url=domain)
-    return _SeedSession(iam=iam, row=row, domain=domain)
+    return _SeedSession(iam=iam, row=row)
 
 
 def adopt_domain(
@@ -1210,7 +1290,7 @@ def create_seed(
     user = ensure(iam, SEED)
 
     _room_for_one_more(iam, user.ocid, name=SEED.name)
-    private_pem = _mint_verified(iam, user, name=SEED.name, domain_url=domain)
+    private_pem = _mint_verified(iam, user, name=SEED.name)
     _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=user.ocid, private_pem=private_pem, domain=domain)
 
     # A run that died between upload and store left a key whose private half
@@ -1406,7 +1486,7 @@ def mint_api_key(
     log.info('converging the user, group and policy for %s', identity.name)
     user = ensure(seed.iam, identity)
     _room_for_one_more(seed.iam, user.ocid, name=identity.name)
-    private_pem = _mint_verified(seed.iam, user, name=identity.name, domain_url=seed.domain)
+    private_pem = _mint_verified(seed.iam, user, name=identity.name)
 
     # Swept as the key just minted rather than as the seed, the way a bring-up
     # sweeps as the seed it just created: the self-service endpoints authorize
