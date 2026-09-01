@@ -185,10 +185,17 @@ def _carried(answer: object) -> frozenset[str]:
     A token's own record is read for one thing -- which permission groups it
     holds, by name -- so that is what crosses the boundary. Which resources
     each policy names is the minter's statement, not the platform's answer.
+
+    A group is identified by id and its name is optional, so a group that
+    arrives without one is skipped: it matches no name this repository asks
+    for, and refusing the answer over it would stop a seed that can mint.
     """
     body = payload.Payload.of(answer, 'GET /user/tokens/{id}')
     return frozenset(
-        group.text('name') for policy in body.objects('policies') for group in policy.objects('permission_groups')
+        name
+        for policy in body.objects('policies')
+        for group in policy.objects('permission_groups')
+        if (name := group.optional_text('name')) is not None
     )
 
 
@@ -221,9 +228,15 @@ def _created_token(answer: object) -> Token:
 
 
 def _permission_groups(answer: object) -> tuple[PermissionGroup, ...]:
-    """`GET /user/tokens/permission_groups`: the account's whole catalogue."""
+    """`GET /user/tokens/permission_groups`: the account's whole catalogue.
+
+    Hundreds of entries covering every product the platform sells, of which
+    this repository asks for two by name. `scopes` is optional, so an entry
+    without one carries none: it is in no zone catalogue and matches nothing
+    here, which is a fact about that entry rather than a fault in the answer.
+    """
     return tuple(
-        PermissionGroup(group_id=entry.text('id'), name=entry.text('name'), scopes=entry.texts('scopes'))
+        PermissionGroup(group_id=entry.text('id'), name=entry.text('name'), scopes=entry.optional_texts('scopes'))
         for entry in payload.Payload.each(answer, 'GET /user/tokens/permission_groups')
     )
 

@@ -138,6 +138,17 @@ class Payload:
             found.append(entry)
         return tuple(found)
 
+    def optional_texts(self, field: str) -> tuple[str, ...]:
+        """A list of strings an answer may leave out or send as null.
+
+        Absent is the empty list, which is what a schema marking the field
+        optional means: an entry that names no scope is in no scope. A value
+        that is there and is not a list of strings is still refused.
+        """
+        if self.fields.get(field) is None:
+            return ()
+        return self.texts(field)
+
     def nested(self, field: str) -> Payload:
         """A field that must be an object, read the same way as its parent."""
         return Payload.of(self.value(field), f'{self.where}.{field}')
