@@ -1,0 +1,36 @@
+#!/bin/sh
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Ensure every declared public key is present in {{ authorized_keys }}. Runs at
+# boot from authorized-keys.service, and again as the post-apply hook of each
+# key file, so a key declared during a push is usable when that push returns.
+#
+# Append-only and idempotent: a key already in the file stays where it is, and
+# keys added by hand on the box are never removed. The file is off /data and a
+# firmware update takes it away; the sources below survive, which is what makes
+# this recoverable with nothing else present.
+set -eu
+
+keydir={{ key_dir }}
+authorized={{ authorized_keys }}
+
+[ -d "$keydir" ] || exit 0
+
+mkdir -p "$(dirname "$authorized")"
+chmod 700 "$(dirname "$authorized")"
+touch "$authorized"
+
+# A file whose last line never ended would take the first appended key onto the
+# end of it, turning two keys into one string that authorizes neither -- and
+# the line it would ruin is a hand-added one, since this program's own keys are
+# written by the loop below.
+if [ -s "$authorized" ] && [ -n "$(tail -c1 "$authorized")" ]; then
+    echo >>"$authorized"
+fi
+
+for pub in "$keydir"/*{{ suffix }}; do
+    [ -e "$pub" ] || continue
+    grep -qxF "$(cat "$pub")" "$authorized" || cat "$pub" >>"$authorized"
+done
+
+chmod 600 "$authorized"

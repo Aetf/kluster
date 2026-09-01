@@ -38,6 +38,7 @@ from collections.abc import Sequence
 import pulumi
 
 from kluster import conventions
+from kluster.components.gateway.access import AuthorizedKeys, PublicKey
 from kluster.components.gateway.container import (
     CaddyService,
     Container,
@@ -48,14 +49,14 @@ from kluster.components.gateway.container import (
 )
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.components.gateway.services import FRR_APPLY, FRR_CONFIG, FRR_MODE, RoutingSession, frr_config
+from kluster.components.gateway.routing import RoutingSession, SiteRouting
 from kluster.components.gateway.unifi import SiteFirewall
-from kluster.providers.device_files.provider import Connection, DeviceFile
+from kluster.providers.device_files.provider import Connection
 from putils import Component
 
 #: The declaration types the stack program builds a `Gateway` out of are
 #: re-exported here, so that wiring the gateway is one import.
-__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
+__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'PublicKey', 'ResolverService', 'Rootfs', 'RoutingSession')
 
 
 class Gateway(Component):
@@ -70,6 +71,7 @@ class Gateway(Component):
         resolvers: Sequence[ResolverService],
         overlay_daemon: OverlayDaemon,
         routing: RoutingSession,
+        keys: Sequence[PublicKey],
         site: str,
         worker_gua: pulumi.Input[str] | None,
         opts: pulumi.ResourceOptions | None = None,
@@ -88,6 +90,11 @@ class Gateway(Component):
         preview shows it, which is where a reviewer checks what a session will
         be held to (rfc-002 §11). The client credential that answers it is not
         a parameter here either — it is the provider's own (§7.4).
+
+        `keys` are the public keys the device's one account accepts, this
+        program's own among them. They are the parameter that keeps the SSH
+        door open across a firmware update, and the private half of each
+        belongs to whoever holds it rather than to anything here.
 
         `worker_gua` is the worker VM's global IPv6 address: the one firewall
         rule that cannot be written against a stable object, because the
@@ -138,20 +145,22 @@ class Gateway(Component):
             )
             for declaration in (caddy, *resolvers)
         )
-        # The routing configuration answers to the daemon rather than to the
-        # boot chain, so it applies itself. It carries the session password,
-        # which is why it is secret.
-        self.routing = DeviceFile(
+        # The two customizations with no machine behind them: what the device
+        # is told about the site's routing, and who may open a session on it.
+        # Each is its own files plus its own converger, built through the
+        # mechanism the same way the runtime's are.
+        self.routing = SiteRouting(
             f'{name}-routing',
             connection=connection,
-            path=FRR_CONFIG,
-            content=pulumi.Output.from_input(routing.password).apply(
-                lambda password: frr_config(neighbour=routing.neighbour, password=password)
-            ),
-            mode=FRR_MODE,
-            owner=conventions.gateway.SSH_USER,
-            hook=FRR_APPLY,
-            secret=True,
+            mechanism=self.persistence,
+            session=routing,
+            opts=self.child_opts(),
+        )
+        self.access = AuthorizedKeys(
+            f'{name}-access',
+            connection=connection,
+            mechanism=self.persistence,
+            keys=keys,
             opts=self.child_opts(),
         )
         self.firewall = SiteFirewall(
@@ -177,7 +186,7 @@ class Gateway(Component):
             declaration=overlay_daemon,
             runtime=self.runtime,
             connection=connection,
-            after=(self.persistence, self.runtime, *self.containers, self.routing, self.firewall),
+            after=(self.persistence, self.runtime, *self.containers, self.routing, self.access, self.firewall),
             opts=self.child_opts(),
         )
 

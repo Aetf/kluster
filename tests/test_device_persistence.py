@@ -247,6 +247,20 @@ def test_a_script_of_the_chain_runs_itself_once_it_lands(monitor: Recorder) -> N
     assert hook == f'if [ -x {persistence.on_boot_path(SCRIPT)} ]; then {persistence.on_boot_path(SCRIPT)}; fi'
 
 
+def test_the_command_that_runs_an_executable_is_this_layers_to_write() -> None:
+    """A file elsewhere may name a `bin/` program as its hook, and asks for it here.
+
+    Where the program sits and how a hook survives the delete that removes it
+    are the same two decisions this layer already makes for a script of the
+    boot chain, so a component that needs them does not write the shell for
+    itself and cannot get the guard subtly wrong.
+    """
+    hook = persistence.executable_hook(PROGRAM)
+    path = persistence.executable_path(PROGRAM)
+
+    assert hook == f'if [ -x {path} ]; then {path}; fi'
+
+
 @pytest.mark.asyncio
 async def test_a_unit_waits_for_the_converger_that_installs_it(monitor: Recorder, mechanism: DevicePersistence) -> None:
     """A hook that runs a script the device has not been given fails its apply.

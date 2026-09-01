@@ -16,7 +16,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.gateway import Gateway, container, nspawn, persistence, services, unifi
+from kluster.components.gateway import Gateway, access, container, nspawn, persistence, routing, unifi
 
 NAME = 'kluster'
 HOST = 'gateway.invalid'
@@ -24,6 +24,9 @@ SITE = 'default'
 API_KEY = 'unifi-api-key'
 BGP_PASSWORD = 'a-session-password'
 ACME_TOKEN = 'a-zone-scoped-token'
+#: The one key the stack declares, as the device holds it. Invented here; the
+#: shape of an `authorized_keys` line is all this suite needs of it.
+CI_KEY = access.PublicKey(name='kluster-physical', key='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIci kluster-physical@gw')
 DIGEST = f'sha256:{"e" * 64}'
 
 
@@ -66,7 +69,8 @@ async def gateway(monitor: Controller) -> Gateway:
             overlay_daemon=container.OverlayDaemon(
                 service=conventions.gateway.OVERLAY, pin=pin(conventions.gateway.OVERLAY)
             ),
-            routing=services.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+            routing=routing.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+            keys=(CI_KEY,),
             site=SITE,
             worker_gua=None,
         )
@@ -91,7 +95,8 @@ async def test_the_machine_carrying_the_session_actuates_after_every_other_child
         gateway.persistence.units,
         gateway.runtime.machines,
         *(workload.settings for workload in gateway.containers),
-        gateway.routing,
+        gateway.routing.config,
+        gateway.access.keys[CI_KEY.name],
         gateway.firewall.network,
     )
     expected = {str(await resource.urn.future()) for resource in elsewhere}
@@ -120,16 +125,29 @@ def test_the_device_is_asked_for_what_the_layers_above_the_mechanism_require(mon
 def test_the_routing_configuration_answers_to_its_daemon_and_not_to_the_boot_chain(monitor: Controller) -> None:
     """It is the one piece of desired state on this device with no machine behind it.
 
-    So its hook is the install-and-reload the daemon needs rather than a
-    converger of this program's, and it is secret because the session password
-    is in it.
+    So what applies it is a converger of its own — an executable the file's
+    hook runs and a unit runs at boot — rather than one of the boot chain's
+    scripts, and it is secret because the session password is in it.
     """
-    routing = monitor.inputs_of(f'{NAME}-routing')
+    config = monitor.inputs_of(f'{NAME}-routing-config')
 
-    assert routing['path'] == services.FRR_CONFIG
-    assert routing['hook'] == services.FRR_APPLY
-    assert routing['mode'] == services.FRR_MODE
-    assert f'password {BGP_PASSWORD}' in routing['content']
+    assert config['path'] == routing.FRR_CONFIG
+    assert config['hook'] == routing.converger_hook()
+    assert config['mode'] == routing.FRR_MODE
+    assert f'password {BGP_PASSWORD}' in config['content']
+
+
+def test_the_device_keeps_accepting_the_key_this_program_dials_with(monitor: Controller) -> None:
+    """The door the push comes through is desired state like everything else.
+
+    `/root` is off `/data`, so the key that authorizes every session is as
+    perishable as the rest of the customization, and the component that keeps
+    it there is a child of this one.
+    """
+    declared = monitor.inputs_of(f'{NAME}-access-key-{CI_KEY.name}')
+
+    assert declared['path'] == access.key_path(CI_KEY.name)
+    assert declared['content'].strip() == CI_KEY.key
 
 
 def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: Controller) -> None:

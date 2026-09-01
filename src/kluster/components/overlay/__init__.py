@@ -23,8 +23,8 @@ Three things are declared here, and each answers a different question
     was already routing them. A route is `{target, via}` on the network and
     nothing more: `via` names a member, and that member forwards only because
     forwarding is configured on the device itself. That is why the gateway's
-    routing configuration is a file in `DeviceServices` and only the route
-    table is here — two systems being told two different things
+    routing configuration is `SiteRouting`'s file on the box and only the
+    route table is here — two systems being told two different things
     (gateway.md §2.2).
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
