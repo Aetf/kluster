@@ -309,8 +309,9 @@ def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it
 def test_a_unit_boots_the_unpacked_tree() -> None:
     """The pins are container images, and `--image=` cannot boot one.
 
-    `systemd-nspawn`'s `--image=` wants a disk image with a partition table, so
-    what a unit names is the directory the push unpacked the image into.
+    `systemd-nspawn`'s `--image=` boots a disk or filesystem image, not a
+    directory, so what a unit names is the directory the push unpacked the image
+    into.
     """
     unit = container.unit_file(declared_for('caddy'))
 

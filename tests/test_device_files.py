@@ -112,8 +112,8 @@ class Device:
     """A device with files on it, and a memory of what it was asked to do.
 
     `log` is the whole point: several of the design's guarantees are about
-    *order* -- a hook that runs after the payload and before the marker -- and an
-    unordered set of assertions cannot see them.
+    *order* -- a hook that runs after the tree is in place and after the marker
+    that announces it -- and an unordered set of assertions cannot see them.
     """
 
     files: dict[str, Entry] = field(default_factory=dict[str, Entry])
@@ -737,7 +737,7 @@ def test_an_unpack_that_fails_leaves_the_live_tree_untouched(device: Device) -> 
     landed(device, artifact_props(), digest=f'sha256:{"a" * 64}')
     device.refuse = (UMOCI,)
 
-    with pytest.raises(provider.ExtractFailed) as raised:
+    with pytest.raises(provider.UnpackFailed) as raised:
         _ = artifact_provider().create(artifact_props())
 
     assert ROOTFS_TREE in str(raised.value)
@@ -905,7 +905,7 @@ def test_deleting_an_artifact_takes_the_tree_and_its_staging_with_it(device: Dev
     purge = provider.purge_script(ROOTFS_TREE)
     assert ROOTFS_TREE in purge
     assert f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}' in purge
-    assert f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}' in purge
+    assert f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}' in purge
     assert f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}' in purge
 
 
@@ -933,7 +933,7 @@ def test_a_relative_tree_is_refused_before_anything_is_pushed() -> None:
     ids=['bare name', 'namespaced name', 'two components, no host'],
 )
 def test_a_repository_that_does_not_name_its_registry_is_refused(value: str) -> None:
-    """The device resolves the reference now, so an unqualified one would be
+    """The device resolves the reference, so an unqualified one would be
     resolved against whatever default that device is configured with -- which is
     exactly the decision a pin exists to take away from it."""
     result = artifact_provider().check({}, artifact_props(repository=value))
@@ -959,7 +959,7 @@ def test_the_pull_clears_the_last_push_before_it_asks_for_room() -> None:
     every copy at once."""
     script = provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE)
     layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
-    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
+    staging = f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}'
     superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
     assert script.startswith(f'rm -rf {layout} {staging} {superseded}')
@@ -976,7 +976,7 @@ def test_the_unpack_is_two_renames_so_a_half_unpacked_root_never_boots() -> None
     """
     script = provider.unpack_script(ROOTFS_TREE)
     layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
-    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
+    staging = f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}'
     superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
     assert script.startswith(f'umoci raw unpack --image {layout}:{provider.LAYOUT_TAG} {staging}')
@@ -986,10 +986,10 @@ def test_the_unpack_is_two_renames_so_a_half_unpacked_root_never_boots() -> None
 
 
 def test_the_staging_layout_goes_as_soon_as_the_unpack_has_read_it() -> None:
-    """`/data` is a few gigabytes, and the image is on it twice until this runs."""
+    """The image is on the device in two forms until this runs, and in one after it."""
     script = provider.unpack_script(ROOTFS_TREE)
     layout = f'{ROOTFS_TREE}{provider.LAYOUT_SUFFIX}'
-    staging = f'{ROOTFS_TREE}{provider.EXTRACTING_SUFFIX}'
+    staging = f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}'
 
     assert script.index(f'rm -rf {layout}') > script.index('umoci raw unpack')
     assert script.index(f'rm -rf {layout}') < script.index(f'mv {staging} {ROOTFS_TREE}')
