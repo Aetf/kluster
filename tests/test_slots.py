@@ -108,22 +108,20 @@ def test_a_row_the_map_calls_built_is_a_command_the_tree_carries() -> None:
         )
 
 
-def test_the_map_targets_environments_the_forge_stack_declares() -> None:
-    # Imported here rather than at module scope: `slots` must not depend on the
-    # Pulumi provider SDKs, and this is the test that ties the two together
-    # without letting the dependency into the command.
-    from kluster.stacks import github
+def test_the_map_targets_environments_the_census_declares() -> None:
+    """A secret pushed into an Environment nothing declares is one no job will ever see.
 
-    declared = {*github.PREVIEWED_LAYERS, github.PLAN_ENVIRONMENT, github.APPLY_ENVIRONMENT}
+    The map and the `github` stack read one census now, so what is left to
+    check is the rows: a row may name any Environment it likes, and only the
+    census says which of them exist.
+    """
+    declared = {
+        environment.name for repository in conventions.forge.REPOSITORIES for environment in repository.environments
+    }
     environments = {
         slot.environment for row in slots.ROWS.values() for slot in row.sinks if slot.environment is not None
     }
 
-    assert slots.REPOSITORY == f'{github.OWNER}/{github.DEPLOYMENT_REPO}'
-    assert slots.OPS_REPOSITORY == f'{github.OWNER}/{github.OPS_REPO}'
-    assert set(slots.ENVIRONMENTS) == declared
-    # A secret pushed into an Environment the stack does not declare is a
-    # secret no job will ever see.
     assert environments <= declared
 
 
