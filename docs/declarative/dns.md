@@ -9,15 +9,16 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 
 > **Status**: designed 2026-08-22, after a survey of the live
 > dnsconfig.js (6 zones; roughly half the records are not
-> cluster-related). Declared since 2026-08-25:
+> cluster-related). Declared since 2026-08-25 and applied since
+> 2026-08-26 — the zones and their records are in state.
 > `src/kluster/components/dns/` holds the record model (`model.py`),
 > the estate census (`zones.py`), the app records the legacy VPS still
-> serves (`legacy.py`, transitional — §6), the route rows `apps` and
-> `dns` share (`routes.py`), and the two components that turn data into
-> resources (`zone.py`, `adguard.py`, the latter over the custom
-> provider in `src/kluster/providers/adguard_rewrites/`). Not yet
-> applied: the zones exist at Cloudflare and are imported into state
-> before the first `up`.
+> serves (`legacy.py`, transitional — §6), the rewrites the route
+> census implies (`routes.py`), and the two components that turn data
+> into resources (`zone.py`, `adguard.py`, the latter over the custom
+> provider in `src/kluster/providers/adguard_rewrites/`). The route
+> rows themselves are `src/kluster/conventions/routes.py`, because
+> `apps` authors them and both stacks read them (§3).
 
 ## 1. Why a fourth stack
 
@@ -227,9 +228,15 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     yields a rewrite, which is what keeps the stack deployable while
     nothing is routed and why `Pulumi.dns.yaml` carries the AdGuard
     login but not yet the endpoints. So the config key ships with the
-    row that first needs it, in the same change; the route helper
-    (`kluster.components.dns.routes`) carries that contract beside the census
-    itself.
+    row that first needs it, in the same change; the census
+    (`kluster.conventions.routes`) carries that contract beside the rows
+    themselves.
+-   **A rewrite answers with an address, never a name.** AdGuard hands a
+    rewrite's CNAME target to the upstream without re-applying its own
+    rules, so a rewrite aimed at a name that only a sibling rewrite
+    answers is NXDOMAIN. A row's answer is therefore typed as an
+    address, and the text form is written only where the resource input
+    is built.
 
 ## 4. LAN DNS: three name planes
 
@@ -305,6 +312,14 @@ the raw TCP/UDP analog, and it is the **only** helper that emits an
 NLB listener and its security rule (physical.md §1's
 derived-not-enumerated principle) — an HTTP route rides listeners the
 cluster already has.
+
+**One combination the row cannot express**: a public name answered by
+the media VIP. IoT-reachable implies LAN-only, because the IoT VLAN
+reaches the media gateway alone and `iot_reachable` is offered on the
+LAN-only helper. An application that ever needs both is served by a
+fifth exposure value, not by splitting the exposure into two flags —
+two flags would admit "no public record and no LAN answer", a route
+that publishes nothing anywhere, and there is no such thing.
 
 ## 6. Migration shape
 
