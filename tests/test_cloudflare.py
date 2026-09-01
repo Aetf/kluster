@@ -341,6 +341,47 @@ def test_a_token_listing_that_is_not_a_list_is_refused_rather_than_iterated() ->
         _ = cloudflare._listed_tokens({'id': 'token-1', 'name': STACK_TOKEN})  # pyright: ignore[reportPrivateUsage]
 
 
+def test_a_permission_group_without_a_name_is_skipped_rather_than_refusing_the_token() -> None:
+    answer = {
+        'id': 'token-1',
+        'policies': [
+            {
+                'permission_groups': [
+                    {'id': 'group-0'},
+                    {'id': 'group-1', 'name': cloudflare.MINTING_PERMISSION},
+                ]
+            }
+        ],
+    }
+
+    # The platform requires only a permission group's id and marks its name
+    # optional, so a group that arrives without one matches nothing this
+    # repository asks for -- and must not refuse the answer that carries it.
+    assert cloudflare._carried(answer) == frozenset({cloudflare.MINTING_PERMISSION})  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi) -> None:
+    _ = _estate(api)
+    # The catalogue is the whole platform's, and `scopes` is optional on it.
+    # An entry for a product this repository never asks about is in no zone
+    # catalogue, which is a fact about that entry rather than a broken answer.
+    api.groups['some-other-product'] = {'name': 'Some Other Product Write'}
+    session = cloudflare.Session.authorize(_seed(api))
+
+    minted = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+
+    assert _named(api, STACK_TOKEN) == [minted.token_id]
+
+
+def test_a_catalogue_entry_whose_scopes_are_not_a_list_is_refused_by_name() -> None:
+    catalogue = [{'id': 'dns-write', 'name': 'DNS Write', 'scopes': cloudflare.ZONE_RESOURCE}]
+
+    # Optional is not "anything": a field that is there says what it says, and
+    # a scope catalogue read as the characters of one string grants nothing.
+    with pytest.raises(payload.ResponseRejected, match='scopes is'):
+        _ = cloudflare._permission_groups(catalogue)  # pyright: ignore[reportPrivateUsage]
+
+
 def test_a_verification_without_a_status_is_refused_rather_than_read_as_inactive() -> None:
     # "Not active" and "the platform stopped saying" are different answers,
     # and only the first one is about the token in hand.
