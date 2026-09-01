@@ -223,6 +223,49 @@ class GwConfigSecret:
 Channel = Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | WorkstationSlot | GwConfigSecret
 
 
+#: How §3's "Slot" column names each channel: the fixed term an entry in that
+#: cell begins with, whatever qualifier follows it. The column is the
+#: register's half of this map -- a reader learns from it where a credential
+#: lands -- so a vocabulary is what lets a test hold the two equal row by row
+#: instead of trusting prose to keep up (`tests/test_slots.py`).
+_TERMS: Mapping[type[Channel], str] = {
+    PulumiConfig: 'Pulumi config secret',
+    PulumiState: 'Pulumi state',
+    EscrowCopy: 'escrow',
+    SealedSecret: 'SealedSecret',
+    OnBox: 'on-box',
+    WorkstationSlot: 'workstation slot',
+    GwConfigSecret: 'gw-config device secret',
+}
+
+#: `Slot` is four terms rather than one, keyed by repository and by whether an
+#: Environment is named: rule 6 counts a CI Environment secret, an
+#: ops-repository secret and a `kluster` repository secret as separate channels,
+#: and this module carries all of them as one dataclass (`github_secrets.py`).
+_GITHUB_TERMS: Mapping[tuple[str, bool], str] = {
+    (REPOSITORY, True): 'CI env',
+    (REPOSITORY, False): '`kluster` repository secret',
+    (OPS_REPOSITORY, True): 'ops-repo Environment',
+    (OPS_REPOSITORY, False): 'ops-repo secret',
+}
+
+#: The whole vocabulary, which is what a cell may be written in. No term is a
+#: prefix of another, so the entry a cell begins with identifies its channel.
+REGISTER_COLUMNS: frozenset[str] = frozenset(_TERMS.values()) | frozenset(_GITHUB_TERMS.values())
+
+
+def register_column(channel: Channel) -> str:
+    """The term §3's Slot column names this channel with.
+
+    A channel type with no term raises rather than answering with something
+    unparseable: adding one to rule 6's closed set is adding a way the register
+    can describe a delivery, and the column has to be able to say it.
+    """
+    if isinstance(channel, Slot):
+        return _GITHUB_TERMS[(channel.repository, channel.environment is not None)]
+    return _TERMS[type(channel)]
+
+
 # --------------------------------------------------------------------------
 # The sources: where a push obtains the value, if it can obtain it at all.
 # --------------------------------------------------------------------------
@@ -983,6 +1026,7 @@ __all__ = (
     'DRILL_ENVIRONMENT',
     'ENVIRONMENTS',
     'OPS_REPOSITORY',
+    'REGISTER_COLUMNS',
     'REPOSITORY',
     'ROWS',
     'Context',
@@ -995,5 +1039,6 @@ __all__ = (
     'Slot',
     'StateRead',
     'describe',
+    'register_column',
     'sync',
 )
