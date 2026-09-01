@@ -86,52 +86,48 @@ def _yaml() -> YAML:
 # --- Tools ----------------------------------------------------------------
 
 
-def fetch_helm(workdir: Path) -> Path:
-    """The pinned Helm 3 binary, verified against its published digest."""
-    log.info(f'Downloading Helm {pins.HELM_VERSION} from {pins.HELM_URL}')
-    with requests.get(pins.HELM_URL, stream=True, timeout=60) as response:
-        _ = response.raise_for_status()
-        total = int(response.headers.get('content-length', 0))
-        with _progress_read(response.raw, desc=f'Downloading helm {pins.HELM_VERSION}', total=total) as stream:  # pyright: ignore[reportArgumentType]
-            archive = stream.read()
-
-    digest = hashlib.sha256(archive).hexdigest()
-    if digest != pins.HELM_SHA256:
-        raise ValueError(f'helm {pins.HELM_VERSION} digest is {digest}, expected {pins.HELM_SHA256}')
-
-    with tarfile.open(fileobj=BytesIO(archive), mode='r:gz') as tarobj:
-        tarobj.extractall(workdir, filter='data')
-    helm = _extracted_binary(workdir, 'helm', source=pins.HELM_URL)
-    log.info(f'Helm binary: {helm}')
-    return helm
-
-
-def fetch_crd2pulumi(workdir: Path) -> Path:
-    """The pinned `crd2pulumi` binary, verified against its published digest.
+def _fetch_tool(workdir: Path, *, binary: str, version: str, url: str, sha256: str) -> Path:
+    """A pinned tool archive, unpacked under `workdir` once its digest matches.
 
     The archive is held whole rather than unpacked straight out of the
     response: a digest only checks anything if nothing is extracted before it
-    matches.
+    matches. A mismatch names both digests, because the one thing the caller
+    has to decide is whether the pin is stale or the download is not the
+    artifact it claims to be.
     """
-    log.info(f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION} from {pins.CRD2PULUMI_URL}')
-    with requests.get(pins.CRD2PULUMI_URL, stream=True, timeout=60) as response:
+    log.info(f'Downloading {binary} {version} from {url}')
+    with requests.get(url, stream=True, timeout=60) as response:
         _ = response.raise_for_status()
         total = int(response.headers.get('content-length', 0))
-        with _progress_read(
-            response.raw, desc=f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION}', total=total
-        ) as stream:
+        with _progress_read(response.raw, desc=f'Downloading {binary} {version}', total=total) as stream:
             archive = stream.read()
 
     digest = hashlib.sha256(archive).hexdigest()
-    if digest != pins.CRD2PULUMI_SHA256:
-        raise ValueError(f'crd2pulumi {pins.CRD2PULUMI_VERSION} digest is {digest}, expected {pins.CRD2PULUMI_SHA256}')
+    if digest != sha256:
+        raise ValueError(f'{binary} {version} digest is {digest}, expected {sha256}')
 
     with tarfile.open(fileobj=BytesIO(archive), mode='r:gz') as tarobj:
         tarobj.extractall(workdir, filter='data')
 
-    binary = _extracted_binary(workdir, 'crd2pulumi', source=pins.CRD2PULUMI_URL)
-    log.info(f'crd2pulumi binary: {binary}')
-    return binary
+    found = _extracted_binary(workdir, binary, source=url)
+    log.info(f'{binary} binary: {found}')
+    return found
+
+
+def fetch_helm(workdir: Path) -> Path:
+    """The pinned Helm 3 binary, verified against its published digest."""
+    return _fetch_tool(workdir, binary='helm', version=pins.HELM_VERSION, url=pins.HELM_URL, sha256=pins.HELM_SHA256)
+
+
+def fetch_crd2pulumi(workdir: Path) -> Path:
+    """The pinned `crd2pulumi` binary, verified against its published digest."""
+    return _fetch_tool(
+        workdir,
+        binary='crd2pulumi',
+        version=pins.CRD2PULUMI_VERSION,
+        url=pins.CRD2PULUMI_URL,
+        sha256=pins.CRD2PULUMI_SHA256,
+    )
 
 
 def _extracted_binary(workdir: Path, name: str, *, source: str) -> Path:
