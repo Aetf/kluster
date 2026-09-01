@@ -11,7 +11,7 @@ import pulumi
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
-OPERATOR_ID = '4242'
+from kluster import conventions
 
 REPOSITORY = 'github:index/repository:Repository'
 BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'
@@ -20,16 +20,16 @@ VULNERABILITY_ALERTS = 'github:index/repositoryVulnerabilityAlerts:RepositoryVul
 
 
 class Forge(Recorder):
-    """GitHub as far as the program reads it back: node ids, and who the operator is."""
+    """GitHub as far as the program reads it back, which is node ids and nothing else.
+
+    The operator's own id is not among them: it is a census constant
+    (`conventions.forge`), so the run asks GitHub who the operator is at no
+    point and this monitor answers no invoke.
+    """
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == REPOSITORY:
-            return {'nodeId': f'node_{args.name}', 'fullName': f'Aetf/{args.name}'}
-        return {}
-
-    def answer(self, args: pulumi.runtime.MockCallArgs) -> dict[str, Any]:
-        if args.token == 'github:index/getUser:getUser':
-            return {'id': OPERATOR_ID, 'login': 'Aetf'}
+            return {'nodeId': f'node_{args.name}', 'fullName': f'{conventions.forge.OWNER}/{args.name}'}
         return {}
 
 
@@ -66,38 +66,61 @@ def test_the_owner_cannot_walk_around_the_gate(stack: Forge) -> None:
     assert protection['allowsDeletions'] is False
 
 
-def test_the_previewed_layers_are_reachable_from_a_pull_request_branch(stack: Forge) -> None:
-    """`preview.yml` runs these Environments on the PR's own branch.
+def test_every_environment_the_census_names_is_declared(stack: Forge) -> None:
+    """The census is what exists; the program adds none of its own and drops none.
 
-    A protected-branches-only policy on them would fail every preview, which is
-    the check the merge chain rests on.
+    An Environment the credentials command pushes a secret into and this stack
+    never creates is a push that fails; one this stack creates and the census
+    does not name is an Environment nothing fills.
+    """
+    census = {
+        environment.name for repository in conventions.forge.REPOSITORIES for environment in repository.environments
+    }
+
+    assert set(stack.by_name(ENVIRONMENT)) == census
+
+
+def test_a_branch_policy_is_declared_exactly_where_the_census_asks_for_one(stack: Forge) -> None:
+    """A protected-branches policy is what keeps a credential off a pull request's code.
+
+    `physical-plan` and `physical` carry one because their credentials can root
+    the gateway (ci.md §3). The previewed layers carry none, deliberately:
+    `preview.yml` runs those Environments on a pull request's own branch, so a
+    policy would fail every preview — the check the merge chain rests on.
     """
     environments = stack.by_name(ENVIRONMENT)
 
-    for layer in ('dns', 'k8s-base', 'apps'):
-        assert 'deploymentBranchPolicy' not in environments[layer], layer
+    for repository in conventions.forge.REPOSITORIES:
+        for entry in repository.environments:
+            main_only = entry.branches is conventions.forge.BranchPolicy.PROTECTED_ONLY
+            declared = environments[entry.name].get('deploymentBranchPolicy')
+
+            assert declared == ({'protectedBranches': True, 'customBranchPolicies': False} if main_only else None), (
+                entry.name
+            )
 
 
-def test_the_physical_environments_are_main_only(stack: Forge) -> None:
-    # Their credentials can root the gateway, so a pull request's code never
-    # runs with them (ci.md §3).
+def test_a_reviewer_stands_in_front_of_exactly_the_gated_environments(stack: Forge) -> None:
     environments = stack.by_name(ENVIRONMENT)
-
-    for name in ('physical-plan', 'physical'):
-        assert environments[name]['deploymentBranchPolicy'] == {
-            'protectedBranches': True,
-            'customBranchPolicies': False,
-        }
-
-
-def test_the_apply_environment_is_the_only_gated_one(stack: Forge) -> None:
-    environments = stack.by_name(ENVIRONMENT)
+    census = {
+        entry.name for repository in conventions.forge.REPOSITORIES for entry in repository.environments if entry.gated
+    }
 
     gated = {name for name, inputs in environments.items() if inputs.get('reviewers')}
 
-    assert gated == {'physical'}
-    assert environments['physical']['reviewers'] == [{'users': [int(OPERATOR_ID)]}]
-    assert environments['physical']['canAdminsBypass'] is False
+    assert gated == census
+    for name in gated:
+        assert environments[name]['reviewers'] == [{'users': [conventions.forge.OPERATOR_ID]}]
+        # Admin bypass off for the same reason `enforce_admins` is on: a door
+        # with a key under the mat is not a door.
+        assert environments[name]['canAdminsBypass'] is False
+
+
+def test_the_run_asks_github_nothing(stack: Forge) -> None:
+    # The operator's user id is the only thing this program ever read back from
+    # the account, and it is a census constant now. An invoke would also be the
+    # one call that needs a parent named for it to inherit a provider at all.
+    assert stack.call_providers == {}
 
 
 def test_merges_are_rebases_only(stack: Forge) -> None:
@@ -115,17 +138,34 @@ def test_merges_are_rebases_only(stack: Forge) -> None:
 def test_destroying_the_stack_cannot_delete_the_repositories(stack: Forge) -> None:
     repositories = stack.by_name(REPOSITORY)
 
-    assert set(repositories) == {'kluster', 'kluster-ops'}
+    assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
     assert all(inputs['archiveOnDestroy'] is True for inputs in repositories.values())
 
 
 def test_secret_scanning_is_only_claimed_where_the_plan_offers_it(stack: Forge) -> None:
-    # Secret scanning is public-repository-or-paid; asking for it on the
-    # private ops repository is an API error, not a stricter setting.
+    # Public-repository-or-paid on this account, so asking for it on the
+    # private ops repository is an API error, not a stricter setting. Which is
+    # why the program asks the census rather than each repository's own line.
     repositories = stack.by_name(REPOSITORY)
 
-    assert repositories['kluster']['securityAndAnalysis']['secretScanning'] == {'status': 'enabled'}
-    assert 'securityAndAnalysis' not in repositories['kluster-ops']
+    for repository in conventions.forge.REPOSITORIES:
+        inputs = repositories[repository.name]
+        if repository.plan_offers_public_features:
+            assert inputs['securityAndAnalysis']['secretScanning'] == {'status': 'enabled'}
+        else:
+            assert 'securityAndAnalysis' not in inputs
+
+
+def test_visibility_is_what_the_census_says(stack: Forge) -> None:
+    # The flag the plan's features are derived from, so a repository whose
+    # declared visibility disagreed with it would ask for a feature it cannot
+    # have, or decline one it could.
+    repositories = stack.by_name(REPOSITORY)
+
+    assert {name: inputs['visibility'] for name, inputs in repositories.items()} == {
+        'kluster': 'public',
+        'kluster-ops': 'private',
+    }
 
 
 def test_vulnerability_alerts_are_asked_for_where_the_provider_still_answers(stack: Forge) -> None:
