@@ -205,7 +205,7 @@ def test_cilium_crds_come_from_the_source_tree_at_the_pinned_chart_version() -> 
     assert cilium_tree.ref == f'v{cilium_chart.version}'
 
 
-# -- the crd2pulumi pin -------------------------------------------------------
+# -- the pinned tool downloads ------------------------------------------------
 
 
 #: What `renovate.json5` matches the pin with, spelled exactly as that file
@@ -219,11 +219,11 @@ CRD2PULUMI_MATCH_STRING = (
 TOOL = b'#!/bin/sh\nexit 0\n'
 
 
-def archive() -> bytes:
-    """A tar.gz holding one executable called `crd2pulumi`, and nothing else."""
+def archive(binary: str) -> bytes:
+    """A tar.gz holding one executable called `binary`, and nothing else."""
     buffer = BytesIO()
     with tarfile.open(fileobj=buffer, mode='w:gz') as tarobj:
-        entry = tarfile.TarInfo('crd2pulumi')
+        entry = tarfile.TarInfo(binary)
         entry.size = len(TOOL)
         entry.mode = 0o755
         tarobj.addfile(entry, BytesIO(TOOL))
@@ -268,7 +268,7 @@ def test_fetch_crd2pulumi_refuses_an_archive_that_is_not_the_pinned_one(
     about: an archive already extracted has had its say whatever the digest
     turns out to be.
     """
-    _ = serve(monkeypatch, archive())
+    _ = serve(monkeypatch, archive('crd2pulumi'))
 
     with pytest.raises(ValueError, match=pins.CRD2PULUMI_SHA256):
         _ = sources.fetch_crd2pulumi(tmp_path)
@@ -276,10 +276,22 @@ def test_fetch_crd2pulumi_refuses_an_archive_that_is_not_the_pinned_one(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_fetch_helm_refuses_an_archive_that_is_not_the_pinned_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both tools answer to the same check, so both are held to it here."""
+    _ = serve(monkeypatch, archive('helm'))
+
+    with pytest.raises(ValueError, match=pins.HELM_SHA256):
+        _ = sources.fetch_helm(tmp_path)
+
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_fetch_crd2pulumi_unpacks_the_archive_whose_digest_matches_the_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    payload = archive()
+    payload = archive('crd2pulumi')
     monkeypatch.setattr(pins, 'CRD2PULUMI_SHA256', hashlib.sha256(payload).hexdigest())
     requested = serve(monkeypatch, payload)
 
