@@ -772,6 +772,33 @@ def test_a_policy_the_first_page_does_not_show_is_still_found(
     ]
 
 
+def test_the_converged_policy_comes_back_as_a_record(tenancy: Tenancy, root: masters.Credential) -> None:
+    # A policy leaves this module as the three things converging it speaks --
+    # OCID, name, statements -- rather than as the model the SDK answered
+    # with, so the statements the tenancy holds and the statements the
+    # register describes are compared as one shape against the same shape.
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy)
+
+    converged = iam.policy(oci_iam.SEED)
+
+    assert converged == oci_iam.Policy(
+        ocid=f'ocid1.policy.oc1..{oci_iam.SEED_NAME}', name=oci_iam.SEED_NAME, statements=oci_iam.STATEMENTS
+    )
+
+
+def test_a_policy_put_back_comes_back_as_it_now_stands(tenancy: Tenancy, root: masters.Credential) -> None:
+    # The correction is returned, not the drift that was found: a caller that
+    # acted on what came back would otherwise act on statements the tenancy
+    # no longer has.
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy)
+    _ = iam.policy(oci_iam.SEED)
+    next(iter(tenancy.identity.policies.values())).statements = ['Allow group kluster-seed to read all-resources']
+
+    converged = iam.policy(oci_iam.SEED)
+
+    assert converged.statements == oci_iam.STATEMENTS
+
+
 def test_rotation_replaces_the_key_and_retires_the_predecessor(
     kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
 ) -> None:
@@ -1257,6 +1284,55 @@ def test_the_repair_reads_the_domain_with_the_account_root(kit: KdbxStore, root:
     # keys from then on.
     assert url == DOMAIN_URL
     assert oci_iam.load_domain(kit, SEED_ENTRY) == DOMAIN_URL
+
+
+def test_the_tenancys_domains_come_back_as_records(tenancy: Tenancy, root: masters.Credential) -> None:
+    # The listing is read into what picking one takes and nothing else: the
+    # endpoint to address, whether it is the default, and the name the
+    # refusal above puts in front of an operator.
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy)
+
+    assert iam.domains() == [oci_iam.TenancyDomain(url=DOMAIN_URL, display_name='Default', kind='DEFAULT')]
+
+
+def test_a_session_carries_the_endpoint_its_domain_was_opened_at(tenancy: Tenancy, root: masters.Credential) -> None:
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy, domain_url=DOMAIN_URL)
+
+    # The client and the endpoint it was opened at are one value, which is
+    # what a session hands on to the session of a key it has just minted.
+    assert iam.domain is not None
+    assert iam.domain.url == DOMAIN_URL
+    assert iam.domain_url == DOMAIN_URL
+
+
+def test_a_session_without_a_domain_names_no_endpoint(tenancy: Tenancy, root: masters.Credential) -> None:
+    iam = oci_iam.Iam.authorize(TENANCY, ROOT_USER, root['private-key'], connect=tenancy)
+
+    # A tenancy that has no domains, and a row written before the attribute
+    # existed, are the same state here: no client and no endpoint, never one
+    # without the other.
+    assert iam.domain is None
+    assert iam.domain_url is None
+
+
+def test_a_domain_cannot_be_opened_without_saying_where(tenancy: Tenancy) -> None:
+    # An endpoint no client was opened at, and a client whose endpoint nobody
+    # recorded, are both half a domain: a rotation would either address the
+    # domains API with no client or mint a successor it cannot tell where to
+    # look, so the two are one argument list.
+    client = FakeDomain(identity=tenancy.identity, user_id=ROOT_USER)
+
+    with pytest.raises(TypeError, match='url'):
+        _ = oci_iam.Domain(client=client)  # pyright: ignore[reportCallIssue]
+
+
+def test_a_session_cannot_be_opened_without_the_user_it_signs_as(tenancy: Tenancy) -> None:
+    # The caller is what tells the self-service half of the domains API from
+    # the administrative one. A session that did not know whose it was would
+    # match no subject at all and would send every self-service call to the
+    # endpoints that need domain-admin rights, which the seed does not hold.
+    with pytest.raises(TypeError, match='caller'):
+        _ = oci_iam.Iam(tenancy=TENANCY, identity=tenancy.identity)  # pyright: ignore[reportCallIssue]
 
 
 def test_a_refused_sweep_does_not_fail_the_bring_up(kit: KdbxStore, root: masters.Credential, tmp_path: Path) -> None:
