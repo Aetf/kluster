@@ -54,6 +54,13 @@ PREVIEWED_LAYERS = ('dns', 'k8s-base', 'apps')
 PLAN_ENVIRONMENT = 'physical-plan'
 APPLY_ENVIRONMENT = 'physical'
 
+#: The ops repository's own Environment, which is where the unattended drills
+#: hold their credentials (credentials.md §3). Named here rather than spelled
+#: at its resource, because it is the ops repository's half of the same
+#: partition the constants above declare -- and the register's map is held
+#: against it by name (`credentials/slots.py`).
+DRILL_ENVIRONMENT = 'drill'
+
 
 async def main() -> None:
     operator = github.get_user(username=OWNER)
@@ -172,9 +179,9 @@ async def main() -> None:
     # and the ops repository is private, so branch protection is not available
     # to it on this plan anyway (github.md §2).
     _ = github.RepositoryEnvironment(
-        'drill',
+        DRILL_ENVIRONMENT,
         repository=ops.name,
-        environment='drill',
+        environment=DRILL_ENVIRONMENT,
         opts=pulumi.ResourceOptions(parent=ops),
     )
 

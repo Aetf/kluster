@@ -59,17 +59,27 @@ def _command_line(argv: list[str]) -> str:
 UNMAPPED: frozenset[str] = frozenset()
 
 
-def register_credentials() -> list[str]:
-    """The first column of §3's table, in the document's own words.
+def register_table() -> dict[str, str]:
+    """§3's table in the document's own words: each credential, and its Slot cell.
 
     Read out of the file rather than copied here: a copy is a third description
     of the inventory, and the point of this test is that there are two.
     """
     document = (pulumi_config.project_dir() / 'docs' / 'credentials.md').read_text()
     section = document.split('\n## 3. ', 1)[1].split('\n## 4. ', 1)[0]
-    rows = [line for line in section.splitlines() if line.startswith('| ')]
-    cells = [line.split('|')[1].strip() for line in rows]
-    return [cell for cell in cells if cell not in {'Credential'} and not cell.startswith('---')]
+    rows = [line.split('|') for line in section.splitlines() if line.startswith('| ')]
+    for row in rows:
+        assert len(row) == 7, f'§3 has five columns; this line has {len(row) - 2}: {"|".join(row)[:60]}'
+    return {
+        row[1].strip(): row[4].strip()
+        for row in rows
+        if row[1].strip() != 'Credential' and not row[1].strip().startswith('---')
+    }
+
+
+def register_credentials() -> list[str]:
+    """The first column alone, which is what the two name-equality tests compare."""
+    return list(register_table())
 
 
 def test_every_map_row_names_a_credential_the_register_carries() -> None:
@@ -108,23 +118,146 @@ def test_a_row_the_map_calls_built_is_a_command_the_tree_carries() -> None:
         )
 
 
-def test_the_map_targets_environments_the_forge_stack_declares() -> None:
+def declared_environments() -> dict[str, set[str]]:
+    """Every Environment the forge stack declares, by the repository it declares it in."""
     # Imported here rather than at module scope: `slots` must not depend on the
-    # Pulumi provider SDKs, and this is the test that ties the two together
+    # Pulumi provider SDKs, and this is the file that ties the two together
     # without letting the dependency into the command.
     from kluster.stacks import github
 
-    declared = {*github.PREVIEWED_LAYERS, github.PLAN_ENVIRONMENT, github.APPLY_ENVIRONMENT}
-    environments = {
-        slot.environment for row in slots.ROWS.values() for slot in row.sinks if slot.environment is not None
+    return {
+        f'{github.OWNER}/{github.DEPLOYMENT_REPO}': {
+            *github.PREVIEWED_LAYERS,
+            github.PLAN_ENVIRONMENT,
+            github.APPLY_ENVIRONMENT,
+        },
+        f'{github.OWNER}/{github.OPS_REPO}': {github.DRILL_ENVIRONMENT},
     }
+
+
+def undeclared_environments(rows: Mapping[str, slots.Row]) -> dict[str, set[str]]:
+    """The sinks' Environments the forge stack does not declare **in their own repository**.
+
+    Partitioned by repository rather than pooled: the two repositories have
+    disjoint Environments, so a pooled comparison passes a `drill` secret aimed
+    at the deployment repository and fails a correct one aimed at the ops
+    repository.
+    """
+    declared = declared_environments()
+    undeclared: dict[str, set[str]] = {}
+    for row in rows.values():
+        for slot in row.sinks:
+            if slot.environment is None or slot.environment in declared.get(slot.repository, set()):
+                continue
+            undeclared.setdefault(slot.repository, set()).add(slot.environment)
+    return undeclared
+
+
+def test_the_map_targets_environments_the_forge_stack_declares() -> None:
+    from kluster.stacks import github
 
     assert slots.REPOSITORY == f'{github.OWNER}/{github.DEPLOYMENT_REPO}'
     assert slots.OPS_REPOSITORY == f'{github.OWNER}/{github.OPS_REPO}'
-    assert set(slots.ENVIRONMENTS) == declared
+    assert set(slots.ENVIRONMENTS) == declared_environments()[slots.REPOSITORY]
+    # The ops repository's one Environment, held by name the way the deployment
+    # repository's are: the map addresses it as a constant, and the stack that
+    # creates it is the only thing that decides what it is called.
+    assert slots.DRILL_ENVIRONMENT == github.DRILL_ENVIRONMENT
+    assert declared_environments()[slots.OPS_REPOSITORY] == {slots.DRILL_ENVIRONMENT}
     # A secret pushed into an Environment the stack does not declare is a
     # secret no job will ever see.
-    assert environments <= declared
+    assert undeclared_environments(slots.ROWS) == {}
+
+
+def sinking_into(slot: Slot) -> Mapping[str, slots.Row]:
+    """A one-row map whose only delivery is that slot."""
+    return {'a-row': slots.Row(register='a credential', source=slots.Derived('a-label'), targets=(slot,))}
+
+
+def test_an_environment_is_held_against_the_repository_its_sink_names() -> None:
+    drill = Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT)
+    misplaced = Slot(repository=slots.REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT)
+    foreign = Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.ENVIRONMENTS[0])
+
+    # The drills' credentials live in the ops repository's own Environment, so
+    # the first sink to name it must pass rather than read as undeclared.
+    assert undeclared_environments(sinking_into(drill)) == {}
+    # And each of the other two is a secret no job can see: the Environment is
+    # real, but not in the repository the sink names.
+    assert undeclared_environments(sinking_into(misplaced)) == {slots.REPOSITORY: {slots.DRILL_ENVIRONMENT}}
+    assert undeclared_environments(sinking_into(foreign)) == {slots.OPS_REPOSITORY: {slots.ENVIRONMENTS[0]}}
+
+
+#: How §3's Slot column separates the channels one credential lands in.
+CHANNEL_SEPARATOR = '·'
+
+#: The word in an entry's qualifier that marks a channel the register promises
+#: and nothing addresses yet -- the cell's half of a map row's `pending`.
+PENDING = 'pending'
+
+
+def promised_channels(cell: str) -> dict[str, bool]:
+    """A §3 Slot cell read as the map's vocabulary: each channel, and whether it is pending."""
+    promised: dict[str, bool] = {}
+    for entry in cell.split(CHANNEL_SEPARATOR):
+        text = entry.strip()
+        terms = [term for term in slots.REGISTER_COLUMNS if text.startswith(term)]
+        assert len(terms) == 1, f'{text!r} begins with no channel term: {sorted(slots.REGISTER_COLUMNS)}'
+        assert terms[0] not in promised, f'{cell!r} names {terms[0]!r} twice'
+        promised[terms[0]] = PENDING in text
+    return promised
+
+
+def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], set[str]]:
+    """Where a §3 Slot cell and the rows implementing that credential disagree.
+
+    Two ways to disagree, and the pair separates them: a channel the cell hands
+    out as delivered that no row addresses, and a channel a row addresses that
+    the cell does not name. A cell may still name a channel that has no
+    address, which is what `pending` says.
+    """
+    promised = promised_channels(cell)
+    delivered = {term for term, waiting in promised.items() if not waiting}
+    addressed = {slots.register_column(target) for row in rows for target in row.targets}
+    return delivered - addressed, addressed - promised.keys()
+
+
+def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
+    # §3's first column is held against the map by name above; this is the same
+    # equality one column over, which is what keeps a cell from promising a
+    # delivery no row makes. More than one row may implement one credential, so
+    # the cell is held against all of their channels together.
+    for credential, cell in register_table().items():
+        rows = [row for row in slots.ROWS.values() if row.register == credential]
+
+        assert drifted_channels(cell, rows) == (set(), set()), credential
+        # A channel the register promises without an address is what a row's
+        # `pending` is for, so the cell may say `pending` only where a row says
+        # what stands in the way.
+        if any(waiting for waiting in promised_channels(cell).values()):
+            assert [row for row in rows if row.pending], credential
+
+
+def test_a_cell_promising_a_channel_no_row_delivers_is_drift() -> None:
+    # The drift this vocabulary exists to catch. A cell naming a CI Environment
+    # secret beside a state entry reads, to anyone working from the register, as
+    # a credential CI holds -- while nothing pushes one and no slot exists to
+    # push it into.
+    stated = [
+        slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(slots.PulumiState('a-stack', 'a value'),),
+        )
+    ]
+
+    assert drifted_channels('Pulumi state · CI env', stated) == ({'CI env'}, set())
+    # Saying it is pending is how the register promises a channel honestly: the
+    # row then has to carry the reason.
+    assert drifted_channels('Pulumi state · CI env (pending)', stated) == (set(), set())
+    # And the other direction: a slot the map fills that the register does not
+    # mention is a delivery its reader cannot know about.
+    assert drifted_channels('CI env (pending)', stated) == (set(), {'Pulumi state'})
 
 
 def test_the_passphrase_reaches_every_environment() -> None:
