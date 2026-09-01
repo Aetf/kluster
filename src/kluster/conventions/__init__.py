@@ -107,6 +107,7 @@ from kluster.conventions.providers import (
     CompartmentMissing,
     OciTenancy,
 )
+from kluster.conventions.routes import ROUTES, Exposure, Route
 from kluster.conventions.site import (
     CLUSTER_VLAN,
     CONTAINER_VLAN,
@@ -174,6 +175,7 @@ __all__ = (
     'PUBLIC_PORT_CENSUS',
     'QBITTORRENT_PEER_PORT',
     'RETENTION_CLASSES',
+    'ROUTES',
     'SC_CLOUD_BLOCK',
     'SC_LOCAL_PATH',
     'SC_NAS',
@@ -196,10 +198,12 @@ __all__ = (
     'B2Account',
     'Compartment',
     'CompartmentMissing',
+    'Exposure',
     'FollowsDedicatedVip',
     'NodeVolume',
     'OciTenancy',
     'RetentionClass',
+    'Route',
     'SiteNetwork',
     'Vip',
     'barman_repo_path',

@@ -34,7 +34,7 @@ from kluster import conventions
 from kluster.components.dns.adguard import declare_rewrites
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.model import Record, a, aaaa
-from kluster.components.dns.routes import ROUTES, rewrites
+from kluster.components.dns.routes import rewrites
 from kluster.components.dns.zone import ManagedZone
 from kluster.components.dns.zones import ESTATE, zt_records
 
@@ -102,7 +102,7 @@ async def main() -> None:
     # first app declares a LAN-side route. The login is not read here at all:
     # it opens the rewrite provider and nothing else, so the provider reads it
     # in `configure` (rfc-002 §7.4).
-    entries = rewrites(ROUTES)
+    entries = rewrites(conventions.ROUTES)
     if entries:
         _ = declare_rewrites(entries, endpoints=config.require_object('adguardEndpoints'))
 

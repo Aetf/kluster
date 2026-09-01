@@ -5,7 +5,8 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.dns.adguard import declare_rewrites
-from kluster.components.dns.routes import Exposure, Route, rewrites
+from kluster.components.dns.routes import rewrites
+from kluster.conventions.routes import Exposure, Route
 from kluster.providers import configured
 
 ENDPOINTS = ('http://alice.lan:3000', 'http://bob.lan:3000')
@@ -40,10 +41,17 @@ def test_both_instances_are_written_to_directly(stack: Recorder) -> None:
 
 
 def test_a_rewrite_carries_the_vip_its_route_implies(stack: Recorder) -> None:
+    """And carries it as text, which is the only place the address is spelled.
+
+    A row holds the address it is; the rewrite API takes a string. Spelling it
+    here rather than in the census is what keeps the family a property of the
+    row instead of something the provider recovers by looking for a colon.
+    """
     inputs = stack.inputs_of('alice-lan-photos.ucw.phd-v4')
 
     assert inputs['domain'] == 'photos.ucw.phd'
     assert inputs['answer'] == str(conventions.LAN_POOL.default_vip.v4)
+    assert isinstance(inputs['answer'], str)
     assert inputs['endpoint'] == ENDPOINTS[0]
 
 

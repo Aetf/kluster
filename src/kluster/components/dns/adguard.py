@@ -49,13 +49,14 @@ def declare_rewrites(
     for endpoint in endpoints:
         instance = instance_label(endpoint)
         for entry in entries:
-            family = 'v6' if ':' in entry.answer else 'v4'
-            name = f'{instance}-{entry.domain}-{family}'
+            name = f'{instance}-{entry.domain}-{entry.family}'
             declared[name] = AdGuardRewrite(
                 name,
                 endpoint=endpoint,
                 domain=entry.domain,
-                answer=entry.answer,
+                # The rewrite API takes the answer as text; the row holds it as
+                # the address it is, so this is the only place it is spelled.
+                answer=str(entry.answer),
                 opts=opts,
             )
     return declared
