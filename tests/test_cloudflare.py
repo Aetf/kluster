@@ -23,7 +23,7 @@ from cloudflare_api import ACCOUNT_ID, MINTING_POLICY, ZONE_POLICY, FakeApi, con
 from memory_kit import MemoryKit
 
 from kluster import conventions
-from kluster.scripts.credentials import cloudflare, entries, lifecycle
+from kluster.scripts.credentials import cloudflare, entries, lifecycle, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 
@@ -236,10 +236,11 @@ def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
     api.zones[conventions.ZONE_FAMILY[0]]['account'] = {}
     session = cloudflare.Session.authorize(_seed(api))
 
-    # The empty string satisfies "the zones are all in one account" and is
-    # then written into a stack's committed configuration as the account id,
-    # where nothing ever refuses it.
-    with pytest.raises(CredentialRejected, match='no account id'):
+    # Read as an empty string it would satisfy "the zones are all in one
+    # account" and then be written into a stack's committed configuration as
+    # the account id, where nothing ever refuses it. The listing refuses it
+    # instead, before a token is minted against it.
+    with pytest.raises(CredentialRejected, match='account: the answer carries no id'):
         _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
     assert not _named(api, STACK_TOKEN)
 
@@ -317,7 +318,34 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi) -> None:
 
     # A listing that stopped at the first page would report a token as unable
     # to see zones it can see, and the scope check is built on this call.
-    assert {str(zone['name']) for zone in session.zones()} == expected
+    assert {zone.name for zone in session.zones()} == expected
+
+
+# -- the response boundary --------------------------------------------------
+
+
+def test_a_zone_without_an_account_is_refused_naming_the_entry() -> None:
+    answer = [
+        {'id': 'zone-1', 'name': 'example.test', 'account': {'id': ACCOUNT_ID}},
+        {'id': 'zone-2', 'name': 'other.test', 'account': {'name': 'estate'}},
+    ]
+
+    # Which call, which row, which field: the account id reaches a stack's
+    # committed configuration, so the entry that lacks one is named.
+    with pytest.raises(payload.ResponseRejected, match=r'GET /zones\[1\]\.account: the answer carries no id'):
+        _ = cloudflare._listed_zones(answer)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_token_listing_that_is_not_a_list_is_refused_rather_than_iterated() -> None:
+    with pytest.raises(payload.ResponseRejected, match='GET /user/tokens: expected a list'):
+        _ = cloudflare._listed_tokens({'id': 'token-1', 'name': STACK_TOKEN})  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_verification_without_a_status_is_refused_rather_than_read_as_inactive() -> None:
+    # "Not active" and "the platform stopped saying" are different answers,
+    # and only the first one is about the token in hand.
+    with pytest.raises(payload.ResponseRejected, match='carries no status'):
+        _ = cloudflare._verified({'id': 'token-1'})  # pyright: ignore[reportPrivateUsage]
 
 
 class Interrupted(RuntimeError):

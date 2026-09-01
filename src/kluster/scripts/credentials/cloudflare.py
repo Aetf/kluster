@@ -19,6 +19,12 @@ Copying is what a same-permission successor would need, and it is exactly
 what the platform refuses: the minter carries *API Tokens Write* by
 definition, so a copy of its policies is a sub-token with token permissions.
 What §3's tokens carry is stated by the stack that consumes them.
+
+**Every answer Cloudflare sends crosses into a typed value at one parser**
+(`payload`): `_call` unwraps the envelope and hands back the `result` as an
+`object`, and the `_...` functions below turn each response shape into a
+record. A field the platform does not send, or sends as something else, is
+refused there by name instead of surfacing as a `KeyError` from inside a mint.
 """
 
 from __future__ import annotations
@@ -26,11 +32,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 import requests
 
+from . import payload
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -68,23 +75,45 @@ ZONE_PERMISSIONS = ('DNS Write', 'Zone Read')
 ZONE_RESOURCE = 'com.cloudflare.api.account.zone'
 
 
-def _result(resp: requests.Response) -> Any:
+def _message(error: object) -> str:
+    """One entry of a refused envelope's `errors`, as the most it reads as."""
+    shown = repr(error)
+    if isinstance(error, dict):
+        message = cast('dict[str, object]', error).get('message')
+        if isinstance(message, str):
+            return message
+    return shown
+
+
+def _why(body: payload.Payload) -> str:
+    """The messages a refused envelope carries, joined into one line.
+
+    The one thing here read leniently: this runs when the call has already
+    failed, so an `errors` of an unexpected shape must still say as much as it
+    can rather than be replaced by a complaint about its own shape.
+    """
+    listed = body.fields.get('errors')
+    entries = cast('list[object]', listed) if isinstance(listed, list) else []
+    return '; '.join(_message(error) for error in entries)
+
+
+def _result(resp: requests.Response) -> object:
     """The `result` of a Cloudflare envelope, or the error it carries instead.
 
     Every response is `{success, errors, result}`, and a refused credential
     arrives as a 400 with a populated `errors` rather than as an exception, so
-    unwrapping and diagnosing are the same step.
+    unwrapping and diagnosing are the same step. The result itself stays
+    untyped: its shape is the call's, and each call has a parser below.
     """
     try:
-        body: dict[str, Any] = resp.json()
+        decoded: object = resp.json()
     except ValueError:
         resp.raise_for_status()
         raise
-    if not body.get('success'):
-        errors: list[dict[str, Any]] = list(body.get('errors') or [])
-        messages = '; '.join(str(error.get('message', error)) for error in errors)
-        raise CredentialRejected(f'Cloudflare refused the call: {messages or resp.status_code}')
-    return body['result']
+    body = payload.Payload.of(decoded, 'the Cloudflare envelope')
+    if not body.truth('success'):
+        raise CredentialRejected(f'Cloudflare refused the call: {_why(body) or resp.status_code}')
+    return body.value('result')
 
 
 @dataclass(frozen=True)
@@ -98,6 +127,105 @@ class Token:
 
     token_id: str
     value: str
+
+
+@dataclass(frozen=True)
+class VerifiedToken:
+    """`GET /user/tokens/verify`: who the caller is, and whether it may act."""
+
+    token_id: str
+    #: `active` is the only status that can do anything; the platform's others
+    #: (`disabled`, `expired`) are reported to the operator as they arrive.
+    status: str
+
+
+@dataclass(frozen=True)
+class TokenSummary:
+    """One row of `GET /user/tokens`: what retirement addresses a token by.
+
+    Id and name only. What a listed token may do is not read from here --
+    a token's own permissions are asked for by id, one token at a time.
+    """
+
+    token_id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class Zone:
+    """One row of `GET /zones`: a zone this credential can see, and its account."""
+
+    zone_id: str
+    name: str
+    account_id: str
+
+
+@dataclass(frozen=True)
+class PermissionGroup:
+    """One row of `GET /user/tokens/permission_groups`.
+
+    `scopes` is what separates the zone-scoped groups from the user-scoped
+    ones, and a policy over zones may only carry the former.
+    """
+
+    group_id: str
+    name: str
+    scopes: tuple[str, ...]
+
+
+def _verified(answer: object) -> VerifiedToken:
+    """`GET /user/tokens/verify`, the one call every token may make."""
+    body = payload.Payload.of(answer, 'GET /user/tokens/verify')
+    return VerifiedToken(token_id=body.text('id'), status=body.text('status'))
+
+
+def _carried(answer: object) -> frozenset[str]:
+    """`GET /user/tokens/{id}`, reduced to the permission groups it carries.
+
+    A token's own record is read for one thing -- which permission groups it
+    holds, by name -- so that is what crosses the boundary. Which resources
+    each policy names is the minter's statement, not the platform's answer.
+    """
+    body = payload.Payload.of(answer, 'GET /user/tokens/{id}')
+    return frozenset(
+        group.text('name') for policy in body.objects('policies') for group in policy.objects('permission_groups')
+    )
+
+
+def _listed_tokens(answer: object) -> tuple[TokenSummary, ...]:
+    """`GET /user/tokens`: the account's tokens, as retirement reads them."""
+    return tuple(
+        TokenSummary(token_id=entry.text('id'), name=entry.text('name'))
+        for entry in payload.Payload.each(answer, 'GET /user/tokens')
+    )
+
+
+def _listed_zones(answer: object) -> tuple[Zone, ...]:
+    """`GET /zones`: one page of zones, each with the account that owns it.
+
+    The account is required of every zone rather than of the one a policy ends
+    up naming: read as an empty string it would satisfy "the zones are all in
+    one account" and then be written into a stack's committed configuration as
+    the account id, where nothing ever refuses it.
+    """
+    return tuple(
+        Zone(zone_id=entry.text('id'), name=entry.text('name'), account_id=entry.nested('account').text('id'))
+        for entry in payload.Payload.each(answer, 'GET /zones')
+    )
+
+
+def _created_token(answer: object) -> Token:
+    """`POST /user/tokens`: the id, and the value Cloudflare discloses once."""
+    body = payload.Payload.of(answer, 'POST /user/tokens')
+    return Token(token_id=body.text('id'), value=body.text('value'))
+
+
+def _permission_groups(answer: object) -> tuple[PermissionGroup, ...]:
+    """`GET /user/tokens/permission_groups`: the account's whole catalogue."""
+    return tuple(
+        PermissionGroup(group_id=entry.text('id'), name=entry.text('name'), scopes=entry.texts('scopes'))
+        for entry in payload.Payload.each(answer, 'GET /user/tokens/permission_groups')
+    )
 
 
 @dataclass(frozen=True)
@@ -125,18 +253,18 @@ class Session:
                 'Cloudflare rejected the token — the value is the one shown once at creation, '
                 'not the token id and not the Global API Key'
             )
-        result = _result(resp)
-        status = str(result.get('status', ''))
-        if status != 'active':
-            raise CredentialRejected(f'the Cloudflare token is {status or "not active"}')
-        return cls(token=token, token_id=str(result['id']))
+        verified = _verified(_result(resp))
+        if verified.status != 'active':
+            raise CredentialRejected(f'the Cloudflare token is {verified.status}')
+        return cls(token=token, token_id=verified.token_id)
 
     @classmethod
     def from_entry(cls, store: KdbxStore, entry: str) -> Session:
         """Authorize with the seed held in the offline store."""
         return cls.authorize(store.get(entry))
 
-    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> object:
+        """One API call, answered with the envelope's `result` for a parser."""
         resp = requests.request(
             method,
             f'{API}{path}',
@@ -146,19 +274,14 @@ class Session:
         )
         return _result(resp)
 
-    def granted(self) -> set[str]:
+    def granted(self) -> frozenset[str]:
         """The permission groups this token carries, by name.
 
         Reading a token requires the same permission as writing one, so a
         token that cannot do this is a token that could not have minted
         anything either.
         """
-        result = self._call('GET', f'/user/tokens/{self.token_id}')
-        return {
-            str(group.get('name', ''))
-            for policy in list[dict[str, Any]](result.get('policies') or [])
-            for group in list[dict[str, Any]](policy.get('permission_groups') or [])
-        }
+        return _carried(self._call('GET', f'/user/tokens/{self.token_id}'))
 
     def require_minting(self) -> None:
         """Refuse a token that cannot mint, naming the permission it lacks."""
@@ -189,24 +312,25 @@ class Session:
                 'it with `credentials seed cloudflare create`, and delete this one'
             )
 
-    def tokens(self) -> list[dict[str, Any]]:
-        return list(self._call('GET', '/user/tokens'))
+    def tokens(self) -> tuple[TokenSummary, ...]:
+        """Every token this credential may see, which only a minter may ask."""
+        return _listed_tokens(self._call('GET', '/user/tokens'))
 
-    def zones(self, name: str | None = None) -> list[dict[str, Any]]:
+    def zones(self, name: str | None = None) -> tuple[Zone, ...]:
         """The zones this token may see, or the ones matching `name`.
 
         Which zones come back is a property of the token, so this is both how
         the seed resolves a zone name to the id a policy needs and how a minted
         token proves what it was given: the same call, asked of two credentials.
         """
-        found: list[dict[str, Any]] = []
+        found: list[Zone] = []
         page = 1
         while True:
             query = {'per_page': str(PAGE_SIZE), 'page': str(page)} | ({'name': name} if name else {})
-            batch = list[dict[str, Any]](self._call('GET', f'/zones?{urlencode(query)}'))
+            batch = _listed_zones(self._call('GET', f'/zones?{urlencode(query)}'))
             found.extend(batch)
             if len(batch) < PAGE_SIZE:
-                return found
+                return tuple(found)
             page += 1
 
     def permission_groups(self, names: Sequence[str]) -> list[dict[str, str]]:
@@ -216,12 +340,8 @@ class Session:
         read here rather than written down, so a token is minted with the scope
         the name means rather than with whatever the id used to mean.
         """
-        catalogue = list[dict[str, Any]](self._call('GET', '/user/tokens/permission_groups'))
-        by_name = {
-            str(group['name']): str(group['id'])
-            for group in catalogue
-            if ZONE_RESOURCE in [str(scope) for scope in list[Any](group.get('scopes') or [])]
-        }
+        catalogue = _permission_groups(self._call('GET', '/user/tokens/permission_groups'))
+        by_name = {group.name: group.group_id for group in catalogue if ZONE_RESOURCE in group.scopes}
         missing = [name for name in names if name not in by_name]
         if missing:
             raise CredentialRejected(
@@ -231,8 +351,7 @@ class Session:
         return [{'id': by_name[name]} for name in names]
 
     def create_token(self, name: str, policies: list[dict[str, Any]]) -> Token:
-        result = self._call('POST', '/user/tokens', {'name': name, 'policies': policies})
-        return Token(token_id=str(result['id']), value=str(result['value']))
+        return _created_token(self._call('POST', '/user/tokens', {'name': name, 'policies': policies}))
 
     def delete_token(self, token_id: str) -> None:
         _ = self._call('DELETE', f'/user/tokens/{token_id}')
@@ -266,10 +385,9 @@ def _retire_superseded(session: Session, name: str, keep: str) -> None:
     was asked for: every earlier stop must leave a working predecessor behind.
     """
     for existing in session.tokens():
-        token_id = str(existing.get('id'))
-        if str(existing.get('name')) == name and token_id not in (keep, session.token_id):
-            log.info('deleting superseded token %s', token_id)
-            session.delete_token(token_id)
+        if existing.name == name and existing.token_id not in (keep, session.token_id):
+            log.info('deleting superseded token %s', existing.token_id)
+            session.delete_token(existing.token_id)
 
 
 def mint_token(
@@ -325,20 +443,14 @@ def _resolve_zones(session: Session, names: Sequence[str]) -> tuple[str, dict[st
     ids: dict[str, str] = {}
     accounts: set[str] = set()
     for name in names:
-        matches = [zone for zone in session.zones(name=name) if str(zone.get('name')) == name]
+        matches = [zone for zone in session.zones(name=name) if zone.name == name]
         if not matches:
             raise CredentialRejected(
                 f'the Cloudflare seed cannot see the zone {name!r}: it is not in this account, '
                 'or the seed token carries no zone read permission'
             )
-        ids[name] = str(matches[0]['id'])
-        account = dict[str, Any](matches[0].get('account') or {}).get('id')
-        if not isinstance(account, str) or not account:
-            # An empty string here would satisfy the single-account check
-            # below and be written into a stack's committed configuration as
-            # the account id, where nothing ever refuses it.
-            raise CredentialRejected(f'Cloudflare returned the zone {name!r} with no account id')
-        accounts.add(account)
+        ids[name] = matches[0].zone_id
+        accounts.add(matches[0].account_id)
     if len(accounts) != 1:
         raise CredentialRejected(
             f'the zones are spread over {len(accounts)} Cloudflare accounts; one token cannot be scoped to them'
@@ -356,7 +468,7 @@ def _confirm_scope(value: str, expected: Sequence[str]) -> None:
     stack with no credential at all.
     """
     log.info('checking the minted token against the %d estate zones', len(expected))
-    visible = {str(zone.get('name')) for zone in Session.authorize(value).zones()}
+    visible = {zone.name for zone in Session.authorize(value).zones()}
     missing = [name for name in expected if name not in visible]
     if missing:
         raise CredentialRejected(f'the minted token cannot see {", ".join(missing)}; it was not scoped as asked')
