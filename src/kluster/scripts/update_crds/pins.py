@@ -60,8 +60,21 @@ HELM_SHA256 = 'dbb4c8fc8e19d159d1a63dda8db655f9ffa4aac1b9a6b188b34a40957119b286'
 #: Pinned rather than `latest`: this binary decides the shape of every
 #: generated module *and* the `pulumi-kubernetes` version `packages/crds`
 #: declares, so an unpinned one would rewrite the bindings without a bump.
-# renovate: datasource=github-releases depName=pulumi/crd2pulumi
+#:
+#: The version is part of the asset's file name, and that is what lets the pin
+#: below travel with a bump: renovate finds the next release's asset by
+#: substituting the new version into this name.
 CRD2PULUMI_VERSION = 'v1.6.2'
+CRD2PULUMI_URL = (
+    f'https://github.com/pulumi/crd2pulumi/releases/download/{CRD2PULUMI_VERSION}'
+    f'/crd2pulumi-{CRD2PULUMI_VERSION}-linux-amd64.tar.gz'
+)
+
+#: The digest that release publishes for that asset, in its `checksums.txt`.
+#: Recomputed on every download, so a truncated or substituted tarball fails
+#: the run instead of generating bindings from a binary nobody pinned. The
+#: manager in `renovate.json5` moves this line with the version above.
+CRD2PULUMI_SHA256 = 'eda24f0fd79654784171357cffca7f6e99d46f1026da429ee416dbe993c73309'
 
 # --- Sources --------------------------------------------------------------
 

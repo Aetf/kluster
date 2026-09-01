@@ -107,20 +107,29 @@ def fetch_helm(workdir: Path) -> Path:
 
 
 def fetch_crd2pulumi(workdir: Path) -> Path:
-    """The pinned `crd2pulumi` binary."""
-    url = (
-        f'https://github.com/pulumi/crd2pulumi/releases/download/{pins.CRD2PULUMI_VERSION}'
-        f'/crd2pulumi-{pins.CRD2PULUMI_VERSION}-linux-amd64.tar.gz'
-    )
-    log.info(f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION} from {url}')
-    with requests.get(url, stream=True, timeout=60) as response:
+    """The pinned `crd2pulumi` binary, verified against its published digest.
+
+    The archive is held whole rather than unpacked straight out of the
+    response: a digest only checks anything if nothing is extracted before it
+    matches.
+    """
+    log.info(f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION} from {pins.CRD2PULUMI_URL}')
+    with requests.get(pins.CRD2PULUMI_URL, stream=True, timeout=60) as response:
         _ = response.raise_for_status()
         total = int(response.headers.get('content-length', 0))
-        with _progress_read(response.raw, desc=f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION}', total=total) as f:  # pyright: ignore[reportArgumentType]
-            with tarfile.open(fileobj=f, mode='r:gz') as tarobj:
-                tarobj.extractall(workdir, filter='data')
+        with _progress_read(
+            response.raw, desc=f'Downloading crd2pulumi {pins.CRD2PULUMI_VERSION}', total=total
+        ) as stream:
+            archive = stream.read()
 
-    binary = _extracted_binary(workdir, 'crd2pulumi', source=url)
+    digest = hashlib.sha256(archive).hexdigest()
+    if digest != pins.CRD2PULUMI_SHA256:
+        raise ValueError(f'crd2pulumi {pins.CRD2PULUMI_VERSION} digest is {digest}, expected {pins.CRD2PULUMI_SHA256}')
+
+    with tarfile.open(fileobj=BytesIO(archive), mode='r:gz') as tarobj:
+        tarobj.extractall(workdir, filter='data')
+
+    binary = _extracted_binary(workdir, 'crd2pulumi', source=pins.CRD2PULUMI_URL)
     log.info(f'crd2pulumi binary: {binary}')
     return binary
 

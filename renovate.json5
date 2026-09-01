@@ -183,6 +183,33 @@
       datasourceTemplate: 'github-releases',
     },
     {
+      // The `crd2pulumi` release the CRD bindings are generated with, and the
+      // digest `update_crds` checks its download against. Version and digest
+      // are captured by one manager so they move as a pair: left to separate
+      // managers, a version bump would land with a digest that no longer
+      // matches and the next run would refuse to start.
+      //
+      // `github-release-attachments` rather than `github-releases` because
+      // only that data source maintains a digest. It reads the asset's sha256
+      // out of the release's own `checksums.txt`, which crd2pulumi publishes
+      // beside the tarballs, and finds the next release's asset by
+      // substituting the new version into the pinned asset's file name.
+      //
+      // A bump is not finished by the pin alone: `crd2pulumi` decides the
+      // shape of the generated modules, so `uv run update_crds` regenerates
+      // `packages/crds` (which `ignorePaths` keeps renovate out of) and the
+      // result is committed onto the same pull request.
+      customType: 'regex',
+      managerFilePatterns: [
+        '/^src/kluster/scripts/update_crds/pins\\.py$/',
+      ],
+      matchStrings: [
+        "CRD2PULUMI_VERSION = '(?<currentValue>v[\\d.]+)'[\\s\\S]*?CRD2PULUMI_SHA256 = '(?<currentDigest>[0-9a-f]{64})'",
+      ],
+      depNameTemplate: 'pulumi/crd2pulumi',
+      datasourceTemplate: 'github-release-attachments',
+    },
+    {
       // The Talos version is a Pulumi config value, which no manager reads. It
       // lives in the project-level `versions:` namespace, so one file holds it
       // for every stack (rfc-002 §11.1).
