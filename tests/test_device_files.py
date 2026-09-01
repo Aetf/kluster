@@ -125,6 +125,11 @@ class Device:
     #: guarantees are about which step failed, so a test has to be able to
     #: refuse one of them and let the rest through.
     refuse: tuple[str, ...] = ()
+    #: Commands whose text contains one of these never answer at all: the
+    #: session drops, or the command overruns the timeout it was given. That
+    #: failure reaches the provider as an exception rather than as an exit
+    #: status, which is a different path through the same code.
+    interrupt: tuple[str, ...] = ()
 
     @property
     def commands(self) -> list[str]:
@@ -171,6 +176,11 @@ class Transport:
 
     async def run(self, command: str) -> ssh.CommandResult:
         self.device.log.append(f'run {command}')
+        if any(fragment in command for fragment in self.device.interrupt):
+            # The builtin, which is what `asyncssh.TimeoutError` is a subclass
+            # of: a command given a timeout that runs past it raises rather
+            # than returning a status.
+            raise TimeoutError(f'`{command}` never answered')
         refused = any(fragment in command for fragment in self.device.refuse)
         status = 1 if refused else self.device.hook_status
         return ssh.CommandResult(exit_status=status, stdout=b'', stderr='refused')
@@ -754,6 +764,22 @@ def test_a_hook_that_refuses_withdraws_the_marker_it_was_about_to_be_told_about(
         f'run {HOOK_COMMAND}',
         f'remove {provider.marker_path(ROOTFS_TREE)}',
     ]
+
+
+def test_a_hook_that_never_answers_withdraws_the_marker_as_well(device: Device) -> None:
+    """A non-zero exit is not the only way a hook fails to converge.
+
+    A hook that overruns the session's timeout, or a session that goes away
+    under it, raises instead of reporting a status. A marker that survived that
+    would make the next `diff` report a device that agrees, while the container
+    goes on running a tree the marker no longer describes.
+    """
+    device.interrupt = (HOOK_COMMAND,)
+
+    with pytest.raises(TimeoutError):
+        _ = artifact_provider().create(artifact_props())
+
+    assert provider.marker_path(ROOTFS_TREE) not in device.files
 
 
 def test_a_marker_naming_the_pinned_digest_is_no_change(device: Device) -> None:
