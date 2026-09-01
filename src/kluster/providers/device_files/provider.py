@@ -79,22 +79,20 @@ resource here identifies it, the address least of all: a replacement triggered b
 an address would delete, at what is the same device, the file its own create had
 just written there.
 
-**Order within an apply is chosen so that a failure is visible.** The payload
-lands, then the hook runs, then the marker is written: a hook that fails leaves
-the device without the marker, so the next preview still sees work to do. A
-failed create raises, which means the resource is not recorded -- the file may
-already exist on the device, and the retry rewrites the same bytes, both
-operations being idempotent by construction.
+**Order within an apply is chosen so that a failure is visible.** A file is
+written, then its hook runs; a failed hook raises, so the resource is not
+recorded -- the bytes may already be on the device, and the retry writes the
+same ones, every operation here being idempotent by construction.
 
-An artifact meets that requirement from the other side, because its marker
-cannot be written last. The gateway's hook is a script that restarts a container
-only when a file it reads has changed, and the marker beside the tree is that
-file, so a marker written after the hook would be a change the hook could never
-see -- the container would learn of a new root filesystem one deployment late.
-The marker therefore precedes the hook, and **a hook that fails withdraws it**:
-the marker is the claim that this tree came from this pin and that the device
-has acted on it, and half of that claim being false makes the whole of it false.
-What the next preview sees is a tree of unknown provenance, which is work to do.
+An artifact carries a marker as well, and it cannot go last. The gateway's hook
+is a script that restarts a container only when a file it reads has changed, and
+the marker beside the tree is that file, so a marker written after the hook would
+be a change the hook could never see -- the container would learn of a new root
+filesystem one deployment late. The marker therefore precedes the hook, and **a
+hook that does not succeed withdraws it**, however it failed: the marker is the
+claim that this tree came from this pin and that the device has acted on it, and
+half of that claim being false makes the whole of it false. What the next preview
+sees is a tree of unknown provenance, which is work to do.
 
 A file's content is declared secret on request (`secret=True`), for the files
 that carry device credentials, and not by default: a secret input renders as a
@@ -121,7 +119,7 @@ import abc
 import asyncio
 import shlex
 from collections.abc import Coroutine, Mapping
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
 from typing import Any, final
 
@@ -726,17 +724,16 @@ class DeviceArtifactProvider(DeviceProvider):
             unpack = await transport.run(unpack_script(root))
             if not unpack.ok:
                 raise ExtractFailed(root, unpack.exit_status, unpack.stderr)
-            # Before the hook, because the hook is what notices: it restarts a
-            # container when a file it reads has changed, and this marker is
-            # that file.
+            # Before the hook: the hook reads this.
             await _mark(transport, root, digest)
             try:
                 await run_hook(transport, props)
-            except HookFailed:
-                # And withdrawn if the hook refused, because the marker claims
-                # the whole sequence succeeded. Leaving it would leave the next
-                # preview with nothing to notice.
-                await transport.remove(marker_path(root))
+            except BaseException:
+                # Withdrawn on any hook that did not succeed: the claim is no
+                # longer true. Best-effort -- a session that is gone removes
+                # nothing, and the failure worth reporting is the one from here.
+                with suppress(Exception):
+                    await transport.remove(marker_path(root))
                 raise
 
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
