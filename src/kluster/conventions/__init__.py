@@ -100,9 +100,11 @@ from kluster.conventions.homelab import (
 from kluster.conventions.identity import CLUSTER_NAME, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
 from kluster.conventions.providers import (
     B2_ACCOUNT,
+    CLOUDFLARE_ACCOUNT,
     OCI_SEED_USER_EMAIL,
     OCI_TENANCY,
     B2Account,
+    CloudflareAccount,
     Compartment,
     CompartmentMissing,
     OciTenancy,
@@ -132,6 +134,7 @@ __all__ = (
     'BACKUP_VERSION_RETENTION_DAYS',
     'BUCKET_BACKUP',
     'BULKY',
+    'CLOUDFLARE_ACCOUNT',
     'CLOUD_NODES',
     'CLUSTER_ASN',
     'CLUSTER_NAME',
@@ -194,6 +197,7 @@ __all__ = (
     'ZT_LABEL',
     'AddressPool',
     'B2Account',
+    'CloudflareAccount',
     'Compartment',
     'CompartmentMissing',
     'FollowsDedicatedVip',

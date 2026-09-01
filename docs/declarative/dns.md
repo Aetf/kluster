@@ -81,6 +81,29 @@ The estate as classified: unlimited-code.works, unlimitedcodeworks.xyz,
 peifeng.phd, ucw.phd and jiahui.love hold proxied names and take the
 Cloudflare set; jiahui.id takes none.
 
+### 1.2 What the stack reads
+
+`Pulumi.dns.yaml` carries three secrets, and they are the whole of this
+stack's configuration:
+
+-   `cloudflareApiToken` — the zones token, read at the one line that
+    builds the Cloudflare provider and nowhere else
+    (framework/rfc-002 §8.1).
+-   `adguardUsername` and `adguardPassword` — the rewrite provider's own
+    login, read inside its `configure` and by no declaration (§3).
+
+All three are in this repository's own configuration namespace, the
+provider's own left empty: default providers are disabled for
+`cloudflare`, so a key sitting under `cloudflare:` would configure
+nothing and read as the ambient configuration this repository has
+retired everywhere else.
+
+Everything else the program needs is a decision, and decisions are code.
+The account the zones belong to is the one worth naming: an account
+identifier names an account rather than authenticating to it, so it is a
+convention (`conventions.CLOUDFLARE_ACCOUNT`) beside the cloud tenancy
+and the backup account's region, and the token stays configuration.
+
 ## 2. Naming hierarchy (formalizing the existing conventions)
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live

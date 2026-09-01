@@ -31,10 +31,10 @@ class Compartment:
     The **name** is a convention: it is chosen here, it is what the mint
     creates or adopts, and it is the only form OCI's quota statements accept
     (`components/cloud/guardrails.py`). The **OCID** is the site fact that follows
-    from creating it — an identifier the committed file may carry in the clear,
-    for the reason `cloudflareAccountId` may: it names a container inside the
-    tenancy rather than the account that owns it, and everything it admits is
-    still behind a key.
+    from creating it — an identifier this file may carry in the clear, for the
+    reason `CLOUDFLARE_ACCOUNT` may: it names a container inside the tenancy
+    rather than the account that owns it, and everything it admits is still
+    behind a key.
 
     A compartment that has not been created yet therefore has a name and no
     OCID. That is a state rather than a gap: `credentials derived oci-<consumer>
@@ -99,6 +99,22 @@ class OciTenancy:
 
 
 @dataclass(frozen=True)
+class CloudflareAccount:
+    """The account the estate's zones belong to.
+
+    A zone resource carries the account it is created in, so this identifier
+    is an input every zone declaration needs. It names the account rather than
+    authenticating to it — everything the account holds is still behind the
+    zones token — which is the side of rfc-002 §10.3's split that makes an
+    account fact code and leaves the token stack configuration.
+    """
+
+    #: What Cloudflare calls the account: the form its API and the `account`
+    #: input of a zone both take.
+    account_id: str
+
+
+@dataclass(frozen=True)
 class B2Account:
     """The backup account.
 
@@ -137,5 +153,9 @@ OCI_TENANCY = OciTenancy(
 
 #: The seed user's primary email.
 OCI_SEED_USER_EMAIL = f'pulumi@{OCI_TENANCY.user_email_domain}'
+
+#: One account owns every zone in `conventions.ALL_ZONES`, which is why one
+#: token opens the whole set and one provider signs for all of them.
+CLOUDFLARE_ACCOUNT = CloudflareAccount(account_id='c452df7ed633d2335c980bd7cc46a550')
 
 B2_ACCOUNT = B2Account(region='us-west-002')

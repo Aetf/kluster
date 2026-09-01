@@ -17,8 +17,13 @@ from kluster.components.dns.zones import zt_label
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VIP1_ADDRESS = '203.0.113.20'
-ACCOUNT_ID = 'cf-account'
 API_TOKEN = 'a-zones-token'
+
+#: The zones token, as the committed file spells it: unqualified in the
+#: program, and therefore resolved against the project's own name. Written out
+#: here rather than built from the program's constant so that renaming the key
+#: is a change this suite sees; a case below holds the two equal.
+API_TOKEN_KEY = 'kluster:cloudflareApiToken'
 
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
@@ -43,14 +48,8 @@ class AppliedPhysical(Recorder):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> AppliedPhysical:
     from kluster.stacks import dns
-    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
 
-    pulumi.runtime.set_all_config(
-        {
-            'kluster:cloudflareAccountId': ACCOUNT_ID,
-            f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': API_TOKEN,
-        }
-    )
+    pulumi.runtime.set_all_config({API_TOKEN_KEY: API_TOKEN})
     monitor = await run_with(AppliedPhysical(), stack='dns')
     async with declaring():
         await dns.main()
@@ -63,8 +62,10 @@ def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
 
 
 def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
+    account = {'id': conventions.CLOUDFLARE_ACCOUNT.account_id}
+
     assert set(stack.by_name(ZONE)) == set(conventions.ALL_ZONES)
-    assert all(inputs['account'] == {'id': ACCOUNT_ID} for inputs in stack.by_name(ZONE).values())
+    assert all(inputs['account'] == account for inputs in stack.by_name(ZONE).values())
 
 
 def test_every_zone_is_signed(stack: AppliedPhysical) -> None:
@@ -224,13 +225,13 @@ def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: Applied
 def test_the_zones_token_is_read_where_that_provider_is_built(stack: AppliedPhysical) -> None:
     """The credential and the provider it opens are one thing, at one line.
 
-    It keeps the provider's own configuration namespace rather than moving
-    into this project's: it is exactly a provider-construction input, and this
-    stack's own reorganization belongs to a document of its own. What changed
-    is that nothing reads it ambiently any more.
+    The key is this project's own and unqualified, so `pulumi.Config()`
+    resolves it against the project name and the committed file spells it with
+    that prefix — the shape every other provider credential in this repository
+    has (rfc-002 §8.1).
     """
     from kluster.stacks import dns
 
     built = stack.of_type('pulumi:providers:cloudflare')[0].inputs
     assert built['apiToken']['value'] == API_TOKEN
-    assert dns.CLOUDFLARE_NAMESPACE == 'cloudflare'
+    assert API_TOKEN_KEY == f'kluster:{dns.CLOUDFLARE_API_TOKEN}'

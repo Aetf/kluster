@@ -49,25 +49,28 @@ OUTPUT_VIP1_V4 = 'vip1'
 ANCHOR_CLUSTER_COMMENT = 'cluster ingress; every app record is a CNAME here'
 
 #: Where the zones token is read: at the line that builds the provider it
-#: configures, and nowhere else (rfc-002 §8.1). It keeps the provider's own
-#: namespace rather than moving into this project's, because it is exactly a
-#: provider-construction input and this stack's own reorganization is a
-#: separate document's; what changes here is that the value is read explicitly
-#: instead of reaching the provider by ambient configuration.
-CLOUDFLARE_NAMESPACE = 'cloudflare'
-CLOUDFLARE_API_TOKEN = 'apiToken'
+#: configures, and nowhere else (rfc-002 §8.1). It lives in this project's own
+#: namespace like every other provider credential here, rather than in the
+#: `cloudflare:` namespace the provider would also accept it from: with
+#: default providers disabled for that package there is nothing left for its
+#: namespace to configure, and a key sitting in one is indistinguishable from
+#: the ambient configuration this repository has retired everywhere else.
+CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
 
 
 async def main() -> None:
     config = pulumi.Config()
-    account_id = config.require('cloudflareAccountId')
+    # A convention rather than a config key: the identifier names the account
+    # the zones belong to rather than authenticating to it, which is the split
+    # rfc-002 §10.3 draws between an account's facts and its secrets.
+    account_id = conventions.CLOUDFLARE_ACCOUNT.account_id
 
     # One provider for every zone: the token is scoped to the estate's zones
     # as a set, so a provider built inside one zone's component would be
     # reached into by the rest (rfc-002 §8.1).
     zone_provider = cloudflare.Provider(
         f'{conventions.CLUSTER_NAME}-cloudflare',
-        api_token=pulumi.Config(CLOUDFLARE_NAMESPACE).require_secret(CLOUDFLARE_API_TOKEN),
+        api_token=config.require_secret(CLOUDFLARE_API_TOKEN),
     )
     on_cloudflare = pulumi.ResourceOptions(providers=[zone_provider])
 
