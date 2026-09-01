@@ -1,0 +1,34 @@
+#!/bin/sh
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Install the routing configuration where the daemon reads it, and tell the
+# daemon. Runs at boot from frr-config.service, and again as the post-apply
+# hook of the file it installs, so the boot path is the path every push
+# exercises.
+#
+# The daemon's copy is off /data and a firmware update takes it away; the
+# source below survives, which is what makes this recoverable with nothing else
+# present. A missing source means this program no longer declares the
+# configuration -- not that the daemon should lose the one it is running on.
+#
+# What decides "already done" is the stamp, written only after the daemon has
+# accepted the configuration. The installed file alone cannot decide it: a run
+# whose reload failed leaves the bytes in place, and a rerun that trusted them
+# would exit successfully with the daemon still on its old configuration.
+set -eu
+
+source={{ source }}
+live={{ live }}
+stamp={{ stamp }}
+
+[ -e "$source" ] || exit 0
+
+applied=$(cksum <"$source")
+if [ "$applied" = "$(cat "$stamp" 2>/dev/null)" ] && cmp -s "$source" "$live"; then
+    exit 0
+fi
+
+echo "frr-config: installing $live"
+install -m {{ mode }} "$source" "$live"
+{{ reload }}
+echo "$applied" >"$stamp"

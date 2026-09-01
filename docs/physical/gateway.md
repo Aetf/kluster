@@ -316,6 +316,98 @@ reach `10-packages.sh` without that script naming a package of its own.
 The machines themselves are the workloads on it, and they own nothing
 of the framework.
 
+### 1.3 The routing configuration, and what installs it
+
+The BGP session the `lan` pool arrives over
+(cluster/architecture.md §3.4) is held by the device's own routing
+daemon, FRR, which this program neither installs nor supervises. What
+it owns is the configuration that daemon reads, and it exists twice:
+
+-   **`/data/custom/frr/frr.conf`** is the declared one — a rendered
+    file naming the worker VM as a BGP peer, with the inbound
+    prefix-list and the prefix cap that keep a compromised (or
+    impersonated) peer from advertising the LAN out from under itself
+    (declarative/cluster-infra.md §2). It carries the session's
+    authentication password, so it is a secret in state and not
+    world-readable on the device.
+-   **`/etc/frr/frr.conf`** is the one the daemon opens. It is off
+    `/data`, so a firmware update takes it away.
+
+Between them sits **`frr-config.sh`**, an executable in `bin/` run by
+**`frr-config.service`**, a `Type=oneshot` unit wanted by
+`multi-user.target` and installed like every other unit here. Where the
+daemon does not already hold what the source says, it installs the
+declared file and reloads: `systemctl reload frr`, falling back to a
+restart for the boot where the daemon is not up yet to be reloaded.
+Reload rather than restart because a restart drops every routing
+session the device holds, including ones this file is not about;
+neither outcome is silenced, because a step that cannot make the file
+take effect has failed.
+
+**What says the daemon already holds it is a stamp, not the installed
+file.** The write happens before the reload is attempted, so a run that
+failed at the reload leaves two identical copies behind — and a rerun
+deciding on those alone would exit successfully having told the daemon
+nothing, leaving the session on the old configuration under an apply
+that reported success. The stamp is a checksum written beside
+`/etc/frr/frr.conf` after the reload returns, so what is skipped is
+work whose *effect* has landed. It is off `/data` with the file it
+describes: an update takes both, and the next boot installs and reloads
+from scratch.
+
+**The daemon's unit name and its reload verb are assumed until the
+first push.** `frr.service`, `systemctl reload frr` and
+`/etc/frr/frr.conf` are FRR's own names on Debian-family packaging,
+which is what the device's firmware is built on; nothing here has been
+observed on the box, and nothing confirms that UniFi's own provisioning
+leaves that file alone. The first push is what settles all three.
+
+**The same executable is the configuration file's post-apply hook**, so
+the boot path and the push path run the one program and the boot path
+cannot rot unnoticed — the property §1.1 states for the machines,
+applied here. It is a unit-plus-executable rather than a script in the
+boot chain because installing a configuration file manipulates nothing
+of systemd's own, which is what §1.2's rule turns on.
+
+**A configuration this program stops declaring is not a configuration
+taken away.** The executable does nothing when the source is absent:
+the daemon is the device's own, running on what it has, and a file this
+program stops declaring is no reason to leave the router with none.
+
+### 1.4 Authorized keys
+
+The device has one account, `root`, and it is reached by public key.
+The keys this program declares are one file each under
+`/data/custom/authorized_keys.d/`, and **`authorized-keys.sh`** —
+an executable in `bin/` run by **`authorized-keys.service`**, a
+`Type=oneshot` unit shaped like §1.3's — appends any that
+`/root/.ssh/authorized_keys` does not already hold, then leaves the
+directory and the file with the modes the ssh daemon insists on. It
+ends the file's last line first where nothing else did: appending onto
+a line that never ended would run a hand-added key together with a
+declared one, and authorize neither. It is
+also each key file's post-apply hook, so a key declared during a push
+is usable when that push returns rather than at the next boot.
+
+**Append-only, and that is the design.** The file also holds keys
+nobody declared: an operator's own, one pasted in during a recovery
+where this program was not reachable. Mirroring the declaration onto it
+would delete those, which on this machine means locking out the person
+holding the only other way in. A key is added when it is absent and
+nothing is ever removed, so retiring one is an act on the device rather
+than a delete of a resource here.
+
+`/root` has survived every firmware update observed so far — the same
+undocumented migration `/etc` gets — so day to day this converges
+nothing. It is load-bearing after a major-version jump or a factory
+reset, on the same reasoning as `20-units.sh`.
+
+What the `physical` stack declares is one key: the public half of the
+credential its own sessions present, which is a constant in
+`conventions` for the reasons the device's host-key pin is one — a
+public key is not a secret, and a constant is what a preview shows a
+reviewer (credentials.md §3).
+
 ## 2. ZeroTier network design
 
 Architecture.md §5.3 decides *where* ZT terminates (the UDM) and *what

@@ -26,7 +26,7 @@ from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.cloud import nodes
-from kluster.components.gateway import nspawn, persistence
+from kluster.components.gateway import access, nspawn, persistence
 from kluster.components.overlay import flow_rules
 from kluster.lib import workstation
 from kluster.stacks import physical
@@ -248,7 +248,7 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
     assert (
         setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{conventions.overlay.UDM}'
     )
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing')['host'] == str(conventions.overlay.UDM)
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == str(conventions.overlay.UDM)
     # And nothing supplies it: the stack has no key to read it from, so a
     # `record` command that pushed one would be filling a slot nobody reads.
     assert not [key for key in STACK_CONFIG if 'ApiUrl' in key]
@@ -386,12 +386,12 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     async with declaring():
         await physical.main()
 
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing')['host'] == BOOTSTRAP_HOST
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host'] == BOOTSTRAP_HOST
     assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-firewall-unifi')['apiUrl'] == f'https://{BOOTSTRAP_HOST}'
     # Nothing else about the channels moves — the pin in particular is a bare
     # key with no host name in front of it, so it matches the device at either
     # address (`test_device_files`).
-    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing')['port'] == 22
+    assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['port'] == 22
 
 
 @pytest.mark.asyncio
@@ -406,9 +406,28 @@ async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setu
     async with declaring():
         await physical.main()
 
-    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing')['host_key']
+    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['host_key']
     assert declared == conventions.gateway.HOST_KEY
     assert not isinstance(declared, dict), 'the pin reached the engine marked secret'
+
+
+@pytest.mark.asyncio
+async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(setup: Estate) -> None:
+    """The door this program comes through is one it declares, or an update closes it.
+
+    `/root` is off `/data`, so the key that authorizes every push is exactly as
+    perishable as the rest of the customization. The stack passes the public
+    half of its own credential, and nothing else: the operator's keys are on
+    the device already and the converger takes none of them away.
+    """
+    async with declaring():
+        await physical.main()
+
+    name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
+    declared = setup.inputs_of(f'{conventions.CLUSTER_NAME}-access-key-{name}')
+
+    assert declared['content'].strip() == conventions.gateway.CLIENT_KEY
+    assert declared['path'] == access.key_path(name)
 
 
 @pytest.mark.asyncio

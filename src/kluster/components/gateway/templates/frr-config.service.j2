@@ -1,0 +1,17 @@
+[Unit]
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+Description={{ cluster }} routing configuration
+# Nothing to converge where this program declares no configuration, and the
+# reload wants a daemon that is already up: after it, never pulling it in.
+ConditionPathExists={{ source }}
+After=frr.service
+
+[Service]
+Type=oneshot
+# A finished run has to look finished: the unit converger starts whatever it
+# finds inactive, and a oneshot without this is inactive the moment it succeeds.
+RemainAfterExit=yes
+ExecStart={{ executable }}
+
+[Install]
+WantedBy=multi-user.target

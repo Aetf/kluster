@@ -34,6 +34,19 @@ SSH_USER = 'root'
 #: the session dials.
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINrKKu2hnEHPUrWm4TEN40YFQVI3JEPfQQDUebNj0R4k'
 
+#: The other half of the same handshake: the public key of the credential this
+#: program opens the session with, which the device must hold for any of the
+#: rest to be deliverable. Here for the same reasons `HOST_KEY` is — a public
+#: key is not a secret, and code is what a preview shows — and the private half
+#: is the provider's own configuration, read in its `configure` and nowhere
+#: else (rfc-002 §7.4).
+#:
+#: Stored as the whole `authorized_keys` line, comment included, because that
+#: is what lands on the device and what the converger compares against: a line
+#: differing only in its comment is a second key as far as the file is
+#: concerned.
+CLIENT_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHbSmpDYOHlgjIfrVs9WZ7BAl7kgwpFqquLcqtJuK9iy kluster-physical@gw'
+
 #: The gateway's desired-state root. `/data` is the one directory that survives
 #: a firmware update, which is why everything this program puts on the device
 #: lives under it (architecture.md §5.2); `on_boot.d` holds the scripts that

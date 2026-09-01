@@ -1,0 +1,15 @@
+[Unit]
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+Description={{ cluster }} authorized keys
+# Nothing to append where this program declares no keys.
+ConditionPathExists={{ key_dir }}
+
+[Service]
+Type=oneshot
+# A finished run has to look finished: the unit converger starts whatever it
+# finds inactive, and a oneshot without this is inactive the moment it succeeds.
+RemainAfterExit=yes
+ExecStart={{ executable }}
+
+[Install]
+WantedBy=multi-user.target

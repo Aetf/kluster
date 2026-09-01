@@ -40,6 +40,7 @@ from kluster.components.gateway import (
     CaddyService,
     Gateway,
     OverlayDaemon,
+    PublicKey,
     ResolverService,
     Rootfs,
     RoutingSession,
@@ -409,6 +410,16 @@ def _gateway(config: pulumi.Config) -> Gateway:
         routing=RoutingSession(
             neighbour=conventions.HOMELAB_NODE_IPV4,
             password=config.require_secret('gatewayBgpPassword'),
+        ),
+        # The key this stack's own sessions present, and the only one this
+        # program declares: the operator's own keys are on the device already
+        # and the converger takes nothing away. Named for the credential it is
+        # the public half of, which is this stack's.
+        keys=(
+            PublicKey(
+                name=f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}',
+                key=conventions.gateway.CLIENT_KEY,
+            ),
         ),
         site=conventions.gateway.UNIFI_SITE,
         # Optional, and absent on the first apply of all: the worker's global

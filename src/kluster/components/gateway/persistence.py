@@ -87,6 +87,7 @@ __all__ = (
     'UNIT_SOURCE_DIR',
     'UNIT_SUFFIX',
     'DevicePersistence',
+    'executable_hook',
     'executable_path',
     'on_boot_hook',
     'on_boot_path',
@@ -178,6 +179,19 @@ def on_boot_hook(name: str) -> str:
     nothing left to converge.
     """
     path = shlex.quote(on_boot_path(name))
+    return f'if [ -x {path} ]; then {path}; fi'
+
+
+def executable_hook(name: str) -> str:
+    """Run one executable of `bin/`, for a file that names it as its hook.
+
+    An executable is delivered with no hook of its own (`executable`), but a
+    file another component declares may need one run once it lands — which is
+    how a converger's boot path and its push path stay one program. The guard
+    is `on_boot_hook`'s: the same command runs after the delete, and by then
+    the program may be gone with the resource that declared it.
+    """
+    path = shlex.quote(executable_path(name))
     return f'if [ -x {path} ]; then {path}; fi'
 
 

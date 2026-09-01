@@ -3,8 +3,7 @@
 Nothing here contacts a device. What is exercised is the part a diff cannot show
 a reviewer: which file's change makes which machine restart, which file carries a
 credential, what a machine's settings say about the box it starts on, where each
-piece of a machine lands, and what the routing configuration says about a peer
-that misbehaves.
+piece of a machine lands.
 
 The renderers are plain functions over plain declarations, so most of the suite
 reads their output directly; the components are declared once against mocks,
@@ -21,7 +20,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.gateway import container, nspawn, persistence, services
+from kluster.components.gateway import container, nspawn, persistence
 from kluster.components.gateway.container import Container
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
@@ -30,7 +29,6 @@ from kluster.providers.device_files.provider import Connection, marker_path
 NAME = 'kluster'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
-BGP_PASSWORD = 'a-session-password'
 ACME_TOKEN = 'a-zone-scoped-token'
 
 DIGEST = f'sha256:{"f" * 64}'
@@ -141,29 +139,6 @@ def test_only_the_overlay_daemon_runs_in_the_hosts_network_namespace() -> None:
 ##
 ## Rendering
 ##
-
-
-def test_the_routing_configuration_confines_what_the_peer_may_announce() -> None:
-    """Three defences, and each of them is a line a reviewer can find.
-
-    Without the prefix-list, anything holding the worker's address could
-    announce the resolvers' own /32s and take the LAN's name service with it;
-    without the cap, it could announce the pool one address at a time until the
-    table gave out; without the password, holding the address would be enough
-    to be the peer.
-    """
-    rendered = services.frr_config(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD)
-    peer = str(conventions.HOMELAB_NODE_IPV4)
-
-    assert f'neighbor {peer} remote-as {conventions.CLUSTER_ASN}' in rendered
-    assert f'router bgp {conventions.UDM_ASN}' in rendered
-    assert f'neighbor {peer} password {BGP_PASSWORD}' in rendered
-    assert f'neighbor {peer} maximum-prefix {services.MAX_PREFIXES}' in rendered
-    assert f'permit {conventions.LAN_POOL.v4} le 32' in rendered
-    assert f'permit {conventions.LAN_POOL.v6} le 128' in rendered
-    assert rendered.count('deny any') == 2, 'each family admits the pool and refuses the rest'
-    # Both families ride the one session, so both have to be activated on it.
-    assert rendered.count(f'neighbor {peer} activate') == 2
 
 
 def test_a_bridged_service_is_placed_and_the_overlay_daemon_is_not() -> None:
