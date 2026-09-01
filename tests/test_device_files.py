@@ -76,6 +76,12 @@ CONFIG_PATH = '/data/frr/frr.conf'
 CONFIG = 'router bgp 65000\n'
 HOOK = "vtysh -c 'configure terminal'"
 
+DIRECTORY_PATH = '/data/custom/machines'
+DIRECTORY_HOOK = 'systemctl daemon-reload'
+#: What the fake's `stat` finds where a directory is. The fake keeps files, and a
+#: directory is an entry whose contents nothing reads.
+DIRECTORY_ENTRY = b'a directory, as far as `stat` is concerned'
+
 ROOTFS_REPOSITORY = 'registry.invalid/estate/adguard'
 #: Deliberately unlike everything else here, so that a test asserting the pull
 #: does not name the tag can tell the difference.
@@ -125,6 +131,9 @@ class Device:
     #: guarantees are about which step failed, so a test has to be able to
     #: refuse one of them and let the rest through.
     refuse: tuple[str, ...] = ()
+    #: The same, where the status itself is what the provider reads: the
+    #: fragment that identifies the command, and what it exits with.
+    statuses: dict[str, int] = field(default_factory=dict[str, int])
     #: Commands whose text contains one of these never answer at all: the
     #: session drops, or the command overruns the timeout it was given. That
     #: failure reaches the provider as an exception rather than as an exit
@@ -181,8 +190,9 @@ class Transport:
             # of: a command given a timeout that runs past it raises rather
             # than returning a status.
             raise TimeoutError(f'`{command}` never answered')
+        answered = [status for fragment, status in self.device.statuses.items() if fragment in command]
         refused = any(fragment in command for fragment in self.device.refuse)
-        status = 1 if refused else self.device.hook_status
+        status = answered[0] if answered else (1 if refused else self.device.hook_status)
         return ssh.CommandResult(exit_status=status, stdout=b'', stderr='refused')
 
 
@@ -220,6 +230,10 @@ def artifact_provider(credential: str = PRIVATE_KEY) -> provider.DeviceArtifactP
     return configured(provider.DeviceArtifactProvider(), credential)
 
 
+def directory_provider(credential: str = PRIVATE_KEY) -> provider.DeviceDirectoryProvider:
+    return configured(provider.DeviceDirectoryProvider(), credential)
+
+
 def checked(instance: provider.DeviceProvider, props: dict[str, Any]) -> dict[str, Any]:
     """The inputs as the engine stores and compares them: what `check` returned."""
     return instance.check({}, props).inputs
@@ -254,6 +268,20 @@ def artifact_props(**overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
+def directory_props(**overrides: Any) -> dict[str, Any]:
+    """A directory as a layer that fills it declares one: a path and a shape."""
+    return {
+        'host': HOST,
+        'port': 22,
+        'username': 'root',
+        'host_key': HOST_KEY,
+        'path': DIRECTORY_PATH,
+        'mode': '0755',
+        'owner': 'root:root',
+        'hook': DIRECTORY_HOOK,
+    } | overrides
+
+
 def converged(device: Device, props: Mapping[str, Any]) -> None:
     """Put the device in the state the property bag declares."""
     user, _, group = str(props['owner']).partition(':')
@@ -263,6 +291,12 @@ def converged(device: Device, props: Mapping[str, Any]) -> None:
         owner=user,
         group=group,
     )
+
+
+def made(device: Device, props: Mapping[str, Any]) -> None:
+    """Put the device in the state a directory bag declares."""
+    user, _, group = str(props['owner']).partition(':')
+    device.files[str(props['path'])] = Entry(data=DIRECTORY_ENTRY, mode=str(props['mode']), owner=user, group=group)
 
 
 def landed(device: Device, props: Mapping[str, Any], digest: str | None = None) -> None:
@@ -658,6 +692,246 @@ def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
     result = file_provider().check({}, file_props(path=rpc.UNKNOWN))
 
     assert result.failures == []
+
+
+##
+## The directory resource
+##
+
+
+def test_a_created_directory_is_made_before_the_hook_that_is_told_about_it(device: Device) -> None:
+    """Make, then notify — the order a file's write and hook are in."""
+    made_command = provider.make_script(DIRECTORY_PATH, '0755', 'root:root')
+
+    result = directory_provider().create(directory_props())
+
+    assert device.log == [f'run {made_command}', f'run {DIRECTORY_HOOK}']
+    assert result.id == DIRECTORY_PATH
+
+
+def test_making_a_directory_sets_its_mode_and_ownership_in_one_idempotent_command() -> None:
+    """`mkdir -p` accepts what is already there, so create and update are one script.
+
+    The mode and the owner are set rather than compared, which is what converges
+    a directory somebody chmodded on the device without replacing it.
+    """
+    script = provider.make_script(DIRECTORY_PATH, '0750', 'root:staff')
+
+    assert script == f'mkdir -p {DIRECTORY_PATH} && chmod 0750 {DIRECTORY_PATH} && chown root:staff {DIRECTORY_PATH}'
+
+
+def test_a_directory_with_no_declared_owner_keeps_whatever_the_device_gave_it() -> None:
+    assert 'chown' not in provider.make_script(DIRECTORY_PATH, '0755', None)
+
+
+def test_a_directory_path_a_shell_would_mangle_is_quoted() -> None:
+    assert "mkdir -p '/data/a dir; rm -rf /'" in provider.make_script('/data/a dir; rm -rf /', '0755', None)
+    assert "rmdir '/data/a dir; rm -rf /'" in provider.remove_script('/data/a dir; rm -rf /')
+
+
+def test_a_directory_someone_removed_on_the_device_is_a_change(device: Device) -> None:
+    """The gap the resource closes: a marker beside a directory could not see this.
+
+    A directory taken away by hand, or by a firmware update, is work the next
+    preview reports without anybody asking for a refresh.
+    """
+    props = directory_props()
+
+    result = directory_provider().diff('id', props, props)
+
+    assert result.changes is True
+
+
+def test_a_directory_the_device_already_has_is_no_change(device: Device) -> None:
+    props = directory_props()
+    made(device, props)
+
+    result = directory_provider().diff('id', props, props)
+
+    assert result.changes is False
+    assert device.commands == []
+
+
+def test_a_mode_the_device_does_not_have_is_drift(device: Device) -> None:
+    props = directory_props()
+    made(device, props)
+    device.files[DIRECTORY_PATH].mode = '0700'
+
+    assert directory_provider().diff('id', props, props).changes is True
+
+
+def test_ownership_a_directory_does_not_have_is_drift(device: Device) -> None:
+    props = directory_props()
+    made(device, props)
+    device.files[DIRECTORY_PATH].group = 'staff'
+
+    assert directory_provider().diff('id', props, props).changes is True
+
+
+def test_moving_a_directory_replaces_it_and_the_new_path_exists_before_the_old_one_goes(device: Device) -> None:
+    """The path is the identity; the address it is reached at is not."""
+    result = directory_provider().diff('id', directory_props(), directory_props(path='/data/custom/other'))
+
+    assert result.replaces == ['path']
+    assert result.delete_before_replace is False
+
+    moved = directory_provider().diff('id', directory_props(), directory_props(host='gateway.invalid'))
+    assert moved.replaces == []
+    assert moved.changes is True
+    assert device.sessions == 0
+
+
+def test_a_declared_mode_change_is_converged_in_place(device: Device) -> None:
+    """A mode is a value the device converges to, not a reason to make it again."""
+    olds = checked(directory_provider(), directory_props())
+    made(device, olds)
+    news = checked(directory_provider(), directory_props(mode='0700'))
+    device.log.clear()
+
+    result = directory_provider().update('id', olds, news)
+
+    assert device.commands == [provider.make_script(DIRECTORY_PATH, '0700', 'root:root'), DIRECTORY_HOOK]
+    assert result.outs == news
+
+
+def test_a_rotation_restamps_a_directory_and_leaves_the_device_alone(device: Device) -> None:
+    """A new credential is not a new directory, and nothing is run because of one."""
+    olds = checked(directory_provider(), directory_props())
+    made(device, olds)
+    device.log.clear()
+    rotated = directory_provider(private_key())
+    news = checked(rotated, directory_props())
+
+    result = rotated.update('id', olds, news)
+
+    assert device.commands == []
+    assert result.outs is not None
+    assert result.outs[SESSION] == news[SESSION]
+
+
+def test_a_directory_update_still_runs_when_the_device_is_the_reason_for_it(device: Device) -> None:
+    """A rotation and a directory somebody removed can arrive in the same run."""
+    olds = checked(directory_provider(), directory_props())
+    rotated = directory_provider(private_key())
+
+    _ = rotated.update('id', olds, checked(rotated, directory_props()))
+
+    assert device.commands == [provider.make_script(DIRECTORY_PATH, '0755', 'root:root'), DIRECTORY_HOOK]
+
+
+def test_deleting_an_empty_directory_takes_it_away_and_says_so(device: Device) -> None:
+    made(device, directory_props())
+    device.log.clear()
+
+    directory_provider().delete('id', directory_props())
+
+    assert device.commands == [provider.remove_script(DIRECTORY_PATH), DIRECTORY_HOOK]
+
+
+def test_deleting_a_directory_somebody_filled_is_refused(device: Device) -> None:
+    """What is inside was never declared here, so it is not this resource's to delete.
+
+    The removal is the one operation that could destroy state the device or a
+    person put there, so a directory with anything in it fails the delete and
+    names itself, rather than being emptied.
+    """
+    made(device, directory_props())
+    device.statuses = {'rmdir': provider.NOT_EMPTY}
+
+    with pytest.raises(provider.DirectoryNotEmpty) as raised:
+        directory_provider().delete('id', directory_props())
+
+    assert DIRECTORY_PATH in str(raised.value)
+    assert DIRECTORY_HOOK not in device.commands
+
+
+def test_a_removal_the_device_refused_for_its_own_reason_is_not_read_as_content(device: Device) -> None:
+    """An unwritable directory and a full one are two answers, and `rmdir` gives one.
+
+    So the script says which it was with a status of its own, and anything else
+    is reported as the device's failure with the device's own message.
+    """
+    made(device, directory_props())
+    device.statuses = {'rmdir': 1}
+
+    with pytest.raises(provider.RemoveDirectoryFailed) as raised:
+        directory_provider().delete('id', directory_props())
+
+    assert 'refused' in str(raised.value)
+
+
+def test_a_removal_of_a_directory_that_is_already_gone_is_a_success() -> None:
+    """Nothing to remove is the outcome a delete wanted, so the script exits 0."""
+    script = provider.remove_script(DIRECTORY_PATH)
+
+    assert script.startswith(f'if [ ! -e {DIRECTORY_PATH} ]; then exit 0; fi')
+    assert f'exit {provider.NOT_EMPTY}' in script
+    assert script.endswith(f'rmdir {DIRECTORY_PATH}')
+    assert 'rm -r' not in script
+
+
+def test_a_directory_that_could_not_be_made_fails_the_apply(device: Device) -> None:
+    device.statuses = {'mkdir': 5}
+
+    with pytest.raises(provider.MakeDirectoryFailed) as raised:
+        _ = directory_provider().create(directory_props())
+
+    assert 'exited 5' in str(raised.value)
+    assert DIRECTORY_HOOK not in device.commands
+
+
+def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
+    props = directory_props()
+    made(device, props)
+    device.files[DIRECTORY_PATH].mode = '0700'
+
+    result = directory_provider().read('id', props)
+
+    assert result.outs is not None
+    assert result.outs['mode'] == '0700'
+    assert result.outs['owner'] == 'root:root'
+
+
+def test_reading_a_directory_someone_removed_drops_the_identifier(device: Device) -> None:
+    """Absence is a deleted resource, which is how the next up makes it again."""
+    result = directory_provider().read('id', directory_props())
+
+    assert result.id is None
+    assert result.outs == {}
+
+
+def test_a_relative_directory_is_refused_before_anything_is_made() -> None:
+    result = directory_provider().check({}, directory_props(path='custom/machines'))
+
+    assert [failure.property for failure in result.failures] == ['path']
+
+
+def test_a_directory_mode_that_is_not_octal_is_refused() -> None:
+    result = directory_provider().check({}, directory_props(mode='rwxr-xr-x'))
+
+    assert [failure.property for failure in result.failures] == ['mode']
+
+
+def test_an_unknown_input_on_a_directory_is_an_unknown_diff_and_touches_nothing(device: Device) -> None:
+    result = directory_provider().diff('id', directory_props(), directory_props(hook=rpc.UNKNOWN))
+
+    assert result.changes is None
+    assert device.sessions == 0
+
+
+def test_the_directory_operations_are_versioned_apart_from_the_file_and_the_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stamp says that *this* resource's behavior changed, and no other's.
+
+    A bump to the version the files and the trees carry re-stamps them and leaves
+    the directories alone, which is what keeps the property a statement about the
+    code that made this resource.
+    """
+    monkeypatch.setattr(provider, 'VERSION', f'{provider.VERSION}-next')
+
+    assert checked(directory_provider(), directory_props())[PROVIDER_VERSION] == provider.DIRECTORY_VERSION
+    assert checked(file_provider(), file_props())[PROVIDER_VERSION] == provider.VERSION
 
 
 ##
@@ -1082,6 +1356,7 @@ async def stack() -> Recorder:
     monitor = await run_with(Recorder(), stack='physical')
     async with declaring():
         _ = provider.DeviceFile('frr', connection=connection, path=CONFIG_PATH, content=CONFIG, hook=HOOK)
+        _ = provider.DeviceDirectory('machines', connection=connection, path=DIRECTORY_PATH)
         _ = provider.DeviceArtifact(
             'adguard-rootfs',
             connection=connection,
@@ -1111,6 +1386,21 @@ def test_a_declared_file_carries_the_connection_and_the_file_into_one_property_b
     assert 'private_key' not in inputs
     assert SESSION not in inputs
     assert PROVIDER_VERSION not in inputs
+
+
+def test_a_declared_directory_carries_a_shape_and_nothing_about_its_contents(stack: Recorder) -> None:
+    """A resource kind of its own, so a preview shows a directory as a directory.
+
+    The mode a caller leaves out is the one a directory has to have to be entered
+    at all, and the contents are the caller's business rather than an input.
+    """
+    declaration = stack.one('machines')
+    typ, inputs = declaration.typ, declaration.inputs
+
+    assert typ == 'pulumi-python:dynamic/device:Directory'
+    assert inputs['path'] == DIRECTORY_PATH
+    assert inputs['mode'] == '0755'
+    assert 'content' not in inputs
 
 
 def test_a_declared_artifact_carries_its_pin_and_never_its_bytes(stack: Recorder) -> None:
