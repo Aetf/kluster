@@ -4,11 +4,16 @@ The device has no API for what matters on it -- routing, the container services,
 the scripts that re-establish both after a firmware update -- but it has a proven
 convention: files under `/data`, written idempotently, with a command run
 afterwards to make whatever reads them notice. This module turns that convention
-into two Pulumi resources (architecture.md §5.2):
+into three Pulumi resources (architecture.md §5.2):
 
 -   `DeviceFile` is a file: path, content, ownership, mode, and an optional
     hook. Its content lives in state, because a configuration file is small
     and its diff is the reason to have a preview at all.
+-   `DeviceDirectory` is a directory: path, mode, ownership, and an optional
+    hook. It declares that the directory is there and says nothing about what is
+    inside it, which is what a layer needs for a directory something else fills
+    at runtime -- and the reason its delete takes the directory away only while
+    it is empty.
 -   `DeviceArtifact` is a tree too big for state: a container image, the
     manifest digest that pins it, and the directory on the device its root
     filesystem is unpacked into. What state carries is the pin, and what the
@@ -43,7 +48,7 @@ marker the device keeps records *the pin* -- the manifest's digest, not a
 checksum of the tree beside it. A marker is the device's claim about
 provenance, not a checksum of its neighbour.
 
-**Both resources diff against the device, not only against state.** A file
+**Every resource here diffs against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
 refresh, which is what makes this convergence rather than record-keeping. The
 cost is that a preview opens a session per resource and fails if the device is
@@ -138,10 +143,14 @@ __all__ = (
     'ADDRESS',
     'ARTIFACT_COMPARED',
     'ARTIFACT_DECLARED',
+    'DIRECTORY_COMPARED',
+    'DIRECTORY_DECLARED',
+    'DIRECTORY_VERSION',
     'FILE_COMPARED',
     'FILE_DECLARED',
     'LAYOUT_SUFFIX',
     'LAYOUT_TAG',
+    'NOT_EMPTY',
     'PIN',
     'PRIVATE_KEY_CONFIG',
     'SUPERSEDED_SUFFIX',
@@ -150,19 +159,26 @@ __all__ = (
     'Connection',
     'DeviceArtifact',
     'DeviceArtifactProvider',
+    'DeviceDirectory',
+    'DeviceDirectoryProvider',
     'DeviceFile',
     'DeviceFileProvider',
     'DeviceProvider',
+    'DirectoryNotEmpty',
     'HookFailed',
+    'MakeDirectoryFailed',
     'PullFailed',
+    'RemoveDirectoryFailed',
     'UnpackFailed',
     'endpoint',
     'gone',
+    'make_script',
     'marker_path',
     'open_transport',
     'pull_script',
     'purge_script',
     'reference',
+    'remove_script',
     'secret_outputs',
     'unpack_script',
 )
@@ -201,6 +217,11 @@ FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 #: than the image the pin names.
 ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'hook', *ADDRESS, *PIN)
 
+#: The same for a `DeviceDirectory`. Nothing about the contents appears here,
+#: because nothing about the contents is declared: what the resource states is
+#: that the directory exists and who may do what in it.
+DIRECTORY_DECLARED = ('mode', 'owner', 'hook', *ADDRESS, *PIN)
+
 #: The stack-configuration key the session's credential is read from
 #: (`configured`), which makes this module the only code in the repository that
 #: ever holds the device's private key.
@@ -210,12 +231,26 @@ PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 #: (`configured`).
 VERSION = '3'
 
+#: The same for the directory operations, which are versioned apart from the two
+#: above. The stamp exists to make a change to *this* resource's behavior show up
+#: in a preview, and one constant for the module would say that directories are
+#: made differently by re-stamping every file and tree on the device.
+DIRECTORY_VERSION = '1'
+
+#: The exit status a removal uses to say "this directory has something in it".
+#: The device's own `rmdir` refuses a non-empty directory, but it refuses an
+#: unwritable one with the same status and a message in whatever language the
+#: session speaks, and those two are not the same answer. Distinct from
+#: `ssh.ABSENT`, which the transport's own verbs speak on the same channel.
+NOT_EMPTY = 43
+
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
 #: that only an operation's outs ever carried lives in `olds` alone -- and a
 #: provider comparing the two bags wholesale reports a change on every run.
 FILE_COMPARED = (*FILE_DECLARED, *STAMPS)
 ARTIFACT_COMPARED = (*ARTIFACT_DECLARED, *STAMPS)
+DIRECTORY_COMPARED = (*DIRECTORY_DECLARED, *STAMPS)
 
 #: The mode a digest marker is written with. The marker is the provider's own
 #: bookkeeping, not part of the image, so it takes a fixed mode.
@@ -278,6 +313,45 @@ class UnpackFailed(Exception):
         self.directory: str = directory
         self.exit_status: int = exit_status
         self.stderr: str = stderr
+
+
+@final
+class MakeDirectoryFailed(Exception):
+    """The device could not create the directory or give it the declared shape."""
+
+    def __init__(self, path: str, exit_status: int, stderr: str) -> None:
+        super().__init__(f'making {path} on the device exited {exit_status}: {stderr.strip() or "(no output)"}')
+        self.path: str = path
+        self.exit_status: int = exit_status
+        self.stderr: str = stderr
+
+
+@final
+class RemoveDirectoryFailed(Exception):
+    """The device could not remove the directory, for a reason of its own."""
+
+    def __init__(self, path: str, exit_status: int, stderr: str) -> None:
+        super().__init__(f'removing {path} on the device exited {exit_status}: {stderr.strip() or "(no output)"}')
+        self.path: str = path
+        self.exit_status: int = exit_status
+        self.stderr: str = stderr
+
+
+@final
+class DirectoryNotEmpty(Exception):
+    """A directory this program stops declaring still holds somebody else's files.
+
+    Nothing about the contents was ever declared, so nothing about them may be
+    deleted: the resource is the directory, and emptying it would destroy state
+    the device -- or a person -- put there. The operation fails instead, and what
+    resolves it is a decision on the device rather than a wider delete here.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"refusing to remove {path}: it is not empty, and its contents are not this resource's to delete"
+        )
+        self.path: str = path
 
 
 @final
@@ -403,6 +477,40 @@ def purge_script(directory: str) -> str:
         f'{directory}{LAYOUT_SUFFIX}',
     )
     return 'rm -rf ' + ' '.join(shlex.quote(path) for path in paths)
+
+
+def make_script(path: str, mode: str, owner: str | None) -> str:
+    """The command that makes `path` a directory of the declared shape.
+
+    Every step is idempotent, which is what lets one script serve the create and
+    the update alike: `mkdir -p` accepts a directory that is already there, and
+    the mode and the ownership are set rather than adjusted. Ownership is left
+    alone where none was declared, exactly as a write does -- a directory whose
+    owner this resource has no opinion about keeps whatever the device gave it.
+    """
+    quoted = shlex.quote(path)
+    script = [f'mkdir -p {quoted}', f'chmod {shlex.quote(mode)} {quoted}']
+    if owner:
+        script.append(f'chown {shlex.quote(owner)} {quoted}')
+    return ' && '.join(script)
+
+
+def remove_script(path: str) -> str:
+    """The command that takes `path` away, and only while nothing is in it.
+
+    Three answers rather than two, because the caller has to tell them apart: a
+    directory that was already gone is a success, one with something in it exits
+    `NOT_EMPTY`, and anything else is the device's own failure with its own
+    message. `rmdir` would collapse the last two into one status.
+    """
+    quoted = shlex.quote(path)
+    return '; '.join(
+        (
+            f'if [ ! -e {quoted} ]; then exit 0; fi',
+            f'if [ -n "$(ls -A {quoted})" ]; then exit {NOT_EMPTY}; fi',
+            f'rmdir {quoted}',
+        )
+    )
 
 
 def marker_path(directory: str) -> str:
@@ -758,6 +866,103 @@ class DeviceArtifactProvider(DeviceProvider):
 
 
 @final
+class DeviceDirectoryProvider(DeviceProvider):
+    """One directory the device must have, whose contents belong to somebody else.
+
+    The shape is the file provider's without the content: what is converged is
+    existence, mode and ownership, and the device is asked about all three on
+    every diff. What is not here is any statement about the contents --
+    they are why the directory was declared, and they are never read, written or
+    counted except to refuse a delete that would take them with it.
+
+    Whether the path holds a directory rather than a file is a question `stat`
+    does not answer, and the operations answer it instead: `mkdir -p` refuses a
+    path a regular file occupies, and so does the removal. So a path that is the
+    wrong kind is reported by the device on the next apply rather than converged
+    into silently.
+    """
+
+    def _version(self) -> str:
+        return DIRECTORY_VERSION
+
+    def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
+        return self._stamp(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
+
+    def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
+        run_sync(self._make(props))
+        return dynamic.CreateResult(id_=str(props['path']), outs=props)
+
+    def diff(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.DiffResult:
+        replaces = replacements(olds, news, 'path')
+        if replaces:
+            # Created before deleted, as a moved file is: the new directory
+            # exists before the old one is taken away, and the old one is taken
+            # away only if nothing has filled it in the meantime.
+            return dynamic.DiffResult(changes=True, replaces=replaces, delete_before_replace=False)
+        if has_unknowns(news):
+            return dynamic.DiffResult(changes=None)
+        if declared_change(olds, news, DIRECTORY_COMPARED):
+            return dynamic.DiffResult(changes=True, replaces=[])
+        return dynamic.DiffResult(changes=run_sync(self._drifted(news)), replaces=[])
+
+    def update(self, _id: str, olds: dict[str, Any], news: dict[str, Any]) -> dynamic.UpdateResult:
+        if not run_sync(self._restamp_only(olds, news, DIRECTORY_DECLARED)):
+            run_sync(self._make(news))
+        return dynamic.UpdateResult(outs=news)
+
+    def read(self, id_: str, props: dict[str, Any]) -> dynamic.ReadResult:
+        return run_sync(self._read(id_, props))
+
+    def delete(self, _id: str, props: dict[str, Any]) -> None:
+        run_sync(self._delete(props))
+
+    async def _make(self, props: Mapping[str, Any]) -> None:
+        """Make the directory, then tell whatever was waiting for it.
+
+        One script for the create and the update both, because converging a mode
+        and making a directory that is already there are the same three commands.
+        """
+        path = str(props['path'])
+        async with open_transport(self._device(props)) as transport:
+            made = await transport.run(make_script(path, str(props['mode']), _owner(props)))
+            if not made.ok:
+                raise MakeDirectoryFailed(path, made.exit_status, made.stderr)
+            await run_hook(transport, props)
+
+    async def _drifted(self, props: Mapping[str, Any]) -> bool:
+        async with open_transport(self._device(props)) as transport:
+            stat = await transport.stat(str(props['path']))
+            if stat is None:
+                # Which is the gap this resource closes: a directory removed by
+                # hand, or taken by a firmware update, is work the next preview
+                # sees without anyone asking for a refresh.
+                return True
+            return not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat)
+
+    async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
+        async with open_transport(self._device(props)) as transport:
+            stat = await transport.stat(str(props['path']))
+            if stat is None:
+                # Gone from the device is gone, as it is for a file: the next up
+                # makes the directory again.
+                return gone()
+            outs = {**props, 'mode': stat.mode, 'owner': _observed_owner(props.get('owner'), stat)}
+        return dynamic.ReadResult(id_=id_, outs=outs)
+
+    async def _delete(self, props: Mapping[str, Any]) -> None:
+        path = str(props['path'])
+        async with open_transport(self._device(props)) as transport:
+            removed = await transport.run(remove_script(path))
+            if removed.exit_status == NOT_EMPTY:
+                raise DirectoryNotEmpty(path)
+            if not removed.ok:
+                raise RemoveDirectoryFailed(path, removed.exit_status, removed.stderr)
+            # And the hook on the way out, as a file's delete runs it: whatever
+            # was told the directory had arrived is told it is gone.
+            await run_hook(transport, props)
+
+
+@final
 class DeviceFile(dynamic.Resource, module='device', name='File'):
     """A file the device must have, and what to run once it has it."""
 
@@ -802,6 +1007,60 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
                 pulumi.ResourceOptions(additional_secret_outputs=secret_outputs(secret_content=secret)),
                 opts,
             ),
+        )
+
+
+@final
+class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
+    """A directory the device must have, whose contents are somebody else's."""
+
+    path: pulumi.Output[str]
+    mode: pulumi.Output[str]
+    owner: pulumi.Output[str | None]
+    hook: pulumi.Output[str | None]
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        connection: Connection,
+        path: pulumi.Input[str],
+        mode: pulumi.Input[str] = '0755',
+        owner: pulumi.Input[str] | None = None,
+        hook: pulumi.Input[str] | None = None,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        """Declare that `path` is a directory on the device.
+
+        `owner` is `user` or `user:group`, and omitting it leaves ownership to
+        whatever the device does by default. `hook` runs after the directory is
+        made or its shape converged, and after the delete; a non-zero exit fails
+        the operation.
+
+        **The directory is declared and its contents are not.** That is the point
+        of the resource -- it is for a directory something on the device fills at
+        runtime -- and it is why the delete removes an empty directory and
+        refuses a full one: what is inside was put there by whoever fills it, and
+        this program never claimed it.
+
+        `path` is therefore the only replacement. A directory cannot be in two
+        places, and one left behind at the old path would be an orphan nothing
+        declares -- while everything else, the address dialled included, is a
+        value the next apply converges where the directory already is.
+        """
+        super().__init__(
+            DeviceDirectoryProvider(),
+            name,
+            {
+                **connection.props(),
+                'path': path,
+                'mode': mode,
+                'owner': owner,
+                'hook': hook,
+            },
+            # A path, a mode and an owner: nothing here is a secret, and a
+            # preview that shows them is a preview a reviewer can read.
+            opts,
         )
 
 
