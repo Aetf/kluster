@@ -60,8 +60,9 @@ __all__ = (
     'same_owner',
 )
 
-#: How long a single command or the handshake may take. Long enough for a root
-#: filesystem image to stream over a home uplink, short enough that an
+#: How long a single command or the handshake may take. Long enough for the
+#: device's own `skopeo copy` to download a root filesystem image and for
+#: `umoci` to write it out, each of which is one command; short enough that an
 #: unreachable device fails its resource instead of hanging the deployment.
 DEFAULT_TIMEOUT = 600.0
 

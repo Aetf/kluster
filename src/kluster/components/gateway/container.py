@@ -41,7 +41,7 @@ import pulumi
 
 from kluster import conventions
 from kluster.lib import templates
-from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile
+from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile, marker_path
 from putils import Component
 
 __all__ = (
@@ -332,7 +332,7 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
         """
         return (
             f'{UNIT_DIR}/{self.unit_name}',
-            f'{root_path(self.service.name)}.digest',
+            marker_path(root_path(self.service.name)),
             *(mounted_path(self.service.name, mounted) for mounted in self.mounted_files),
         )
 

@@ -9,7 +9,7 @@ into two Pulumi resources (architecture.md §5.2):
 -   `DeviceFile` is a file: path, content, ownership, mode, and an optional
     hook. Its content lives in state, because a configuration file is small
     and its diff is the reason to have a preview at all.
--   `DeviceArtifact` is a payload too big for state: a container image, the
+-   `DeviceArtifact` is a tree too big for state: a container image, the
     manifest digest that pins it, and the directory on the device its root
     filesystem is unpacked into. What state carries is the pin, and what the
     device carries is a marker file beside the tree naming the digest it holds.
@@ -21,9 +21,8 @@ from the registry into a staging OCI layout beside the tree, then
 `umoci raw unpack` out of that layout into a staging tree. Neither the bytes nor
 the code that understands them passes through the runner -- digest verification
 is skopeo's, and whiteout, hard link and extended-attribute semantics are
-umoci's. The two packages are stock Debian bullseye, which is what UniFi OS 4.x
-is built on, and they arrive through the same package list as the rest of the
-device's user space.
+umoci's. Both have to be on the session's `PATH`: putting them there is the
+caller's business, and a device without them fails the pull by name.
 
 **The tree is derived state** -- the push puts it there, the push replaces it,
 and the push takes it away -- so it is never edited in place: the unpack lands
@@ -32,8 +31,8 @@ renames, and no moment passes in which a half-unpacked tree is the one a
 container boots. The tree it displaced is left behind until the *next* push
 clears it, because at the moment of the swap the container is still running on
 it and has not yet been restarted. The staging layout goes as soon as the
-unpack has read it: `/data` is a few gigabytes, and a copy of every image in
-two forms is not a thing to leave lying there.
+unpack has read it, so the image is never held in two forms for longer than the
+unpack needs both.
 
 **The digest pins the artifact as published.** The pull is by manifest digest,
 so the registry's answer is checked against the pin before anything is written,
@@ -108,9 +107,9 @@ separate process where each call arrives on a thread with no event loop, so ever
 operation runs its own loop, opens its own session and closes both. The one seam
 a test replaces -- how a session is opened -- is a module-level function looked
 up when it is called rather than an attribute captured at construction, which
-keeps the pickled provider a constant. There is no second seam any more: the
-device does the pulling, so a test that has replaced the session has replaced
-everything that leaves the runner.
+keeps the pickled provider a constant. There is no second seam: the device does
+the pulling, so a test that has replaced the session has replaced everything
+that leaves the runner.
 """
 
 from __future__ import annotations
@@ -139,7 +138,6 @@ __all__ = (
     'ADDRESS',
     'ARTIFACT_COMPARED',
     'ARTIFACT_DECLARED',
-    'EXTRACTING_SUFFIX',
     'FILE_COMPARED',
     'FILE_DECLARED',
     'LAYOUT_SUFFIX',
@@ -147,9 +145,9 @@ __all__ = (
     'PIN',
     'PRIVATE_KEY_CONFIG',
     'SUPERSEDED_SUFFIX',
+    'UNPACKING_SUFFIX',
     'VERSION',
     'Connection',
-    'ExtractFailed',
     'DeviceArtifact',
     'DeviceArtifactProvider',
     'DeviceFile',
@@ -157,6 +155,7 @@ __all__ = (
     'DeviceProvider',
     'HookFailed',
     'PullFailed',
+    'UnpackFailed',
     'endpoint',
     'gone',
     'marker_path',
@@ -192,7 +191,7 @@ PIN = ('host_key',)
 #: What a `DeviceFile` declares beyond its own path.
 FILE_DECLARED = ('content', 'mode', 'owner', 'hook', *ADDRESS, *PIN)
 
-#: The same for a `DeviceArtifact`. The digest is the payload's identity, and the
+#: The same for a `DeviceArtifact`. The digest is the tree's identity, and the
 #: repository and tag are only where those bytes were found -- but all three are
 #: declared, so moving publication to another registry, or a tag that moved onto
 #: a digest the device already holds, is a diff a reviewer sees rather than a
@@ -208,9 +207,7 @@ ARTIFACT_DECLARED = ('repository', 'tag', 'digest', 'hook', *ADDRESS, *PIN)
 PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 
 #: This module's version, bumped by hand when an operation's behavior changes
-#: (`configured`). At `3` because an artifact's apply changed shape: the device
-#: pulls the image itself instead of receiving a flattened archive over the
-#: session, and the archive it used to receive no longer exists.
+#: (`configured`).
 VERSION = '3'
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
@@ -221,21 +218,19 @@ FILE_COMPARED = (*FILE_DECLARED, *STAMPS)
 ARTIFACT_COMPARED = (*ARTIFACT_DECLARED, *STAMPS)
 
 #: The mode a digest marker is written with. The marker is the provider's own
-#: bookkeeping rather than part of the desired state, so it does not inherit the
-#: payload's ownership.
+#: bookkeeping, not part of the image, so it takes a fixed mode.
 MARKER_MODE = '0644'
 
 #: Where a tree is assembled before it becomes the live one, and where the tree
 #: it displaced waits to be cleared. Both sit beside the tree rather than in a
 #: temporary directory, so the renames that swap them stay within one filesystem
 #: and are therefore atomic.
-EXTRACTING_SUFFIX = '.kluster-extracting'
+UNPACKING_SUFFIX = '.kluster-unpacking'
 SUPERSEDED_SUFFIX = '.kluster-superseded'
 
 #: Where the pulled image waits between the two device-side commands, as an OCI
-#: layout. Beside the tree for the same reason the other two are: whatever
-#: filesystem holds the tree is the one with room for it, and a temporary
-#: directory on a router is likely to be a small `tmpfs`.
+#: layout. Beside the tree for the same reason the other two are: the filesystem
+#: holding the tree is the one with room for the image it came from.
 LAYOUT_SUFFIX = '.kluster-oci'
 
 #: What the image is called inside that layout. An OCI layout indexes its
@@ -275,8 +270,8 @@ class PullFailed(Exception):
 
 
 @final
-class ExtractFailed(Exception):
-    """Unpacking the payload failed, so the tree the device boots is untouched."""
+class UnpackFailed(Exception):
+    """The unpack failed before any rename, so the tree the device boots is untouched."""
 
     def __init__(self, directory: str, exit_status: int, stderr: str) -> None:
         super().__init__(f'unpacking into {directory} exited {exit_status}: {stderr.strip() or "(no output)"}')
@@ -338,9 +333,9 @@ def pull_script(image: str, directory: str) -> str:
 
     Its first act is to clear what the last push left: the tree the last swap
     displaced, any staging tree a failed run abandoned, and any layout a failed
-    pull abandoned. That is the moment to do it -- disk on the device is
-    measured in gigabytes, and reclaiming it before pulling is what keeps a
-    bumped pin from needing room for three copies at once.
+    pull abandoned. That is the moment to do it -- reclaiming the space before
+    pulling is what keeps a bumped pin from needing room for three copies of one
+    root filesystem at once.
 
     `skopeo copy` is given a `docker://` source carrying the digest, so the
     registry's answer is verified against the pin before a byte is written, and
@@ -350,7 +345,7 @@ def pull_script(image: str, directory: str) -> str:
     default its package ships.
     """
     layout = shlex.quote(f'{directory}{LAYOUT_SUFFIX}')
-    staging = shlex.quote(f'{directory}{EXTRACTING_SUFFIX}')
+    staging = shlex.quote(f'{directory}{UNPACKING_SUFFIX}')
     superseded = shlex.quote(f'{directory}{SUPERSEDED_SUFFIX}')
     source = shlex.quote(f'docker://{image}')
     destination = shlex.quote(f'oci:{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
@@ -386,7 +381,7 @@ def unpack_script(directory: str) -> str:
     """
     quoted_directory = shlex.quote(directory)
     layout = shlex.quote(f'{directory}{LAYOUT_SUFFIX}')
-    staging = shlex.quote(f'{directory}{EXTRACTING_SUFFIX}')
+    staging = shlex.quote(f'{directory}{UNPACKING_SUFFIX}')
     superseded = shlex.quote(f'{directory}{SUPERSEDED_SUFFIX}')
     tagged = shlex.quote(f'{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
     return ' && '.join(
@@ -403,21 +398,21 @@ def purge_script(directory: str) -> str:
     """The command that removes a tree and every sibling the push uses."""
     paths = (
         directory,
-        f'{directory}{EXTRACTING_SUFFIX}',
+        f'{directory}{UNPACKING_SUFFIX}',
         f'{directory}{SUPERSEDED_SUFFIX}',
         f'{directory}{LAYOUT_SUFFIX}',
     )
     return 'rm -rf ' + ' '.join(shlex.quote(path) for path in paths)
 
 
-def marker_path(target: str) -> str:
-    """Where the digest of the payload at `target` is recorded on the device.
+def marker_path(directory: str) -> str:
+    """Where the digest of the tree at `directory` is recorded on the device.
 
     Beside a tree rather than inside it: a file the push wrote into the tree
     would be a file inside the container's root filesystem, and the tree is the
     image, not the push's bookkeeping.
     """
-    return f'{target}.digest'
+    return f'{directory}.digest'
 
 
 def secret_outputs(*, secret_content: bool = False) -> list[str]:
@@ -491,7 +486,7 @@ def _absolute(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
 def _registry_qualified(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
     """Refuse a repository that does not begin with the registry to ask.
 
-    The pull happens on the device now, so an unqualified reference would be
+    The pull happens on the device, so an unqualified reference would be
     resolved by the device's own short-name configuration -- a default this
     declaration never named, reached over the network, and exactly what a pin
     exists to prevent. The registry world's own rule decides: a first component
@@ -723,7 +718,7 @@ class DeviceArtifactProvider(DeviceProvider):
                 raise PullFailed(image, pull.exit_status, pull.stderr)
             unpack = await transport.run(unpack_script(root))
             if not unpack.ok:
-                raise ExtractFailed(root, unpack.exit_status, unpack.stderr)
+                raise UnpackFailed(root, unpack.exit_status, unpack.stderr)
             # Before the hook: the hook reads this.
             await _mark(transport, root, digest)
             try:

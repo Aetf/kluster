@@ -48,12 +48,11 @@ def is_digest(value: str) -> bool:
     """Whether `value` is a registry digest, in the one spelling a registry uses.
 
     Read here and by the provider that pulls by one
-    (`providers.device_files.registry`), so that the shape a pin is accepted in
-    and the shape a pull is performed by cannot drift apart. Three boundaries
-    check it — this accessor, the resource's `check`, and the reference a pull
-    is constructed from — and a predicate each would be three chances for one
-    of them to be laxer than the marker comparison on the device, which is
-    exact.
+    (`providers.device_files.provider`), so that the shape a pin is accepted in
+    and the shape a pull is performed by cannot drift apart. The provider's
+    `check` is the other boundary: it holds a digest to this same spelling and a
+    repository to one naming its registry host, because the device resolves the
+    reference itself and compares the marker beside its tree byte for byte.
     """
     return _DIGEST.fullmatch(value) is not None
 
