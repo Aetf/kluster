@@ -29,7 +29,7 @@ import requests
 from b2_api import FakeApi, Key
 from memory_kit import MemoryKit
 
-from kluster.scripts.credentials import b2, entries, masters
+from kluster.scripts.credentials import b2, entries, masters, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 
@@ -285,7 +285,7 @@ def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -
     with pytest.raises(requests.HTTPError):
         _ = uploader.keys()
     with pytest.raises(requests.HTTPError):
-        _ = uploader.post('b2_list_buckets', {'accountId': uploader.account_id})
+        _ = uploader.buckets()
 
 
 def test_minting_a_dump_key_retires_the_one_the_old_box_held(api: FakeApi, kit: KdbxStore) -> None:
@@ -375,8 +375,71 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: Kdbx
     # B2 pages `b2_list_keys` at a size it chooses, so a caller that reads the
     # first page only would call a live key gone — and rebuild a box that was
     # fine, while leaving every key it failed to see behind.
-    assert {str(listed['applicationKeyId']) for listed in session.keys()} == set(api.keys)
+    assert {listed.key_id for listed in session.keys()} == set(api.keys)
     assert _current(session, key_id, bucket_id)
+
+
+# -- the response boundary --------------------------------------------------
+
+
+def test_a_listed_key_missing_a_field_is_refused_naming_the_entry() -> None:
+    answer = {
+        'keys': [
+            {'applicationKeyId': 'key-1', 'keyName': DUMP_KEY_NAME, 'capabilities': ['writeFiles']},
+            {'applicationKeyId': 'key-2', 'capabilities': ['writeFiles']},
+        ]
+    }
+
+    # Which call, which row, which field: a listing read one field at a time
+    # is what keeps a changed response from surfacing as a KeyError inside a
+    # retirement that has already deleted something.
+    with pytest.raises(payload.ResponseRejected, match=r'b2_list_keys\.keys\[1\]: the answer carries no keyName'):
+        _ = b2._key_page(answer)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_retention_of_the_wrong_type_is_refused_rather_than_compared() -> None:
+    answer = {
+        'buckets': [
+            {
+                'bucketId': 'bucket-1',
+                'lifecycleRules': [
+                    {
+                        'fileNamePrefix': f'{PREFIX}/',
+                        'daysFromUploadingToHiding': 'thirty',
+                        'daysFromHidingToDeleting': 1,
+                    }
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(payload.ResponseRejected, match='daysFromUploadingToHiding'):
+        _ = b2._listed_buckets(answer)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_an_answer_that_is_not_an_object_is_refused_rather_than_indexed() -> None:
+    with pytest.raises(payload.ResponseRejected, match='b2_create_key: expected an object'):
+        _ = b2._created_key(['key-1', 'secret-of-key-1'])  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_retention_that_already_says_this_is_not_rewritten(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    api.buckets[bucket_id]['lifecycleRules'] = [
+        {
+            'fileNamePrefix': f'{PREFIX}/',
+            'daysFromUploadingToHiding': RETENTION_DAYS,
+            'daysFromHidingToDeleting': 1,
+            'somethingB2Added': True,
+        }
+    ]
+
+    _ = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
+
+    # Rules are compared as rules -- the three fields a B2 lifecycle rule is
+    # made of -- so anything else the answer carries is not drift, and does not
+    # become a bucket rewritten on every run.
+    assert 'b2_update_bucket' not in api.calls
 
 
 # -- the fault sweep --------------------------------------------------------

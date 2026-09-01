@@ -16,6 +16,12 @@ Seed and management carry the same capabilities: what separates them is
 lifetime and reach, not permission. Neither carries file capabilities at
 all — the credential that manages the backup buckets cannot read a byte out
 of them.
+
+**Every answer B2 sends crosses into a typed value at one parser** (`payload`):
+`post` hands back the decoded JSON as an `object`, and the `_…` functions below
+turn each response shape into a record. A field B2 does not send, or sends as
+something else, is refused there by name instead of surfacing as a `KeyError`
+from inside a mint.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ from typing import Any
 
 import requests
 
-from . import masters
+from . import masters, payload
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -81,6 +87,125 @@ class AppKey:
 
 
 @dataclass(frozen=True)
+class ListedKey:
+    """One row of `b2_list_keys`: what names a key, and what it may do.
+
+    Scope is the two nullable halves — an account-wide key is confined to
+    neither a bucket nor a prefix — and together with the capabilities they are
+    what `dump_key_is_current` measures an appliance's key against.
+    """
+
+    key_id: str
+    name: str
+    capabilities: tuple[str, ...]
+    bucket_id: str | None
+    name_prefix: str | None
+
+
+@dataclass(frozen=True)
+class KeyPage:
+    """One page of `b2_list_keys`, and where the page after it starts.
+
+    B2 chooses the page size, so `next_key_id` — absent on the last page — is
+    the only thing that says a listing is complete.
+    """
+
+    keys: tuple[ListedKey, ...]
+    next_key_id: str | None
+
+
+@dataclass(frozen=True)
+class LifecycleRule:
+    """One B2 lifecycle rule: which files it governs, and how long each phase lasts.
+
+    A record rather than the JSON document B2 exchanges, so "the bucket already
+    says what this program wants it to say" is a comparison of two rules. What
+    is compared is what a rule *is* — B2's schema is these three fields — so a
+    rule that agrees on all three is not rewritten.
+    """
+
+    file_name_prefix: str
+    #: `None` is B2's "never": files this rule never hides, or never deletes.
+    days_from_uploading_to_hiding: int | None
+    days_from_hiding_to_deleting: int | None
+
+    def body(self) -> dict[str, Any]:
+        """The rule as `b2_create_bucket` and `b2_update_bucket` take it."""
+        return {
+            'fileNamePrefix': self.file_name_prefix,
+            'daysFromUploadingToHiding': self.days_from_uploading_to_hiding,
+            'daysFromHidingToDeleting': self.days_from_hiding_to_deleting,
+        }
+
+
+@dataclass(frozen=True)
+class Bucket:
+    """A bucket as `b2_list_buckets` and `b2_create_bucket` describe it.
+
+    The id and the rules on it: what `ensure_bucket` returns, and what it
+    compares. The name is not part of it — a listing is asked for one name and
+    a creation is told one, so the answer's copy adds nothing.
+    """
+
+    bucket_id: str
+    lifecycle_rules: tuple[LifecycleRule, ...]
+
+
+def _created_key(answer: object) -> AppKey:
+    """`b2_create_key`: the id, and the secret B2 discloses exactly once."""
+    body = payload.Payload.of(answer, 'b2_create_key')
+    return AppKey(key_id=body.text('applicationKeyId'), key=body.text('applicationKey'))
+
+
+def _listed_key(entry: payload.Payload) -> ListedKey:
+    """One `b2_list_keys` row."""
+    return ListedKey(
+        key_id=entry.text('applicationKeyId'),
+        name=entry.text('keyName'),
+        capabilities=entry.texts('capabilities'),
+        bucket_id=entry.optional_text('bucketId'),
+        name_prefix=entry.optional_text('namePrefix'),
+    )
+
+
+def _key_page(answer: object) -> KeyPage:
+    """`b2_list_keys`: one page of rows, and the cursor for the next."""
+    body = payload.Payload.of(answer, 'b2_list_keys')
+    return KeyPage(
+        keys=tuple(_listed_key(entry) for entry in body.objects('keys')),
+        next_key_id=body.optional_text('nextApplicationKeyId'),
+    )
+
+
+def _lifecycle_rule(entry: payload.Payload) -> LifecycleRule:
+    """One rule of a bucket's `lifecycleRules`."""
+    return LifecycleRule(
+        file_name_prefix=entry.string('fileNamePrefix'),
+        days_from_uploading_to_hiding=entry.optional_whole('daysFromUploadingToHiding'),
+        days_from_hiding_to_deleting=entry.optional_whole('daysFromHidingToDeleting'),
+    )
+
+
+def _bucket(body: payload.Payload) -> Bucket:
+    """A bucket object, wherever it is being described."""
+    return Bucket(
+        bucket_id=body.text('bucketId'),
+        lifecycle_rules=tuple(_lifecycle_rule(rule) for rule in body.objects('lifecycleRules')),
+    )
+
+
+def _listed_buckets(answer: object) -> tuple[Bucket, ...]:
+    """`b2_list_buckets`: the buckets matching what was asked for."""
+    body = payload.Payload.of(answer, 'b2_list_buckets')
+    return tuple(_bucket(entry) for entry in body.objects('buckets'))
+
+
+def _created_bucket(answer: object) -> Bucket:
+    """`b2_create_bucket`: the bucket that now exists."""
+    return _bucket(payload.Payload.of(answer, 'b2_create_bucket'))
+
+
+@dataclass(frozen=True)
 class Session:
     """An authorized B2 API session."""
 
@@ -99,11 +224,20 @@ class Session:
                 '(for the master key, that is the account id) and its password the key itself'
             )
         resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        return cls._authorized(resp.json())
+
+    @classmethod
+    def _authorized(cls, answer: object) -> Session:
+        """`b2_authorize_account`, whose three fields are exactly a session.
+
+        The API host is the account's own, handed out here: every later call
+        goes to it rather than to the authorization endpoint.
+        """
+        body = payload.Payload.of(answer, 'b2_authorize_account')
         return cls(
-            account_id=data['accountId'],
-            api_url=data['apiInfo']['storageApi']['apiUrl'],
-            token=data['authorizationToken'],
+            account_id=body.text('accountId'),
+            api_url=body.nested('apiInfo').nested('storageApi').text('apiUrl'),
+            token=body.text('authorizationToken'),
         )
 
     @classmethod
@@ -119,7 +253,12 @@ class Session:
             raise ValueError(f'{entry!r} must hold the key id as its username and the key as its password')
         return cls.authorize(key_id, key)
 
-    def post(self, api: str, body: dict[str, Any]) -> dict[str, Any]:
+    def post(self, api: str, body: dict[str, Any]) -> object:
+        """One API call, answered with decoded JSON for a parser to read.
+
+        Deliberately untyped on the way out: what a response holds is B2's
+        business until one of the `_…` parsers above has said so.
+        """
         resp = requests.post(
             f'{self.api_url}/b2api/v3/{api}',
             json=body,
@@ -130,30 +269,38 @@ class Session:
         return resp.json()
 
     def create_key(self, name: str) -> AppKey:
-        data = self.post(
-            'b2_create_key',
-            {'accountId': self.account_id, 'keyName': name, 'capabilities': list(CAPABILITIES)},
+        return _created_key(
+            self.post(
+                'b2_create_key',
+                {'accountId': self.account_id, 'keyName': name, 'capabilities': list(CAPABILITIES)},
+            )
         )
-        return AppKey(key_id=str(data['applicationKeyId']), key=str(data['applicationKey']))
 
-    def keys(self) -> list[dict[str, Any]]:
+    def keys(self) -> tuple[ListedKey, ...]:
         """Every application key on the account, following the pages.
 
         The page size is the server's choice, not the caller's: a listing that
         stopped at the first answer would report keys that exist as gone --
         which retires nothing and rebuilds an appliance that was fine.
         """
-        found: list[dict[str, Any]] = []
+        found: list[ListedKey] = []
         start: str | None = None
         while True:
             body: dict[str, Any] = {'accountId': self.account_id, 'maxKeyCount': PAGE_SIZE}
             if start is not None:
                 body['startApplicationKeyId'] = start
-            data = self.post('b2_list_keys', body)
-            found.extend(list[dict[str, Any]](data['keys']))
-            start = data.get('nextApplicationKeyId')
+            page = _key_page(self.post('b2_list_keys', body))
+            found.extend(page.keys)
+            start = page.next_key_id
             if not start:
-                return found
+                return tuple(found)
+
+    def buckets(self, name: str | None = None) -> tuple[Bucket, ...]:
+        """The account's buckets, or the one called `name`."""
+        body: dict[str, Any] = {'accountId': self.account_id}
+        if name is not None:
+            body['bucketName'] = name
+        return _listed_buckets(self.post('b2_list_buckets', body))
 
     def delete_key(self, key_id: str) -> None:
         _ = self.post('b2_delete_key', {'applicationKeyId': key_id})
@@ -175,7 +322,7 @@ def _mint_verified(session: Session, name: str) -> MintedKey:
     """Create a key and prove it works before anything is told to rely on it."""
     app_key = session.create_key(name)
     minted = Session.authorize(app_key.key_id, app_key.key)
-    _ = minted.post('b2_list_buckets', {'accountId': minted.account_id})
+    _ = minted.buckets()
     log.info('minted %s (%s), verified against the API', name, app_key.key_id)
     return MintedKey(session=minted, app_key=app_key)
 
@@ -193,9 +340,9 @@ def retire_others(session: Session, name: str, *, keep: str) -> None:
     deletes its own key cannot delete the next one.
     """
     for existing in session.keys():
-        if existing['keyName'] == name and existing['applicationKeyId'] != keep:
-            log.info('deleting superseded %s %s', name, existing['applicationKeyId'])
-            session.delete_key(str(existing['applicationKeyId']))
+        if existing.name == name and existing.key_id != keep:
+            log.info('deleting superseded %s %s', name, existing.key_id)
+            session.delete_key(existing.key_id)
 
 
 def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
@@ -263,42 +410,55 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> AppKey:
 DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 
 
-def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: int) -> str:
-    """Create the bucket if absent and pin its retention. Returns the bucket id.
+def _retention(prefix: str, retention_days: int) -> LifecycleRule:
+    """What the dump prefix's lifecycle rule has to say.
 
     Retention is a lifecycle rule rather than a pruning job precisely so the
     uploader needs no delete capability; hiding then deleting is what gives a
     retired encryption key a definite end of life.
     """
-    rules = [
-        {
-            'fileNamePrefix': f'{prefix}/',
-            'daysFromUploadingToHiding': retention_days,
-            'daysFromHidingToDeleting': 1,
-        }
-    ]
-    existing = session.post('b2_list_buckets', {'accountId': session.account_id, 'bucketName': name})['buckets']
+    return LifecycleRule(
+        file_name_prefix=f'{prefix}/',
+        days_from_uploading_to_hiding=retention_days,
+        days_from_hiding_to_deleting=1,
+    )
+
+
+def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: int) -> str:
+    """Create the bucket if absent and pin its retention. Returns the bucket id.
+
+    Convergent in the rule as well as in the bucket: a retention someone
+    changed is put back, and one that already says this is left alone.
+    """
+    wanted = _retention(prefix, retention_days)
+    existing = session.buckets(name)
     if existing:
-        bucket_id = str(existing[0]['bucketId'])
-        if existing[0].get('lifecycleRules') != rules:
+        bucket = existing[0]
+        if bucket.lifecycle_rules != (wanted,):
             _ = session.post(
                 'b2_update_bucket',
-                {'accountId': session.account_id, 'bucketId': bucket_id, 'lifecycleRules': rules},
+                {
+                    'accountId': session.account_id,
+                    'bucketId': bucket.bucket_id,
+                    'lifecycleRules': [wanted.body()],
+                },
             )
             log.info('bucket %s: retention set to %d days', name, retention_days)
-        return bucket_id
+        return bucket.bucket_id
 
-    created = session.post(
-        'b2_create_bucket',
-        {
-            'accountId': session.account_id,
-            'bucketName': name,
-            'bucketType': 'allPrivate',
-            'lifecycleRules': rules,
-        },
+    created = _created_bucket(
+        session.post(
+            'b2_create_bucket',
+            {
+                'accountId': session.account_id,
+                'bucketName': name,
+                'bucketType': 'allPrivate',
+                'lifecycleRules': [wanted.body()],
+            },
+        )
     )
     log.info('created bucket %s', name)
-    return str(created['bucketId'])
+    return created.bucket_id
 
 
 def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix: str, name: str) -> bool:
@@ -313,30 +473,31 @@ def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix
     if not key_id:
         return False
     for existing in session.keys():
-        if existing['applicationKeyId'] != key_id:
+        if existing.key_id != key_id:
             continue
         return (
-            existing['keyName'] == name
-            and existing.get('bucketId') == bucket_id
-            and existing.get('namePrefix') == f'{prefix}/'
-            and sorted(existing.get('capabilities') or []) == sorted(DUMP_CAPABILITIES)
+            existing.name == name
+            and existing.bucket_id == bucket_id
+            and existing.name_prefix == f'{prefix}/'
+            and sorted(existing.capabilities) == sorted(DUMP_CAPABILITIES)
         )
     return False
 
 
 def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> AppKey:
     """A write-only key confined to one prefix of one bucket."""
-    data = session.post(
-        'b2_create_key',
-        {
-            'accountId': session.account_id,
-            'keyName': name,
-            'capabilities': list(DUMP_CAPABILITIES),
-            'bucketId': bucket_id,
-            'namePrefix': f'{prefix}/',
-        },
+    minted = _created_key(
+        session.post(
+            'b2_create_key',
+            {
+                'accountId': session.account_id,
+                'keyName': name,
+                'capabilities': list(DUMP_CAPABILITIES),
+                'bucketId': bucket_id,
+                'namePrefix': f'{prefix}/',
+            },
+        )
     )
-    minted = AppKey(key_id=str(data['applicationKeyId']), key=str(data['applicationKey']))
     # Retired by the minter rather than by the new key: a write-only key
     # carries no `deleteKeys` and could not retire anything, its predecessor
     # least of all.

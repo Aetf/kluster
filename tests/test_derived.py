@@ -236,7 +236,7 @@ def test_the_gateway_token_lands_in_the_stack_config_and_sees_only_its_own_zone(
     assert api.values[runner.config[derived.GATEWAY_ACME_KEY]] == token_id
     assert derived.ACCOUNT_KEY not in runner.config
     delivered = cloudflare.Session.authorize(runner.config[derived.GATEWAY_ACME_KEY])
-    scoped = {str(zone['name']) for zone in delivered.zones()}
+    scoped = {zone.name for zone in delivered.zones()}
     assert scoped == set(derived.GATEWAY_ACME_ZONES)
     # Narrower than the provider token's on purpose: the device holding this
     # one is the machine the cluster cannot re-seal.
