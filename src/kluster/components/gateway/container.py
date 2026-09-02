@@ -155,10 +155,13 @@ OVERLAY_STATE = '/var/lib/zerotier-one'
 #: VLAN's bridge — the container services are what the VLAN exists for.
 CONTAINER_BRIDGE = 'br5'
 
-#: The one capability every image here needs beyond nspawn's default set: each
-#: configures its own interface from inside. Stated as a constant because the
-#: settings template is what a reviewer reads it in, and the alternative the
-#: device ran before this program owned the mechanism was `all`.
+#: The capability every image here configures its own interface with. It is
+#: load-bearing for the machine in the host's network namespace: a machine with
+#: a private network keeps `CAP_NET_ADMIN` in nspawn's default set anyway, so
+#: naming it changes nothing for the bridged three and is what the host-networked
+#: one needs stated. A constant rather than a literal in the template because
+#: the alternative the device ran before this program owned the mechanism was
+#: `all`, and narrowing it is a decision worth finding.
 CAPABILITY = 'CAP_NET_ADMIN'
 
 #: How a container is stopped, and the same instruction restated on the inside.
@@ -718,6 +721,14 @@ class Container(Component):
     whose hook runs a script the device has not been given yet fails its own
     apply, which is why the runtime's convergers are depended on here too.
 
+    **The pieces are ordered so that the machine starts once, with all of
+    them.** The files the container reads come first, the settings file after
+    them because it names them as binds, and the root filesystem last: the
+    converger skips a machine that has no tree, so the tree's own delivery is
+    the one that starts it, and by then everything it reads is on the device.
+    Unordered siblings would instead have each configuration file arrive at a
+    machine that cannot start yet.
+
     `after` is what this machine must be actuated behind. It is a parameter
     rather than a fact of this class because the only service that has such a
     constraint has it for a reason that is invisible from inside: the machine
@@ -742,28 +753,6 @@ class Container(Component):
         self.unit_name: str = declaration.unit_name
         self.stamped_set: tuple[str, ...] = declaration.stamped_set
 
-        root = nspawn.rootfs_path(service)
-        self.image = DeviceArtifact(
-            f'{name}-image',
-            connection=connection,
-            repository=declaration.pin.repository,
-            tag=declaration.pin.tag,
-            digest=declaration.pin.digest,
-            root=root,
-            hook=runtime.hook(service, root),
-            opts=child,
-        )
-        settings = nspawn.nspawn_path(service)
-        self.settings = DeviceFile(
-            f'{name}-nspawn',
-            connection=connection,
-            path=settings,
-            content=nspawn_file(declaration),
-            mode=CONFIG_MODE,
-            owner=owner,
-            hook=runtime.hook(service, settings),
-            opts=child,
-        )
         self.mounted_files = {
             mounted.name: DeviceFile(
                 f'{name}-file-{mounted.name}',
@@ -792,6 +781,36 @@ class Container(Component):
                 hook=runtime.hook(service, nspawn.machine_file(service, initial.name)),
                 opts=child,
             )
+        )
+        read_by_the_container: list[pulumi.Resource] = [
+            *self.mounted_files.values(),
+            *([] if self.initial_state is None else [self.initial_state]),
+        ]
+
+        settings = nspawn.nspawn_path(service)
+        self.settings = DeviceFile(
+            f'{name}-nspawn',
+            connection=connection,
+            path=settings,
+            content=nspawn_file(declaration),
+            mode=CONFIG_MODE,
+            owner=owner,
+            hook=runtime.hook(service, settings),
+            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *read_by_the_container]),
+        )
+        root = nspawn.rootfs_path(service)
+        self.image = DeviceArtifact(
+            f'{name}-image',
+            connection=connection,
+            repository=declaration.pin.repository,
+            tag=declaration.pin.tag,
+            digest=declaration.pin.digest,
+            root=root,
+            # The one hook that may roll back: the tree is the only piece of a
+            # machine the device keeps a displaced copy of, and this is the
+            # delivery that starts the machine.
+            hook=runtime.hook(service, root, rollback=True),
+            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *read_by_the_container, self.settings]),
         )
 
         self.register_outputs({})

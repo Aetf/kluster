@@ -2,11 +2,11 @@
 # Managed by the {{ cluster }} physical stack. Local edits are overwritten.
 #
 # Converge every declared machine under {{ machines_root }}: link the root
-# filesystem where systemd resolves a machine name, seed a state directory that
-# has never held one, and (re)start a machine whose definition moved. Runs at
-# boot, when nothing else is present, and again as the post-apply hook of every
-# file a machine is made of -- so the recovery path is the path every push
-# exercises.
+# filesystem where systemd resolves a machine name, make sure its state
+# directory exists, install an initial state into one that has never held any,
+# and (re)start a machine whose definition moved. Runs at boot, when nothing
+# else is present, and again as the post-apply hook of every file a machine is
+# made of -- so the recovery path is the path every push exercises.
 #
 # The machine set below is unordered. Which machine is actuated when is a
 # push-time constraint -- the one carrying the deployment's own session goes
@@ -55,7 +55,7 @@ install_initial_state() {
     [ -n "$destination" ] || return 0
     [ -e "$source" ] || return 0
     [ -z "$(ls -A "$MACHINES/$1/{{ state }}" 2>/dev/null)" ] || return 0
-    echo "machines: seeding $1"
+    echo "machines: initial state for $1"
     mkdir -p "$(dirname "$destination")"
     cp "$source" "$destination"
 }
@@ -84,11 +84,16 @@ done
 failed=0
 for machine in $DECLARED; do
     root=$MACHINES/$machine/{{ rootfs }}
-    # What is declared *and* has landed: a push writes this script before the
-    # trees it describes, so a machine with no root filesystem yet is one this
-    # run has nothing to do about -- not an error, and not a reason to leave
-    # the rest unconverged.
+    # What is declared *and* has landed, in both halves: a push writes this
+    # script before the files it describes, so a machine with no root
+    # filesystem, or none of the settings 30-nspawn-units.sh has just mirrored,
+    # is one this run has nothing to do about -- not an error, and not a reason
+    # to leave the rest unconverged. Starting a machine whose settings are
+    # missing would be worse than skipping it: nspawn would boot it with the
+    # template unit's defaults, which for a bridged machine is a virtual
+    # ethernet pair attached to nothing.
     [ -d "$root" ] || continue
+    [ -e "$MACHINES/$machine/$machine{{ nspawn_suffix }}" ] || continue
 
     link=$LIVE/$machine
     if [ -e "$link" ] && [ ! -L "$link" ]; then
@@ -104,6 +109,12 @@ for machine in $DECLARED; do
 
     unit={{ unit_template }}$machine.service
     systemctl is-enabled "$unit" >/dev/null 2>&1 || systemctl enable "$unit"
+
+    # The writable state is a bind source, and nspawn refuses to start a
+    # machine whose bind source is missing -- so the directory exists for every
+    # machine, whether or not anything is ever placed in it. A machine that has
+    # never run has nothing to create it otherwise.
+    mkdir -p "$MACHINES/$machine/{{ state }}"
     install_initial_state "$machine"
 
     stamp=$MACHINES/$machine/{{ stamp }}

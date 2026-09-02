@@ -153,7 +153,8 @@ under `/data/custom/machines`, the persistent root a firmware update
 leaves alone: the root filesystem tree, the digest marker naming the pin
 it came from, the writable state bind-mounted into the container, the
 `<name>.nspawn` settings file, the content stamp, and whatever files
-that machine mounts or is seeded from. A machine can therefore be read,
+that machine mounts or is given as initial state. A machine can therefore
+be read,
 moved or deleted whole, and nothing about a service is left somewhere
 else when the service goes.
 
@@ -173,9 +174,11 @@ The machine set they act on is **rendered and unordered**: a machine
 absent from it is skipped even if its directory exists, which is what
 keeps a half-migrated or hand-made sibling directory from being
 started, and one that is no longer declared is disabled and unlinked.
-A machine whose root filesystem has not landed yet is skipped rather
-than fatal, because a push writes that script before the trees it
-describes.
+A machine whose root filesystem has not landed yet, or whose settings
+have not, is skipped rather than fatal, because a push writes that
+script before the files it describes — and a machine started without
+its settings would come up on the template unit's defaults, which for
+a bridged service is an interface attached to nothing.
 
 **A service is restarted only if a file that defines it changed**, and
 that is why the health of a service here is decided by *files* rather
