@@ -100,7 +100,7 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
     ):
         assert monitor.options_of(name).parent.endswith(f'::{NAME}'), name
 
-    assert monitor.inputs_of(f'{MECHANISM}-skeleton-{nspawn.SKELETON}')['content'].strip() == nspawn.MACHINES
+    assert monitor.inputs_of(f'{MECHANISM}-skeleton-{nspawn.SKELETON}')['path'] == nspawn.MACHINES
     assert nspawn.MACHINES == f'{conventions.gateway.CUSTOM_ROOT}/machines'
 
 
