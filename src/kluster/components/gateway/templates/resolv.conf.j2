@@ -1,0 +1,14 @@
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# The gateway's own resolver, which is the only one that answers both halves of
+# what the proxy asks: it is authoritative for the internal zone the proxy's
+# upstreams are named in, and it forwards everything else, so the calls the
+# certificate issuance makes to the registrar's API resolve too. It is not the
+# pair of resolvers this proxy fronts, so the proxy still does not depend on
+# what it serves, and it runs on this same device, so it cannot be down while
+# the proxy is up.
+#
+# Exactly one entry: the image's resolver library queries every listed server
+# in parallel and takes the first response, so a public resolver beside this
+# one would answer the internal names with NXDOMAIN and win the race.
+nameserver {{ resolver }}

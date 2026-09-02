@@ -1,0 +1,71 @@
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# What machine {{ name }} is, as systemd-nspawn@.service reads it. Every
+# setting here is something an s6 image does or does not do for itself.
+[Exec]
+{# `Boot=on` looks for an init and finds the one the image places at
+   `/sbin/init`, which is s6's. That init never sends a readiness message, and
+   nspawn answers for it by default, so the machine is up once its PID 1
+   exists rather than when a message that never comes arrives.
+
+   An s6 guest treats a gentler shutdown signal as advisory: it returns from
+   it with its supervisors still running, and they hold the machine's control
+   group open until the next start fails against a group that never emptied.
+   The kill signal and the zero grace time are the two halves of ending that.
+
+   Every image configures its own interface from inside, which takes the one
+   capability nspawn's default set does not keep.
+
+   Nothing synthesizes an `/etc/resolv.conf` here. The image ships one -- the
+   overlay daemon resolves through public servers because it has to come up
+   while this device's own resolvers are down -- and a machine that must ask
+   the site's own resolver instead is handed that file as a bind like any
+   other configuration. #}
+Boot=on
+KillSignal={{ kill_signal }}
+Capability={{ capability }}
+ResolvConf=off
+{# A machine is told things through its PID 1's environment, because that is
+   what its own startup scripts read. A drop-in written for a network manager
+   the image does not run is a file nobody opens. #}
+Environment=S6_KILL_GRACETIME={{ kill_gracetime }}
+{%- for variable, value in environment.items() %}
+Environment={{ variable }}={{ value }}
+{%- endfor %}
+{%- if host_network %}
+{# The template unit runs every machine in a user namespace. A machine in the
+   host's network namespace creates an interface there, and a namespaced
+   CAP_NET_ADMIN does not reach the host's namespace, so the daemon would join
+   and route nothing. #}
+PrivateUsers=no
+{%- endif %}
+
+[Network]
+{%- if bridge %}
+Bridge={{ bridge }}
+{%- else %}
+{# Host networking is the absence of a virtual ethernet pair: the daemon
+   creates the interface this device routes through, and an interface created
+   inside a private namespace is invisible to the router that has to use it.
+   The template unit asks for a pair, so cancelling it is what has to be said. #}
+VirtualEthernet=off
+{%- endif %}
+{%- if state_bind or devices or binds %}
+
+[Files]
+{%- if state_bind %}
+{# The writable state is kept out of the tree, so replacing the software keeps
+   the identity -- which for the overlay daemon is the difference between a
+   reboot and a new node address. #}
+Bind={{ state_bind }}
+{%- endif %}
+{%- for device in devices %}
+{# A device node the machine needs. nspawn refuses to start when a bind source
+   is missing, which is what turns "the daemon logged that it cannot open the
+   device and went to sleep" into a machine that failed with a reason. #}
+Bind={{ device }}
+{%- endfor %}
+{%- for bind in binds %}
+BindReadOnly={{ bind }}
+{%- endfor %}
+{%- endif %}
