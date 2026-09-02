@@ -145,12 +145,10 @@ __all__ = (
     'ARTIFACT_DECLARED',
     'DIRECTORY_COMPARED',
     'DIRECTORY_DECLARED',
-    'DIRECTORY_VERSION',
     'FILE_COMPARED',
     'FILE_DECLARED',
     'LAYOUT_SUFFIX',
     'LAYOUT_TAG',
-    'NOT_EMPTY',
     'PIN',
     'PRIVATE_KEY_CONFIG',
     'SUPERSEDED_SUFFIX',
@@ -230,19 +228,6 @@ PRIVATE_KEY_CONFIG = 'gatewayPrivateKey'
 #: This module's version, bumped by hand when an operation's behavior changes
 #: (`configured`).
 VERSION = '3'
-
-#: The same for the directory operations, which are versioned apart from the two
-#: above. The stamp exists to make a change to *this* resource's behavior show up
-#: in a preview, and one constant for the module would say that directories are
-#: made differently by re-stamping every file and tree on the device.
-DIRECTORY_VERSION = '1'
-
-#: The exit status a removal uses to say "this directory has something in it".
-#: The device's own `rmdir` refuses a non-empty directory, but it refuses an
-#: unwritable one with the same status and a message in whatever language the
-#: session speaks, and those two are not the same answer. Distinct from
-#: `ssh.ABSENT`, which the transport's own verbs speak on the same channel.
-NOT_EMPTY = 43
 
 #: What `diff` compares, and the whole of it. Its `olds` is the stored *output*
 #: bag while its `news` is the checked *input* bag (rfc-002 §7.5 E7), so a key
@@ -499,15 +484,21 @@ def remove_script(path: str) -> str:
     """The command that takes `path` away, and only while nothing is in it.
 
     Three answers rather than two, because the caller has to tell them apart: a
-    directory that was already gone is a success, one with something in it exits
-    `NOT_EMPTY`, and anything else is the device's own failure with its own
-    message. `rmdir` would collapse the last two into one status.
+    path that was already gone is a success, a directory with something in it
+    exits `ssh.NOT_EMPTY`, and anything else is the device's own failure with
+    its own message. `rmdir` would collapse the last two into one status.
+
+    The emptiness test asks about a directory first. `ls -A` on a regular file
+    prints that file's own name, so a file left at the declared path would be
+    called "not empty" -- a statement about contents it does not have. It falls
+    through to `rmdir` instead, which refuses it as not a directory and says so
+    in the device's own words.
     """
     quoted = shlex.quote(path)
     return '; '.join(
         (
             f'if [ ! -e {quoted} ]; then exit 0; fi',
-            f'if [ -n "$(ls -A {quoted})" ]; then exit {NOT_EMPTY}; fi',
+            f'if [ -d {quoted} ] && [ -n "$(ls -A {quoted})" ]; then exit {ssh.NOT_EMPTY}; fi',
             f'rmdir {quoted}',
         )
     )
@@ -632,7 +623,7 @@ def gone() -> dynamic.ReadResult:
 
 
 class DeviceProvider(ConfiguredProvider, abc.ABC):
-    """What both device providers share: the session, and what it makes visible.
+    """What the device providers share: the session, and what it makes visible.
 
     The stateless-provider machinery is `kluster.providers.configured`: the key
     is read in `configure`, nothing is pickled, and `check` stamps the session
@@ -875,15 +866,15 @@ class DeviceDirectoryProvider(DeviceProvider):
     they are why the directory was declared, and they are never read, written or
     counted except to refuse a delete that would take them with it.
 
-    Whether the path holds a directory rather than a file is a question `stat`
-    does not answer, and the operations answer it instead: `mkdir -p` refuses a
-    path a regular file occupies, and so does the removal. So a path that is the
-    wrong kind is reported by the device on the next apply rather than converged
-    into silently.
+    **What the device holds at the path is part of the comparison**, not merely
+    whether something is there: `stat` reports the kind, so a regular file
+    somebody left where a directory is declared is drift, and a refresh records
+    the resource as gone rather than as converged. The operations refuse it too
+    -- `mkdir -p` will not take a path a file occupies, and neither will `rmdir`
+    -- but a diff that could not see it would report no change for as long as
+    the mode and the owner happened to match, which is exactly the directory
+    this resource exists to notice.
     """
-
-    def _version(self) -> str:
-        return DIRECTORY_VERSION
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
         return self._stamp(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
@@ -932,19 +923,21 @@ class DeviceDirectoryProvider(DeviceProvider):
     async def _drifted(self, props: Mapping[str, Any]) -> bool:
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(str(props['path']))
-            if stat is None:
+            if stat is None or not stat.is_directory:
                 # Which is the gap this resource closes: a directory removed by
-                # hand, or taken by a firmware update, is work the next preview
-                # sees without anyone asking for a refresh.
+                # hand, taken by a firmware update, or replaced by a file of the
+                # same name is work the next preview sees without anyone asking
+                # for a refresh.
                 return True
             return not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat)
 
     async def _read(self, id_: str, props: Mapping[str, Any]) -> dynamic.ReadResult:
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(str(props['path']))
-            if stat is None:
-                # Gone from the device is gone, as it is for a file: the next up
-                # makes the directory again.
+            if stat is None or not stat.is_directory:
+                # Gone from the device is gone, as it is for a file, and a path
+                # something else occupies is a directory that is not there: the
+                # next up makes it again, and says so if it cannot.
                 return gone()
             outs = {**props, 'mode': stat.mode, 'owner': _observed_owner(props.get('owner'), stat)}
         return dynamic.ReadResult(id_=id_, outs=outs)
@@ -953,7 +946,7 @@ class DeviceDirectoryProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             removed = await transport.run(remove_script(path))
-            if removed.exit_status == NOT_EMPTY:
+            if removed.exit_status == ssh.NOT_EMPTY:
                 raise DirectoryNotEmpty(path)
             if not removed.ok:
                 raise RemoveDirectoryFailed(path, removed.exit_status, removed.stderr)
