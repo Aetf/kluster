@@ -1,0 +1,48 @@
+#!/bin/bash
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Put one machine back on the root filesystem the last push displaced. The push
+# leaves the tree it replaced beside the live one until the next push clears
+# it, so the bytes this needs are on the device for exactly the window that
+# needs them.
+#
+# One command over any transport: the health gate of a push takes it when a
+# machine does not come up, and an operator takes it by hand over the LAN when
+# a bad push took the overlay down with it.
+
+set -u
+
+usage() {
+    echo "usage: $(basename "$0") <machine>" >&2
+    exit 2
+}
+
+[ $# -eq 1 ] || usage
+machine=$1
+
+live={{ machines_root }}/$machine/{{ rootfs }}
+superseded=$live{{ superseded_suffix }}
+rejected=$live{{ rejected_suffix }}
+unit={{ unit_template }}$machine.service
+
+if [ ! -d "$superseded" ]; then
+    echo "$machine: no superseded root filesystem beside $live, so there is nothing to roll back to" >&2
+    exit 1
+fi
+
+systemctl stop "$unit" || true
+
+# A swap rather than a restore: the tree that was rejected takes the
+# superseded one's place, so running this twice returns to where it started.
+rm -rf "$rejected"
+mv "$live" "$rejected"
+mv "$superseded" "$live"
+mv "$rejected" "$superseded"
+
+# The tree is no longer the one the pin names, and the marker is the claim that
+# it is. Taking it away leaves a tree of unknown provenance, which is what
+# makes the next push land the declared pin again rather than see nothing to
+# do.
+rm -f "$live{{ marker_suffix }}"
+
+systemctl start "$unit"

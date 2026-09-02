@@ -1,0 +1,38 @@
+#!/bin/bash
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Mirror each machine's settings -- {{ machines_root }}/<name>/<name>{{ suffix }} --
+# into {{ live_nspawn_dir }}, which is where systemd-nspawn@.service reads them
+# when it starts a machine. Ordered before the machines are started, so one
+# never comes up without its network and its binds.
+#
+# /etc has survived every observed firmware update, so day to day this is a
+# no-op self-heal; it is load-bearing after a major-version jump or a factory
+# reset. Unlike the unit store, this directory holds nothing that is not ours,
+# so it is a true mirror: a live file with no source is removed, and a machine
+# retired stays retired on a recovery boot rather than only on the push that
+# retired it.
+
+set -u
+
+src={{ machines_root }}
+live={{ live_nspawn_dir }}
+[ -d "$src" ] || exit 0
+mkdir -p "$live"
+
+for f in "$src"/*/*{{ suffix }}; do
+    [ -e "$f" ] || continue
+    if ! cmp -s "$f" "$live/$(basename "$f")"; then
+        echo "nspawn-units: installing $(basename "$f")"
+        cp "$f" "$live/"
+    fi
+done
+
+for f in "$live"/*{{ suffix }}; do
+    [ -e "$f" ] || continue
+    machine=$(basename "$f" {{ suffix }})
+    if [ ! -e "$src/$machine/$machine{{ suffix }}" ]; then
+        echo "nspawn-units: removing stale $(basename "$f")"
+        rm "$f"
+    fi
+done
