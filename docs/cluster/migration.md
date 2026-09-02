@@ -25,7 +25,9 @@ owns sequencing, data movement, and teardown.
     (FRR, nspawn, on_boot.d, caddy — the whole repo retires),
     yadm/aconfmgr (qbittorrent unit, quadlets, state-backend compose,
     adguardhome-sync), DNSControl. Each step ends with a
-    removal/pointer commit — nothing tracked twice or by nothing.
+    removal/pointer commit — nothing tracked twice or by nothing. What
+    the gw-config commit covers, piece by piece, and what holds each
+    piece instead: physical/gateway-cutover.md §7.
 4.  **NVMe space *and* RAM are interleaved** (nodes.md §4.2): ~85 GB
     free and no spare RAM while both clusters coexist — legacy k3s
     still holds ~16 GiB of the host's 32, so the worker VM **cannot
@@ -67,7 +69,11 @@ owns sequencing, data movement, and teardown.
     the routes have named as their next hop since the first apply;
     unset the knob and apply once more, which dials over the overlay
     and is thereby the verification. Step by step, and why each step is
-    one: physical/gateway.md §2.5. `dns` up: zones + estate records
+    one: physical/gateway.md §2.5. The device is already running the
+    layout gw-config built, so the first of those applies opens with a
+    cutover window that moves the live container state under the
+    declared paths — procedure, verification and rollback:
+    physical/gateway-cutover.md. `dns` up: zones + estate records
     imported wholesale (records still pointing at `archvps.hosts`; the
     import census also drops dead weight — `abacus.hosts`, its ZT
     entry, jupyter/mc records).

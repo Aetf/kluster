@@ -27,6 +27,7 @@ asyncio
 authelia
 Authelia
 autobackup
+autobackups
 automerge
 automerged
 Automerged
@@ -85,6 +86,7 @@ DNAT
 DNATs
 dns
 DNSControl
+dnsmasq
 Docstrings
 dport
 dst
@@ -183,6 +185,7 @@ kluster
 kluster-code
 kluster-code-era
 kluster-py
+kluster-ops
 kube
 kube-apiserver
 kubeconfig
@@ -386,10 +389,12 @@ uv
 vchord
 VCN
 vCPU
+vendored
 vfio
 VFIO
 VFIO-passthrough
 vfio-pci
+vhost
 vhosts
 vhp
 VictoriaMetrics
@@ -405,6 +410,7 @@ vmsingle
 VNIC
 VolSync
 VolSync-backed
+vtysh
 vps-upgrade
 VPU
 Vultr
