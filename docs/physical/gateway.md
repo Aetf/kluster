@@ -94,12 +94,14 @@ declarative/physical.md §4.
     PID 1**, which is the only channel its startup scripts read. The
     AdGuard pair take their address that way (address, router and the
     SLAAC token, read by the image's own network setup before the
-    resolver it guards may start). Caddy does not: its image asks for
-    a DHCP lease, and the lease is where its resolver comes from too,
-    so the address the census holds for it is the address the design
-    intends and not one the unit delivers — closing that gap is work
-    in the image, which needs the AdGuard pair's network setup plus a
-    resolver that does not depend on these services. The ZeroTier member
+    resolver it guards may start). Caddy takes its address the same
+    way: its image carries that same network setup, the proxy is
+    ordered after it, and that setup exits non-zero when the addressing
+    is not in its environment — so the address the census holds for the proxy
+    is the address it answers on, the one a rewrite has to name, rather
+    than one the design merely intends, and a machine that failed to
+    deliver it stops the proxy instead of starting it somewhere else.
+    The ZeroTier member
     is told nothing at all: it is host-networked, and what it needs of
     its machine is the tunnel device and the state directory that is its
     identity on the overlay.
