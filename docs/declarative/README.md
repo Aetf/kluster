@@ -8,6 +8,10 @@ written with — how a stack program is dispatched and how a value
 mechanically crosses a stack boundary is
 [framework/pulumi.md](../framework/pulumi.md) §3).
 
+Some of the decisions recorded here were proposed as RFCs first; the
+[RFC directory](../rfc/) indexes those and states the process that governs
+them.
+
 ## 1. The stacks
 
 > **Status**: decided 2026-08-22 (interactive review; `dns` added the
