@@ -1,6 +1,11 @@
 # RFC 001: Native Async Inputs for Pulumi Python Components
 
-*   **Status:** Accepted
+*   **Status:** Implemented, 2026-08-15, when Rev 3 removed the last of the
+    legacy flow. The text below is kept as the accepted proposal rather than
+    as a description of the system: what the framework *is* lives in
+    [framework/pulumi.md](../framework/pulumi.md) §1 and §2, and the
+    implementation is `src/putils/`. Where this text and that document
+    disagree, the document is right.
 *   **Author:** Jetski & pfyu
 *   **Created:** 2026-06-01
 *   **Updated:** 2026-07-02 (Rev 2: per-input redesign, supersedes the
