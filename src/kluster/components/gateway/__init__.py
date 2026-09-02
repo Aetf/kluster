@@ -5,13 +5,14 @@ through two doors, and `Gateway` owns both because each needs its own
 credential and neither implies the other:
 
 -   **The device itself**, over SSH. There is no API for most of what matters
-    here — routing, the container services, the script that re-establishes both
-    after a firmware update — but there is a proven convention: desired-state
-    files under `/data`, written idempotently. That is
+    here — routing, the container services, the boot chain that re-establishes
+    both after a firmware update — but there is a proven convention:
+    desired-state files under `/data`, written idempotently. That is
     `kluster.providers.device_files`, a dynamic provider whose `diff` reads the
     device and whose `create`/`update` writes and then runs a hook. Bulk
-    artifacts (container root filesystems built by CI) travel as a URL and a
-    digest, never as bytes in state, so a preview stays cheap. `Gateway` says
+    artifacts (container root filesystems built by CI) are named by a pin the
+    device pulls for itself, never carried as bytes in state, so a preview
+    compares two digests. `Gateway` says
     where the device answers, and the key it must present is the pin in
     `conventions`; the credential that opens the session is the provider's own,
     read in its `configure` and handled by nothing here (rfc-002 §7.4).
@@ -37,27 +38,24 @@ from collections.abc import Sequence
 import pulumi
 
 from kluster import conventions
-from kluster.components.gateway.container import CaddyService, OverlayDaemon, ResolverService, Rootfs
+from kluster.components.gateway.container import (
+    CaddyService,
+    Container,
+    OverlayDaemon,
+    ResolverService,
+    Rootfs,
+    machine,
+)
+from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.components.gateway.services import DeviceServices, RoutingSession
+from kluster.components.gateway.services import FRR_APPLY, FRR_CONFIG, FRR_MODE, RoutingSession, frr_config
 from kluster.components.gateway.unifi import SiteFirewall
-from kluster.providers.device_files.provider import Connection
+from kluster.providers.device_files.provider import Connection, DeviceFile
 from putils import Component
 
 #: The declaration types the stack program builds a `Gateway` out of are
 #: re-exported here, so that wiring the gateway is one import.
-__all__ = ('NSPAWN_PACKAGES', 'CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
-
-#: What the container services need of the device's package set: the tooling
-#: that boots a directory as a machine, and the name-service module that
-#: resolves the machines it started. The two are version-locked to each other,
-#: which is why the mechanism installs the whole set in one transaction rather
-#: than a package at a time (`persistence`).
-#:
-#: It is stated here, beside the component that passes it on, because the set is
-#: a requirement of the container runtime and the runtime is not yet a component
-#: of its own.
-NSPAWN_PACKAGES = ('systemd-container', 'libnss-mymachines')
+__all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'ResolverService', 'Rootfs', 'RoutingSession')
 
 
 class Gateway(Component):
@@ -106,22 +104,54 @@ class Gateway(Component):
             username=conventions.gateway.SSH_USER,
         )
 
+        declarations = (caddy, *resolvers, overlay_daemon)
+
         # The mechanism under everything else on the device: what puts the
         # customization back after a firmware update, and the way the layers
-        # above deliver a script, an executable, a unit or a directory.
+        # above deliver a script, an executable, a unit or a directory. The
+        # package set it renders is the union of what those layers require, so
+        # each of them states its own requirement and none of them writes the
+        # script.
         self.persistence = DevicePersistence(
             f'{name}-persistence',
             connection=connection,
-            packages=NSPAWN_PACKAGES,
+            packages=NspawnRuntime.REQUIRED_PACKAGES,
             opts=self.child_opts(),
         )
-        self.services = DeviceServices(
-            f'{name}-services',
+        # The framework the services run on, handed the same declarations the
+        # services are built from: what the converger acts on and what the
+        # components declare are then one statement, and neither side has to
+        # exist before the other.
+        self.runtime = NspawnRuntime(
+            f'{name}-nspawn',
+            mechanism=self.persistence,
+            machines=tuple(machine(declaration) for declaration in declarations),
+            opts=self.child_opts(),
+        )
+        self.containers: tuple[Container, ...] = tuple(
+            Container(
+                f'{name}-{declaration.service.name}',
+                declaration=declaration,
+                runtime=self.runtime,
+                connection=connection,
+                opts=self.child_opts(),
+            )
+            for declaration in (caddy, *resolvers)
+        )
+        # The routing configuration answers to the daemon rather than to the
+        # boot chain, so it applies itself. It carries the session password,
+        # which is why it is secret.
+        self.routing = DeviceFile(
+            f'{name}-routing',
             connection=connection,
-            caddy=caddy,
-            resolvers=resolvers,
-            overlay_daemon=overlay_daemon,
-            routing=routing,
+            path=FRR_CONFIG,
+            content=pulumi.Output.from_input(routing.password).apply(
+                lambda password: frr_config(neighbour=routing.neighbour, password=password)
+            ),
+            mode=FRR_MODE,
+            owner=conventions.gateway.SSH_USER,
+            hook=FRR_APPLY,
+            secret=True,
             opts=self.child_opts(),
         )
         self.firewall = SiteFirewall(
@@ -133,6 +163,21 @@ class Gateway(Component):
             api_url=f'https://{host}',
             site=site,
             worker_gua=worker_gua,
+            opts=self.child_opts(),
+        )
+
+        # Last, and behind every other child of this component. Once the device
+        # is an overlay member, any resource's session may ride the tunnel this
+        # container carries, so restarting it before the last write has landed
+        # severs the apply mid-flight. The dependency is what says so, rather
+        # than an order inside a script: at boot no apply is in progress and
+        # nothing rides anything, and the converger is therefore free of it.
+        self.overlay_daemon = Container(
+            f'{name}-{overlay_daemon.service.name}',
+            declaration=overlay_daemon,
+            runtime=self.runtime,
+            connection=connection,
+            after=(self.persistence, self.runtime, *self.containers, self.routing, self.firewall),
             opts=self.child_opts(),
         )
 
