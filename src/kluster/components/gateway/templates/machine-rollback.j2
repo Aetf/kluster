@@ -9,8 +9,13 @@
 # One command over any transport: the health gate of a push takes it when a
 # machine does not come up, and an operator takes it by hand over the LAN when
 # a bad push took the overlay down with it.
+#
+# The content stamp is deliberately left as it was, so it now disagrees with
+# what the machine runs: the next run of the machine converger restarts the
+# machine once more onto the swapped tree rather than reading the device as
+# already converged.
 
-set -u
+set -eu
 
 usage() {
     echo "usage: $(basename "$0") <machine>" >&2

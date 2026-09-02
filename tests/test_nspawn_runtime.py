@@ -32,22 +32,23 @@ MECHANISM = 'mechanism'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
-#: Two machines, one of them seeded: enough to render every branch of the
-#: converger, and named so that neither is this repository's own service.
+#: Two machines, one of them with an initial state: enough to render every
+#: branch of the converger, and named so that neither is a service of this
+#: repository's own.
 PLAIN = Machine(
     name='plain',
     stamped=(nspawn.nspawn_path('plain'), marker_path(nspawn.rootfs_path('plain'))),
     initial_state=None,
 )
-SEEDED = Machine(
-    name='seeded',
-    stamped=(nspawn.nspawn_path('seeded'), marker_path(nspawn.rootfs_path('seeded'))),
+GIVEN_STATE = Machine(
+    name='stateful',
+    stamped=(nspawn.nspawn_path('stateful'), marker_path(nspawn.rootfs_path('stateful'))),
     initial_state=Placement(
-        source=nspawn.machine_file('seeded', 'initial.yaml'),
+        source=nspawn.machine_file('stateful', 'initial.yaml'),
         destination=f'{nspawn.state_path("seeded")}/live.yaml',
     ),
 )
-MACHINES = (SEEDED, PLAIN)
+MACHINES = (GIVEN_STATE, PLAIN)
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
@@ -57,14 +58,21 @@ async def monitor() -> Recorder:
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def runtime(monitor: Recorder) -> NspawnRuntime:
-    """The runtime on the mechanism, declared the way `Gateway` declares them."""
+async def mechanism(monitor: Recorder) -> DevicePersistence:
+    """The layer this one is built on, declared the way `Gateway` declares it."""
     async with declaring():
-        mechanism = DevicePersistence(
+        layer_one = DevicePersistence(
             MECHANISM,
             connection=Connection(host=HOST, host_key=HOST_KEY, username=conventions.gateway.SSH_USER),
             packages=NspawnRuntime.REQUIRED_PACKAGES,
         )
+    return layer_one
+
+
+@pytest_asyncio.fixture(scope='module', autouse=True)
+async def runtime(mechanism: DevicePersistence) -> NspawnRuntime:
+    """The runtime on that mechanism, declared once."""
+    async with declaring():
         framework = NspawnRuntime(NAME, mechanism=mechanism, machines=MACHINES)
     return framework
 
@@ -138,7 +146,7 @@ def test_a_machine_that_did_not_come_up_is_rolled_back_and_the_push_fails() -> N
     finds a red apply rather than a resolver that has been down since a push
     that reported success.
     """
-    hook = nspawn.machine_hook('plain', nspawn.nspawn_path('plain'))
+    hook = nspawn.machine_hook('plain', nspawn.rootfs_path('plain'), rollback=True)
 
     assert persistence.on_boot_path(nspawn.NSPAWN_UNITS_SCRIPT) in hook
     assert persistence.on_boot_path(nspawn.MACHINES_SCRIPT) in hook
@@ -147,21 +155,50 @@ def test_a_machine_that_did_not_come_up_is_rolled_back_and_the_push_fails() -> N
     assert 'exit 1' in hook
 
 
-def test_the_health_gate_asks_whether_this_file_was_delivered_or_removed() -> None:
-    """One command runs after a write and after a delete, and they differ.
+def test_only_the_root_filesystems_hook_rolls_anything_back() -> None:
+    """The tree is the only piece of a machine with a displaced copy beside it.
 
-    A machine being retired is a machine that is *supposed* not to be active,
-    so holding the delete to an active unit would roll back a machine on its
-    way out and fail the delete that was removing it. The file the hook belongs
-    to is what says which of the two happened.
+    A configuration file's hook that swapped it would replace a tree that had
+    nothing to do with the failure and leave the bad configuration in place —
+    so the next push would deliver it again, fail again, and swap again. Such a
+    hook fails without touching the tree.
+    """
+    configuration = nspawn.machine_hook('plain', nspawn.machine_file('plain', 'Caddyfile'), rollback=False)
+
+    assert nspawn.ROLLBACK_PROGRAM not in configuration
+    assert 'exit 1' in configuration
+
+
+def test_the_health_gate_holds_only_a_machine_that_could_have_started() -> None:
+    """Two cases the push produces, and the gate has to survive both.
+
+    The same command runs after a delete: a machine being retired is *supposed*
+    not to be active, and holding the delete to an active unit would fail the
+    delete that was removing it. And on the push that creates a machine its
+    configuration lands before its root filesystem does, so the converger skips
+    it — a gate that fired then would fail every file of every new machine.
     """
     path = nspawn.machine_file('plain', 'Caddyfile')
-    hook = nspawn.machine_hook('plain', path)
+    hook = nspawn.machine_hook('plain', path, rollback=False)
 
-    assert f'if [ -e {path} ]' in hook
+    assert f'if [ -e {path} ] && [ -d {nspawn.rootfs_path("plain")} ]; then' in hook
     # The convergers run either way: a file that has just gone is a change the
     # device still has to be told about.
     assert hook.index(persistence.on_boot_path(nspawn.MACHINES_SCRIPT)) < hook.index(f'if [ -e {path} ]')
+
+
+def test_the_convergers_exit_status_reaches_the_apply() -> None:
+    """It reports what only it learns, and a hook that dropped it would lie.
+
+    A machine of this push's set that failed to start, or a live directory the
+    script refused to touch, is a failure no `is-active` of *this* machine
+    would see — and a green apply over a device that printed a failure is the
+    one outcome this mechanism must not produce.
+    """
+    hook = nspawn.machine_hook('plain', nspawn.rootfs_path('plain'), rollback=True)
+
+    assert 'rc=$?' in hook
+    assert hook.endswith('exit $rc')
 
 
 def test_the_settings_are_mirrored_before_the_machines_are_started() -> None:
@@ -188,6 +225,12 @@ def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
         with pytest.raises(ValueError, match='nspawn runtime keeps'):
             _ = nspawn.machine_file('plain', reserved)
 
+    # Any settings name and not only this machine's: the mirror keys the live
+    # directory by machine name, so a second one here would be installed as
+    # another machine's settings and removed as stale in the same run.
+    with pytest.raises(ValueError, match='nspawn runtime keeps'):
+        _ = nspawn.machine_file('plain', f'other{nspawn.NSPAWN_SUFFIX}')
+
 
 ##
 ## What the convergers say
@@ -205,8 +248,8 @@ def test_the_machine_set_carries_no_order() -> None:
     script = nspawn.machines_script(MACHINES)
     declared = next(line for line in script.splitlines() if line.startswith('DECLARED='))
 
-    assert declared == 'DECLARED="plain seeded"'
-    assert nspawn.machines_script(MACHINES) == nspawn.machines_script((PLAIN, SEEDED))
+    assert declared == 'DECLARED="plain stateful"'
+    assert nspawn.machines_script(MACHINES) == nspawn.machines_script((PLAIN, GIVEN_STATE))
 
 
 def test_the_link_names_the_root_filesystem_and_not_the_machine_directory() -> None:
@@ -233,7 +276,7 @@ def test_a_machine_is_restarted_only_when_something_that_defines_it_changed() ->
     """
     script = nspawn.machines_script(MACHINES)
 
-    for path in SEEDED.stamped:
+    for path in GIVEN_STATE.stamped:
         assert path in script
     assert f'stamp=$MACHINES/$machine/{nspawn.STAMP}' in script
     assert 'cksum' in script
@@ -241,7 +284,23 @@ def test_a_machine_is_restarted_only_when_something_that_defines_it_changed() ->
     assert 'systemctl restart "$unit"' in script
 
 
-def test_a_machine_is_seeded_only_while_its_state_directory_is_empty() -> None:
+def test_every_declared_machine_gets_a_state_directory() -> None:
+    """A bind whose source is missing is a machine that refuses to start.
+
+    The writable state is bound into every machine here, and nothing else on
+    the device creates that directory: a machine that has never run would
+    otherwise fail its first start, and the machine that has never run is the
+    last one of the cutover push.
+    """
+    script = nspawn.machines_script(MACHINES)
+
+    assert f'mkdir -p "$MACHINES/$machine/{nspawn.STATE}"' in script
+    assert script.index(f'mkdir -p "$MACHINES/$machine/{nspawn.STATE}"') < script.index(
+        'install_initial_state "$machine"'
+    )
+
+
+def test_a_machine_is_given_its_initial_state_only_while_its_state_is_empty() -> None:
     """The software behind it rewrites the file the moment it accepts a change.
 
     So the initial state is delivered under a name the software does not read,
@@ -251,9 +310,9 @@ def test_a_machine_is_seeded_only_while_its_state_directory_is_empty() -> None:
     """
     script = nspawn.machines_script(MACHINES)
 
-    assert SEEDED.initial_state is not None
-    assert SEEDED.initial_state.source in script
-    assert SEEDED.initial_state.destination in script
+    assert GIVEN_STATE.initial_state is not None
+    assert GIVEN_STATE.initial_state.source in script
+    assert GIVEN_STATE.initial_state.destination in script
     assert f'[ -z "$(ls -A "$MACHINES/$1/{nspawn.STATE}" 2>/dev/null)" ] || return 0' in script
     assert PLAIN.name not in script.split('install_initial_state() {')[1].split('}')[0]
 
@@ -269,6 +328,10 @@ def test_the_converger_converges_a_device_that_has_nothing_on_it() -> None:
     script = nspawn.machines_script(MACHINES)
 
     assert '[ -d "$root" ] || continue' in script
+    # Both halves: a machine started without the settings 30 mirrors would come
+    # up on the template unit's defaults, which for a bridged machine is an
+    # interface attached to nothing — and the gate would then pass on it.
+    assert f'[ -e "$MACHINES/$machine/$machine{nspawn.NSPAWN_SUFFIX}" ] || continue' in script
     assert 'systemctl disable --now' in script
     assert 'machines: retiring $machine' in script
     # Only links into the machines root are candidates for retirement: anything
@@ -299,7 +362,8 @@ def test_the_settings_mirror_removes_what_has_no_source() -> None:
 
     assert f'src={nspawn.MACHINES}' in script
     assert f'live={nspawn.LIVE_NSPAWN_DIR}' in script
-    assert f'for f in "$src"/*/*{nspawn.NSPAWN_SUFFIX}; do' in script
+    assert 'for dir in "$src"/*/; do' in script
+    assert f'f=$dir$machine{nspawn.NSPAWN_SUFFIX}' in script
     assert 'removing stale' in script
 
 
@@ -336,18 +400,26 @@ def test_a_rollback_with_nothing_to_roll_back_to_refuses() -> None:
 
     assert 'if [ ! -d "$superseded" ]; then' in program
     assert 'nothing to roll back to' in program
+    # A failed rename must not let the next two run: a half-swapped machine is
+    # a machine on neither tree.
+    assert 'set -eu' in program
 
 
 @pytest.mark.asyncio
-async def test_a_machines_file_waits_for_the_convergers_that_act_on_it(runtime: NspawnRuntime) -> None:
+async def test_a_machines_file_waits_for_the_convergers_that_act_on_it(
+    runtime: NspawnRuntime, mechanism: DevicePersistence
+) -> None:
     """A hook that runs a script the device has not been given fails its apply.
 
     So what a machine's files must be behind is the two convergers, the
-    rollback the health gate reaches for, and the directory they all work in.
+    rollback the health gate reaches for, the directory they all work in — and
+    the package script, because the two programs the device pulls and unpacks a
+    root filesystem with are not on the box until it has run.
     """
     urns = {str(await resource.urn.future()) for resource in runtime.convergers}
 
     assert urns == {
+        str(await mechanism.packages.urn.future()),
         str(await runtime.skeleton.urn.future()),
         str(await runtime.nspawn_units.urn.future()),
         str(await runtime.machines.urn.future()),

@@ -17,7 +17,7 @@ machines/<name>/
     state/                  the writable state, bind-mounted into the container
     <name>.nspawn           the machine's settings, mirrored into /etc/systemd/nspawn
     stamp                   what the converger last acted on
-    <other files>           whatever the machine mounts or is seeded from
+    <other files>           whatever the machine mounts or is given as initial state
 ```
 
 Two scripts converge it, both delivered through the persistence layer because
@@ -44,11 +44,13 @@ systemd's own template, so what a machine says about itself is said in its
 settings file rather than in a unit this program writes; `machinectl` and
 `systemctl` see the machines the same way they see any other.
 
-**A failed push rolls back and stays failed.** A machine's post-apply hook does
-not stop at converging: it asks whether the machine reached active, and if it
-did not it swaps the root filesystem back to the tree this push displaced and
-exits non-zero. The device is left running what it was running, the resource
-fails, and the next preview still has the work to do.
+**A failed push stays failed, and the root filesystem goes back.** A machine's
+post-apply hook does not stop at converging: it asks whether the machine
+reached active, and a machine that did not fails the operation. The root
+filesystem's own hook additionally swaps the tree back to the one this push
+displaced, because the tree is the only piece of a machine the device keeps a
+displaced copy of. Either way the resource fails and the next preview still has
+the work to do.
 """
 
 from __future__ import annotations
@@ -197,10 +199,14 @@ def machine_file(machine: str, name: str) -> str:
 
     A name the runtime or the push already uses is refused rather than
     delivered: the two would be one path, and whichever wrote last would decide
-    whether the machine booted a configuration file or a root filesystem.
+    whether the machine booted a configuration file or a root filesystem. Any
+    settings-file name is refused and not just this machine's, because the
+    mirror keys the live directory by machine name — a second one here would be
+    installed under a name that names another machine, or removed as stale in
+    the same run that installed it.
     """
-    reserved = (STATE, STAMP, f'{machine}{NSPAWN_SUFFIX}')
-    if name in reserved or name.startswith(ROOTFS):
+    reserved = (STATE, STAMP, f'*{NSPAWN_SUFFIX}')
+    if name in (STATE, STAMP) or name.startswith(ROOTFS) or name.endswith(NSPAWN_SUFFIX):
         raise ValueError(
             f'{name!r} is a name the nspawn runtime keeps under {machine_path(machine)}: '
             f'{", ".join((*reserved, f"{ROOTFS}*"))} are the machine itself, not files it reads'
@@ -223,27 +229,49 @@ def converge() -> str:
     return f'{persistence.on_boot_hook(NSPAWN_UNITS_SCRIPT)}; {persistence.on_boot_hook(MACHINES_SCRIPT)}'
 
 
-def machine_hook(machine: str, path: str) -> str:
-    """Converge, then hold this machine to having come up — or put it back.
+def machine_hook(machine: str, path: str, *, rollback: bool) -> str:
+    """Converge, then hold this machine to having come up.
 
     The health gate is what makes a broken push visible at the moment it
     breaks: converging is not evidence that the machine runs, so the hook asks
-    systemd, and a machine that did not reach active is rolled back onto the
-    tree this push displaced and the operation fails. Failing is half the
-    point — the resource is not recorded as applied, so the next preview still
-    has the work to do, and an artifact whose hook failed withdraws its digest
-    marker as well.
+    systemd, and a machine that did not reach active fails the operation. That
+    is half the point — the resource is not recorded as applied, so the next
+    preview still has the work to do, and an artifact whose hook failed
+    withdraws its digest marker as well.
 
-    `path` is the file whose delivery just ran this hook, and the gate is
-    conditional on it because the same command runs after the delete: a file
-    this program has stopped declaring is gone, and a machine being retired is
-    a machine that is *supposed* not to be active.
+    **The gate holds only a machine that could have started.** Two conditions,
+    and each answers a case the push actually produces. `path` is the file
+    whose delivery just ran this hook, and it is gone after the delete that
+    retires it — a machine on its way out is *supposed* not to be active. And a
+    machine whose root filesystem has not landed yet is one the converger
+    skipped: on the push that creates a machine its files arrive before the
+    tree does, and holding them to a unit that was never started would fail
+    every one of them.
+
+    **`rollback` belongs to the root filesystem's own hook and to no other.**
+    The tree is the one thing on the device with a displaced copy beside it, so
+    it is the only thing a swap can restore; a configuration file's hook that
+    swapped it would replace a tree that had nothing to do with the failure and
+    leave the bad configuration in place, so the next push would re-apply it,
+    fail, and swap again.
+
+    The converger's own exit status is carried out to the apply as well. It
+    reports what only it learns — a machine of this push's set that failed to
+    start, or a live directory it refused to touch — and a hook that dropped it
+    would report a green apply over a device that printed a failure. A sibling
+    machine's failure therefore fails this resource too, without swapping
+    anything of this machine's.
     """
+    rescue = (
+        f'{shlex.quote(persistence.executable_path(ROLLBACK_PROGRAM))} {shlex.quote(machine)}; ' if rollback else ''
+    )
     return (
-        f'{converge()}; '
-        f'if [ -e {shlex.quote(path)} ]; then '
+        f'{persistence.on_boot_hook(NSPAWN_UNITS_SCRIPT)}; '
+        f'{persistence.on_boot_hook(MACHINES_SCRIPT)}; rc=$?; '
+        f'if [ -e {shlex.quote(path)} ] && [ -d {shlex.quote(rootfs_path(machine))} ]; then '
         f'systemctl is-active --quiet {shlex.quote(machine_unit(machine))} || '
-        f'{{ {shlex.quote(persistence.executable_path(ROLLBACK_PROGRAM))} {shlex.quote(machine)}; exit 1; }}; fi'
+        f'{{ {rescue}exit 1; }}; fi; '
+        f'exit $rc'
     )
 
 
@@ -267,8 +295,8 @@ class Machine:
     """One machine as the runtime deals with it, whatever image it runs.
 
     The runtime knows a machine by its name, by the paths whose contents decide
-    that it must be restarted, and by the file it is seeded with where it has
-    one. What the machine *is* — its image, its addressing, what it mounts — is
+    that it must be restarted, and by the initial state it is given where it
+    has one. What the machine *is* — its image, its addressing, what it mounts — is
     the workload's business and never reaches here.
     """
 
@@ -307,6 +335,7 @@ class _MachinesParams:
     rootfs: str
     state: str
     stamp: str
+    nspawn_suffix: str
     machines: tuple[Machine, ...]
 
 
@@ -344,7 +373,7 @@ def nspawn_units_script() -> str:
 
 
 def machines_script(machines: Sequence[Machine]) -> str:
-    """The boot-chain script that links, seeds, stamps and starts the machines.
+    """The boot-chain script that links, stamps and starts the machines.
 
     The set is sorted here, so the file the device holds is a function of which
     machines are declared rather than of the order a caller listed them in.
@@ -362,6 +391,7 @@ def machines_script(machines: Sequence[Machine]) -> str:
             rootfs=ROOTFS,
             state=STATE,
             stamp=STAMP,
+            nspawn_suffix=NSPAWN_SUFFIX,
             machines=tuple(sorted(machines, key=lambda machine: machine.name)),
         ),
     )
@@ -431,6 +461,7 @@ class NspawnRuntime(Component):
         other.
         """
         super().__init__(name, opts=opts)
+        self._packages: DeviceFile = mechanism.packages
 
         self.skeleton: DeviceFile = mechanism.skeleton_dir(SKELETON, opts=self.child_opts())
         # The settings converger before the machine converger, in the order the
@@ -459,9 +490,19 @@ class NspawnRuntime(Component):
         Every file of a machine runs the two scripts as its hook and may reach
         for the rollback, and a hook that runs a program the device has not been
         given fails its own apply.
-        """
-        return (self.skeleton, self.nspawn_units, self.machines, self.rollback)
 
-    def hook(self, machine: str, path: str) -> str:
-        """The post-apply hook one file of `machine` runs once it lands."""
-        return machine_hook(machine, path)
+        The package script is in the set for the same reason one step further
+        out: a root filesystem is pulled and unpacked by two programs the device
+        does not ship, so a machine whose files landed before that script ran
+        would be a machine nothing could fetch a tree for. It belongs to the
+        layer below, and this is where the requirement is made an edge.
+        """
+        return (self._packages, self.skeleton, self.nspawn_units, self.machines, self.rollback)
+
+    def hook(self, machine: str, path: str, *, rollback: bool = False) -> str:
+        """The post-apply hook one file of `machine` runs once it lands.
+
+        `rollback` is the root filesystem's alone: the tree is the only piece of
+        a machine the device keeps a displaced copy of (`machine_hook`).
+        """
+        return machine_hook(machine, path, rollback=rollback)

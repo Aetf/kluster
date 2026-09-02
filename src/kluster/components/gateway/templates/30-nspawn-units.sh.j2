@@ -20,10 +20,16 @@ live={{ live_nspawn_dir }}
 [ -d "$src" ] || exit 0
 mkdir -p "$live"
 
-for f in "$src"/*/*{{ suffix }}; do
+# One settings file per machine directory, named for the machine: the live
+# directory is keyed by machine name, so a stray file with another name would
+# be installed as another machine's settings and removed as stale in the same
+# run. What the source glob walks is therefore the directories, not the files.
+for dir in "$src"/*/; do
+    machine=$(basename "$dir")
+    f=$dir$machine{{ suffix }}
     [ -e "$f" ] || continue
-    if ! cmp -s "$f" "$live/$(basename "$f")"; then
-        echo "nspawn-units: installing $(basename "$f")"
+    if ! cmp -s "$f" "$live/$machine{{ suffix }}"; then
+        echo "nspawn-units: installing $machine{{ suffix }}"
         cp "$f" "$live/"
     fi
 done

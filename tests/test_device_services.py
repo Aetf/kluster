@@ -21,7 +21,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.gateway import container, nspawn, services
+from kluster.components.gateway import container, nspawn, persistence, services
 from kluster.components.gateway.container import Container
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
@@ -553,28 +553,74 @@ def test_every_file_of_a_machine_converges_that_machine_and_holds_it_to_starting
     ]
     for declaration in files:
         path = declaration.inputs.get('path') or declaration.inputs['root']
-        assert declaration.inputs['hook'] == nspawn.machine_hook('caddy', str(path)), declaration.name
+        rollback = declaration.name == f'{NAME}-caddy-image'
+        assert declaration.inputs['hook'] == nspawn.machine_hook('caddy', str(path), rollback=rollback), (
+            declaration.name
+        )
+
+
+def test_only_the_root_filesystem_may_roll_the_machine_back(monitor: Recorder) -> None:
+    """The tree is the only piece of a machine the device keeps a copy of.
+
+    A configuration file's hook that swapped it would replace a tree unrelated
+    to the failure and leave the bad configuration in place, so the next push
+    would deliver it again and swap again.
+    """
+    rolls_back = [
+        declaration.name
+        for declaration in monitor.declared
+        if nspawn.ROLLBACK_PROGRAM in str(declaration.inputs.get('hook', ''))
+    ]
+
+    assert sorted(rolls_back) == sorted(f'{NAME}-{service}-image' for service in SERVICES)
 
 
 @pytest.mark.asyncio
-async def test_a_machines_files_wait_for_the_runtime_that_converges_them(
-    containers: tuple[Container, ...], monitor: Recorder
-) -> None:
+async def test_a_machines_files_wait_for_the_runtime_that_converges_them(monitor: Recorder) -> None:
     """A hook that runs a script the device has not been given fails its apply.
 
     Pulumi does not push a component's own dependencies down to its children,
     so every file of a machine states this rather than the component stating it
-    once.
+    once. The package script is in the set because the two programs the device
+    pulls and unpacks a tree with are not on the box until it has run.
     """
-    caddy = containers[0]
     settings = monitor.depends_on(f'{NAME}-caddy-nspawn')
 
-    assert str(await caddy.settings.urn.future()) not in settings
     for name in (
         f'{NAME}-persistence-on-boot-{nspawn.MACHINES_SCRIPT}',
+        f'{NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}',
         f'{NAME}-persistence-bin-{nspawn.ROLLBACK_PROGRAM}',
     ):
         assert any(urn.endswith(f'::{name}') for urn in settings), name
+
+
+@pytest.mark.asyncio
+async def test_the_tree_lands_last_so_the_machine_starts_once_with_everything(
+    containers: tuple[Container, ...], monitor: Recorder
+) -> None:
+    """The delivery that starts a machine is the one that gives it a tree.
+
+    The converger skips a machine with no root filesystem, so on the push that
+    creates one every configuration file arrives at a machine that cannot start
+    yet. Ordering the tree behind them is what makes the start happen once,
+    with everything the container reads already on the device — and what keeps
+    those files' own hooks from holding a machine to a unit nothing has
+    started.
+    """
+    caddy = containers[0]
+    image = monitor.depends_on(f'{NAME}-caddy-image')
+
+    assert str(await caddy.settings.urn.future()) in image
+    for mounted in caddy.mounted_files.values():
+        assert str(await mounted.urn.future()) in image
+    # And the settings wait for the files they name as binds.
+    settings = monitor.depends_on(f'{NAME}-caddy-nspawn')
+    for mounted in caddy.mounted_files.values():
+        assert str(await mounted.urn.future()) in settings
+
+    alice = next(child for child in containers if child.stamped_set[0] == nspawn.nspawn_path('adguard-alice'))
+    assert alice.initial_state is not None
+    assert str(await alice.initial_state.urn.future()) in monitor.depends_on(f'{NAME}-adguard-alice-image')
 
 
 def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder) -> None:
