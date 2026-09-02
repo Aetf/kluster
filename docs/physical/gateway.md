@@ -451,9 +451,11 @@ there and **the token the device answers challenges with is scoped to
 a row in it** (`credentials.derived.GATEWAY_ACME_ZONES`, held equal to
 the vhosts by a test). Both narrow back when the census empties. The
 challenge's propagation check is aimed at a public resolver, because a
-check has to read authoritative data whatever the device's forwarders
-do: the resolvers answer this zone from a rewrite, and the proxy's own
-resolver does not answer it at all.
+check has to read authoritative data and neither resolver in front of it
+can give it: the AdGuard pair answers this zone from a rewrite, and the
+device's own resolver — the one the proxy asks — forwards the zone but
+caches, holding the negative answer it gave before the challenge record
+was written for half an hour.
 
 ## 2. ZeroTier network design
 
