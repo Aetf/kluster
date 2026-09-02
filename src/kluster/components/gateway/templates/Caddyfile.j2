@@ -23,3 +23,38 @@
 		abort
 	}
 }
+
+*.{{ legacy_zone }} {
+	tls {
+		dns cloudflare {file.{{ token_path }}}
+		resolvers {{ legacy_resolver }}
+	}
+{%- for vhost in legacy %}
+
+	@{{ vhost.label }} host {{ vhost.host }}
+	handle @{{ vhost.label }} {
+{%- if vhost.upstream.self_signed %}
+		reverse_proxy {{ vhost.upstream.dial }} {
+{%- if vhost.upstream.pass_host_header %}
+			header_up Host {host}
+{%- endif %}
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+{%- else %}
+		reverse_proxy {{ vhost.upstream.dial }}
+{%- endif %}
+	}
+{%- endfor %}
+
+	handle {
+		abort
+	}
+}
+{%- for vhost in legacy if vhost.bare_name %}
+
+http://{{ vhost.label }} {
+	redir https://{{ vhost.host }}{uri} permanent
+}
+{%- endfor %}

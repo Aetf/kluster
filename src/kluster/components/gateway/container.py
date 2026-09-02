@@ -587,8 +587,9 @@ def net_setup_environment(address: IPv4Address) -> dict[str, str]:
 class _CaddyParams:
     """What `Caddyfile.j2` reads.
 
-    The resolvers arrive as the census has them, so the file names each one's
-    vhost and address without a second list to keep in step.
+    The resolvers and the legacy vhosts arrive as the census has them, so the
+    file names each one's vhost and upstream without a second list to keep in
+    step.
     """
 
     zone: str
@@ -596,6 +597,9 @@ class _CaddyParams:
     token_path: str
     api_port: int
     resolvers: tuple[conventions.gateway.BridgedService, ...]
+    legacy_zone: str
+    legacy_resolver: str
+    legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
 
 def caddyfile() -> str:
@@ -619,17 +623,25 @@ def caddyfile() -> str:
         gateway serves none of the public names the apex answers for, so it
         asks for less and the two sets stay different.
 
-    One site block therefore serves every name, matching the three vhosts
-    inside it by host and refusing everything else — a name under the zone that
-    nothing here serves gets the connection closed rather than an answer from
-    whichever block happened to be first. A wildcard covers one label, so every
-    name the gateway serves has to be one label under the zone; that is a
-    property of the census and `test_conventions` holds it there.
+    One site block therefore serves every name in that zone, matching the three
+    vhosts inside it by host and refusing everything else — a name under the
+    zone that nothing here serves gets the connection closed rather than an
+    answer from whichever block happened to be first. A wildcard covers one
+    label, so every name the gateway serves has to be one label under the zone;
+    that is a property of the census and `test_conventions` holds it there.
 
     The controller console is reverse-proxied to the device's own port 443 over
     a connection whose certificate cannot be verified, because the certificate
     it presents is the device's self-signed one; the name that matters is the
     one the client asked for, which is forwarded unchanged.
+
+    **A second site block serves the retiring LAN zone**, under a second
+    wildcard, and it is shaped the same way: one certificate, the census
+    matched inside it by host, everything else refused. It is here because the
+    device serves those names today and this file replaces what serves them in
+    one window, before any of the applications behind them has moved
+    (`conventions.gateway.LEGACY_VHOSTS`, gateway.md §1.5). The block empties
+    row by row and then goes; nothing else about the file changes when it does.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -640,6 +652,9 @@ def caddyfile() -> str:
             token_path=CADDY_TOKEN_PATH,
             api_port=conventions.gateway.ADGUARD_API_PORT,
             resolvers=conventions.gateway.RESOLVERS,
+            legacy_zone=conventions.gateway.ZONE_LEGACY,
+            legacy_resolver=conventions.gateway.LEGACY_ACME_RESOLVER,
+            legacy=conventions.gateway.LEGACY_VHOSTS,
         ),
     )
 

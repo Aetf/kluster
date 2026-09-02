@@ -1,0 +1,122 @@
+# The reverse proxy's configuration as the retiring gw-config repository holds
+# it, copied here so that the legacy half of the rendered file can be checked
+# against what the device serves today (test_device_services.py). Nothing in it
+# is a secret: the ACME token is named by the path it is mounted at.
+#
+# It is a transcript, not a source: it is never edited to match a render, and
+# it is deleted when the last row of `conventions.gateway.LEGACY_VHOSTS` is.
+
+{
+	email "aetf@unlimited-code.works"
+	debug
+	admin unix//data/caddy/data/caddy/caddy-admin.sock
+}
+
+*.lan.ucw.phd {
+	tls {
+		dns cloudflare {file./data/caddy/secrets/cf_token}
+		resolvers 1.1.1.1
+	}
+
+	@tube host tube.lan.ucw.phd
+	handle @tube {
+		reverse_proxy aetf-arch-homelab.home.arpa:8096
+	}
+
+	@bt host bt.lan.ucw.phd
+	handle @bt {
+		reverse_proxy aetf-arch-homelab.home.arpa:9876
+	}
+
+	# adguard-alice is the primary (adguardhome-sync origin); dns.lan.ucw.phd
+	# stays pointed at it. Per-instance names for reaching a specific UI.
+	@dns host dns.lan.ucw.phd
+	handle @dns {
+		reverse_proxy 10.0.5.3
+	}
+
+	@dns_alice host dns-alice.lan.ucw.phd
+	handle @dns_alice {
+		reverse_proxy 10.0.5.3
+	}
+
+	@dns_bob host dns-bob.lan.ucw.phd
+	handle @dns_bob {
+		reverse_proxy 10.0.5.4
+	}
+
+	@gw host gw.lan.ucw.phd
+	handle @gw {
+		# UniFi OS rejects a WebSocket upgrade whose Origin does not match the
+		# request Host (HTTP 500 on /api/ws/*), which blanks the console UI.
+		# Caddy rewrites Host to the upstream for scheme-qualified upstreams,
+		# so pass the client's Host through explicitly like every other site
+		# here does by default.
+		reverse_proxy https://dmse.home.arpa {
+			header_up Host {host}
+			transport http {
+				tls
+				tls_insecure_skip_verify
+			}
+		}
+	}
+
+	@spool host spool.lan.ucw.phd
+	handle @spool {
+		reverse_proxy aetf-arch-homelab.home.arpa:8000
+	}
+
+	@thread host thread.lan.ucw.phd
+	handle @thread {
+		reverse_proxy aetf-arch-homelab.home.arpa:8480
+	}
+
+	@seedwatch host seedwatch.lan.ucw.phd
+	handle @seedwatch {
+		reverse_proxy aetf-arch-homelab.home.arpa:8490
+	}
+
+	# go/<name> shortlinks (kluster golinks deployment, homelan LoadBalancer)
+	@go host go.lan.ucw.phd
+	handle @go {
+		reverse_proxy aetf-arch-homelab.home.arpa:8067
+	}
+
+	# APC UPS network management card (AP9631). The card only accepts SSL
+	# certificates in the Security Wizard's proprietary format and its TLS stack
+	# is stuck on TLSv1.2/ECDHE-RSA-AES128-SHA, so terminate a real certificate
+	# here and skip verification on the self-signed hop to the card.
+	@ups host ups.lan.ucw.phd
+	handle @ups {
+		reverse_proxy https://ups.home.arpa {
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+	}
+
+	# Fallback for otherwise unhandled domains
+	handle {
+		abort
+	}
+}
+
+http://tube {
+	redir https://tube.lan.ucw.phd{uri} permanent
+}
+
+http://bt {
+	redir https://bt.lan.ucw.phd{uri} permanent
+}
+
+http://dns {
+	redir https://dns.lan.ucw.phd{uri} permanent
+}
+
+http://gw {
+	redir https://gw.lan.ucw.phd{uri} permanent
+}
+
+http://go {
+	redir https://go.lan.ucw.phd{uri} permanent
+}
