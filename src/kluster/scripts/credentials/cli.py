@@ -104,7 +104,7 @@ _ORDER = """when to run what:
        credentials derived cloudflare-gateway-acme mint
          The two tokens the Cloudflare seed mints: the zone-scoped provider
          token into the dns stack's config, and the gateway's own ACME
-         token -- scoped to the single zone it issues its vhosts under --
+         token -- scoped to the zones it issues its vhosts under --
          into the physical stack's. Each file is then committed. One
          derived row per command; re-running one rotates it.
     6. credentials derived oci-physical mint
@@ -699,7 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
             'own vhosts. A second token from the same Cloudflare seed, kept apart from the cluster '
             "issuer's on purpose: two issuers that have to survive each other's outage do not share a "
             'credential, and the device holding this one is the machine the cluster cannot re-seal. Its '
-            'scope is the one zone those vhosts are served under, and no other. Which stack takes it is '
+            'scope is the zones those vhosts are served under, and no others. Which stack takes it is '
             'not a choice -- the token is named after this row, and minting retires every other token of '
             'that name.'
         ),
@@ -709,12 +709,12 @@ def build_parser() -> argparse.ArgumentParser:
         'mint',
         help="mint it from the seed into the physical stack's config secret",
         description=(
-            'Open the Cloudflare seed in the kit, look up the id of the zone the gateway issues in, mint a '
-            'token scoped to exactly that, and write it into the stack config as an encrypted value. The '
-            'stack writes it onto the device beside the container units that read it, so the run ends at '
-            'the committed file and the change has to be committed afterwards. The new token proves it can '
-            'see the zone, as itself, before a live token of the same name is retired, so re-running this '
-            'is the rotation.'
+            'Open the Cloudflare seed in the kit, look up the ids of the zones the gateway issues in, mint '
+            'a token scoped to exactly those, and write it into the stack config as an encrypted value. '
+            'The stack writes it onto the device beside the container units that read it, so the run ends '
+            'at the committed file and the change has to be committed afterwards. The new token proves it '
+            'can see those zones, as itself, before a live token of the same name is retired, so '
+            're-running this is the rotation.'
         ),
     )
     _ = gateway_acme_mint.add_argument(

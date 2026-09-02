@@ -180,10 +180,12 @@ ZONE_LEGACY = f'lan.{ZONE_SHORT}'
 
 #: Which resolver the legacy block's issuance checks propagation against — a
 #: public one, named because a propagation check has to read authoritative data
-#: whatever the device's own forwarders do. The AdGuard pair answers this whole
-#: zone from a filter rule that points it at the proxy; the proxy resolves
-#: through the device's dnsmasq, which does not forward through the pair and
-#: answers the zone not at all, so the check is aimed past both.
+#: and the two resolvers in front of it cannot give it. The AdGuard pair
+#: answers this whole zone from a filter rule that points it at the proxy. The
+#: device's own resolver, which is the one the proxy asks, does forward the
+#: zone, but it caches: the negative answer it gave before the challenge record
+#: was written is held for that zone's SOA minimum, half an hour here, so a
+#: check asking it would be waiting on a cache rather than on propagation.
 LEGACY_ACME_RESOLVER = '1.1.1.1'
 
 #: The homelab host as the device plane names it: a DHCP-derived name the
