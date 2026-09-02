@@ -684,6 +684,11 @@ The ceremony, four steps and three applies:
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
     over the LAN and delivers the services, the ZT container included.
+    The device is already running the layout the retiring tracker
+    built, so this apply is preceded by a cutover window that moves the
+    live state under the declared paths — the procedure, its
+    verification and its rollback are
+    [gateway-cutover.md](gateway-cutover.md).
     Nothing is declared for the gateway on the overlay. `workerGua`
     is unset here and optional for that reason: the address it
     carries is formed by the worker off this apply's own router

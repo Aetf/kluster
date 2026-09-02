@@ -32,6 +32,10 @@ Documents:
 -   **[homelab-host.md](homelab-host.md)** — the homelab host & worker
     VM: disk shape (nodatacow raw + virtio-blk), the second host
     bridge, two-phase GPU passthrough, the host-prep change-set.
+-   **[gateway-cutover.md](gateway-cutover.md)** — the maintenance
+    window that hands the device from the retiring tracker to this
+    program: what moves, the moves, verification, rollback, and the
+    retirement each old tracker owes. It retires with the window.
 -   **[gateway.md](gateway.md)** — the UDM as a system: the ZeroTier
     network design (roster, routes, CI-confining flow rules, cutover
     order), recovery playbooks, and the firewall target state
