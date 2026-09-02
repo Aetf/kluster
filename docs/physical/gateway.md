@@ -425,15 +425,17 @@ the applications behind them are still on the homelab host or in the
 legacy cluster — they migrate in Waves B through D
 (cluster/migration.md §2), while the declaration replaces the device's
 live configuration whole in one window before any of them does. Without
-the block, every one of them stops resolving on the day the device is
-taken over rather than on the day its application moves.
+the block, every one of them goes on resolving — the resolvers answer
+the whole zone from a rewrite of their own — and stops being served, on
+the day the device is taken over rather than on the day its application
+moves.
 
 **The census is `conventions.gateway.LEGACY_VHOSTS`**, one row per
 name, carrying where the proxy sends it and the wave that deletes the
 row. **A row is deleted in the change that gives its application a
 public name**, which is the same change the application's own migration
-is, and the last wave any row may name is D — so the block is empty by
-the end of Wave D, and an empty census is the zone's retirement
+is, and the last wave any row may name is D — so the census is empty by
+the end of Wave D, and an empty census renders no block at all
 (declarative/dns.md §4.3). Five rows wait on no application. The three
 resolver names and the console are superseded by the public names §1
 already serves, and are carried only so that what is bookmarked
@@ -444,10 +446,14 @@ name instead.
 **The block is a second wildcard certificate**, on the same DNS-01
 challenge and the same device credential. The zone is a name inside
 `ucw.phd` rather than a zone of its own, so the challenge is written
-there and **the device's ACME token has to be scoped to `ucw.phd` while
-the census has a row in it**. The challenge's propagation check is
-aimed at a public resolver, because the LAN's own resolvers answer this
-whole zone from a rewrite that points it at the proxy.
+there and **the token the device answers challenges with is scoped to
+`ucw.phd` as well as to the primary zone, for as long as the census has
+a row in it** (`credentials.derived.GATEWAY_ACME_ZONES`, held equal to
+the vhosts by a test). Both narrow back when the census empties. The
+challenge's propagation check is aimed at a public resolver, because a
+check has to read authoritative data whatever the device's forwarders
+do: the resolvers answer this zone from a rewrite, and the proxy's own
+resolver does not answer it at all.
 
 ## 2. ZeroTier network design
 
