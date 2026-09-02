@@ -18,7 +18,7 @@ from enum import Enum
 from ipaddress import IPv4Address
 from typing import ClassVar
 
-from kluster.conventions.dns import ZONE_PRIMARY
+from kluster.conventions.dns import ZONE_PRIMARY, ZONE_SHORT
 from kluster.conventions.identity import CLUSTER_NAME
 
 #: The account the gateway is configured as. It has no other.
@@ -133,25 +133,30 @@ ContainerService = BridgedService | HostNetworkService
 #: The reverse proxy: the one service that answers for the device's own names.
 CADDY = BridgedService(name='caddy', address=IPv4Address('10.0.5.180'), artifact='caddy')
 
-#: The LAN's name service, in the order the design lists it. Two instances
-#: because every lease on the LAN names both, and a resolver each is what makes
-#: one of them replaceable. One build behind both, and a pin each: what the two
-#: keys buy is proving a new resolver build on one instance before the other
-#: (rfc-002 §11.1).
-RESOLVERS: tuple[BridgedService, ...] = (
-    BridgedService(
-        name='adguard-alice',
-        address=IPv4Address('10.0.5.3'),
-        artifact='adguard',
-        vhost=f'alice.{ZONE_PRIMARY}',
-    ),
-    BridgedService(
-        name='adguard-bob',
-        address=IPv4Address('10.0.5.4'),
-        artifact='adguard',
-        vhost=f'bob.{ZONE_PRIMARY}',
-    ),
+#: The LAN's name service. Two instances because every lease on the LAN names
+#: both, and a resolver each is what makes one of them replaceable. One build
+#: behind both, and a pin each: what the two keys buy is proving a new resolver
+#: build on one instance before the other (rfc-002 §11.1).
+#:
+#: Named individually as well as listed, because they are not
+#: interchangeable — alice is the pair's synchronisation origin, and a
+#: declaration that means that one says so rather than taking the first of a
+#: tuple.
+ADGUARD_ALICE = BridgedService(
+    name='adguard-alice',
+    address=IPv4Address('10.0.5.3'),
+    artifact='adguard',
+    vhost=f'alice.{ZONE_PRIMARY}',
 )
+ADGUARD_BOB = BridgedService(
+    name='adguard-bob',
+    address=IPv4Address('10.0.5.4'),
+    artifact='adguard',
+    vhost=f'bob.{ZONE_PRIMARY}',
+)
+
+#: The pair in the order the design lists it.
+RESOLVERS: tuple[BridgedService, ...] = (ADGUARD_ALICE, ADGUARD_BOB)
 
 #: The overlay daemon: the one service in the host's own network namespace,
 #: because the interface it creates has to be visible to the router that uses
@@ -166,17 +171,19 @@ OVERLAY = HostNetworkService(name='zerotier', artifact='zerotier')
 SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 
 #: The retiring LAN zone (dns.md §4.3), and the second wildcard the proxy holds
-#: a certificate for. It is a name inside `ucw.phd` rather than a zone of its
-#: own at the registrar, so the DNS-01 challenge for `*.lan.ucw.phd` is written
-#: into that zone: the device's ACME token has to be scoped to `ucw.phd` for as
-#: long as the census below has a row in it.
-ZONE_LEGACY = 'lan.ucw.phd'
+#: a certificate for. It is a name inside `ZONE_SHORT` rather than a zone of
+#: its own at the registrar, so the DNS-01 challenge for it is written into
+#: that zone: the token the device answers challenges with has to be scoped to
+#: `ZONE_SHORT` for as long as the census below has a row in it, which is what
+#: `derived.GATEWAY_ACME_ZONES` says and `test_derived` holds it to.
+ZONE_LEGACY = f'lan.{ZONE_SHORT}'
 
-#: Which resolver the legacy block's issuance checks propagation against, and
-#: the one directive the declared block has no use for. The LAN's own resolvers
-#: answer this zone from a rewrite that points every name in it at the proxy,
-#: so a check that asked them would read the site's answer rather than the
-#: record the registrar published.
+#: Which resolver the legacy block's issuance checks propagation against — a
+#: public one, named because a propagation check has to read authoritative data
+#: whatever the device's own forwarders do. The AdGuard pair answers this whole
+#: zone from a filter rule that points it at the proxy; the proxy resolves
+#: through the device's dnsmasq, which does not forward through the pair and
+#: answers the zone not at all, so the check is aimed past both.
 LEGACY_ACME_RESOLVER = '1.1.1.1'
 
 #: The homelab host as the device plane names it: a DHCP-derived name the
@@ -195,11 +202,12 @@ LEGACY_UPSTREAM_HOST = 'aetf-arch-homelab.home.arpa'
 LEGACY_RESOLVER_PORT = 80
 
 
-class Wave(Enum):
-    """A wave of the migration plan, as `cluster/migration.md` §2 numbers them.
+class RetirementWave(Enum):
+    """When a legacy vhost goes, named as `cluster/migration.md` §2 numbers the waves.
 
-    Only the three waves that retire a legacy vhost are spelled: a row cannot
-    be scheduled for a wave that lands after the zone it is in has retired.
+    Only the three waves that retire one are spelled, which is the whole point
+    of the type: a row cannot be scheduled for a wave that lands after the zone
+    it is in has retired.
     """
 
     B = 'B'
@@ -241,8 +249,8 @@ class SelfSignedUpstream:
     host: str
     #: Whether the client's `Host` header is forwarded rather than replaced by
     #: the upstream's own name. It belongs to this kind alone, because Caddy
-    #: rewrites the header for a scheme-qualified upstream and a plain row is
-    #: never one.
+    #: replaces the header only where the transport speaks TLS to the upstream,
+    #: which a plain row never does.
     pass_host_header: bool = False
 
     #: What the render branches on: this kind configures a transport.
@@ -273,7 +281,7 @@ class LegacyVhost:
     #: The one label under `ZONE_LEGACY`; a wildcard certificate covers one.
     label: str
     upstream: PlainUpstream | SelfSignedUpstream
-    wave: Wave
+    wave: RetirementWave
     #: Whether the proxy also answers the bare label and redirects it here.
     #: Carried by the names that are typed rather than followed from a link.
     bare_name: bool = False
@@ -294,14 +302,14 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     LegacyVhost(
         label='tube',
         upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8096),
-        wave=Wave.C,
+        wave=RetirementWave.C,
         bare_name=True,
     ),
     # qBittorrent's interface, host-native and onboarded with seedwatch.
     LegacyVhost(
         label='bt',
         upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=9876),
-        wave=Wave.D,
+        wave=RetirementWave.D,
         bare_name=True,
     ),
     # The three resolver names. Nothing migrates them — the instances stay on
@@ -312,19 +320,19 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     # at alice, which is the pair's sync origin.
     LegacyVhost(
         label='dns',
-        upstream=PlainUpstream(host=str(RESOLVERS[0].address), port=LEGACY_RESOLVER_PORT),
-        wave=Wave.B,
+        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=LEGACY_RESOLVER_PORT),
+        wave=RetirementWave.B,
         bare_name=True,
     ),
     LegacyVhost(
         label='dns-alice',
-        upstream=PlainUpstream(host=str(RESOLVERS[0].address), port=LEGACY_RESOLVER_PORT),
-        wave=Wave.B,
+        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=LEGACY_RESOLVER_PORT),
+        wave=RetirementWave.B,
     ),
     LegacyVhost(
         label='dns-bob',
-        upstream=PlainUpstream(host=str(RESOLVERS[1].address), port=LEGACY_RESOLVER_PORT),
-        wave=Wave.B,
+        upstream=PlainUpstream(host=str(ADGUARD_BOB.address), port=LEGACY_RESOLVER_PORT),
+        wave=RetirementWave.B,
     ),
     # The controller console, which `VHOST_CONTROLLER` also serves. Reached at
     # the device's own name on the LAN rather than at a loopback address, which
@@ -334,19 +342,19 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     LegacyVhost(
         label='gw',
         upstream=SelfSignedUpstream(host='dmse.home.arpa', pass_host_header=True),
-        wave=Wave.B,
+        wave=RetirementWave.B,
         bare_name=True,
     ),
     # Spoolman and thread-dashboard, both on the homelab host today.
-    LegacyVhost(label='spool', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8000), wave=Wave.B),
-    LegacyVhost(label='thread', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8480), wave=Wave.B),
+    LegacyVhost(label='spool', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8000), wave=RetirementWave.B),
+    LegacyVhost(label='thread', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8480), wave=RetirementWave.B),
     # seedwatch, onboarded with the qBittorrent it reconciles.
-    LegacyVhost(label='seedwatch', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8490), wave=Wave.D),
+    LegacyVhost(label='seedwatch', upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8490), wave=RetirementWave.D),
     # golinks, already in the cluster and reached here at its LoadBalancer.
     LegacyVhost(
         label='go',
         upstream=PlainUpstream(host=LEGACY_UPSTREAM_HOST, port=8067),
-        wave=Wave.B,
+        wave=RetirementWave.B,
         bare_name=True,
     ),
     # The UPS network management card: a LAN appliance, and the one row no wave
@@ -355,7 +363,7 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     # certificate is terminated at the proxy and the hop to the card is not
     # verified. Retiring it means serving it under a public name instead, which
     # is what the last wave the zone survives has to have done.
-    LegacyVhost(label='ups', upstream=SelfSignedUpstream(host='ups.home.arpa'), wave=Wave.D),
+    LegacyVhost(label='ups', upstream=SelfSignedUpstream(host='ups.home.arpa'), wave=RetirementWave.D),
 )
 
 #: Where the container root filesystems are published: one registry repository

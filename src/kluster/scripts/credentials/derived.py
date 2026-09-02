@@ -46,18 +46,21 @@ GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
 #: The zones the gateway may answer a DNS-01 challenge in, and the whole of its
 #: token's scope.
 #:
-#: Every vhost its caddy serves — the controller console and both resolver
-#: interfaces — is a name under the primary zone, so a challenge for any of
-#: them is answered there and the token needs no other zone. That is the
-#: minimal set the estate's own certificates require, and it is deliberately
-#: narrower than the zones token's: the gateway issues for itself, and a
-#: credential on a device the cluster cannot re-seal carries no reach it does
-#: not use.
+#: Two zones, because its caddy holds two wildcards. The controller console
+#: and both resolver interfaces are names under the primary zone. The names it
+#: still serves for applications that have not migrated are under
+#: `lan.<short zone>`, and a challenge for that wildcard is written into the
+#: short zone itself — so the scope is wider than the estate's end state by
+#: exactly one zone, and **narrows back to the primary alone when
+#: `conventions.gateway.LEGACY_VHOSTS` empties**, which the plan puts at the
+#: end of Wave D. It stays deliberately narrower than the zones token's: the
+#: gateway issues for itself, and a credential on a device the cluster cannot
+#: re-seal carries no reach it does not use.
 #:
 #: Stated here rather than imported from `kluster.components.gateway`, which would drag
 #: the Pulumi SDKs into `credentials --help`; a test holds the two equal
 #: instead, so a vhost moved to another zone fails there.
-GATEWAY_ACME_ZONES = conventions.PRIMARY_ONLY
+GATEWAY_ACME_ZONES = (conventions.ZONE_PRIMARY, conventions.ZONE_SHORT)
 
 #: Where the Cloudflare provider reads its credential, and where the program
 #: reads the account that owns the zones. The provider's key is a secret; the

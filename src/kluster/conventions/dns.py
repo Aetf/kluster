@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 ZONE_PRIMARY = 'unlimited-code.works'
+#: The shortest mirror, and the zone the retiring LAN names sit inside
+#: (`conventions.gateway.ZONE_LEGACY`). It has a name of its own because three
+#: declarations have to agree on it: that constant, the wildcard the gateway's
+#: proxy holds under it, and the scope of the token that buys the wildcard.
+ZONE_SHORT = 'ucw.phd'
 #: Mirrors of the primary zone: the same app records, fanned out by the
 #: route helpers instead of copy-pasted.
-ZONE_MIRRORS = ('unlimitedcodeworks.xyz', 'peifeng.phd', 'ucw.phd')
+ZONE_MIRRORS = ('unlimitedcodeworks.xyz', 'peifeng.phd', ZONE_SHORT)
 #: Family zones — estate records only, never app fan-out targets.
 ZONE_FAMILY = ('jiahui.id', 'jiahui.love')
 
