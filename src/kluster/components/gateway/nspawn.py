@@ -89,7 +89,6 @@ __all__ = (
     'Machine',
     'NspawnRuntime',
     'Placement',
-    'converge',
     'machine_file',
     'machine_hook',
     'machine_path',
@@ -217,16 +216,6 @@ def machine_file(machine: str, name: str) -> str:
 # ---------------------------------------------------------------------------
 # What runs after a machine's file lands
 # ---------------------------------------------------------------------------
-
-
-def converge() -> str:
-    """Mirror the settings, then converge the machines — the boot chain's own path.
-
-    Both scripts, in the order the boot chain runs them, because a machine
-    started against settings that have not been mirrored yet is a machine on
-    the wrong network.
-    """
-    return f'{persistence.on_boot_hook(NSPAWN_UNITS_SCRIPT)}; {persistence.on_boot_hook(MACHINES_SCRIPT)}'
 
 
 def machine_hook(machine: str, path: str, *, rollback: bool) -> str:

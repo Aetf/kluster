@@ -45,7 +45,7 @@ GIVEN_STATE = Machine(
     stamped=(nspawn.nspawn_path('stateful'), marker_path(nspawn.rootfs_path('stateful'))),
     initial_state=Placement(
         source=nspawn.machine_file('stateful', 'initial.yaml'),
-        destination=f'{nspawn.state_path("seeded")}/live.yaml',
+        destination=f'{nspawn.state_path("stateful")}/live.yaml',
     ),
 )
 MACHINES = (GIVEN_STATE, PLAIN)
@@ -204,10 +204,11 @@ def test_the_convergers_exit_status_reaches_the_apply() -> None:
 def test_the_settings_are_mirrored_before_the_machines_are_started() -> None:
     """A machine started against settings not yet mirrored is on the wrong network.
 
-    The hook runs the two convergers in the order the boot chain runs them,
-    which is what the numeric prefixes are for.
+    The hook runs the two scripts in the order the boot chain runs them, which
+    is what the numeric prefixes are for — and it is the hook itself that is
+    read, because that string is what the device executes.
     """
-    hook = nspawn.converge()
+    hook = nspawn.machine_hook('plain', nspawn.nspawn_path('plain'), rollback=False)
 
     assert hook.index(nspawn.NSPAWN_UNITS_SCRIPT) < hook.index(nspawn.MACHINES_SCRIPT)
 
