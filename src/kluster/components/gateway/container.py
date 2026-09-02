@@ -1,10 +1,10 @@
-"""One container service on the device: its root filesystem, unit, and files.
+"""One container service on the device: the machine it is, and the files it reads.
 
-Everything a service is made of lives under `/data`, the one directory a
-firmware update leaves alone (architecture.md §5.2): the root filesystem tree,
-the unit, the configuration the image reads, the per-service writable state,
-and — where the software behind it rewrites its own configuration — one
-initial-state file.
+A workload on the nspawn runtime (`nspawn`), and everything it is made of lives
+in that machine's own directory under the custom root: the root filesystem
+unpacked from its pin, its settings file, the configuration the image reads,
+the writable state bind-mounted into it, and — where the software behind it
+rewrites its own configuration — one initial-state file.
 
 **A service is declared by its own type.** What a service *is* — where it keeps
 state, which device nodes it needs, which environment its image reads — is a
@@ -13,21 +13,25 @@ in a mapping every reader has to look up (rfc-002 §5.3). A declaration holds
 the census entry it stands for rather than naming it, which is what makes a
 resolver bound to a service with no address impossible to write.
 
-**The images are Alpine with s6-overlay, not systemd.** They ship that init at
-`/sbin/init` so that `systemd-nspawn --boot` finds it, and a unit here
-therefore declares nothing that only a systemd guest would honour. Two
-consequences run through this module. A container is told things through **its
-PID 1's environment**, because that is what its own startup scripts read; a
-drop-in written for a network manager the image does not run is a file nobody
-opens. And a container is stopped with **`SIGKILL`**: s6 treats a gentler
-signal as advisory, returns from it with its supervisors still running, and
-they hold the unit's control group open until the next start fails on it.
+**In-container paths are the image's, not this program's.** A resolver is
+started with `-w /data/adguard`, caddy reads `$XDG_CONFIG_HOME/caddy/Caddyfile`:
+those are baked into the images, so what a declaration decides is only which
+host directory is bound onto them.
 
-**Host networking is the absence of a bridge**, not a switch: `systemd-nspawn`
-shares the host's network namespace unless it is given one. Only a declaration
-built on a bridged census entry can produce a bridge argument, so the overlay
-daemon — which must be in the host's namespace for the gateway to route through
-the interface it creates — cannot acquire one by accident.
+**The images are Alpine with s6-overlay, not systemd.** They ship that init at
+`/sbin/init` so that `Boot=on` finds it, and a machine's settings therefore
+declare nothing that only a systemd guest would honour. Two consequences run
+through this module. A container is told things through **its PID 1's
+environment**, because that is what its own startup scripts read; a drop-in
+written for a network manager the image does not run is a file nobody opens.
+And a container is stopped with **`SIGKILL`**: s6 treats a gentler signal as
+advisory, returns from it with its supervisors still running, and they hold the
+machine's control group open until the next start fails on it.
+
+**Host networking is the absence of a bridge.** Only a declaration built on a
+bridged census entry can produce a bridge, so the overlay daemon — which must
+be in the host's namespace for the gateway to route through the interface it
+creates — cannot acquire one by accident.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ from typing import final
 import pulumi
 
 from kluster import conventions
+from kluster.components.gateway import nspawn
+from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile, marker_path
 from putils import Component
@@ -51,9 +57,10 @@ __all__ = (
     'ADGUARD_UPSTREAMS',
     'CADDY_CONFIG',
     'CADDY_CONFIG_HOME',
+    'CADDY_RESOLV_CONF',
     'CADDY_STATE',
     'CADDY_TOKEN_PATH',
-    'CONFIG_DIR',
+    'CAPABILITY',
     'CONFIG_MODE',
     'CONTAINER_BRIDGE',
     'ENV_IPV4_CIDR',
@@ -61,16 +68,10 @@ __all__ = (
     'ENV_IPV6_TOKEN',
     'KILL_SIGNAL',
     'OVERLAY_STATE',
-    'ROOT_DIR',
     'S6_KILL_GRACETIME',
-    'SECRET_DIR',
     'SECRET_MODE',
-    'SERVICES_ROOT',
-    'STATE_DIR',
     'TEMPLATE_PACKAGE',
     'TUN_DEVICE',
-    'UNIT_DIR',
-    'UNIT_PREFIX',
     'BridgedDeclaration',
     'CaddyService',
     'Container',
@@ -82,47 +83,18 @@ __all__ = (
     'Rootfs',
     'ServiceDeclaration',
     'adguard_initial_state',
-    'bridge_device_unit',
     'caddyfile',
-    'config_path',
+    'machine',
     'mounted_path',
     'net_setup_environment',
-    'root_path',
-    'secret_path',
-    'state_path',
-    'unit_file',
+    'nspawn_file',
+    'resolv_conf',
 )
 
 #: The package `importlib.resources` resolves the `templates/` directory
 #: against, so the rendered files travel with the code that renders them
-#: (rfc-002 §9.1). It is the package both this module and `services` render
-#: from, which is why it is stated once.
+#: (rfc-002 §9.1).
 TEMPLATE_PACKAGE = 'kluster.components.gateway'
-
-# ---------------------------------------------------------------------------
-# Where things live on the device
-# ---------------------------------------------------------------------------
-
-#: The services' root. Everything below it survives a firmware update because
-#: `/data` does; everything outside it is re-materialized from here at boot.
-SERVICES_ROOT = f'{conventions.gateway.DATA_ROOT}/services'
-#: The root filesystems the units boot, one directory per service, each with the
-#: digest marker the artifact resource keeps beside it. A tree is derived state
-#: the push owns: it is replaced whole when the pin moves and nothing in it is
-#: worth keeping, which is why per-service writable state is bind-mounted from
-#: `STATE_DIR` instead of living here.
-ROOT_DIR = f'{SERVICES_ROOT}/roots'
-UNIT_DIR = f'{SERVICES_ROOT}/units'
-CONFIG_DIR = f'{SERVICES_ROOT}/config'
-SECRET_DIR = f'{SERVICES_ROOT}/secrets'
-#: Per-service writable state, bind-mounted in. Kept out of the image so a
-#: digest bump replaces the software and keeps the identity — which for the
-#: overlay daemon is the difference between a reboot and a new node address.
-STATE_DIR = f'{SERVICES_ROOT}/state'
-
-#: Unit names are prefixed so the recovery script can tell this program's units
-#: from the device's own and retire only its own.
-UNIT_PREFIX = 'kluster-'
 
 CONFIG_MODE = '0644'
 SECRET_MODE = '0600'
@@ -168,6 +140,12 @@ CADDY_CONFIG = f'{CADDY_CONFIG_HOME}/caddy/Caddyfile'
 #: A device secret of its own, read by nothing else on the box.
 CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'  # noqa: S105 -- a path, not a credential
 
+#: Where the image's resolver library reads which resolver to ask. Which one an
+#: estate offers is a site fact rather than an image fact, so it is delivered
+#: rather than baked: the image's own default is a public resolver, which
+#: answers none of the internal names this proxy's upstreams have.
+CADDY_RESOLV_CONF = '/etc/resolv.conf'
+
 #: The device node the overlay daemon needs, and the state directory whose
 #: contents are its identity on the overlay.
 TUN_DEVICE = '/dev/net/tun'
@@ -177,11 +155,17 @@ OVERLAY_STATE = '/var/lib/zerotier-one'
 #: VLAN's bridge — the container services are what the VLAN exists for.
 CONTAINER_BRIDGE = 'br5'
 
+#: The one capability every image here needs beyond nspawn's default set: each
+#: configures its own interface from inside. Stated as a constant because the
+#: settings template is what a reviewer reads it in, and the alternative the
+#: device ran before this program owned the mechanism was `all`.
+CAPABILITY = 'CAP_NET_ADMIN'
+
 #: How a container is stopped, and the same instruction restated on the inside.
 #: s6 treats a shutdown signal as advisory: it returns from the signal with its
-#: supervisors still running, they keep the unit's control group populated, and
-#: the next start fails against a group that never emptied. `SIGKILL` from the
-#: outside ends that, and a zero grace time keeps the supervision tree from
+#: supervisors still running, they keep the machine's control group populated,
+#: and the next start fails against a group that never emptied. `SIGKILL` from
+#: the outside ends that, and a zero grace time keeps the supervision tree from
 #: waiting on anything on its way down.
 KILL_SIGNAL = 'SIGKILL'
 S6_KILL_GRACETIME = 0
@@ -225,7 +209,7 @@ class MountedFile:
     """A file written on the device and bind-mounted into the container.
 
     `target` is the path inside the container the image reads it at; the file
-    itself sits beside the other desired state, so the image stays the software
+    itself sits in the machine's own directory, so the image stays the software
     and the configuration stays declarable. It is mounted read-only and it is
     this program's on every deployment, which is what separates it from an
     initial-state file.
@@ -247,7 +231,7 @@ class InitialState:
     initial-state file becomes the service's the moment it is placed, because
     the software behind it rewrites it — a resolver accepting a rewrite through
     its API, for instance. It is therefore delivered to the device, copied into
-    the state directory only when that directory holds none, and left alone
+    the state directory only while that directory is empty, and left alone
     afterwards; it is not bind-mounted and it is not in the content stamp,
     because a change to it can never be a reason to restart something that has
     already made the file its own.
@@ -267,9 +251,9 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
 
     The census entry is held rather than named, so the binding is a reference
     the type checker follows instead of a string looked up at runtime. What the
-    image needs of its unit is stated by the subclass below that stands for it;
-    the defaults here are what a service needs when it needs nothing special —
-    no writable state, no device node, nothing injected, nothing mounted.
+    image needs of its machine is stated by the subclass below that stands for
+    it; the defaults here are what a service needs when it needs nothing special
+    — no writable state, no device node, nothing injected, nothing mounted.
     """
 
     service: S
@@ -282,12 +266,12 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
 
     @property
     def devices(self) -> tuple[str, ...]:
-        """Device nodes the container needs, bound in and asserted by the unit."""
+        """Device nodes the container needs, bound into the machine."""
         return ()
 
     @property
     def environment(self) -> Mapping[str, str]:
-        """What the unit puts into the container's PID 1."""
+        """What the machine's settings put into the container's PID 1."""
         return {}
 
     @property
@@ -300,7 +284,7 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
 
     @property
     def bridge(self) -> str | None:
-        """The device bridge the unit attaches the container to.
+        """The device bridge the machine attaches the container to.
 
         `None` is the host's own network namespace, which is what nspawn does
         when it is given no bridge at all.
@@ -309,30 +293,31 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
 
     @property
     def state_bind(self) -> str | None:
-        """The `--bind` the unit keeps the service's writable state through."""
-        return None if self.state is None else f'{state_path(self.service.name)}:{self.state}'
+        """The bind the machine keeps the service's writable state through."""
+        return None if self.state is None else f'{nspawn.state_path(self.service.name)}:{self.state}'
 
     @property
     def unit_name(self) -> str:
-        return f'{UNIT_PREFIX}{self.service.name}.service'
+        """The unit that runs this service, which is systemd's own template."""
+        return nspawn.machine_unit(self.service.name)
 
     @property
     def stamped_set(self) -> tuple[str, ...]:
-        """The paths the service's content stamp covers (rfc-002 §4.2).
+        """The paths the machine's content stamp covers (rfc-002 §4.2).
 
-        The unit, the digest marker of the root filesystem tree, and every file
-        the container mounts: change one of them and the recovery script
-        restarts the service, change nothing and it does not.
+        The settings file, the digest marker of the root filesystem tree, and
+        every file the container mounts: change one of them and the converger
+        restarts the machine, change nothing and it does not.
 
         The root filesystem is represented by the marker beside it rather than
         by the tree itself: walking a root filesystem to notice it is unchanged
         would cost more than the restart it saves. The artifact resource writes
-        that marker before it runs this script, which is what makes it a change
-        the script can see.
+        that marker before it runs the converger, which is what makes it a
+        change the converger can see.
         """
         return (
-            f'{UNIT_DIR}/{self.unit_name}',
-            marker_path(root_path(self.service.name)),
+            nspawn.nspawn_path(self.service.name),
+            marker_path(nspawn.rootfs_path(self.service.name)),
             *(mounted_path(self.service.name, mounted) for mounted in self.mounted_files),
         )
 
@@ -342,7 +327,7 @@ class BridgedDeclaration(ContainerDeclaration[conventions.gateway.BridgedService
     """A service on the container VLAN, holding an address there.
 
     Being built on a bridged census entry is the whole of it: that is where the
-    address comes from, and it is why the unit can name a bridge at all.
+    address comes from, and it is why the machine can name a bridge at all.
     """
 
     @property
@@ -365,12 +350,21 @@ class CaddyService(BridgedDeclaration):
     and that oneshot exits non-zero when the addressing is not in its
     environment. So the address the census holds for caddy is the address it
     holds — the one a rewrite has to name — rather than one the design merely
-    intends, and a unit that failed to deliver it stops the proxy instead of
+    intends, and a machine that failed to deliver it stops the proxy instead of
     starting it somewhere else.
 
     Two directories come with it, and they are the image's names rather than
     paths chosen here: `XDG_CONFIG_HOME` is where it reads its `Caddyfile` and
     `XDG_DATA_HOME` where it keeps the certificates it must not lose.
+
+    **It resolves through the gateway's own resolver**, delivered as a third
+    mounted file. That is the one resolver that answers both halves of what the
+    proxy asks — it is authoritative for the internal zone its upstreams are
+    named in, and it forwards the rest, so the issuance calls to the registrar's
+    API resolve as well — and it is not the resolver pair the proxy fronts, so
+    the proxy still does not depend on what it serves. The address is the
+    container VLAN's gateway, the same one the image's network setup is handed
+    as its default route, so the two cannot disagree.
     """
 
     acme_token: pulumi.Input[str]
@@ -393,6 +387,7 @@ class CaddyService(BridgedDeclaration):
         return (
             MountedFile(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile()),
             MountedFile(name='cloudflare.token', target=CADDY_TOKEN_PATH, content=self.acme_token, secret=True),
+            MountedFile(name='resolv.conf', target=CADDY_RESOLV_CONF, content=resolv_conf()),
         )
 
 
@@ -447,8 +442,8 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
 
     Nothing is injected into it: the daemon is started with its state directory
     as its only argument, it takes the network it joins from what that directory
-    holds, and it reaches its roots by literal address. What it needs of the
-    unit is the tunnel device and the state bind that is its identity on the
+    holds, and it reaches its roots by literal address. What it needs of its
+    machine is the tunnel device and the state bind that is its identity on the
     overlay.
     """
 
@@ -462,8 +457,8 @@ class OverlayDaemon(ContainerDeclaration[conventions.gateway.HostNetworkService]
 
 
 #: One service's declaration, whichever image it is for. A fifth service is a
-#: new type here and a new parameter on `DeviceServices`, not a key in a mapping
-#: a loop may or may not look up (rfc-002 §5.3).
+#: new type here and a new parameter on `Gateway`, not a key in a mapping a loop
+#: may or may not look up (rfc-002 §5.3).
 ServiceDeclaration = CaddyService | ResolverService | OverlayDaemon
 
 
@@ -472,35 +467,37 @@ ServiceDeclaration = CaddyService | ResolverService | OverlayDaemon
 # ---------------------------------------------------------------------------
 
 
-def root_path(service: str) -> str:
-    """The root filesystem the unit boots, unpacked from the pin on the device."""
-    return f'{ROOT_DIR}/{service}'
-
-
-def state_path(service: str) -> str:
-    return f'{STATE_DIR}/{service}'
-
-
-def config_path(service: str, name: str) -> str:
-    return f'{CONFIG_DIR}/{service}/{name}'
-
-
-def secret_path(service: str, name: str) -> str:
-    return f'{SECRET_DIR}/{service}/{name}'
-
-
 def mounted_path(service: str, mounted: MountedFile) -> str:
-    return secret_path(service, mounted.name) if mounted.secret else config_path(service, mounted.name)
+    """Where one file the container mounts sits, inside the machine's directory.
 
-
-def bridge_device_unit(bridge: str) -> str:
-    """The device unit systemd gives a network interface.
-
-    Network devices are tagged `systemd` in the `udev` database, so a bridge
-    has a unit a service can bind to. Most device nodes do not, which is why
-    `/dev/net/tun` is asserted rather than depended on (rfc-002 §4.3).
+    Secrecy is the file's mode and the resource's own marking, not a directory
+    of its own: what a reader needs to find is the whole of a machine in one
+    place.
     """
-    return f'sys-subsystem-net-devices-{bridge}.device'
+    return nspawn.machine_file(service, mounted.name)
+
+
+def machine(declaration: ServiceDeclaration) -> nspawn.Machine:
+    """One service as the runtime converges it, from what the gateway declared.
+
+    The runtime is handed this rather than the component, which is what keeps
+    the two sides acyclic while leaving one source for both: the same
+    declaration produces the machine the converger acts on and the files the
+    component declares, so a stamped set cannot name a file no resource
+    declares.
+    """
+    service = declaration.service.name
+    initial = declaration.initial_state
+    return nspawn.Machine(
+        name=service,
+        stamped=declaration.stamped_set,
+        initial_state=None
+        if initial is None
+        else nspawn.Placement(
+            source=nspawn.machine_file(service, initial.name),
+            destination=f'{nspawn.state_path(service)}/{initial.into}',
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -510,56 +507,49 @@ def bridge_device_unit(bridge: str) -> str:
 
 @final
 @dataclass(frozen=True)
-class _UnitParams:
-    """What `container.service.j2` reads.
+class _MachineParams:
+    """What `machine.nspawn.j2` reads.
 
-    Every conditional part of the command line is already decided here, as the
-    thing itself or as `None`: `bridge` is the container VLAN's bridge unless
-    the service runs in the host's namespace, and `state_bind` and `binds` are
-    whole `--bind` arguments rather than pairs the file has to assemble.
+    Every conditional part is already decided here, as the thing itself or as
+    `None`: `bridge` is the container VLAN's bridge unless the service runs in
+    the host's namespace, and `state_bind` and `binds` are whole bind arguments
+    rather than pairs the file has to assemble.
     """
 
     cluster: str
     name: str
-    root: str
+    capability: str
     kill_signal: str
     kill_gracetime: int
     environment: Mapping[str, str]
     bridge: str | None
-    bridge_unit: str | None
+    host_network: bool
     state_bind: str | None
     devices: tuple[str, ...]
     binds: tuple[str, ...]
 
 
-def unit_file(declaration: ServiceDeclaration) -> str:
-    """The unit that runs one container.
+def nspawn_file(declaration: ServiceDeclaration) -> str:
+    """The settings that decide what one machine is when systemd starts it.
 
-    It states its own requirements and the recovery script chooses no start
-    order (rfc-002 §4.3): every service comes after the network is up, a
-    service on the container VLAN binds to the bridge's device unit so that it
-    cannot be started against a bridge that does not exist yet, and a service
-    that needs a device node asserts the node rather than depending on a unit
-    `udev` never activates.
-
-    What the rest of the command line answers is in the template beside this
-    module: every flag on it is something an s6 image does or does not do for
-    itself.
+    There is no unit to write: `systemd-nspawn@.service` is systemd's own
+    template and it reads this file, so what a machine says about itself is
+    said once and in the place `machinectl` and `systemctl` already look.
     """
     service = declaration.service.name
     bridge = declaration.bridge
     return templates.render(
         TEMPLATE_PACKAGE,
-        'templates/container.service.j2',
-        _UnitParams(
+        'templates/machine.nspawn.j2',
+        _MachineParams(
             cluster=conventions.CLUSTER_NAME,
             name=service,
-            root=root_path(service),
+            capability=CAPABILITY,
             kill_signal=KILL_SIGNAL,
             kill_gracetime=S6_KILL_GRACETIME,
             environment=declaration.environment,
             bridge=bridge,
-            bridge_unit=None if bridge is None else bridge_device_unit(bridge),
+            host_network=bridge is None,
             state_bind=declaration.state_bind,
             devices=declaration.devices,
             binds=tuple(f'{mounted_path(service, mounted)}:{mounted.target}' for mounted in declaration.mounted_files),
@@ -653,6 +643,32 @@ def caddyfile() -> str:
 
 @final
 @dataclass(frozen=True)
+class _ResolvParams:
+    """What `resolv.conf.j2` reads: the one resolver the file may name."""
+
+    cluster: str
+    resolver: str
+
+
+def resolv_conf() -> str:
+    """Which resolver a container asks, for a container that cannot use the image's.
+
+    Exactly one entry, because the images' resolver library asks every listed
+    server in parallel and takes the first answer: a public resolver beside the
+    site's own would answer the internal names with NXDOMAIN and win the race.
+    """
+    return templates.render(
+        TEMPLATE_PACKAGE,
+        'templates/resolv.conf.j2',
+        _ResolvParams(
+            cluster=conventions.CLUSTER_NAME,
+            resolver=str(conventions.CONTAINER_VLAN.require_gateway()),
+        ),
+    )
+
+
+@final
+@dataclass(frozen=True)
 class _AdguardInitialParams:
     """What `adguard-home.initial.yaml.j2` reads."""
 
@@ -668,12 +684,12 @@ def adguard_initial_state(address: IPv4Address) -> str:
     A running instance rewrites this file whenever it accepts a change through
     its API, and the `dns` stack writes the split-horizon rewrites that way. So
     what is declared is what the instance needs in order to exist at all — where
-    it listens, what it forwards to — and the recovery script installs it only
-    where there is no configuration. That is the state of a service whose
-    working directory the device has never held: a new instance, or a device
-    rebuilt from nothing. Replacing the root filesystem is not such a moment,
-    because the working directory is bind-mounted from the device and survives
-    the tree that is thrown away with it.
+    it listens, what it forwards to — and the converger installs it only while
+    the state directory is empty. That is the state of a service whose working
+    directory the device has never held: a new instance, or a device rebuilt
+    from nothing. Replacing the root filesystem is not such a moment, because
+    the working directory is bind-mounted from the device and survives the tree
+    that is thrown away with it.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -690,17 +706,22 @@ def adguard_initial_state(address: IPv4Address) -> str:
 class Container(Component):
     """One container service on the device, and every file that defines it.
 
-    It owns its root filesystem artifact, its unit, the files it mounts and its
-    initial state, and it exposes the two facts its parent needs: the unit's
-    name, and the stamped set the content stamp covers.
+    It owns its root filesystem artifact, its settings file, the files it mounts
+    and its initial state — all of them in the machine's own directory — and it
+    exposes the two facts a reader needs of it: the unit that runs the machine,
+    and the stamped set its content stamp covers.
 
-    `hook` and `after` are the same script from two sides: the recovery script
-    is what every file of this service runs once it lands, and it is the only
-    thing that installs, starts or restarts anything on the device
-    (rfc-002 §4.2). It is stated on every file rather than once on this
-    component because Pulumi does not push a component's own `depends_on` down
-    to its children — and a file whose hook runs a script the device has not
-    been given yet fails its own apply.
+    **Every file of the machine runs the runtime's hook once it lands**, which
+    converges the machine and then holds it to having come up (`nspawn`). It is
+    stated on every file rather than once on this component because Pulumi does
+    not push a component's own `depends_on` down to its children — and a file
+    whose hook runs a script the device has not been given yet fails its own
+    apply, which is why the runtime's convergers are depended on here too.
+
+    `after` is what this machine must be actuated behind. It is a parameter
+    rather than a fact of this class because the only service that has such a
+    constraint has it for a reason that is invisible from inside: the machine
+    carrying the deployment's own session must move last (rfc-002 §4.4).
     """
 
     def __init__(
@@ -708,37 +729,39 @@ class Container(Component):
         name: str,
         *,
         declaration: ServiceDeclaration,
+        runtime: NspawnRuntime,
         connection: Connection,
-        hook: str,
         after: Sequence[pulumi.Resource] = (),
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
         service = declaration.service.name
         owner = conventions.gateway.SSH_USER
-        child = self.child_opts(depends_on=list(after))
+        child = self.child_opts(depends_on=[*runtime.convergers, *after])
 
         self.unit_name: str = declaration.unit_name
         self.stamped_set: tuple[str, ...] = declaration.stamped_set
 
+        root = nspawn.rootfs_path(service)
         self.image = DeviceArtifact(
             f'{name}-image',
             connection=connection,
             repository=declaration.pin.repository,
             tag=declaration.pin.tag,
             digest=declaration.pin.digest,
-            root=root_path(service),
-            hook=hook,
+            root=root,
+            hook=runtime.hook(service, root),
             opts=child,
         )
-        self.unit = DeviceFile(
-            f'{name}-unit',
+        settings = nspawn.nspawn_path(service)
+        self.settings = DeviceFile(
+            f'{name}-nspawn',
             connection=connection,
-            path=f'{UNIT_DIR}/{self.unit_name}',
-            content=unit_file(declaration),
+            path=settings,
+            content=nspawn_file(declaration),
             mode=CONFIG_MODE,
             owner=owner,
-            hook=hook,
+            hook=runtime.hook(service, settings),
             opts=child,
         )
         self.mounted_files = {
@@ -749,7 +772,7 @@ class Container(Component):
                 content=mounted.content,
                 mode=SECRET_MODE if mounted.secret else CONFIG_MODE,
                 owner=owner,
-                hook=hook,
+                hook=runtime.hook(service, mounted_path(service, mounted)),
                 secret=mounted.secret,
                 opts=child,
             )
@@ -762,11 +785,11 @@ class Container(Component):
             else DeviceFile(
                 f'{name}-initial-state',
                 connection=connection,
-                path=config_path(service, initial.name),
+                path=nspawn.machine_file(service, initial.name),
                 content=initial.content,
                 mode=CONFIG_MODE,
                 owner=owner,
-                hook=hook,
+                hook=runtime.hook(service, nspawn.machine_file(service, initial.name)),
                 opts=child,
             )
         )
