@@ -31,50 +31,61 @@ declarative/physical.md §4.
     is no VLAN and never becomes a network object (§4.1), and
     numbering it next to the VLAN it is announced from keeps the pair
     legible at a glance.
--   **nspawn container services** (units + digest-pinned rootfs pushed
-    by the gw-config provider): caddy, AdGuard ×2 (alice/bob), and the
-    **ZeroTier member container** (§2) as the fourth. A pin is a whole
-    image reference, `<repository>:<tag>@sha256:<digest>`: the runner
-    pulls that manifest by its digest and hashes it against the pin,
-    hashes every layer against the digest the manifest gives for it,
-    and flattens the layers into one plain archive; the push unpacks
-    that into a per-service directory tree, and the unit boots the tree
-    with `systemd-nspawn --directory=`. Which repository publishes a
-    given build stays this repository's decision — the stack checks
-    each pin against it and refuses a mismatch by key, so the two
-    resolvers cannot drift onto two different images. The tree is derived
-    state the push replaces whole and never edits, so nothing worth
-    keeping lives in it — a service's writable state is bind-mounted
-    from `/data` instead, which is also what makes a rootfs bump a
-    software swap rather than a new identity. Doing the pull and the
-    flattening on the runner is deliberate: the device boots a
-    directory rather than running a container engine, and its userland
-    is the cut-down one a router ships, where `tar` can be relied on
-    and little else can.
+-   **nspawn container services**, one **machine** each: caddy, AdGuard
+    ×2 (alice/bob), and the **ZeroTier member container** (§2) as the
+    fourth. A pin is a whole image reference,
+    `<repository>:<tag>@sha256:<digest>`, and **the device pulls it
+    itself**: the push hands the box `repository@digest` over the same
+    session that writes its files, the box copies that manifest out of
+    the registry by digest and unpacks it into a tree beside the one it
+    is running, and neither the bytes nor the code that understands
+    them passes through the runner. Digest verification and layer
+    semantics are then the device's stock tooling rather than this
+    program's, which is why that tooling is part of the package set the
+    boot chain reinstalls (§1.2). Which repository publishes a given
+    build stays this repository's decision — the stack checks each pin
+    against it and refuses a mismatch by key, so the two resolvers
+    cannot drift onto two different images. The tree is derived state
+    the push replaces whole and never edits, so nothing worth keeping
+    lives in it — a service's writable state is bind-mounted from
+    beside the tree instead, which is also what makes a rootfs bump a
+    software swap rather than a new identity.
 
     **The marker beside each tree names the manifest digest**, which
-    is the pin and not a checksum of the archive lying next to it. A
+    is the pin and not a checksum of the tree lying next to it. A
     reviewer running `sha256sum` on the device should expect the two
     to differ: what the marker asserts is provenance — these bytes
-    came from that image — and the flattening is content-equivalent to
-    `podman export` rather than byte-identical to anything.
+    came from that image — and it is withdrawn when the push that
+    wrote it did not finish converging, so a half-applied machine is
+    work the next preview still sees.
 
-    **Each unit states its own requirements**, and nothing chooses a
-    start order for it: the three services on the container VLAN bind
-    to that bridge's device unit and come after it, so a container is
-    never started against a bridge that does not exist yet, and the
-    ZeroTier member asserts `/dev/net/tun` rather than depending on it
-    — nothing tags that node in `udev`, so its device unit can be
-    loaded but never activated and a dependency on it would fail the
-    service permanently. The assertion is what turns "the daemon
-    logged that it cannot open the device and went to sleep" into a
-    failed unit with a reason. No unit names another: caddy proxies to
-    the resolvers at request time, not at start time, and the ZeroTier
-    member carries the management session rather than the others'
-    traffic.
+    **A machine says what it is in its own settings file**, and the
+    unit that runs it is `systemd-nspawn@.service` — systemd's own
+    template, instanced by machine name. There is no unit per service
+    to write, install or retire, and no place for this program to
+    choose a start order: what a settings file carries is the bridge
+    the machine attaches to (or, for the member in the host's network
+    namespace, the cancelling of the virtual ethernet pair the
+    template would otherwise give it), the binds it needs, and the
+    environment its image reads. The ZeroTier member's tunnel device
+    is one of those binds, which is also its assertion: nspawn refuses
+    to start a machine whose bind source is missing, so an absent
+    `/dev/net/tun` is a machine that failed with a reason rather than
+    a daemon that logged it could not open the device and went to
+    sleep. No machine names another: caddy proxies to the resolvers at
+    request time, not at start time, and the ZeroTier member carries
+    the management session rather than the others' traffic.
+
+    **What the template unit does not give a machine is a restart
+    policy**, and that is the price of not writing units: a machine
+    that dies stays down until the next boot or the next push
+    converges it. The one failure this firmware actually produces is
+    narrower and has its own answer — a container's `vb-*` interface
+    comes back detached from its bridge after a restart, and a
+    watchdog unit re-attaches it (§1.2).
 
     **The images are Alpine with s6-overlay, not systemd**, which
-    decides what a unit may say. It boots what the image ships at
+    decides what a settings file may say. It boots what the image ships at
     `/sbin/init`; readiness is nspawn's own message rather than one
     the guest never sends; a member is stopped with `SIGKILL`,
     because s6 returns from anything gentler with supervisors still
@@ -90,7 +101,7 @@ declarative/physical.md §4.
     in the image, which needs the AdGuard pair's network setup plus a
     resolver that does not depend on these services. The ZeroTier member
     is told nothing at all: it is host-networked, and what it needs of
-    its unit is the tunnel device and the state directory that is its
+    its machine is the tunnel device and the state directory that is its
     identity on the overlay.
 
     **Host-networked is a requirement rather than an accident**, and it
@@ -99,9 +110,21 @@ declarative/physical.md §4.
     through that interface, and an interface created inside a private
     namespace is invisible to the router that has to use it — the
     member would join and route nothing. The declaration states it by
-    giving that one service no address, since no address means no
-    bridge and nspawn leaves a container with no bridge in the host's
-    own namespace.
+    giving that one service no address: no address means no bridge, and
+    a machine with no bridge is the one whose settings cancel both the
+    virtual ethernet pair and the user namespace the template unit
+    would otherwise give it — `CAP_NET_ADMIN` inside a user namespace
+    does not reach the interface the host has to route through either.
+
+    **Which resolver a container asks is a fact about this site, not
+    about the image**, so where it differs from the image's own default
+    it arrives as a mounted file. The reverse proxy is the case that
+    has one: its upstreams are internal names that no public resolver
+    answers, and its certificate issuance calls the registrar's API, so
+    it is pointed at this device's own resolver — which answers the
+    first, forwards the second, and is not the AdGuard pair it fronts.
+    Exactly one entry, because the images' resolver library asks every
+    listed server in parallel and takes the first answer.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.
@@ -123,65 +146,92 @@ declarative/physical.md §4.
     device holding one of them is the one machine the cluster cannot
     re-seal.
 
-### 1.1 The recovery script, and what decides a restart
+### 1.1 A machine, and what decides a restart
 
-Everything the routing daemon and the containers need lives under
-`/data`, the one directory a firmware update leaves alone: the root
-filesystem archives and the trees unpacked from them, the unit files,
-the configuration each container reads, the per-container writable
-state, and one **recovery script** in `on_boot.d`. The script is the
-whole mechanism for making any of it take effect, and deliberately the
-only one: it runs at boot, when nothing else is present and this
-program is not reachable, and it runs again after every deployment as
-every pushed file's post-apply hook. The path that recovers a device is
-therefore the path every apply exercises, so it cannot rot unnoticed.
+Everything a container service is lives in **one directory per machine**
+under `/data/custom/machines`, the persistent root a firmware update
+leaves alone: the root filesystem tree, the digest marker naming the pin
+it came from, the writable state bind-mounted into the container, the
+`<name>.nspawn` settings file, the content stamp, and whatever files
+that machine mounts or is seeded from. A machine can therefore be read,
+moved or deleted whole, and nothing about a service is left somewhere
+else when the service goes.
 
-What it guarantees, in that order: every declared unit whose unit file
-*and* root filesystem tree have landed is installed and enabled; a unit
-this program no longer declares is disabled, removed and its stamp
-cleared, and only units of this program's own prefix are candidates;
-the routing daemon's configuration is copied to where the daemon reads
-it, outside `/data`, and reloaded; a service that owns its own
-configuration is given an initial state, but only where it has none,
-because the software behind it rewrites that file afterward; and a
-service is restarted **only if a file that defines it changed**.
+**Two scripts of the boot chain make any of it take effect**, and
+they are deliberately the only mechanism. `30-nspawn-units.sh` mirrors
+each machine's settings into `/etc/systemd/nspawn`, where the template
+unit reads them; `40-machines.sh` links each machine's root filesystem
+into `/var/lib/machines`, enables that machine's instance of
+`systemd-nspawn@.service`, installs an initial state into a state
+directory that has never held one, and restarts a machine whose
+definition moved. Both run at boot, when nothing else is present and
+this program is not reachable, and both run again as the post-apply
+hook of every file a machine is made of — so the path that recovers a
+device is the path every apply exercises, and it cannot rot unnoticed.
 
-That last point is load-bearing, and it is why the health of a service
-here is decided by *files* rather than by a probe. The **content stamp**
-is a file beside each service's state holding a checksum over
-everything that defines that service — its unit, the digest marker of
-its root filesystem tree, and every configuration file it mounts. That
-set of paths is the service's **stamped set**, and the stamp is the
-record of what was last acted on; comparing the two is how the script
-tells intended content from pushed content without asking the service
-anything about itself. An unchanged stamp plus an active unit means
-nothing to do. There is no health check inside and no monitor:
-`Restart=always` handles a service that dies and systemd is what
-notices, while the script decides only whether the *definition* moved.
+The machine set they act on is **rendered and unordered**: a machine
+absent from it is skipped even if its directory exists, which is what
+keeps a half-migrated or hand-made sibling directory from being
+started, and one that is no longer declared is disabled and unlinked.
+A machine whose root filesystem has not landed yet is skipped rather
+than fatal, because a push writes that script before the trees it
+describes.
+
+**A service is restarted only if a file that defines it changed**, and
+that is why the health of a service here is decided by *files* rather
+than by a probe. The **content stamp** is a file in the machine's
+directory holding a checksum over everything that defines it — its
+settings file, the digest marker of its root filesystem tree, and every
+configuration file it mounts. That set of paths is the machine's
+**stamped set**, and the stamp is the record of what was last acted on;
+comparing the two is how the script tells intended content from
+pushed content without asking the service anything about itself. An
+unchanged stamp plus an active machine means nothing to do.
 
 The stamped set names the root filesystem's **digest marker** rather
 than the tree, because walking a root filesystem to learn it has not
-changed costs more than the restart it would save — and the marker
-beside the *tree* rather than beside the archive, because the archive's
-marker is written after the hook has already run, so a service waiting
-on it would learn about a new root filesystem one deployment late. The
-two marker-shaped files are not the same thing: a **digest marker** is
-written by the push and records which published artifact a payload came
-from, while a **content stamp** is written by this script and records
+changed costs more than the restart it would save. The two
+marker-shaped files are not the same thing: a **digest marker** is
+written by the push and records which published artifact a tree came
+from, while a **content stamp** is written by that script and records
 what it last acted on. The first is an input to the second.
 
-**One service is restarted last, and that is a fact about the
-deployment rather than about the machine.** The apply reaches the
-device over ZeroTier, and the overlay daemon carrying that session is
-one of the containers being updated, so restarting it severs the
-session that asked for the restart. Three things make that safe.
-Nothing restarts that did not change, without which every apply would
-cut its own session. The service carrying the session converges last,
-so everything else has settled before the risk is taken — expressed as
-the order of the restart loop, never as a unit ordering, which would
-state something false about how the device boots. And an apply that
+**A push that leaves a machine down fails, and the machine goes back.**
+Converging is not evidence that a machine runs, so every file's
+post-apply hook asks systemd whether that machine reached active. If it
+did not, the hook swaps the machine's root filesystem back to the tree
+this push displaced — the push leaves it beside the live one until the
+next push clears it — takes away the digest marker, which is now a
+claim about a tree the device no longer runs, restarts the machine,
+and **exits non-zero**. The resource fails: the apply is red, the next
+preview still has the work to do, and the operator finds a failed push
+rather than a resolver that has been down since a push that reported
+success. The same swap is a one-command tool
+(`machine-rollback <name>`) for an operator over any transport,
+including the LAN door when a bad push took the overlay down. It
+refuses when there is no displaced tree to go back to, which is the
+honest answer outside that window.
+
+Nothing on the device rolls back autonomously, and that is a decision
+rather than an omission: a device that reverted on its own while this
+program still declared the rejected pin would be a second convergence
+authority, and the very next apply would push the tree the device had
+just rejected.
+
+**One machine is actuated last, and that is a fact about the deployment
+rather than about the device.** The apply reaches the box over
+ZeroTier, and the overlay daemon carrying that session is one of the
+machines being updated, so restarting it severs the session that asked
+for the restart. Three things make that safe. Nothing restarts that did
+not change, without which every apply would cut its own session. The
+machine carrying the session is ordered behind **every other child of
+the gateway component** in the deployment graph — not merely behind the
+other machines, because once the device is a member any resource's
+session may ride that tunnel — which is where a push-time constraint
+belongs; the script itself carries no order at all, since at boot
+there is no apply in flight and nothing to protect. And an apply that
 dies there fails its own resource: every step is idempotent and that
-service's stamp has not been written yet, so the retry finds the work
+machine's stamp has not been written yet, so the retry finds the work
 already done. During a first bring-up there is no overlay to sever —
 the container that will carry it is the thing being delivered — and the
 session runs over the device's LAN address instead (§2.5).
@@ -250,9 +300,18 @@ it can be run again outside boot; what it cannot get is a place before
 the unit store exists, which is what the two scripts above need and
 what the numeric order of `on_boot.d` expresses.
 
-The container services of §1.1 do not go through this layer: their
-files sit under a services root of their own and are converged by their
-own recovery script.
+**The container services of §1.1 are a layer on top of this one**, and
+they reach the device only through it. That layer — the nspawn runtime
+— is what a machine runs on: it asks the mechanism for its two
+boot-chain scripts, for the `machines/` directory they work in, for the
+`machine-rollback` executable a failed push reaches for, and for the
+bridge watchdog as a unit and an executable pair. It also states the
+packages the machines need, which is how `systemd-container`, the
+name-service module that resolves a started machine, and the two
+programs the device pulls and unpacks its own root filesystems with
+reach `10-packages.sh` without that script naming a package of its own.
+The machines themselves are the workloads on it, and they own nothing
+of the framework.
 
 ## 2. ZeroTier network design
 
@@ -648,12 +707,13 @@ at the registrar.
     repair tool (gw-config push) itself rides ZT, hence the side-door:
     connect to the **homelab host's direct ZT address** (member-to-
     member traffic needs no managed routes), hop to the LAN, SSH the
-    UDM, restart the unit or rerun the recovery script (§1.1). If the
-    host is also down: physical presence (LAN).
--   **Firmware update wiped the services** — trigger: post-update, nspawn
-    units gone. The recovery script re-materializes them autonomously
-    (§1.1); verify ZT comes back last (it carries the management
-    path). Fallback if host-networking nspawn misbehaves
+    UDM, restart the machine or rerun the boot chain's two machine
+    scripts (§1.1). If the host is also down: physical presence (LAN).
+-   **Firmware update wiped the services** — trigger: post-update, the
+    machines are gone from `/var/lib/machines` and their settings from
+    `/etc/systemd/nspawn`. The boot chain re-establishes them
+    autonomously (§1.1); verify ZT comes back (it carries the
+    management path). Fallback if host-networking nspawn misbehaves
     post-update: the unifios-utilities apt pattern (§5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the pull-direction yadm timer), re-run the
