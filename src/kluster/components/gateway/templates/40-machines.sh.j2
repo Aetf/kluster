@@ -1,0 +1,123 @@
+#!/bin/bash
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# Converge every declared machine under {{ machines_root }}: link the root
+# filesystem where systemd resolves a machine name, seed a state directory that
+# has never held one, and (re)start a machine whose definition moved. Runs at
+# boot, when nothing else is present, and again as the post-apply hook of every
+# file a machine is made of -- so the recovery path is the path every push
+# exercises.
+#
+# The machine set below is unordered. Which machine is actuated when is a
+# push-time constraint -- the one carrying the deployment's own session goes
+# last -- and it is expressed in the deployment's dependency graph, where the
+# session is. At boot there is no session to sever and nothing to order.
+#
+# systemctl on systemd's own template unit rather than machinectl: the two
+# produce the identical machines.target.wants symlink and unit start, and
+# systemctl is part of the firmware base, so linking and enabling still succeed
+# on a boot where the package install failed. Only the start itself needs
+# systemd-container.
+
+set -u
+
+MACHINES={{ machines_root }}
+LIVE={{ live_machines_dir }}
+DECLARED="{{ machines | map(attribute='name') | join(' ') }}"
+
+# The stamped set: every file whose content defines a machine. The content
+# stamp is a checksum over exactly these, which is how a restart is decided
+# without asking the machine anything about itself.
+stamped_set() {
+    case "$1" in
+{%- for machine in machines %}
+        {{ machine.name }}) stamped="{{ machine.stamped | join(' ') }}" ;;
+{%- endfor %}
+        *) stamped="" ;;
+    esac
+    echo "$stamped"
+}
+
+# Place a machine's own configuration into a state directory that has never
+# held one. Emptiness is the test rather than the absence of the file: a
+# machine that has run once owns everything in there, including the file it
+# rewrote when it accepted a change through its own API.
+install_initial_state() {
+    source=""
+    destination=""
+    case "$1" in
+{%- for machine in machines if machine.initial_state %}
+        {{ machine.name }}) source={{ machine.initial_state.source }}; destination={{ machine.initial_state.destination }} ;;
+{%- else %}
+        # no machine on this device owns its own configuration
+{%- endfor %}
+    esac
+    [ -n "$destination" ] || return 0
+    [ -e "$source" ] || return 0
+    [ -z "$(ls -A "$MACHINES/$1/{{ state }}" 2>/dev/null)" ] || return 0
+    echo "machines: seeding $1"
+    mkdir -p "$(dirname "$destination")"
+    cp "$source" "$destination"
+}
+
+mkdir -p "$LIVE"
+# machinectl would do this implicitly; enabling the instance units does not.
+systemctl is-enabled machines.target >/dev/null 2>&1 || systemctl enable machines.target
+
+# Retire what is no longer declared. Only links into the machines root are
+# candidates: anything else under $LIVE is somebody else's container.
+for link in "$LIVE"/*; do
+    [ -L "$link" ] || continue
+    case "$(readlink "$link")" in
+        "$MACHINES"/*) ;;
+        *) continue ;;
+    esac
+    machine=$(basename "$link")
+    case " $DECLARED " in
+        *" $machine "*) continue ;;
+    esac
+    echo "machines: retiring $machine"
+    systemctl disable --now "{{ unit_template }}$machine.service" || true
+    rm -f "$link"
+done
+
+failed=0
+for machine in $DECLARED; do
+    root=$MACHINES/$machine/{{ rootfs }}
+    # What is declared *and* has landed: a push writes this script before the
+    # trees it describes, so a machine with no root filesystem yet is one this
+    # run has nothing to do about -- not an error, and not a reason to leave
+    # the rest unconverged.
+    [ -d "$root" ] || continue
+
+    link=$LIVE/$machine
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+        echo "machines: $link is not a link into $MACHINES; leaving it alone" >&2
+        failed=1
+        continue
+    fi
+    if [ "$(readlink "$link" 2>/dev/null)" != "$root" ]; then
+        echo "machines: linking $machine"
+        rm -f "$link"
+        ln -s "$root" "$link"
+    fi
+
+    unit={{ unit_template }}$machine.service
+    systemctl is-enabled "$unit" >/dev/null 2>&1 || systemctl enable "$unit"
+    install_initial_state "$machine"
+
+    stamp=$MACHINES/$machine/{{ stamp }}
+    want=$(cat $(stamped_set "$machine") 2>/dev/null | cksum)
+    have=$(cat "$stamp" 2>/dev/null || echo none)
+    if [ "$want" = "$have" ] && systemctl is-active --quiet "$unit"; then
+        continue
+    fi
+    echo "machines: starting $machine"
+    if systemctl restart "$unit"; then
+        echo "$want" > "$stamp"
+    else
+        echo "machines: FAILED to start $machine" >&2
+        failed=1
+    fi
+done
+exit "$failed"
