@@ -66,7 +66,7 @@ from kluster import conventions
 from kluster.components.gateway import persistence
 from kluster.components.gateway.persistence import DevicePersistence
 from kluster.lib import templates
-from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, DeviceFile, marker_path
+from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, DeviceDirectory, DeviceFile, marker_path
 from putils import Component
 
 __all__ = (
@@ -452,7 +452,7 @@ class NspawnRuntime(Component):
         super().__init__(name, opts=opts)
         self._packages: DeviceFile = mechanism.packages
 
-        self.skeleton: DeviceFile = mechanism.skeleton_dir(SKELETON, opts=self.child_opts())
+        self.skeleton: DeviceDirectory = mechanism.skeleton_dir(SKELETON, opts=self.child_opts())
         # The settings converger before the machine converger, in the order the
         # boot chain runs them and a hook re-runs them.
         self.nspawn_units: DeviceFile = mechanism.on_boot_script(
