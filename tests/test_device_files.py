@@ -104,12 +104,17 @@ HOOK_COMMAND = 'systemctl restart adguard'
 @final
 @dataclass
 class Entry:
-    """A file as the device holds it."""
+    """A file as the device holds it.
+
+    `kind` is what `stat` would call it, because a path holding the wrong kind
+    of thing is one of the answers the providers act on.
+    """
 
     data: bytes
     mode: str = '0644'
     owner: str = 'root'
     group: str = 'root'
+    kind: str = 'regular file'
 
 
 @final
@@ -172,7 +177,9 @@ class Transport:
         self.device.log.append(f'stat {path}')
         if entry is None:
             return None
-        return ssh.FileStat(owner=entry.owner, group=entry.group, mode=entry.mode, size=len(entry.data))
+        return ssh.FileStat(
+            owner=entry.owner, group=entry.group, mode=entry.mode, size=len(entry.data), kind=entry.kind
+        )
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
         user, _, group = (owner or 'root:root').partition(':')
@@ -296,7 +303,9 @@ def converged(device: Device, props: Mapping[str, Any]) -> None:
 def made(device: Device, props: Mapping[str, Any]) -> None:
     """Put the device in the state a directory bag declares."""
     user, _, group = str(props['owner']).partition(':')
-    device.files[str(props['path'])] = Entry(data=DIRECTORY_ENTRY, mode=str(props['mode']), owner=user, group=group)
+    device.files[str(props['path'])] = Entry(
+        data=DIRECTORY_ENTRY, mode=str(props['mode']), owner=user, group=group, kind='directory'
+    )
 
 
 def landed(device: Device, props: Mapping[str, Any], digest: str | None = None) -> None:
@@ -307,7 +316,7 @@ def landed(device: Device, props: Mapping[str, Any], digest: str | None = None) 
     """
     root = str(props['root'])
     claimed = digest if digest is not None else str(props['digest'])
-    device.files[root] = Entry(data=TREE_ENTRY)
+    device.files[root] = Entry(data=TREE_ENTRY, kind='directory')
     device.files[provider.marker_path(root)] = Entry(data=f'{claimed}\n'.encode())
 
 
@@ -730,10 +739,11 @@ def test_a_directory_path_a_shell_would_mangle_is_quoted() -> None:
 
 
 def test_a_directory_someone_removed_on_the_device_is_a_change(device: Device) -> None:
-    """The gap the resource closes: a marker beside a directory could not see this.
+    """A directory taken away by hand, or by a firmware update, is work to do.
 
-    A directory taken away by hand, or by a firmware update, is work the next
-    preview reports without anybody asking for a refresh.
+    The next preview reports it without anybody asking for a refresh, which is
+    what makes the resource a statement about the device rather than a record of
+    what was once pushed to it.
     """
     props = directory_props()
 
@@ -836,7 +846,7 @@ def test_deleting_a_directory_somebody_filled_is_refused(device: Device) -> None
     names itself, rather than being emptied.
     """
     made(device, directory_props())
-    device.statuses = {'rmdir': provider.NOT_EMPTY}
+    device.statuses = {'rmdir': ssh.NOT_EMPTY}
 
     with pytest.raises(provider.DirectoryNotEmpty) as raised:
         directory_provider().delete('id', directory_props())
@@ -865,9 +875,22 @@ def test_a_removal_of_a_directory_that_is_already_gone_is_a_success() -> None:
     script = provider.remove_script(DIRECTORY_PATH)
 
     assert script.startswith(f'if [ ! -e {DIRECTORY_PATH} ]; then exit 0; fi')
-    assert f'exit {provider.NOT_EMPTY}' in script
+    assert f'exit {ssh.NOT_EMPTY}' in script
     assert script.endswith(f'rmdir {DIRECTORY_PATH}')
     assert 'rm -r' not in script
+
+
+def test_only_a_directory_is_ever_called_not_empty() -> None:
+    """`ls -A` on a regular file prints that file's own name.
+
+    Without the kind test in front of it, a file left where a directory is
+    declared would be refused as "not empty" -- a claim about contents a file
+    does not have. It reaches `rmdir` instead, which says what is actually wrong
+    with it.
+    """
+    script = provider.remove_script(DIRECTORY_PATH)
+
+    assert f'if [ -d {DIRECTORY_PATH} ] && [ -n "$(ls -A {DIRECTORY_PATH})" ]' in script
 
 
 def test_a_directory_that_could_not_be_made_fails_the_apply(device: Device) -> None:
@@ -900,6 +923,30 @@ def test_reading_a_directory_someone_removed_drops_the_identifier(device: Device
     assert result.outs == {}
 
 
+def test_a_file_left_where_the_directory_should_be_is_a_change(device: Device) -> None:
+    """Existence is not the question; what is there is.
+
+    The mode and the owner can agree by coincidence -- 0755 owned by root is
+    what a script looks like too -- so a comparison that stopped at those would
+    report a converged directory for a path holding a file, on every preview,
+    for as long as nobody applied.
+    """
+    props = directory_props()
+    made(device, props)
+    device.files[DIRECTORY_PATH].kind = 'regular file'
+
+    assert directory_provider().diff('id', props, props).changes is True
+
+
+def test_reading_a_path_something_else_occupies_drops_the_identifier(device: Device) -> None:
+    """A refresh records what the device can offer, and it is not this directory."""
+    props = directory_props()
+    made(device, props)
+    device.files[DIRECTORY_PATH].kind = 'symbolic link'
+
+    assert directory_provider().read('id', props).id is None
+
+
 def test_a_relative_directory_is_refused_before_anything_is_made() -> None:
     result = directory_provider().check({}, directory_props(path='custom/machines'))
 
@@ -919,19 +966,22 @@ def test_an_unknown_input_on_a_directory_is_an_unknown_diff_and_touches_nothing(
     assert device.sessions == 0
 
 
-def test_the_directory_operations_are_versioned_apart_from_the_file_and_the_tree(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The stamp says that *this* resource's behavior changed, and no other's.
+def test_every_resource_of_this_module_carries_the_one_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One constant, because the three kinds share the code a bump would announce.
 
-    A bump to the version the files and the trees carry re-stamps them and leaves
-    the directories alone, which is what keeps the property a statement about the
-    code that made this resource.
+    The session, the stamping, the hook and the transport are one implementation
+    serving all three, so a change to any of them changes every resource's
+    behavior -- and a second constant would have to be remembered twice, leaving
+    one kind silent about a change the others reported.
     """
     monkeypatch.setattr(provider, 'VERSION', f'{provider.VERSION}-next')
+    stamped = {
+        checked(directory_provider(), directory_props())[PROVIDER_VERSION],
+        checked(file_provider(), file_props())[PROVIDER_VERSION],
+        checked(artifact_provider(), artifact_props())[PROVIDER_VERSION],
+    }
 
-    assert checked(directory_provider(), directory_props())[PROVIDER_VERSION] == provider.DIRECTORY_VERSION
-    assert checked(file_provider(), file_props())[PROVIDER_VERSION] == provider.VERSION
+    assert stamped == {provider.VERSION}
 
 
 ##
@@ -1558,11 +1608,23 @@ def test_a_read_that_actually_failed_is_a_fault() -> None:
     assert 'Permission denied' in str(raised.value)
 
 
-def test_a_stat_is_read_as_owner_group_mode_size() -> None:
-    device, connection = transport(answer(stdout=b'root staff 640 12\n'))
+def test_a_stat_is_read_as_owner_group_mode_size_and_kind() -> None:
+    device, connection = transport(answer(stdout=b'root staff 640 12 regular empty file\n'))
 
-    assert asyncio.run(device.stat('/data/x')) == ssh.FileStat(owner='root', group='staff', mode='640', size=12)
-    assert "stat -c '%U %G %a %s' /data/x" in connection.commands[0]
+    assert asyncio.run(device.stat('/data/x')) == ssh.FileStat(
+        owner='root', group='staff', mode='640', size=12, kind='regular empty file'
+    )
+    assert "stat -c '%U %G %a %s %F' /data/x" in connection.commands[0]
+
+
+def test_the_kind_takes_the_rest_of_the_line_because_it_is_the_field_with_spaces() -> None:
+    """`%F` says `regular empty file`, and a split into fixed fields would lose it."""
+    device, _ = transport(answer(stdout=b'root root 755 4096 directory\n'))
+    stat = asyncio.run(device.stat('/data/custom/dpkg'))
+
+    assert stat is not None
+    assert stat.kind == ssh.DIRECTORY
+    assert stat.is_directory
 
 
 def test_an_unreadable_stat_is_a_fault_rather_than_a_guess() -> None:
@@ -1587,7 +1649,7 @@ def test_modes_written_two_ways_compare_equal() -> None:
 
 
 def test_ownership_is_compared_only_as_far_as_it_was_declared() -> None:
-    stat = ssh.FileStat(owner='root', group='staff', mode='0644', size=0)
+    stat = ssh.FileStat(owner='root', group='staff', mode='0644', size=0, kind='regular file')
 
     assert ssh.same_owner(None, stat)
     assert ssh.same_owner('root', stat)

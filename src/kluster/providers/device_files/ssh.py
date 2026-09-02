@@ -43,6 +43,8 @@ from asyncssh.known_hosts import KnownHostsArg
 __all__ = (
     'ABSENT',
     'DEFAULT_TIMEOUT',
+    'DIRECTORY',
+    'NOT_EMPTY',
     'CommandFailed',
     'CommandResult',
     'Device',
@@ -66,11 +68,23 @@ __all__ = (
 #: unreachable device fails its resource instead of hanging the deployment.
 DEFAULT_TIMEOUT = 600.0
 
-#: The exit status the file verbs use to say "there is no such path". `cat` and
-#: `stat` both exit 1 for an absent file *and* for a file that cannot be read,
-#: and those two are not the same answer: the first is a resource to create, the
-#: second is a fault to report.
+#: The exit statuses this module reserves, for the answers a shell has no
+#: status of its own for. They live together because they are spoken on one
+#: channel: a command that returned either meant it, and a range stated in one
+#: place is a range nothing else in a script may reuse.
+#:
+#: `ABSENT` is "there is no such path" -- `cat` and `stat` both exit 1 for an
+#: absent file *and* for one that cannot be read, and those two are not the same
+#: answer: the first is a resource to create, the second is a fault to report.
+#: `NOT_EMPTY` is "this directory has something in it", which `rmdir` reports
+#: with the same status as a directory it may not touch, in whatever language
+#: the session speaks.
 ABSENT = 42
+NOT_EMPTY = 43
+
+#: The word `stat`'s `%F` gives a directory, which is the only kind any caller
+#: here asks about.
+DIRECTORY = 'directory'
 
 #: The suffix a staged write uses before it is moved into place.
 STAGING_SUFFIX = '.kluster-staged'
@@ -128,12 +142,23 @@ class Device:
 @final
 @dataclass(frozen=True)
 class FileStat:
-    """What the device says about a path that exists."""
+    """What the device says about a path that exists.
+
+    `kind` is `stat`'s own description of it -- `directory`, `regular file`,
+    `symbolic link` -- because existence alone does not say what is there, and a
+    resource that declares a directory has to be able to tell one from a file
+    somebody left at the same path.
+    """
 
     owner: str
     group: str
     mode: str
     size: int
+    kind: str
+
+    @property
+    def is_directory(self) -> bool:
+        return self.kind == DIRECTORY
 
 
 @final
@@ -166,7 +191,7 @@ class Transport(Protocol):
         ...
 
     async def stat(self, path: str) -> FileStat | None:
-        """The file's ownership and mode, or `None` if there is no such file."""
+        """What the path is and whose it is, or `None` if there is no such path."""
         ...
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
@@ -240,15 +265,17 @@ class SshTransport:
 
     async def stat(self, path: str) -> FileStat | None:
         quoted = shlex.quote(path)
-        result = await self._sh(f"if [ ! -e {quoted} ]; then exit {ABSENT}; fi; stat -c '%U %G %a %s' {quoted}")
+        result = await self._sh(f"if [ ! -e {quoted} ]; then exit {ABSENT}; fi; stat -c '%U %G %a %s %F' {quoted}")
         if result.exit_status == ABSENT:
             return None
         _check(f'stat {path}', result)
-        fields = result.text.split()
-        if len(fields) != 4:
+        # The kind is last and is the one field with spaces in it (`regular
+        # empty file`), so it takes whatever remains of the line.
+        fields = result.text.split(None, 4)
+        if len(fields) != 5:
             raise CommandFailed(f'stat {path}', result.exit_status, f'unreadable stat output: {result.text!r}')
-        owner, group, mode, size = fields
-        return FileStat(owner=owner, group=group, mode=mode, size=int(size))
+        owner, group, mode, size, kind = fields
+        return FileStat(owner=owner, group=group, mode=mode, size=int(size), kind=kind.strip())
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
         staged = shlex.quote(f'{path}{STAGING_SUFFIX}')
