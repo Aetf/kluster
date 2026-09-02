@@ -217,7 +217,14 @@ def test_the_token_scope_is_the_zone_set_the_gateway_vhosts_need() -> None:
     # `credentials --help`. This is what holds the two equal: a vhost moved to
     # another zone fails here rather than at a renewal on the device months
     # later, and a zone left in the set after its last vhost leaves fails too.
-    vhosts = [conventions.gateway.VHOST_CONTROLLER, *(service.vhost for service in conventions.gateway.RESOLVERS)]
+    vhosts = [
+        conventions.gateway.VHOST_CONTROLLER,
+        *(service.vhost for service in conventions.gateway.RESOLVERS),
+        # The names served for applications that have not migrated. They are in
+        # a zone of their own, so they widen the scope while any of them
+        # remains and narrow it again when the census empties.
+        *(vhost.host for vhost in conventions.gateway.LEGACY_VHOSTS),
+    ]
     served = {_vhost_zone(name) for name in vhosts if name is not None}
 
     assert served == set(derived.GATEWAY_ACME_ZONES)

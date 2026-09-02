@@ -86,6 +86,7 @@ from kluster.conventions.dns import (
     ZONE_FAMILY,
     ZONE_MIRRORS,
     ZONE_PRIMARY,
+    ZONE_SHORT,
     ZT_LABEL,
 )
 from kluster.conventions.homelab import (
@@ -191,6 +192,7 @@ __all__ = (
     'ZONE_FAMILY',
     'ZONE_MIRRORS',
     'ZONE_PRIMARY',
+    'ZONE_SHORT',
     'ZT_LABEL',
     'AddressPool',
     'B2Account',
