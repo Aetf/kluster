@@ -49,10 +49,23 @@ def pin(service: str) -> container.Rootfs:
     return container.Rootfs(repository=f'registry.invalid/estate/{service}', tag=TAG, digest=DIGEST)
 
 
+def caddy(
+    legacy: tuple[conventions.gateway.LegacyVhost, ...] = conventions.gateway.LEGACY_VHOSTS,
+) -> container.CaddyService:
+    """The proxy as the stack declares it, with the census a case is about."""
+    return container.CaddyService(
+        service=conventions.gateway.CADDY,
+        pin=pin('caddy'),
+        acme_token=ACME_TOKEN,
+        vhosts=conventions.gateway.RESOLVERS,
+        legacy=legacy,
+    )
+
+
 def declarations() -> tuple[container.ServiceDeclaration, ...]:
     """The four services, in the order the gateway takes them."""
     return (
-        container.CaddyService(service=conventions.gateway.CADDY, pin=pin('caddy'), acme_token=ACME_TOKEN),
+        caddy(),
         *(
             container.ResolverService(service=resolver, pin=pin(resolver.name))
             for resolver in conventions.gateway.RESOLVERS
@@ -326,7 +339,7 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     device and nowhere else — never the cluster issuer's, which is the point of
     there being two.
     """
-    rendered = container.caddyfile()
+    rendered = container.caddyfile(caddy())
 
     assert conventions.gateway.VHOST_CONTROLLER in rendered
     assert f'dns cloudflare {{file.{container.CADDY_TOKEN_PATH}}}' in rendered
@@ -350,7 +363,7 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
     must survive each other's outage into one weekly duplicate-certificate
     window.
     """
-    rendered = container.caddyfile()
+    rendered = container.caddyfile(caddy())
 
     zone = conventions.ZONE_PRIMARY
     assert rendered.startswith(f'*.{zone} {{\n')
@@ -422,7 +435,7 @@ def test_every_name_the_device_serves_today_is_still_served() -> None:
     dark on the day the device is taken over rather than on the day its
     application migrates.
     """
-    rendered = served(container.caddyfile())
+    rendered = served(container.caddyfile(caddy()))
     live = served(LIVE_CADDYFILE.read_text(encoding='utf-8'))
 
     legacy = [vhost.host for vhost in conventions.gateway.LEGACY_VHOSTS]
@@ -439,7 +452,7 @@ def test_each_legacy_vhost_proxies_where_the_device_proxies_it() -> None:
     certificate — comes across as it is. What changes at the cutover is which
     program renders the file, not what the file says.
     """
-    rendered = served(container.caddyfile())
+    rendered = served(container.caddyfile(caddy()))
     live = served(LIVE_CADDYFILE.read_text(encoding='utf-8'))
 
     for vhost in conventions.gateway.LEGACY_VHOSTS:
@@ -455,12 +468,30 @@ def test_the_legacy_block_is_its_own_certificate_and_refuses_the_rest() -> None:
     that nothing here serves is refused rather than answered by the block that
     happened to match.
     """
-    rendered = container.caddyfile()
+    rendered = container.caddyfile(caddy())
 
     zone = conventions.gateway.ZONE_LEGACY
     assert f'\n*.{zone} {{\n' in rendered
     assert f'resolvers {conventions.gateway.LEGACY_ACME_RESOLVER}\n' in rendered
     assert rendered.count('abort') == 2
+
+
+def test_an_empty_census_is_a_file_with_no_legacy_block_in_it() -> None:
+    """Deleting the last row is what retires the zone, and nothing else has to happen.
+
+    A block rendered unconditionally would go on asking for a wildcard for a
+    zone nothing is served under, and go on needing that zone in the scope of
+    the token the device answers challenges with. So the census is the switch:
+    with no rows there is no site block, no `resolvers` line and no redirect.
+    """
+    rendered = container.caddyfile(caddy(legacy=()))
+
+    assert conventions.gateway.ZONE_LEGACY not in rendered
+    assert conventions.gateway.LEGACY_ACME_RESOLVER not in rendered
+    assert rendered.count('abort') == 1
+    # And what the device's own services are served under is untouched.
+    assert rendered.startswith(f'*.{conventions.ZONE_PRIMARY} {{\n')
+    assert conventions.gateway.VHOST_CONTROLLER in rendered
 
 
 def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -> None:
@@ -470,7 +501,7 @@ def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -
     certificate does not cover a one-label name, so the only thing the proxy
     can do over plain HTTP is send the client to the name it does cover.
     """
-    rendered = container.caddyfile()
+    rendered = container.caddyfile(caddy())
     live = LIVE_CADDYFILE.read_text(encoding='utf-8')
 
     assert sum(vhost.bare_name for vhost in conventions.gateway.LEGACY_VHOSTS) == 5

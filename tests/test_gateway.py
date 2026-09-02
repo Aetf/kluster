@@ -61,6 +61,8 @@ async def gateway(monitor: Controller) -> Gateway:
                 service=conventions.gateway.CADDY,
                 pin=pin(conventions.gateway.CADDY),
                 acme_token=ACME_TOKEN,
+                vhosts=conventions.gateway.RESOLVERS,
+                legacy=conventions.gateway.LEGACY_VHOSTS,
             ),
             resolvers=tuple(
                 container.ResolverService(service=resolver, pin=pin(resolver))

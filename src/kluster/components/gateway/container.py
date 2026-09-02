@@ -368,9 +368,19 @@ class CaddyService(BridgedDeclaration):
     the proxy still does not depend on what it serves. The address is the
     container VLAN's gateway, the same one the image's network setup is handed
     as its default route, so the two cannot disagree.
+
+    **What it serves arrives with the declaration.** The proxy holds no roll of
+    its own and looks nothing up: `vhosts` are the services it fronts, each
+    holding the name it answers under and the address it answers at, and
+    `legacy` is the census of names it still serves for applications that have
+    not migrated. Both are the entries themselves rather than keys into a
+    table, so the binding is one the type checker follows (rfc-002 §5.3), and
+    the file this renders changes when the census does and at no other time.
     """
 
     acme_token: pulumi.Input[str]
+    vhosts: tuple[conventions.gateway.BridgedService, ...]
+    legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
     @property
     def state(self) -> str:
@@ -388,7 +398,7 @@ class CaddyService(BridgedDeclaration):
     @property
     def mounted_files(self) -> tuple[MountedFile, ...]:
         return (
-            MountedFile(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile()),
+            MountedFile(name='Caddyfile', target=CADDY_CONFIG, content=caddyfile(self)),
             MountedFile(name='cloudflare.token', target=CADDY_TOKEN_PATH, content=self.acme_token, secret=True),
             MountedFile(name='resolv.conf', target=CADDY_RESOLV_CONF, content=resolv_conf()),
         )
@@ -587,22 +597,22 @@ def net_setup_environment(address: IPv4Address) -> dict[str, str]:
 class _CaddyParams:
     """What `Caddyfile.j2` reads.
 
-    The resolvers and the legacy vhosts arrive as the census has them, so the
-    file names each one's vhost and upstream without a second list to keep in
-    step.
+    Both rolls arrive as the declaration was handed them, so the file names
+    each service's own vhost and each legacy row's own upstream without a
+    second list to keep in step.
     """
 
     zone: str
     controller: str
     token_path: str
     api_port: int
-    resolvers: tuple[conventions.gateway.BridgedService, ...]
+    vhosts: tuple[conventions.gateway.BridgedService, ...]
     legacy_zone: str
     legacy_resolver: str
     legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
 
-def caddyfile() -> str:
+def caddyfile(declaration: CaddyService) -> str:
     """The gateway's vhosts, under one wildcard certificate it issues itself.
 
     The certificate is obtained through a DNS-01 challenge with a token that
@@ -640,8 +650,10 @@ def caddyfile() -> str:
     matched inside it by host, everything else refused. It is here because the
     device serves those names today and this file replaces what serves them in
     one window, before any of the applications behind them has moved
-    (`conventions.gateway.LEGACY_VHOSTS`, gateway.md §1.5). The block empties
-    row by row and then goes; nothing else about the file changes when it does.
+    (gateway.md §1.5). The block empties row by row and then is not rendered at
+    all — an empty census is a file with one site block in it, and the second
+    wildcard, the second zone in the token's scope and the redirects go
+    together with it.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -651,10 +663,10 @@ def caddyfile() -> str:
             controller=conventions.gateway.VHOST_CONTROLLER,
             token_path=CADDY_TOKEN_PATH,
             api_port=conventions.gateway.ADGUARD_API_PORT,
-            resolvers=conventions.gateway.RESOLVERS,
+            vhosts=declaration.vhosts,
             legacy_zone=conventions.gateway.ZONE_LEGACY,
             legacy_resolver=conventions.gateway.LEGACY_ACME_RESOLVER,
-            legacy=conventions.gateway.LEGACY_VHOSTS,
+            legacy=declaration.legacy,
         ),
     )
 

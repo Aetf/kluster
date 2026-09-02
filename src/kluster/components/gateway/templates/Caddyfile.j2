@@ -11,11 +11,11 @@
 			}
 		}
 	}
-{%- for resolver in resolvers %}
+{%- for service in vhosts %}
 
-	@{{ resolver.name }} host {{ resolver.vhost }}
-	handle @{{ resolver.name }} {
-		reverse_proxy http://{{ resolver.address }}:{{ api_port }}
+	@{{ service.name }} host {{ service.vhost }}
+	handle @{{ service.name }} {
+		reverse_proxy http://{{ service.address }}:{{ api_port }}
 	}
 {%- endfor %}
 
@@ -23,6 +23,7 @@
 		abort
 	}
 }
+{%- if legacy %}
 
 *.{{ legacy_zone }} {
 	tls {
@@ -58,3 +59,4 @@ http://{{ vhost.label }} {
 	redir https://{{ vhost.host }}{uri} permanent
 }
 {%- endfor %}
+{%- endif %}

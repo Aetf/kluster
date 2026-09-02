@@ -399,6 +399,12 @@ def _gateway(config: pulumi.Config) -> Gateway:
             # on the device reads it: its TLS has to keep renewing while the
             # cluster — and the cluster's issuer — is down.
             acme_token=config.require_secret('gatewayAcmeToken'),
+            # What it serves: the services whose interfaces it fronts, and the
+            # names it still answers for applications that have not migrated.
+            # The second census empties by the end of Wave D, and the block it
+            # renders goes with it (conventions.gateway.LEGACY_VHOSTS).
+            vhosts=conventions.gateway.RESOLVERS,
+            legacy=conventions.gateway.LEGACY_VHOSTS,
         ),
         resolvers=tuple(
             ResolverService(service=service, pin=_rootfs(service)) for service in conventions.gateway.RESOLVERS
