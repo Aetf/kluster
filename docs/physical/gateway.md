@@ -413,6 +413,42 @@ credential its own sessions present, which is a constant in
 public key is not a secret, and a constant is what a preview shows a
 reviewer (credentials.md §3).
 
+### 1.5 The legacy vhosts, and how they leave
+
+The reverse proxy's configuration carries a second site block, for the
+retiring `lan.ucw.phd` zone, holding eleven names beyond the three of
+§1: the media server, the torrent client and its reconciler, spoolman,
+the thread dashboard, the shortlink service, three names for the two
+resolvers' interfaces, the controller console, and the UPS card's own
+web interface. Those are the names the device answers for today, and
+the applications behind them are still on the homelab host or in the
+legacy cluster — they migrate in Waves B through D
+(cluster/migration.md §2), while the declaration replaces the device's
+live configuration whole in one window before any of them does. Without
+the block, every one of them stops resolving on the day the device is
+taken over rather than on the day its application moves.
+
+**The census is `conventions.gateway.LEGACY_VHOSTS`**, one row per
+name, carrying where the proxy sends it and the wave that deletes the
+row. **A row is deleted in the change that gives its application a
+public name**, which is the same change the application's own migration
+is, and the last wave any row may name is D — so the block is empty by
+the end of Wave D, and an empty census is the zone's retirement
+(declarative/dns.md §4.3). Five rows wait on no application. The three
+resolver names and the console are superseded by the public names §1
+already serves, and are carried only so that what is bookmarked
+survives the window; the UPS card is a LAN appliance that no wave
+moves, so retiring its name means serving that appliance under a public
+name instead.
+
+**The block is a second wildcard certificate**, on the same DNS-01
+challenge and the same device credential. The zone is a name inside
+`ucw.phd` rather than a zone of its own, so the challenge is written
+there and **the device's ACME token has to be scoped to `ucw.phd` while
+the census has a row in it**. The challenge's propagation check is
+aimed at a public resolver, because the LAN's own resolvers answer this
+whole zone from a rewrite that points it at the proxy.
+
 ## 2. ZeroTier network design
 
 Architecture.md §5.3 decides *where* ZT terminates (the UDM) and *what
