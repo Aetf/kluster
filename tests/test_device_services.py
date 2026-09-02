@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from ipaddress import IPv4Address
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -353,7 +354,8 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
 
     zone = conventions.ZONE_PRIMARY
     assert rendered.startswith(f'*.{zone} {{\n')
-    # One block, so one certificate: a second site block is a second request.
+    # One block for the zone, so one certificate for it: a second site block
+    # under the same zone would be a second request for the same names.
     assert rendered.count(f'{zone} {{') == 1
     assert f'\n{zone} {{' not in rendered
 
@@ -362,6 +364,120 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
     for vhost in (conventions.gateway.VHOST_CONTROLLER, *(r.vhost for r in conventions.gateway.RESOLVERS)):
         assert f'host {vhost}\n' in rendered
     assert 'abort' in rendered
+
+
+##
+## The legacy vhosts, until each application migrates
+##
+
+
+#: The device's live configuration, checked in beside this module: what the
+#: legacy half of the render has to keep serving.
+LIVE_CADDYFILE = Path(__file__).parent / 'data' / 'gw-config-caddyfile'
+
+#: One `@name host <host>` matcher and the `handle` block it guards, which is
+#: how both files spell a vhost. The body ends at the first closing brace back
+#: at the block's own indentation.
+VHOST_BLOCK = re.compile(
+    r'^\t@(?P<matcher>\S+) host (?P<host>\S+)\n\thandle @(?P=matcher) \{\n(?P<body>.*?)\n\t\}$',
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def served(caddyfile: str) -> dict[str, tuple[str, ...]]:
+    """Each vhost in a Caddyfile, as what its block tells Caddy.
+
+    Keyed by the name clients ask for, so the two files are compared on the
+    thing they have in common rather than on how they are laid out. What a
+    block says is its directives with the spelling taken out: comments and
+    indentation dropped, and the two defaults the live file leans on written
+    the way the render writes them — an upstream with no scheme is plain HTTP
+    on port 80, and `tls` inside a transport is what the `https://` scheme
+    already turned on.
+    """
+    return {match['host']: directives(match['body']) for match in VHOST_BLOCK.finditer(caddyfile)}
+
+
+def directives(body: str) -> tuple[str, ...]:
+    lines = (' '.join(line.split()) for line in body.splitlines())
+    return tuple(explicit(line) for line in lines if line and not line.startswith('#') and line != 'tls')
+
+
+def explicit(directive: str) -> str:
+    """One directive with the upstream's scheme and port spelled out."""
+    proxy, _, upstream = directive.partition('reverse_proxy ')
+    if proxy or not upstream:
+        return directive
+    dial, brace, trailer = upstream.partition(' {')
+    if '://' not in dial:
+        dial = f'http://{dial}' if ':' in dial else f'http://{dial}:80'
+    return f'reverse_proxy {dial}{brace}{trailer}'
+
+
+def test_every_name_the_device_serves_today_is_still_served() -> None:
+    """The cutover replaces the live file whole, weeks before the first application moves.
+
+    So each name the device answers for under the retiring zone is a row in the
+    census, and each row renders — a name missing from here is a name that goes
+    dark on the day the device is taken over rather than on the day its
+    application migrates.
+    """
+    rendered = served(container.caddyfile())
+    live = served(LIVE_CADDYFILE.read_text(encoding='utf-8'))
+
+    legacy = [vhost.host for vhost in conventions.gateway.LEGACY_VHOSTS]
+    assert set(legacy) == {host for host in live if host.endswith(conventions.gateway.ZONE_LEGACY)}
+    for host in legacy:
+        assert host in rendered
+
+
+def test_each_legacy_vhost_proxies_where_the_device_proxies_it() -> None:
+    """Transcription, not redesign: the census carries what the live file carries.
+
+    Every directive of every legacy block — the upstream, the header the UniFi
+    console needs, the transport that skips verification on an appliance's own
+    certificate — comes across as it is. What changes at the cutover is which
+    program renders the file, not what the file says.
+    """
+    rendered = served(container.caddyfile())
+    live = served(LIVE_CADDYFILE.read_text(encoding='utf-8'))
+
+    for vhost in conventions.gateway.LEGACY_VHOSTS:
+        assert rendered[vhost.host] == live[vhost.host], vhost.host
+
+
+def test_the_legacy_block_is_its_own_certificate_and_refuses_the_rest() -> None:
+    """A second zone is a second wildcard, and the block is shaped like the first.
+
+    Its own `tls` block, because the challenge for this zone is checked against
+    a public resolver rather than the LAN's, which answers the whole zone from
+    a rewrite. Its own `handle` fallback, so a name under the retiring zone
+    that nothing here serves is refused rather than answered by the block that
+    happened to match.
+    """
+    rendered = container.caddyfile()
+
+    zone = conventions.gateway.ZONE_LEGACY
+    assert f'\n*.{zone} {{\n' in rendered
+    assert f'resolvers {conventions.gateway.LEGACY_ACME_RESOLVER}\n' in rendered
+    assert rendered.count('abort') == 2
+
+
+def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -> None:
+    """The bare label is a site of its own, and the device serves five of them.
+
+    A redirect rather than a second matcher on the vhost: the wildcard
+    certificate does not cover a one-label name, so the only thing the proxy
+    can do over plain HTTP is send the client to the name it does cover.
+    """
+    rendered = container.caddyfile()
+    live = LIVE_CADDYFILE.read_text(encoding='utf-8')
+
+    assert sum(vhost.bare_name for vhost in conventions.gateway.LEGACY_VHOSTS) == 5
+    for vhost in conventions.gateway.LEGACY_VHOSTS:
+        block = f'http://{vhost.label} {{\n\tredir https://{vhost.host}{{uri}} permanent\n}}\n'
+        assert (block in rendered) == vhost.bare_name
+        assert (block in live) == vhost.bare_name
 
 
 ##

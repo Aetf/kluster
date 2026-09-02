@@ -94,6 +94,20 @@ def test_every_name_the_gateway_serves_is_one_label_under_the_primary_zone() -> 
         assert vhost.partition('.')[2] == conventions.ZONE_PRIMARY, vhost
 
 
+def test_every_legacy_name_is_one_label_under_the_retiring_zone() -> None:
+    """The same wildcard rule, held for the census that empties instead of growing.
+
+    A legacy row deeper than one label is a name no site block in the rendered
+    file covers, and one under some other zone is a name the proxy holds no
+    certificate for at all.
+    """
+    hosts = [vhost.host for vhost in conventions.gateway.LEGACY_VHOSTS]
+
+    assert len(set(hosts)) == len(conventions.gateway.LEGACY_VHOSTS)
+    for host in hosts:
+        assert host.partition('.')[2] == conventions.gateway.ZONE_LEGACY, host
+
+
 def test_every_service_names_a_build_the_registry_publishes() -> None:
     """One image can serve two services, and each still gets a pin of its own.
 
