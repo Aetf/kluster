@@ -73,8 +73,10 @@ from kluster.providers.device_files.provider import Connection, DeviceDirectory,
 from putils import Component
 
 __all__ = (
+    'BIN',
     'BIN_DIR',
     'DIRECTORY_MODE',
+    'DPKG',
     'DPKG_DIR',
     'FILE_MODE',
     'LIVE_UNIT_DIR',
@@ -83,6 +85,7 @@ __all__ = (
     'SKELETON',
     'TEMPLATE_PACKAGE',
     'UDM_BOOT_UNIT',
+    'UNITS',
     'UNITS_SCRIPT',
     'UNIT_SOURCE_DIR',
     'UNIT_SUFFIX',
@@ -112,10 +115,13 @@ TEMPLATE_PACKAGE = 'kluster.components.gateway'
 #: sources `20-units.sh` converges. Every other directory under the custom root
 #: belongs to a layer above and arrives through `skeleton_dir`.
 #:
-#: The three paths are unpacked from that same tuple rather than spelled again,
-#: so a directory added to the skeleton without a name to reach it by fails
-#: here instead of on the device.
+#: The names and the three paths are unpacked from that same tuple rather than
+#: spelled again, so a directory added to the skeleton without a name to reach
+#: it by fails here instead of on the device. The names are what index
+#: `DevicePersistence.skeleton`, which is how a file declares that it waits on
+#: the directory it lands in.
 SKELETON = ('bin', 'dpkg', 'units')
+BIN, DPKG, UNITS = SKELETON
 BIN_DIR, DPKG_DIR, UNIT_SOURCE_DIR = (f'{conventions.gateway.CUSTOM_ROOT}/{name}' for name in SKELETON)
 
 #: Where systemd reads the units `20-units.sh` installs, which is off `/data`
@@ -351,6 +357,11 @@ class DevicePersistence(Component):
         installing a program is not an event anything on the device has to be
         told about. Only the file named is managed, so an executable placed by
         hand beside it is left alone.
+
+        It waits on the directory it lands in, which is the edge a destroy
+        needs: Pulumi deletes in reverse dependency order, and a directory
+        deleted before the files in it refuses to go and fails the run
+        (`DeviceDirectory`).
         """
         return self._declare(
             'bin',
@@ -360,6 +371,7 @@ class DevicePersistence(Component):
             mode=SCRIPT_MODE,
             hook=None,
             opts=opts,
+            after=(self.skeleton[BIN],),
         )
 
     def unit(self, name: str, content: pulumi.Input[str], *, opts: pulumi.ResourceOptions) -> DeviceFile:
@@ -375,6 +387,11 @@ class DevicePersistence(Component):
         device installed by nothing, which is the one failure this mechanism
         cannot report. Extending the kinds is a change to `20-units.sh` and to
         `UNIT_SUFFIX` together.
+
+        It waits on the converger for the reason above and on the directory it
+        lands in for the reason `executable` does: a destroy deletes in reverse
+        dependency order, and the directory refuses to go while a unit source is
+        still in it.
         """
         if not name.endswith(UNIT_SUFFIX):
             raise ValueError(
@@ -389,7 +406,7 @@ class DevicePersistence(Component):
             mode=FILE_MODE,
             hook=unit_hook(name),
             opts=opts,
-            after=(self.units,),
+            after=(self.units, self.skeleton[UNITS]),
         )
 
     def skeleton_dir(self, name: str, *, opts: pulumi.ResourceOptions) -> DeviceDirectory:
