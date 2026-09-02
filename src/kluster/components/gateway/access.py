@@ -42,7 +42,7 @@ from kluster.components.gateway.persistence import (
     skeleton_path,
 )
 from kluster.lib import templates
-from kluster.providers.device_files.provider import Connection, DeviceFile
+from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
 
 __all__ = (
@@ -225,7 +225,7 @@ class AuthorizedKeys(Component):
             )
         super().__init__(name, opts=opts)
 
-        self.directory: DeviceFile = mechanism.skeleton_dir(KEY_DIRECTORY, opts=self.child_opts())
+        self.directory: DeviceDirectory = mechanism.skeleton_dir(KEY_DIRECTORY, opts=self.child_opts())
         self.converger: DeviceFile = mechanism.executable(CONVERGER, converger_script(), opts=self.child_opts())
         # The unit is what runs the converger at boot; it waits for the
         # executable, because installing a unit starts it.

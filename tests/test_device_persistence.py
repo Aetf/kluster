@@ -134,12 +134,12 @@ def test_the_anchor_of_the_chain_is_delivered_as_a_unit_source(monitor: Recorder
     assert any(len(word) == 40 for line in header for word in line.split()), header
 
 
-def test_the_custom_root_has_its_shape_before_anything_fills_it(monitor: Recorder) -> None:
-    """The skeleton is declared as directories, at the paths it names.
+def test_the_custom_root_is_declared_as_directories_at_the_paths_it_names(monitor: Recorder) -> None:
+    """A directory is desired state like a file is, and a resource of its own.
 
-    A directory is desired state like a file is, and it is a resource of its own:
-    what the device is asked for is the directory itself, so one removed by hand
-    is a change the next preview reports.
+    What the device is asked for is the directory itself, so one removed by hand
+    is a change the next preview reports. The order between a directory and what
+    goes in it is a separate claim, asserted below.
     """
     for directory in persistence.SKELETON:
         declaration = monitor.one(f'{NAME}-skeleton-{directory}')
@@ -155,9 +155,9 @@ def test_the_custom_root_has_its_shape_before_anything_fills_it(monitor: Recorde
 def test_no_file_stands_in_for_a_directory_anywhere_under_the_custom_root(monitor: Recorder) -> None:
     """A directory is declared by asking for a directory, and by nothing else.
 
-    The marker convention this replaced could not report a directory somebody
-    removed — the marker was still there — so a marker file left behind anywhere
-    would be a second, blind way of declaring the same thing.
+    A file that stood for one would be a second way of declaring the same thing,
+    and a blind one: what the device says about the file is no answer about the
+    directory.
     """
     declared = [str(declaration.inputs.get('path', '')) for declaration in monitor.of_type(DEVICE_FILE)]
 
@@ -288,6 +288,23 @@ async def test_a_unit_waits_for_the_converger_that_installs_it(monitor: Recorder
     assert converger in monitor.depends_on(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
 
 
+@pytest.mark.asyncio
+async def test_a_file_waits_for_the_directory_it_lands_in(monitor: Recorder, mechanism: DevicePersistence) -> None:
+    """Create order is free; delete order is not, and only an edge declares it.
+
+    A destroy deletes in reverse dependency order, and a directory still holding
+    files refuses to go — so without this edge the run would fail on a directory
+    Pulumi tried to remove before its contents. It is the same edge that keeps a
+    file from being written into a directory that is not there yet.
+    """
+    bin_dir = str(await mechanism.skeleton[persistence.BIN].urn.future())
+    unit_dir = str(await mechanism.skeleton[persistence.UNITS].urn.future())
+
+    assert bin_dir in monitor.depends_on(f'{NAME}-bin-{PROGRAM}')
+    assert unit_dir in monitor.depends_on(f'{NAME}-unit-{UNIT}')
+    assert unit_dir in monitor.depends_on(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
+
+
 def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Recorder) -> None:
     """One command, two meanings, and the device says which one applies.
 
@@ -309,10 +326,10 @@ def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Record
 def test_a_directory_arriving_is_not_an_event_anything_is_told_about(monitor: Recorder) -> None:
     """The layer that fills a directory is the one that knows what to run.
 
-    Making it is the resource's own business now, so there is no command left
-    for the mechanism to attach — where the marker convention needed one to
-    create the directory at all. Refusing to remove a directory somebody filled
-    is the provider's, and is asserted there.
+    Making the directory is the resource's own business, so the mechanism has no
+    command to attach: a directory appearing is not an event anything on the
+    device waits for. Refusing to remove one somebody filled is the provider's,
+    and is asserted there.
     """
     assert monitor.inputs_of(f'{NAME}-skeleton-{DIRECTORY}').get('hook') is None
 

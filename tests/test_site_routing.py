@@ -215,9 +215,10 @@ def test_the_configuration_survives_a_firmware_update_and_the_daemons_copy_does_
     assert config['path'] == f'{conventions.gateway.CUSTOM_ROOT}/{routing.FRR_DIRECTORY}/frr.conf'
     assert config['path'] == routing.FRR_CONFIG
     assert routing.FRR_LIVE_CONFIG.startswith('/etc/')
-    assert monitor.inputs_of(f'{MECHANISM}-skeleton-{routing.FRR_DIRECTORY}')['hook'].endswith(
-        f'rmdir {persistence.skeleton_path(routing.FRR_DIRECTORY)} 2>/dev/null || true; fi'
-    )
+    directory = monitor.one(f'{MECHANISM}-skeleton-{routing.FRR_DIRECTORY}')
+
+    assert directory.typ == 'pulumi-python:dynamic/device:Directory'
+    assert directory.inputs['path'] == persistence.skeleton_path(routing.FRR_DIRECTORY)
 
 
 def test_the_session_password_is_in_the_file_and_the_file_is_a_secret(monitor: Recorder) -> None:

@@ -290,7 +290,7 @@ resource of its own: where the file goes, what mode it takes and what
 runs once it lands are the mechanism's decisions, while the file itself
 belongs to the component that needs it and goes away when that
 component stops declaring it. A directory is asked for the same way and
-is a resource of the same kind: its existence, mode and ownership are
+is a resource of its own: its existence, kind, mode and ownership are
 compared against the device, so one removed there is a change the next
 preview reports, while nothing about its contents is ever declared —
 which is what lets the layer that fills it own everything inside, and
