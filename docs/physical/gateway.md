@@ -118,6 +118,23 @@ declarative/physical.md §4.
     would otherwise give it — `CAP_NET_ADMIN` inside a user namespace
     does not reach the interface the host has to route through either.
 
+    **A resolver machine serves two ports: its interface on 80 and DNS
+    on 53**, so nothing else inside one may claim 80. The interface's
+    port is the appliance's rather than this program's, and the
+    declaration follows it. Both instances bind their interface there,
+    the window carries each instance's live configuration into its
+    machine directory whole, and the initial state this program declares
+    is installed only into a state directory that has never held one
+    (§1.1) — so an instance that already has a configuration never reads
+    the declaration, and declaring another port would describe a
+    listener that does not exist. Declaring the port the appliance
+    answers on is also what keeps the window free of a write into a
+    state directory this program does not own. Every declaration naming
+    that interface takes the same convention
+    (`conventions.gateway.ADGUARD_API_PORT`) — each instance's vhost,
+    the initial state, and the flow rule that admits the `dns` stack's
+    runner (§2.3) — and a test holds the four to one value.
+
     **Which resolver a container asks is a fact about this site, not
     about the image**, so where it differs from the image's own default
     it arrives as a mounted file. The reverse proxy is the case that
