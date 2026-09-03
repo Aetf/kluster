@@ -25,4 +25,4 @@ config:
   kluster-py:gatewayBgpPassword:
     secure: v1:wBdxusHiDpECsu68:foOGUk8WIHDIwueFbHlYXIFkpStxgkHQiqZHOppNjDfgUlt1L9PGhmwX7UKuk5Un
   kluster-py:gatewayAcmeToken:
-    secure: v1:KlvldEZM7HYUinCo:IQIPROFu/59AEb2CFy7dYsJlQW5haxYJF0Dau5INfxDj0Qkm/3LDkX2pK/i5iAh8hTka4lw4abIKnn7inrpkre2haUJH
+    secure: v1:xzgsWLXiWRnaN3J6:D3ljufQQ1KfbjJo/xhUT0F9voObIMDkTE0ggxdCWv/INybDX43rQ73bdL1+JtZ4z3SdV4THpkG79P3xV1CwKl2Ey92FO
