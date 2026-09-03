@@ -430,3 +430,146 @@ architecture.
 
 The blog is deliberately **not** an image (workloads.md §4: built
 branch + git-sync).
+
+## 5. Red before the installation exists
+
+The pipeline above is complete; the installation it drives is not.
+`physical` holds no resources and has never been updated, and
+`k8s-base` and `apps` are not written at all — of the stacks this
+repository declares, only `dns` (whose resources were imported rather
+than created) and `github` have state behind them. The checks that
+reach past the repository therefore fail, on `main` and on every pull
+request, and that red is a property of the phase rather than a fault
+to report. What follows is how to tell it apart from a real one. The
+milestones named below are the ops repository's roadmap phases
+(dispatch.md §4); the `M1`/`M2` of cluster/security-audit.md are audit
+findings and unrelated.
+
+`drift` is left out of the job lists below. Its matrix names all four
+stacks and every entry would fail, for whichever of the two reasons
+below applies to its stack, but the workflow has never run at all
+(§3), so nothing about it here is an observation.
+
+**A merge is gated on `checks` and `changes`, and on nothing else.**
+`main` requires exactly those two contexts on an up-to-date branch,
+with `enforce_admins` on and no reviewer requirement (§3); `preview`,
+`noop-automerge`'s `prove`, `deploy` and `drift` are unrequired, so a
+pull request whose `checks` and `changes` are green is mergeable while
+the rest of the matrix is red. That much is standing and does not
+retire. What is phase-bound is the reading: today a red one of those
+says something about the installation and nothing about the change, so
+it is not a review finding. Once the stacks exist, a red `preview` on
+a code change is exactly a review finding again. Each of the three
+findings below names the condition that deletes it, and the section
+goes with the last of them.
+
+**No Environment holds a `ZEROTIER_IDENTITY`, so every job that joins
+the overlay fails.** The `dns`, `physical` and `physical-plan`
+Environments carry `ZEROTIER_NETWORK_ID` and not the identity beside
+it, because the identity is generated in the `physical` stack's state
+and `credentials derived sync` (§3) can only copy it out once that
+stack has been applied. The join fails in the *Install the member
+identity* step of the ZeroTier action, where `zerotier-idtool` is
+handed an empty secret:
+
+```
+Identity argument invalid or file unreadable: /var/lib/zerotier-one/identity.secret
+```
+
+Only `preview.yml` gives that action a name of its own, *Join
+ZeroTier*. In `deploy`, `noop-automerge` and `drift` it is unnamed, and
+the log shows `Run ./.github/actions/zerotier` with the same sub-step
+inside it. The jobs are `preview (dns)`, `prove (dns)` and `deploy`'s
+`plan-physical`. `plan-physical` is the head of the merge chain, so a
+push to `main` fails there and skips all four `up` jobs — which is
+also why `notify-failure`, the Home Assistant alert of §3, runs on
+every merge. On a pull request the two `dns` jobs share the `zt-dns`
+concurrency group (§2), and one of the pair is routinely cancelled
+before it runs a single step rather than reaching the failing one. A
+`preview (dns)` that is cancelled with no steps at all was superseded
+by the lock; it is not a separate problem. **Retires with the M1 first
+`physical` up**: that ceremony mints the identity, the
+`credentials derived sync` after it fills the row, and these jobs then
+join like any other.
+
+**`k8s-base` and `apps` are not stacks yet, so previewing them is an
+error.** Each entrypoint raises `NotImplementedError`, neither name
+has a `Pulumi.<stack>.yaml`, and no stack of either name exists in the
+state backend — while the `preview` and `prove` matrices already name
+all three stacks. Pulumi resolves the stack before it loads the
+program, so what CI reports is the backend's answer rather than the
+entrypoint's refusal:
+
+```
+error: no stack named 'k8s-base' found
+```
+
+Every pull request runs both entries, documentation-only ones
+included: §3 describes the `changes` filter as skipping jobs for a
+docs-only change, and it does not skip anything at all
+(`kluster-ops#195`). `prove` is `fail-fast: true`, so an entry that
+fails first can cancel the other two: which names are reported failed
+and which cancelled varies between runs and carries no information.
+One consequence is worth knowing in advance — a documentation-only
+pull request touches neither `src/` nor `Pulumi.*`, so `classify`
+calls it a noop, `prove` runs against the missing stacks, and
+`noop-automerge` goes red; such a pull request is merged by hand
+rather than unattended (`kluster-ops#193`). **Retires with the M2
+stacks** (`kluster-ops#77`), which create both and make the matrices
+honest.
+
+**Neither of those is a secret-availability problem, and the tell is
+which step fails, and then which name the message carries.** All five
+Environments hold the four `PULUMI_BACKEND_*` secrets and the
+passphrase, and the `state-backend` action checks the four before
+anything else runs: an empty one aborts the job in *Write the bundle
+into the checkout's slot* with `the ci client bundle is incomplete`,
+naming the variables that came through blank. The passphrase has no
+such guard — the `pulumi` step reads it directly, and a blank one
+surfaces only once a stack holding encrypted secrets is reached, which
+in this phase never happens.
+
+A job that reached a `pulumi` command therefore had a complete bundle,
+so `no stack named` at that step is not a blank secret. It is not
+proof that the backend answered either: whether `pulumi` was pointed
+at the appliance turns on `mise.toml` resolving the slot under
+`config_root`, which no line of the log settles either way. What
+`pulumi` does with no URL at all is left out here on purpose — it
+depends on the version and on whether the session is judged
+interactive, and nothing below rests on it. In this phase no job ever
+reaches a stack that exists, so no run here says anything about the
+box being up.
+
+**The names are the test.** The only ones ever expected in that
+message are `k8s-base` and `apps`. `no stack named 'dns'` or
+`no stack named 'physical'` — both exist in the backend, `dns` holding
+the records imported into it — means `pulumi` was pointed at a backend
+that is not the appliance, or that the state is gone, and is a
+regression on either reading. A bundle that resolves but cannot reach
+the appliance fails differently again, with
+`unable to open bucket ...: failed to ping PostgreSQL`.
+
+One artifact of the logs invites a blank secret where there is none.
+The runner prints each step's inherited environment, and in it
+`GITHUB_TOKEN`, `PULUMI_BACKEND_URL`, `PULUMI_CONFIG_PASSPHRASE` and
+the three `PGSSL*` variables are all blank — in every job, including
+the ones that go on to reach the backend. That listing is a snapshot
+`mise-action` took before the bundle was materialized, frozen into the
+job's environment; `mise x` re-resolves them from the checkout's
+`.credentials/state-backend/` slot at the moment the command runs
+(physical/state-backend.md §3), and a step that sets one explicitly
+overrides it, which is why `PULUMI_CONFIG_PASSPHRASE` reads `***` in
+the `pulumi` steps and blank in every other.
+
+The pair that actually misleads is in the ZeroTier step, where that
+blank passphrase is the line directly above `IDENTITY:`. Those two
+look identical and mean opposite things: the passphrase is the
+snapshot artifact, while `IDENTITY` is
+`${{ secrets.ZEROTIER_IDENTITY }}` interpolated by the workflow at
+that moment, so blank there is the genuine absence this section opened
+with. **Retires with the two paragraphs above**, since a green matrix
+leaves nothing to misread — but the parts of it that are not phase
+state should survive the deletion beside the credential partition they
+belong to in §3: the `state-backend` action rejects an incomplete
+bundle by name, the passphrase is not covered by that check, and the
+step headers go on showing blanks after every stack exists.
