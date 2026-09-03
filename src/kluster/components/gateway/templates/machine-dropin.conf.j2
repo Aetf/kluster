@@ -23,8 +23,8 @@ BindsTo={{ bridge_device }}
 #
 # A machine that cannot start retries every five seconds for as long as it is
 # left alone. Two starts in any ten seconds stay inside systemd's default start
-# rate limit, so nothing here ever gives up -- `systemctl stop` is what ends the
-# loop, while `machinectl poweroff` and `machinectl terminate` are the service
-# exiting and bring it back five seconds later.
+# rate limit, so nothing here ever gives up: `systemctl stop` and `machinectl
+# terminate` end the loop, both of them stopping this unit, while `machinectl
+# poweroff` is the service exiting and brings it back five seconds later.
 Restart={{ restart }}
 RestartSec={{ restart_delay }}

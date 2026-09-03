@@ -92,9 +92,9 @@ declarative/physical.md §4.
 
         **A machine that cannot start retries every five seconds, and
         nothing here stops it.** Two starts in any ten seconds stay
-        inside systemd's default start rate limit, so the unit is
-        never left in `failed` for somebody to find; it cycles between
-        activating and failed until the unit is stopped. That is the
+        inside systemd's default start rate limit, so it retries
+        instead of settling in `failed` for somebody to find, until
+        the unit is stopped. That is the
         trade: a condition that clears itself — a bridge that arrives
         late, a control group that has not emptied yet — is recovered
         from with nobody watching, and the price is a loop that is
@@ -104,11 +104,12 @@ declarative/physical.md §4.
 
         **What is not a restart is a deliberate stop of the unit.**
         `systemctl stop` on the machine's unit ends the loop, and a
-        restart policy does not act on it — which is what the push and
-        `machine-rollback` do. `machinectl poweroff` and `machinectl
-        terminate` are not that: they end the container's PID 1, which
-        is the service exiting, so the machine is back five seconds
-        later.
+        restart policy does not act on it — which is what the push,
+        `machine-rollback` and `machinectl terminate` do, the last by
+        asking systemd to stop the unit the machine runs as.
+        `machinectl poweroff` is not that: it signals the container's
+        PID 1, and one that shuts down on that signal is the service
+        exiting, so the machine is back five seconds later.
     -   **`After=` and `BindsTo=` the bridge's device unit**, for the
         three machines on the container VLAN. The machine is therefore
         never started against a bridge that is not up yet, and is
@@ -123,15 +124,15 @@ declarative/physical.md §4.
         its unit could name. The machine in the host's network
         namespace has no bridge and no binding.
 
-    **Two mechanisms keep a machine on its bridge, and the rule is
-    that they answer different failures.** The binding above is about
-    the bridge *existing*. The **bridge watchdog** (§1.2) is about an
-    interface that fell off a bridge that is still there: on this
-    firmware a container's `vb-*` interface can come back detached
+    **Two mechanisms keep a machine on its bridge, and the rule is that
+    they answer different failures.** The binding above is about the
+    bridge *existing*. The **bridge watchdog**, declared in §1.2, is
+    about an interface that fell off a bridge that is still there: on
+    this firmware a container's `vb-*` interface can come back detached
     after a restart, and that is a state systemd has no view of — the
     machine is active, the bridge's device unit is active, and the
-    container is talking to nothing. So the watchdog re-attaches it,
-    and neither mechanism sees the other's failure.
+    container is talking to nothing. So the watchdog re-attaches it, and
+    neither mechanism sees the other's failure.
 
     What neither of them does is bring a machine back that systemd
     stopped because its bridge went away: a dependency stop is not a
