@@ -68,12 +68,20 @@ credentials, knobs, measurements of the moment.
 [illegal-states rule](README.md) applied to data: group them so that
 using one without its siblings does not type-check or does not parse.
 
-**A census lives where it is decided: conventions or stack
-configuration.** A component receives the census it acts on; it does
-not hardcode the roll inside and accept a mapping it then ignores. If a
-component requires specific entries, the requirement is in its
-parameter types or validated loudly at its boundary — not implied by
-which keys it happens to look up.
+**A census lives with the programs that read it.** Count them — a
+stack program or a script alike, and regardless of whether each
+declares a resource from the table. One: the table is data in that
+program's own area, beside the component that receives it and never
+inside it. More than one: it is a convention, because `conventions` is
+the only package a stack program and a script can both import. Which
+program turns the table into resources does not enter into it. A roll
+an operator supplies or rotates is stack configuration, not a census.
+
+**A component receives the census it acts on**; it does not hardcode
+the roll inside and accept a mapping it then ignores. If a component
+requires specific entries, the requirement is in its parameter types or
+validated loudly at its boundary — not implied by which keys it happens
+to look up.
 
 ## Resources and their contents
 
