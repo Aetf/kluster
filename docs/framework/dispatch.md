@@ -87,7 +87,10 @@ milestone). The rules that keep them out of each other's way:
 1.  **The `in-flight` label is the claim.** A dispatcher labels an
     issue before dispatching it and never dispatches, edits, or merges
     work for an issue another dispatcher has labeled. First label
-    wins; everything else follows from ownership of the claim.
+    wins; everything else follows from ownership of the claim. Because
+    the label is the claim and nothing else is, a `decision/*` label
+    beside it does not release it (§4.1) — an issue parked on a ruling
+    with no claim is one a second dispatcher would pick up.
 2.  **Claims must not overlap in paths.** Before claiming, a
     dispatcher lists every other in-flight issue and open pull
     request; if the owned paths would intersect, it does not claim.
@@ -150,8 +153,11 @@ doc-vs-implementation audit of the milestone's areas plus the
 operator's design-level review and acceptance. Each operator pass
 covers one milestone's worth of change, so problems surface while they
 are cheap. Any other major structural change runs the same RFC-first
-sequence (rfc-002 is the shape), and an RFC names the design documents
-its content must land in once built, if any.
+sequence. **The process itself is [rfc.md](rfc.md)** — when an RFC is
+required and when an ops issue is enough, what one contains, the states
+it moves through and the labels that carry them, the operator's gate,
+amendment after acceptance, and numbering — and this document says
+nothing about it that rfc.md does not settle.
 
 ## 4. How progress is reported
 
@@ -166,7 +172,12 @@ merge can report once:
     ruling carry a `decision/*` label (§4.1).
 -   **Dispatch is visible**: `in-flight` marks a dispatched issue — it
     is the dispatcher's claim as well (§2) — and comes off when the
-    pull request merges or the dispatch is abandoned.
+    pull request merges or the dispatch is abandoned. **`in-flight` and
+    `decision/*` answer different questions** — whether somebody is
+    dispatched, and who holds the ball — so an issue may carry both,
+    and an issue waiting on the operator is still claimed: neither the
+    merge nor the abandonment that takes `in-flight` off has happened
+    while the operator reads.
 -   **The pull request closes the issue**: its description carries
     `Closes Aetf/kluster-ops#N` (cross-repository closing works and is
     the one mechanism that cannot forget), so the merge itself moves
@@ -185,14 +196,23 @@ merge can report once:
 
 ### 4.1 Decisions
 
-An issue that needs an operator ruling carries a `decision/*` label
-from the moment it is filed, and the label is a three-state machine:
-`decision/pending` awaits the operator's review; `decision/responded`
-means the operator replied and the agent investigates or revises the
-proposal per the reply (then sets `decision/pending` again);
-`decision/lgtm` means the latest decision in the issue is approved and
-clear to build. The dispatcher sweeps `decision/responded` and
-`decision/lgtm` whenever idle — they are the queue of what can move.
+An issue that needs an operator ruling carries a `decision/*` label,
+and the label is a three-state machine: `decision/pending` awaits the
+operator's review; `decision/responded` means the operator replied and
+the agent investigates or revises the proposal per the reply (then sets
+`decision/pending` again); `decision/lgtm` means the latest decision in
+the issue is approved and clear to build. The dispatcher sweeps
+`decision/responded` and `decision/lgtm` whenever idle — they are the
+queue of what can move.
+
+**When the label goes on depends on why the issue exists.** An issue
+whose whole purpose is a ruling carries it from the moment it is filed.
+An issue filed as a task gains it at the hand-off, when the work reaches
+the point where the ball moves to the operator — and an RFC's issue is
+that case: filed as a task, claimed and dispatched like any other, and a
+decision issue from the moment its document is ready
+([rfc.md](rfc.md) §3.3). Either way the label rides the issue, never a
+pull request in this repository.
 
 ### 4.2 The board
 

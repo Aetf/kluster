@@ -2,11 +2,20 @@
 
 *   **Status:** Accepted, 2026-09-02. The operator ruled on the three
     questions this document opened, and the answers are written into the text
-    rather than left in the thread. Nothing below is built yet: §12's slices
-    are cut from here, and the first of them moves the mechanism to
-    `docs/framework/rfc.md`, after which this document is history like the
-    rest of the directory.
+    rather than left in the thread. The mechanism §3 to §9 states now lives at
+    [framework/rfc.md](../framework/rfc.md), which is what a reader follows to
+    run an RFC; where this text and that document disagree, the document is
+    right. This document keeps the argument, the alternatives weighed and the
+    record of what the process replaced. §12's other two slices — AGENTS.md's
+    pointer and the `decision/*` label descriptions — are outstanding.
 *   **Created:** 2026-09-02
+*   **Updated:** 2026-09-02 — three wording points settled as §12's first
+    slice moved the mechanism: a promotion gives §5.4's `rfc-NNN slice K:`
+    title prefix to slices still open and leaves merged ones with the title
+    they merged under (§3.2); a promoted design's **Created** is the date of
+    the pull request carrying the document, with the design's own date in the
+    Status line (§4.1); and the status word and the index row are written by
+    the final push before the merge (§5.1).
 *   **Authority:** AGENTS.md, [framework/dispatch.md](../framework/dispatch.md)
     and the style rules (`docs/style/`) are what this document obeys. Where
     they are silent, a rule proposed here is marked **new rule** — which is
@@ -172,7 +181,10 @@ rule**, and it is a promotion rather than a restart:
     the sections it adds have not been read; a ruling on the design is not
     withdrawn by the promotion and is not asked for twice.
 *   **Slices already cut stay cut.** They keep their numbers and their briefs,
-    and §12's list names them as they are rather than re-deriving them. One
+    and §12's list names them as they are rather than re-deriving them. Slices
+    still open gain §5.4's `rfc-NNN slice K:` title prefix in the same action
+    as the promotion; ones that have already merged keep the title they merged
+    under, because a merged title is a link somebody has already followed. One
     that has already merged is named and marked as landed: the document does
     not re-propose what is built, and §7.3 governs it from the start — what is
     built is canon, and the document records any deviation rather than
@@ -198,7 +210,10 @@ A bullet list, before anything else, carrying in this order:
 *   **Status** — one of the words of §5.1, with the date it was reached. For
     an implemented RFC, the header is also where the content's new homes and
     any construction deviation are named (§7.3).
-*   **Created** — the date the document was first proposed.
+*   **Created** — the date the document was first proposed. For a promoted
+    design (§3.2) that is the date of the pull request carrying the document,
+    because the design it is drafted from was never a document; the design's
+    own date belongs in the Status line.
 *   **Updated** — one dated line per revision made after acceptance, saying
     what that revision changed (§7.2). Absent until there is one; rfc-001
     carries two.
@@ -262,8 +277,8 @@ reader is asking the question. rfc-002 §7.1 and rfc-003 §7.4 are the shape.
 *   **Accepted** — the operator has approved the design and the pull request
     has merged. The slices may be cut and dispatched. The text is now stable:
     it changes only by the rules of §7.2. The word and its date are written by
-    the last commit on the RFC's own pull request, pushed after the ruling and
-    before the merge, together with the index row — so no RFC ever sits on
+    the final push to the RFC's own pull request, after the ruling and before
+    the merge, together with the index row — so no RFC ever sits on
     `main` claiming to be proposed when it is not.
 *   **Implemented** — every slice has merged. The header names where the
     content now lives, and the body is history (§9). The word is written by
