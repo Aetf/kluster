@@ -5,7 +5,8 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.dns.adguard import declare_rewrites
-from kluster.components.dns.routes import Exposure, Route, rewrites
+from kluster.components.dns.routes import rewrites
+from kluster.conventions.routes import Exposure, Route
 from kluster.providers import configured
 
 ENDPOINTS = ('http://alice.lan:3000', 'http://bob.lan:3000')

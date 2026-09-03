@@ -12,12 +12,14 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > cluster-related). Declared since 2026-08-25:
 > `src/kluster/components/dns/` holds the record model (`model.py`),
 > the estate census (`zones.py`), the app records the legacy VPS still
-> serves (`legacy.py`, transitional — §6), the route rows `apps` and
-> `dns` share (`routes.py`), and the two components that turn data into
-> resources (`zone.py`, `adguard.py`, the latter over the custom
-> provider in `src/kluster/providers/adguard_rewrites/`). Not yet
-> applied: the zones exist at Cloudflare and are imported into state
-> before the first `up`.
+> serves (`legacy.py`, transitional — §6), the rewrites the routes imply
+> (`routes.py`), and the two components that turn data into resources
+> (`zone.py`, `adguard.py`, the latter over the custom provider in
+> `src/kluster/providers/adguard_rewrites/`). The route rows themselves
+> are a convention, `src/kluster/conventions/routes.py`, because `apps`
+> and `dns` both read them (README.md §2). Not yet applied: the
+> zones exist at Cloudflare and are imported into state before the
+> first `up`.
 
 ## 1. Why a fourth stack
 
@@ -215,9 +217,12 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     rewrite targeting the media VIP) — an app cannot forget its
     rewrite because it never writes it by hand. Crossing a stack
     boundary does not weaken that: an app's route declaration is
-    **plain data** in a module both stacks import, so `apps` builds
-    its HTTPRoutes from it and `dns` builds the rewrites from the same
-    rows. One edit, two stack diffs, both previewable — rather than
+    **plain data** in a module both stacks import
+    (`kluster.conventions.routes`), so `apps` builds its HTTPRoutes from
+    it and `dns` builds the rewrites from the same rows. A rewrite's
+    answer is an address and never a name, so what it steers a LAN
+    client to cannot depend on some other rewrite existing to resolve
+    it. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
 -   **The first LAN-side row is what makes the instances' address a
@@ -226,9 +231,9 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     yields a rewrite, which is what keeps the stack deployable while
     nothing is routed and why `Pulumi.dns.yaml` carries the AdGuard
     login but not yet the endpoints. So the config key ships with the
-    row that first needs it, in the same change; the route helper
-    (`kluster.components.dns.routes`) carries that contract beside the census
-    itself.
+    row that first needs it, in the same change; the rewrites module
+    (`kluster.components.dns.routes`) carries that contract beside the
+    derivation the key serves.
 
 ## 4. LAN DNS: three name planes
 
