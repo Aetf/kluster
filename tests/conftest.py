@@ -1,4 +1,4 @@
-"""Fixtures shared across the credential suites, and the session's stack depth.
+"""Fixtures shared across the credential suites.
 
 The kit they share is `memory_kit.MemoryKit`, a kit that is not a file; it
 lives in its own module because test modules import the class directly, and
@@ -9,9 +9,6 @@ want a real KeePass file rather than the in-memory stand-in -- the row shape is
 half of what they check -- and a KDBX4 file is guarded by Argon2 at settings
 chosen to be slow. `cheap_kdbx_kdf` moves that cost to the algorithm's floor
 for the whole session.
-
-`RECURSION_LIMIT` is neither: it is headroom the whole session needs, and the
-reason is below.
 """
 
 # `pykeepass` ships no type information; the store module carries the same
@@ -21,7 +18,6 @@ reason is below.
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Any
 
 import pykeepass.pykeepass as pykeepass_module
@@ -33,27 +29,6 @@ from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-#: How deep a Python call may go in this session, raised because a leak in
-#: `pulumi.dynamic` makes serializing a provider cost a stack frame per
-#: provider serialized before it.
-#:
-#: `serialize_provider` replaces `pickle.Pickler._batch_setitems` with a
-#: wrapper closing over whatever that attribute held, and restores only the
-#: `pickle.Pickler` name afterwards -- which on CPython is not the class the
-#: method lives on, so the wrapper stays. The next call wraps the wrapper, and
-#: the chain is walked on every serialization from then on. Nothing about the
-#: provider or the resource is deep: the pickling itself is four frames, and
-#: the rest is the chain. This suite dies on serialization 934 of a 1000-frame
-#: limit, so which suite fails is decided by how many dynamic resources ran
-#: before it rather than by anything about itself.
-#:
-#: Headroom, not a fix -- it also does nothing about the quadratic time. The
-#: fix is a scoped save and restore in this repository's provider framework,
-#: plus the upstream report: Aetf/kluster-ops#165, which takes this constant
-#: out again.
-RECURSION_LIMIT = 3000
-sys.setrecursionlimit(RECURSION_LIMIT)
 
 #: Argon2 at its cheapest, in the names KDBX gives the parameters: one pass
 #: (`I`), one lane (`P`), and the least memory the algorithm accepts for one
