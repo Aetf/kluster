@@ -1,18 +1,21 @@
 # RFC 003: The `dns` and `github` Stacks Under the Style Rules
 
-*   **Status:** Proposed, 2026-08-29. Nothing below is built; the slices of §19
-    are cut from this text once the operator approves it.
+*   **Status:** Accepted, 2026-09-03. Nothing below is built; the slices of
+    §19 are cut from this text.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,
     and the per-zone view the provider takes is derived. §5 is new — nothing
     mirrors, so the fan-out set retires, the copies it produced are dropped,
     and a public record is published only in a zone that answers for the name.
-    §6 gains the field that keeps an application's own records in its census
-    row, and the seam test that compares record keys. §1 and §19 say that the
-    `dns` stack's state is imported rather than applied and that the retiring
-    DNSControl program is authoritative until cutover. §11 records the settled
-    vocabulary, §20 is new, and §§6–19 are renumbered from §§5–18.
+    The two zones nothing of ours serves are parked: what resolves in them is
+    copies of the primary's records, which retire with the machine they
+    address (§5.4). §6 gains the field that keeps an
+    application's own records in its census row, and the seam test that
+    compares record keys. §1 and §19 say that the `dns` stack's state is
+    imported rather than applied and that the retiring DNSControl program is
+    authoritative until cutover. §11 records the settled vocabulary, §20 is
+    new, and §§6–19 are renumbered from §§5–18.
 *   **Authority:** the style rules (`docs/style/`) and the design documents are
     what this document obeys. Where they are silent, a rule proposed here is
     marked **new rule**.
@@ -29,8 +32,7 @@
 *   **Out of scope:** the records this document keeps — nothing is added and
     nothing is repointed, and the rows it drops are enumerated in §5.3; the
     `apps` stack's route helpers (dns.md §5), of which this document fixes only
-    the census they consume; whether the redirect zones' undeclared redirect is
-    adopted or deleted (§5.4); the shared test machinery; and the `k8s-base`
+    the census they consume; the shared test machinery; and the `k8s-base`
     stack, which is unwritten.
 
 --------------------------------------------------------------------------------
@@ -245,7 +247,7 @@ set in the first column:
 BASE_RECORDS: tuple[Block, ...] = (
     # The zones that answer for a website: the apex and www, served by a web
     # server rather than by an app.
-    Block((*conventions.WEB_ZONES, *conventions.REDIRECT_ZONES), (
+    Block((*conventions.WEB_ZONES, *conventions.PARKED_ZONES), (
         a('@', legacy.IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
         cname('www', legacy.ANCHOR_ARCHVPS, proxied=True),
     )),
@@ -321,7 +323,7 @@ The zone sets in the second column are §5.2's.
 
 | Block | Zone set | Form |
 | --- | --- | --- |
-| web origin | `WEB_ZONES` and `REDIRECT_ZONES` | block |
+| web origin | `WEB_ZONES` and `PARKED_ZONES` | block |
 | overlay host block | `PRIMARY_ONLY` | block, derived from the roster |
 | Workspace mail | `MAIL_ZONES` | block; the two zones are identical, which a per-zone parameter blurred |
 | Workspace DKIM key | one zone each | zone-specific: one key is issued per domain, so it is the one mail record that is per-zone by nature |
@@ -362,19 +364,36 @@ LAN-only names are rewrite-only precisely to keep them out of public DNS
 (dns.md §4). A union taken over the records would omit exactly the issuers
 whose renewal then fails silently.
 
-**A zone's set is what serves it, which gives one zone a second stage.** Both
-redirect zones (§5.2) keep the edge's set, because the redirect is served at
-the edge on the edge's own certificate. `ucw.phd` is also the zone the
-gateway's proxy holds `*.lan.ucw.phd` under (dns.md §4), and while the edge
-answers there that costs the zone no extra row: `letsencrypt.org` is a member
-of the edge's set, so one set authorizes both. If that zone's redirect is
-dropped and the zone emptied (§5.4), the gateway's need stands alone, and the
-set becomes `CLUSTER_ISSUERS` — `letsencrypt.org`, with `issuewild` the tag
-that matters, since the gateway asks for the wildcard alone and never the apex
-— for as long as the gateway's ACME scope names the zone, and none afterward.
-`peifeng.phd` has no second stage: nothing of ours issues there, so if its
-redirect goes it carries no CAA at all, by the same rule that leaves the Google
-Site's zone unpinned.
+**The first apply writes this installation's first CAA records.** Not one of
+the six zones holds a CAA record of its own: the values the primary answers
+with are the edge's, injected into the response and absent from the record set,
+and the other five answer nothing. The retiring DNSControl program never
+declared CAA either, so nothing of ours ever put a value there. There is
+therefore nothing to import and nothing to collide with — eight creates on the
+primary, and eight on each of the other pinned zones.
+
+**The declared set is narrower than what the primary answers, deliberately.**
+The injected values name `comodoca.com` and `digicert.com`; the declaration
+names neither. Dropping them is checked rather than assumed: Certificate
+Transparency holds no certificate from `digicert.com` for any of the six zones,
+and `comodoca.com` is the former issuer domain of the authority the declaration
+already names as `sectigo.com`, which still honors the old value.
+
+**A zone's set is what serves it, and one zone has a second stage.** The two
+parked zones (§5.2) serve nothing of this installation's and keep the edge's
+set anyway: they stay on the edge's DNS, and the edge mints an apex and a
+wildcard for a zone it hosts, proxied or not, so the set authorizes the
+certificate that is actually issued. `ucw.phd` has a standing
+reason of its own on top — it is the zone the gateway's proxy holds
+`*.lan.ucw.phd` under (dns.md §4) — and it costs the zone no extra row, because
+`letsencrypt.org` is a member of the edge's set and one set authorizes both.
+**The second stage arrives when a parked zone leaves the edge**, not when its
+last record does: `ucw.phd`'s set becomes `CLUSTER_ISSUERS` — `letsencrypt.org`,
+with `issuewild` the tag that matters, since the gateway asks for the wildcard
+alone and never the apex — for as long as the gateway's ACME scope names the
+zone, and none afterward; `peifeng.phd` has nothing of ours issuing for it and
+would carry no CAA at all, by the same rule that leaves the Google Site's zone
+unpinned. Nothing in this document reaches that stage.
 
 **What keeps the table from going stale is not a test.** The pinned edge set is
 a copy of somebody else's list, and nothing in this repository can see that
@@ -382,7 +401,7 @@ list; a test that fetched it would put a network call in the gate. What
 notices a partner authority this repository does not authorize is the edge
 itself, whose Universal SSL notification reports a validation or renewal
 failure before the certificate expires — the one guard here that is not a human
-remembering. Two invariants can be held offline and are worth a test: every
+remembering, and it is enabled on the account. Two invariants can be held offline and are worth a test: every
 zone with a proxied record carries the edge set, and every zone in the
 gateway's ACME scope authorizes `letsencrypt.org` for `issuewild`. The
 remainder — a third party moving certificate authority under a zone this
@@ -424,15 +443,20 @@ co-host's three names are its own and always were.
 
 **The cut names the rows no application owns**, which is what it is for: as
 rows in a sixteen-row tuple they were invisible, and as blocks with no
-application in the header they are obvious. Four of them — `login`, `k8s`,
-`test` and `files` — are no longer used and are deleted from the module. Each
-deletion unpublishes a name, so the slice states them as deletions in their own
-right rather than as tidying. `mon` is different: it is the monitoring
-dashboard, it is in use, and it keeps its block with its owner named in the
-comment. Where it lands after migration follows from a classification the
-monitoring design owes an answer to (§20), and the ordering is easy either way,
-because monitoring is rebuilt fresh in Wave B rather than migrated — the name's
-new home exists before its old one is deleted.
+application in the header they are obvious. Six of them — `login`, `k8s`,
+`test`, `files`, `mcmap` and `archvps.stats` — are no longer used and are
+deleted from the module. Each deletion unpublishes a name, so the slice states
+them as deletions in their own right rather than as tidying.
+
+Two more keep their blocks, because a block with an owner only wants an address
+while a block with none is a drop at the census. `mon` is the monitoring
+dashboard and is in use. `bt` answers nothing on the VPS today, and is kept for
+the other half of the same reason: a component will declare the name after
+migration. Both carry their owner in the comment. Where `mon` lands follows
+from a classification the monitoring design owes an answer to (§20), and the
+ordering is easy either way, because monitoring is rebuilt fresh in Wave B
+rather than migrated — the name's new home exists before its old one is
+deleted.
 
 ### 4.6 The apex is the exception the anchor rule needs
 
@@ -477,16 +501,16 @@ they share a block of base records, and an application name fans out across the
 set by default. Measured against what the zones actually answer with, the
 premise does not hold.
 
-*   **`peifeng.phd` and `ucw.phd` serve nothing.** Every request in either zone
-    — the apex, `www`, and every application name — is answered by a Cloudflare
-    redirect rule that keeps the path and replaces the host with the primary's.
-    It fires on plain HTTP, and it fires for names nothing serves anywhere, so
-    the origin never sees a request for either zone. No certificate has ever
-    been issued at the origin for a name in either: the only certificates
-    naming those zones are the edge's own and the gateway's `*.lan.ucw.phd`.
-    Every application name published in the two zones is dead today, and if the
-    redirect rule were removed each would become an edge error rather than a
-    service. Neither zone is referenced anywhere outside this stack's own
+*   **`peifeng.phd` and `ucw.phd` serve nothing of this installation's.**
+    Every name in either zone is a copy of one of the primary's, published by
+    the retiring DNSControl program and addressed at the legacy VPS. A request
+    for any of them reaches that machine's catch-all, which answers with a
+    redirect to the primary — so the zones behave, and none of the behavior is
+    theirs. No certificate has ever been issued at the origin for a name in
+    either: the only certificates naming those zones are the edge's own and the
+    gateway's `*.lan.ucw.phd`. Every application name published in the two
+    zones is dead, because what answers it is the catch-all rather than the
+    application. Neither zone is referenced anywhere outside this stack's own
     declaration and its test fixtures.
 *   **`unlimitedcodeworks.xyz` answers for a website and nothing else.** Its
     apex and `www` serve the same site, from the same instance, as the
@@ -539,17 +563,28 @@ Every block and every route row is declared against the same words:
 | --- | --- |
 | `PRIMARY_ONLY` | the primary alone: every route's default, both anchor blocks, the overlay block, and every application name the VPS still serves |
 | `WEB_ZONES` | the zones whose apex and `www` are served: the primary and the website co-host |
-| `REDIRECT_ZONES` | the two zones that answer only with a redirect: an apex, a `www`, a CAA set, nothing else |
+| `PARKED_ZONES` | the two zones this installation holds and does not serve: what resolves in them is copies addressed at the legacy VPS, and when those retire each carries only the CAA set §4.4 leaves it |
 | `MAIL_ZONES` | the two Workspace domains; it lives beside the one block that names it |
 | `ZONE_FAMILY` | the two family zones — taxonomy only, so that `ALL_ZONES` reads; no block names it |
 | `ALL_ZONES` | every zone the stack declares, which is what the program loops over |
 
-The web origin block names `WEB_ZONES` and `REDIRECT_ZONES` together, because
-all four zones carry the identical apex and `www` today. The two sets are
-separate all the same, because they part company the moment the redirect zones'
-answer changes (§5.4) — and because one pair is served at the origin while the
-other is intercepted at the edge before the origin is consulted, which is the
-fact a reader of the table needs.
+The web origin block names `WEB_ZONES` and `PARKED_ZONES` together, because
+all four zones carry the same apex and `www` and something answers for all
+four. The sets are separate because what answers differs and one of the two is
+retiring: the served pair is answered by the website, the parked pair by the
+legacy VPS's catch-all, which goes with the machine (§5.4).
+
+§5.1's rule holds without exception either way. What it forbids is publishing a
+name nothing answers for, and the names in the parked zones that nothing
+answers for are exactly the ones §5.3 drops.
+
+**Parked is a state, not a stage.** `PARKED_ZONES` does not name zones on their
+way out. What the set says is that nothing of this installation's has ever
+served them: the names that resolve there are copies of the primary's, and they
+retire with the legacy VPS they address. `ucw.phd` outlives all of them — it is
+where the gateway's proxy holds `*.lan.ucw.phd`, so its CAA is load-bearing for
+the gateway's renewals long after its last record goes (§4.4); `peifeng.phd` is
+held because a domain in hand is cheaper than a domain reacquired.
 
 Three names retire. `PUBLIC_ALL` retires as a fan-out set, since nothing
 legitimately fans out to four zones; `ZONE_MIRRORS` retires because a
@@ -567,14 +602,14 @@ This is the one place this document changes what a zone carries, so the change
 is a list rather than a principle:
 
 *   **The overlay host block becomes `PRIMARY_ONLY`.** Its copies in the two
-    redirect zones are deleted, and the copy the declaration would create in
+    parked zones are deleted, and the copy the declaration would create in
     the website co-host is not created. Nothing anywhere references a copy —
     every overlay name used in a configuration file names the primary's — and
     private addresses in public DNS are published once instead of three times.
 *   **The copy of the legacy VPS anchor becomes `PRIMARY_ONLY`.** The copies in
-    the redirect zones are deleted and the one in the co-host is not created.
+    the parked zones are deleted and the one in the co-host is not created.
     Nothing targets a copy: the legacy CNAMEs all name the primary's.
-*   **The application names in the two redirect zones are deleted** — sixteen
+*   **The application names in the two parked zones are deleted** — sixteen
     labels and the identity SRV that rides with them, in each zone. They are
     dropped in one change rather than one at a time as their applications
     migrate: what authorizes the deletion is the measurement in §5.1, which is
@@ -582,31 +617,44 @@ is a list rather than a principle:
     migration would make each wave re-derive it. A migration afterward is one
     delete and one create, in one zone.
 
-Nothing else is added, dropped or repointed by this document. Two of the three
-items above are also creates the first `up` would otherwise perform, so they
-land before it (§19).
+Nothing else is added, dropped or repointed by this document. The first two
+items are also creates the first `up` would otherwise perform, so they land
+before it (§19).
 
-### 5.4 The redirect rules are undeclared, and their fate is not decided here
+### 5.4 What the parked zones carry, and when it goes
 
-The redirect rule that makes both redirect zones behave is declared nowhere —
-not in the retiring DNSControl program, not in the cluster's own program, and
-not here, which manages records and not rulesets. It was added when the domains
-were registered and nothing depends on it, so declaring it and dropping it are
-both acceptable and the choice is not this document's:
+There is nothing declared at the edge for either parked zone — no ruleset, no
+rule, nothing but records. What resolves in them is copies: the apex, `www`,
+the sixteen application labels, the overlay block and the legacy VPS anchor,
+all published by the retiring DNSControl program and all addressed at the same
+machine. **The redirect a visitor gets is that machine's own catch-all, not the
+edge's.** The proxy rewrites the `Server` header on everything it passes
+through, so a response carrying the edge's name says nothing about where the
+response was made; every observation of these two zones is the origin
+answering and the proxy relaying it.
 
-*   **Declared** — one Cloudflare ruleset per redirect zone, imported into this
-    stack so that the first preview adopts what exists rather than creating a
-    second rule beside it. Its one benefit is that those zones' apex and `www`
-    can then address a documented placeholder instead of the legacy VPS, so
-    they reference the VPS anchor nowhere and Wave F's check clears for them
-    without waiting on the website's own migration.
-*   **Dropped** — the rule deleted, and the zones carry an apex, a `www` and a
-    CAA set against nothing, or nothing at all. That branch is what §4.4's
-    second stage is written for.
+So the parked zones need no special treatment, and they get none. Their
+contents go the way every other legacy record goes:
 
-Either way the zones' purpose is stated in dns.md, because the records alone do
-not carry it. The work is sequenced after the first `up`, being a new resource
-type rather than a record, and §20 keeps the question.
+*   **The application labels are dead** — no application answers them, only the
+    catch-all — and §5.3 drops them in one change rather than one per wave,
+    because the measurement that condemns them covers both zones at once.
+*   **The overlay block and the anchor copy** become primary-only in the same
+    change (§5.3): nothing references a copy.
+*   **The apex and `www` are the only names left doing what they were published
+    to do**, and they retire with the machine they address. Wave F's check —
+    that nothing still references the legacy VPS anchor — is what removes them,
+    on the plan §4.5 and dns.md §6 already carry. Neither is repointed at the
+    cluster, because there is nothing in either zone for the cluster to serve.
+
+**The end state is that both zones are dark**, and it is worth saying before it
+happens rather than after: an old link that used to land on the primary's front
+page stops resolving rather than arriving somewhere else. Nothing in any
+repository, configuration file or certificate references either name, so
+nothing visibly breaks — but a redirect that answered is not the same as a name
+that does not exist. Each zone keeps the CAA set §4.4 leaves it, and nothing
+else. That is what `PARKED_ZONES` names: held, and not served, which dns.md
+states because the records alone do not carry it.
 
 --------------------------------------------------------------------------------
 
@@ -1293,8 +1341,8 @@ stacks touches. What is deliberately not applied:
     suite asserted — that the shared block is a subset of every mirror zone —
     the shape now makes unwritable otherwise. What is worth asserting in its
     place is what the shape does not enforce: that every zone a block names is
-    one `ALL_ZONES` declares, and that the redirect zones carry an apex, a
-    `www` and CAA and nothing else (§5.2).
+    one `ALL_ZONES` declares, and that no block publishes an application name
+    into a parked zone (§5.2).
 *   **The route census gains an invariants test** (§6.6), which is what the
     roster has.
 *   **The seam between the stacks gains one** (§6.7): per zone, the legacy
@@ -1343,22 +1391,23 @@ each half the order keeps anything from being moved twice.
     rule in the style document rather than as a citation of this one.
 2.  **What each zone is for** (§5): the zone sets re-cut, the overlay block and
     the legacy VPS anchor made primary-only, the application names deleted from
-    the two redirect zones, and dns.md's mirror bullet replaced by the rule
-    that a public record needs a listener and a certificate — plus the sentence
-    that the retiring DNSControl program is authoritative until cutover. It
-    changes what the zones carry, so its preview shows deletes by design.
-    **Done** when the preview's deletes are exactly the rows §5.3 enumerates,
-    and it shows no replacement.
+    the two parked zones, and dns.md's mirror bullet replaced by the rule that
+    a public record needs a listener and a certificate — plus what the parked
+    zones are and when their remaining records go, and the sentence that the
+    retiring DNSControl program is authoritative until cutover. It changes what
+    the zones carry, so its preview shows deletes by design. **Done** when the
+    preview's deletes are exactly the rows §5.3 enumerates, and it shows no
+    replacement.
 3.  **The record tables become blocks** (§4, §11): `Block` and `zone_records`,
-    `base.py` as a table, the per-application cut of `legacy.py` with the four
-    unowned names deleted and the monitoring name's owner written into its
-    comment, the module renames, the import direction between base and legacy,
+    `base.py` as a table, the per-application cut of `legacy.py` — six unowned
+    names deleted, two kept ones naming their owners in comment — the module
+    renames, the import direction between base and legacy,
     the anchor shape moving out of the program, the overlay identifiers, the
     apex exception in dns.md, and the installation-terms rule in
     style/pulumi.md. It is the slice with the most renames in it. **Done** when
     the set of zone-and-key pairs the declaration produces is identical before
     and after — the pull request carries that comparison — and the preview adds
-    no replacement and no delete beyond the four names.
+    no replacement and no delete beyond the six names.
 4.  **The Cloudflare provider's namespace and account fact** (§9): a
     configuration move, a constant, and the two other places the key is named,
     the slot map and the mint. The encrypted value moves to its new key
@@ -1398,23 +1447,18 @@ CAA and DNSSEC settings on the pinned zones and the cluster anchors among them
 
 ## 20. Open questions
 
-*   **Whether the redirect zones' rule is declared or deleted** (§5.4). Either
-    is acceptable and neither blocks anything here; it is sequenced after the
-    first `up`, and the second branch is what §4.4's second stage describes.
 *   **Where the monitoring dashboard's name lands** (§4.5). Whether monitoring
     is cluster infrastructure or an application decides which component
     declares `mon` after migration and therefore which wave deletes its legacy
     block. The monitoring design answers it, and the ordering is safe either
     way because monitoring is rebuilt fresh rather than migrated.
-*   **Three more legacy names answer nothing in the primary either** — `bt`,
-    `mcmap` and `archvps.stats`. Unlike the four §4.5 deletes, no ruling covers
-    them, and unpublishing a name is a decision rather than tidying, so they
-    keep their blocks until one is taken.
-*   **Whether the primary's live CAA values are records or the edge's
-    injection.** Nothing of this repository's authored them, and one query of
-    the zone's records settles whether the first `up` creates the whole set or
-    adopts most of it. It changes no design and no slice; it changes what the
-    first apply's plan looks like, which is worth knowing before it is read.
+*   **Why only the primary is answered.** None of the six zones holds a CAA
+    record of its own (§4.4), and the edge injects a set into that one zone's
+    responses alone. What selects that zone is not known, and
+    the mechanism usually offered — that the edge adds its rows only to a zone
+    already carrying one of its own — cannot be it, since none of them does.
+    It changes no decision: the first apply creates the same records either
+    way.
 *   **The LAN-only helper's default zone** (§6.2). A rewrite-only name buys one
     wildcard certificate per zone it is published in, so the default should be
     one zone; which one is the `apps` stack's design and not this document's.
