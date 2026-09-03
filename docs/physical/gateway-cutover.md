@@ -259,10 +259,11 @@ object with no file behind it and goes at the next boot, or to
     window is the first time that path runs on this device. The log at
     debug level is what shows it: before each check the proxy writes
     `checking authoritative nameservers` naming the servers it is about
-    to ask, and `certificate obtained successfully` when the order
-    completes. What a stall looks like is a propagation timeout followed
-    by the proxy's own retries, which are slow and unattended: read the
-    log, and do not intervene between them.
+    to ask — which should be the zone's own name servers, never this
+    device's resolver — and `certificate obtained successfully` when the
+    order completes. What a stall looks like is a propagation timeout
+    followed by the proxy's own retries, which are slow and unattended:
+    read the log, and do not intervene between them.
 -   **A second `pulumi up` reports no changes and restarts nothing**,
     which is the stamp mechanism proving itself on the path every later
     apply takes.

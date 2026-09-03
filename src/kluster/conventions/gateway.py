@@ -238,8 +238,9 @@ SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 #: across (gateway-cutover.md §1) — a role address instead of this personal one
 #: would discard it silently. Declared rather than left out, because an absent
 #: contact makes the proxy take the newest account directory in storage instead
-#: of naming the one it means, and because Caddy adds its second issuer as a
-#: fallback only when the contact is non-empty.
+#: of naming the one it means. Either way the block has one issuer: a `dns`
+#: challenge names its own issuer configuration, so Caddy's second-issuer
+#: fallback does not apply here.
 ACME_CONTACT = 'aetf@unlimited-code.works'
 
 #: The retiring LAN zone (dns.md §4.3), and the second wildcard the proxy holds
