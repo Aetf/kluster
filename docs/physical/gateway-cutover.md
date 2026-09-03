@@ -217,8 +217,9 @@ did not, so a bad push is red rather than silent. What it does **not** do
 in this window is put anything back: the swap it reaches for needs the
 tree the push displaced, and on a first push there is none — the old tree
 went to `machines-old` in step 2, and `machine-rollback` says so and
-exits non-zero. A machine that fails to start therefore stays down, and
-§6 by hand is the only way back.
+exits non-zero. A machine that fails to start therefore cycles between
+activating and failed every five seconds instead of settling, and §6 by
+hand is the only way back.
 
 ## 5. Verification
 

@@ -44,6 +44,16 @@ systemd's own template, so what a machine says about itself is said in its
 settings file rather than in a unit this program writes; `machinectl` and
 `systemctl` see the machines the same way they see any other.
 
+**What a settings file cannot say, a drop-in on that instance says.** A
+settings file describes the container; a restart policy and a dependency on the
+bridge describe the *unit*, and the unit is systemd's. So each machine carries
+one drop-in (`machine_dropin`), delivered through the persistence layer like any
+other unit source: it is what keeps a machine that died from staying down until
+the next boot, and what keeps a machine from running when the bridge it is
+attached to is gone. The watchdog below answers the other half of the same
+concern — an interface that fell off a bridge that is still there, which is a
+state systemd has no view of.
+
 **A failed push stays failed, and the root filesystem goes back.** A machine's
 post-apply hook does not stop at converging: it asks whether the machine
 reached active, and a machine that did not fails the operation. The root
@@ -56,6 +66,7 @@ the work to do.
 from __future__ import annotations
 
 import shlex
+import string
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, final
@@ -74,10 +85,13 @@ __all__ = (
     'LIVE_NSPAWN_DIR',
     'MACHINES',
     'MACHINES_SCRIPT',
+    'MACHINE_DROPIN',
     'MARKER_SUFFIX',
     'NSPAWN_SUFFIX',
     'NSPAWN_UNITS_SCRIPT',
     'REJECTED_SUFFIX',
+    'RESTART_DELAY',
+    'RESTART_POLICY',
     'ROLLBACK_PROGRAM',
     'ROOTFS',
     'SKELETON',
@@ -89,6 +103,8 @@ __all__ = (
     'Machine',
     'NspawnRuntime',
     'Placement',
+    'interface_device_unit',
+    'machine_dropin',
     'machine_file',
     'machine_hook',
     'machine_path',
@@ -144,6 +160,37 @@ ROLLBACK_PROGRAM = 'machine-rollback'
 #: write, install or retire.
 UNIT_TEMPLATE = 'systemd-nspawn@'
 
+#: The one drop-in each machine carries on its instance of that template, for
+#: what a settings file has no way of saying: how the machine is kept running,
+#: and what it may not run without. The name is what places it among the
+#: firmware's, and both halves of it earn their place (systemd.unit(5)).
+#: Differently named drop-ins of the instance and of the template are applied
+#: together in lexicographic order whichever directory they sit in, so the
+#: number decides where this one falls among any on `systemd-nspawn@.service`
+#: itself. Equally named ones do not merge at all — the more specific of the
+#: two wins outright, and this file is as specific as they get, being on the
+#: instance and under `/etc` — so the cluster's name is what keeps it from
+#: silently shadowing a firmware drop-in that happened to be called the same.
+#: Inside the instance's directory nothing else may live: the converger removes
+#: what it has no source for, a `systemctl edit` override included.
+MACHINE_DROPIN = f'10-{conventions.CLUSTER_NAME}.conf'
+
+#: The restart policy that drop-in carries. `always` rather than `on-failure`:
+#: a container that exited cleanly is still a service that is meant to be
+#: running. The delay is what keeps a machine that cannot start from retrying in
+#: a hot loop; it does not end the retrying, which goes on until somebody stops
+#: the unit (physical/gateway.md §1).
+RESTART_POLICY = 'always'
+RESTART_DELAY = '5s'
+
+#: The escaped sysfs path every network interface's device unit is named
+#: under, and the characters that escaping leaves alone — every other byte
+#: becomes `\xNN`, which for an interface name is the hyphen a bridge may
+#: carry. "Device" here is the kernel's, not this package's: everywhere else in
+#: the gateway a device is the box itself.
+_NET_DEVICE_UNIT_PREFIX = 'sys-subsystem-net-devices'
+_UNESCAPED = frozenset(string.ascii_letters + string.digits + ':_.')
+
 #: The names inside `machines/<name>/` that belong to the runtime and to the
 #: push. Everything else in there is the machine's own (`machine_file`).
 ROOTFS = 'rootfs'
@@ -191,6 +238,18 @@ def stamp_path(machine: str) -> str:
 def machine_unit(machine: str) -> str:
     """The unit that runs the machine: systemd's template, instanced by name."""
     return f'{UNIT_TEMPLATE}{machine}.service'
+
+
+def interface_device_unit(interface: str) -> str:
+    """The systemd device unit one network interface is known by.
+
+    Named for the escaped sysfs path of the kernel device, so this is
+    `systemd-escape --path --suffix=device` over `/sys/subsystem/net/devices/`
+    and the interface. Written out rather than shelled out to, because the name
+    is decided here, where there is no box and no systemd to ask.
+    """
+    escaped = ''.join(character if character in _UNESCAPED else f'\\x{ord(character):02x}' for character in interface)
+    return f'{_NET_DEVICE_UNIT_PREFIX}-{escaped}.device'
 
 
 def machine_file(machine: str, name: str) -> str:
@@ -342,6 +401,54 @@ class _RollbackParams:
     rejected_suffix: str
 
 
+@final
+@dataclass(frozen=True)
+class _MachineDropinParams:
+    """What `machine-dropin.conf.j2` reads: one machine, and its bridge or none.
+
+    `bridge_device` is already the unit name rather than the interface, and it
+    is `None` for a machine in the host's network namespace — which is the one
+    machine with no bridge to depend on. The interface itself is not among these:
+    the unit name carries it, and a second spelling of the same fact would be one
+    the file could disagree with.
+    """
+
+    cluster: str
+    machine: str
+    restart: str
+    restart_delay: str
+    bridge_device: str | None
+
+
+def machine_dropin(machine: str, *, bridge: str | None) -> str:
+    """What the template unit does not say about one machine in particular.
+
+    Two statements, and each of them is about the *unit* rather than about the
+    container, which is why neither can live in a settings file:
+
+    -   **a restart policy**, so that a machine that died comes back instead of
+        staying down until the next boot or the next push converges it — and,
+        where it cannot start at all, retries until somebody stops the unit;
+    -   **a binding on the bridge's device unit**, for a machine that attaches to
+        one, so that the machine is ordered after the bridge and stopped when the
+        bridge goes away rather than left running with an interface enslaved to
+        nothing.
+
+    A machine in the host's network namespace has no bridge and gets no binding.
+    """
+    return templates.render(
+        persistence.TEMPLATE_PACKAGE,
+        'templates/machine-dropin.conf.j2',
+        _MachineDropinParams(
+            cluster=conventions.CLUSTER_NAME,
+            machine=machine,
+            restart=RESTART_POLICY,
+            restart_delay=RESTART_DELAY,
+            bridge_device=None if bridge is None else interface_device_unit(bridge),
+        ),
+    )
+
+
 def nspawn_units_script() -> str:
     """The boot-chain script that mirrors each machine's settings where systemd reads them.
 
@@ -451,6 +558,10 @@ class NspawnRuntime(Component):
         """
         super().__init__(name, opts=opts)
         self._packages: DeviceFile = mechanism.packages
+        # Kept because a machine's drop-in is declared when that machine is, and
+        # by the component that has the machine: what the runtime supplies is
+        # the content and the unit it goes on (`dropin`).
+        self._mechanism: DevicePersistence = mechanism
 
         self.skeleton: DeviceDirectory = mechanism.skeleton_dir(SKELETON, opts=self.child_opts())
         # The settings converger before the machine converger, in the order the
@@ -487,6 +598,22 @@ class NspawnRuntime(Component):
         layer below, and this is where the requirement is made an edge.
         """
         return (self._packages, self.skeleton, self.nspawn_units, self.machines, self.rollback)
+
+    def dropin(self, machine: str, *, bridge: str | None, opts: pulumi.ResourceOptions) -> DeviceFile:
+        """One machine's drop-in on the template unit, as a resource of the caller's.
+
+        The runtime decides what a machine's instance of `systemd-nspawn@.service`
+        has to say for itself and which unit that is; the file belongs to the
+        component that declares the machine, so it goes away with it and the
+        statement comes off the unit in the same session.
+
+        `bridge` is the machine's, and is the one thing here the runtime cannot
+        know: which network a container is on is the workload's business
+        (`container.ContainerDeclaration.bridge`).
+        """
+        return self._mechanism.dropin(
+            machine_unit(machine), MACHINE_DROPIN, machine_dropin(machine, bridge=bridge), opts=opts
+        )
 
     def hook(self, machine: str, path: str, *, rollback: bool = False) -> str:
         """The post-apply hook one file of `machine` runs once it lands.

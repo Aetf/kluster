@@ -774,12 +774,13 @@ class Container(Component):
     apply, which is why the runtime's convergers are depended on here too.
 
     **The pieces are ordered so that the machine starts once, with all of
-    them.** The files the container reads come first, the settings file after
-    them because it names them as binds, and the root filesystem last: the
-    converger skips a machine that has no tree, so the tree's own delivery is
-    the one that starts it, and by then everything it reads is on the device.
-    Unordered siblings would instead have each configuration file arrive at a
-    machine that cannot start yet.
+    them.** The files the container reads and the drop-in its unit carries come
+    first, the settings file after them because it names those files as binds,
+    and the root filesystem last: the converger skips a machine that has no
+    tree, so the tree's own delivery is the one that starts it, and by then
+    everything the machine needs is on the device. Unordered siblings would
+    instead have each configuration file arrive at a machine that cannot start
+    yet.
 
     `after` is what this machine must be actuated behind. It is a parameter
     rather than a fact of this class because the only service that has such a
@@ -834,9 +835,17 @@ class Container(Component):
                 opts=child,
             )
         )
-        read_by_the_container: list[pulumi.Resource] = [
+        # What the machine's unit says that its settings file cannot: how the
+        # machine is kept running, and the bridge it may not run without. It is
+        # not in the stamped set, because a drop-in takes effect on the reload
+        # its own delivery does rather than on a start — what the stamp decides
+        # is when the machine is bounced, and this is not a reason to bounce one.
+        self.dropin: DeviceFile = runtime.dropin(service, bridge=declaration.bridge, opts=child)
+
+        before_the_machine_starts: list[pulumi.Resource] = [
             *self.mounted_files.values(),
             *([] if self.initial_state is None else [self.initial_state]),
+            self.dropin,
         ]
 
         settings = nspawn.nspawn_path(service)
@@ -848,7 +857,7 @@ class Container(Component):
             mode=CONFIG_MODE,
             owner=owner,
             hook=runtime.hook(service, settings),
-            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *read_by_the_container]),
+            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *before_the_machine_starts]),
         )
         root = nspawn.rootfs_path(service)
         self.image = DeviceArtifact(
@@ -862,7 +871,7 @@ class Container(Component):
             # machine the device keeps a displaced copy of, and this is the
             # delivery that starts the machine.
             hook=runtime.hook(service, root, rollback=True),
-            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *read_by_the_container, self.settings]),
+            opts=self.child_opts(depends_on=[*runtime.convergers, *after, *before_the_machine_starts, self.settings]),
         )
 
         self.register_outputs({})

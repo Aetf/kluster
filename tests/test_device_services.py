@@ -783,6 +783,60 @@ async def test_the_tree_lands_last_so_the_machine_starts_once_with_everything(
     assert str(await alice.initial_state.urn.future()) in monitor.depends_on(f'{NAME}-adguard-alice-image')
 
 
+def dropin_of(service: str) -> str:
+    """The resource name of one machine's drop-in on the template unit.
+
+    Layer one names it, because layer one decided the path; the component that
+    has the machine owns it.
+    """
+    return f'{NAME}-persistence-dropin-{nspawn.machine_unit(service)}.d/{nspawn.MACHINE_DROPIN}'
+
+
+def test_every_machine_carries_what_its_shared_unit_cannot_say_about_it(monitor: Recorder) -> None:
+    """One template unit runs four machines, so per-machine statements go in a drop-in.
+
+    Each of the four gets a restart policy, without which a machine that died
+    would stay down until the next boot or the next push. The three on the
+    container VLAN are additionally bound to that bridge's device unit, and the
+    one in the host's network namespace has no bridge to be bound to.
+    """
+    for service in SERVICES:
+        content = str(monitor.inputs_of(dropin_of(service))['content'])
+        bridged = declared_for(service).bridge is not None
+
+        assert f'Restart={nspawn.RESTART_POLICY}' in content, service
+        assert (f'BindsTo={nspawn.interface_device_unit(container.CONTAINER_BRIDGE)}' in content) is bridged, service
+        assert monitor.options_of(dropin_of(service)).parent.endswith(f'::{NAME}-{service}'), service
+
+
+@pytest.mark.asyncio
+async def test_a_machine_is_started_by_a_unit_that_already_carries_its_drop_in(
+    containers: tuple[Container, ...], monitor: Recorder
+) -> None:
+    """The tree is what starts the machine, so the statements must precede it.
+
+    A machine started before its drop-in landed would run under the template
+    unit's own defaults — no restart policy, and no dependency on the bridge it
+    is attached to — until something restarted it. Ordering it with the files
+    the container reads is what makes the first start the right one.
+    """
+    caddy = containers[0]
+
+    assert str(await caddy.dropin.urn.future()) in monitor.depends_on(f'{NAME}-caddy-image')
+    assert str(await caddy.dropin.urn.future()) in monitor.depends_on(f'{NAME}-caddy-nspawn')
+
+
+def test_a_drop_in_is_no_reason_to_restart_a_machine(monitor: Recorder) -> None:
+    """The stamped set decides when a machine is bounced, and this is not in it.
+
+    A drop-in takes effect on the reload its own delivery does, so putting it in
+    the stamped set would trade a reload for a restart of the container — and
+    for the machine carrying the deployment's session, that is the session.
+    """
+    for service in SERVICES:
+        assert monitor.inputs_of(dropin_of(service))['path'] not in declared_for(service).stamped_set
+
+
 def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder) -> None:
     """State carries the digest; the device fetches the payload for itself.
 

@@ -1,0 +1,30 @@
+# Managed by the {{ cluster }} physical stack. Local edits are overwritten.
+#
+# What systemd-nspawn@.service -- systemd's own template unit, shared by every
+# machine on this device -- cannot say about {{ machine }} in particular.
+{%- if bridge_device %}
+
+[Unit]
+# Ordered after the bridge's device unit and bound to it, so this machine is
+# never started against a bridge that is not up yet and is stopped rather than
+# left with an interface enslaved to nothing when the bridge goes away. systemd
+# has such a unit for every network device udev tags, which it does by default;
+# a device node gets none, which is why /dev/net/tun is asserted with a bind
+# instead.
+After={{ bridge_device }}
+BindsTo={{ bridge_device }}
+{%- endif %}
+
+[Service]
+# The template unit carries no restart policy, so without this a machine that
+# died would stay down until the next boot or the next push converged it.
+# `always` rather than `on-failure`: a container that exited cleanly is still a
+# service that is meant to be running.
+#
+# A machine that cannot start retries every five seconds for as long as it is
+# left alone. Two starts in any ten seconds stay inside systemd's default start
+# rate limit, so nothing here ever gives up -- `systemctl stop` is what ends the
+# loop, while `machinectl poweroff` and `machinectl terminate` are the service
+# exiting and bring it back five seconds later.
+Restart={{ restart }}
+RestartSec={{ restart_delay }}

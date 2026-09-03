@@ -13,6 +13,7 @@ wiring mistake would surface.
 
 from __future__ import annotations
 
+import pulumi
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
@@ -21,7 +22,8 @@ from kluster import conventions
 from kluster.components.gateway import nspawn, persistence
 from kluster.components.gateway.nspawn import Machine, NspawnRuntime, Placement
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, Connection, marker_path
+from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, Connection, DeviceFile, marker_path
+from putils import Component
 
 NAME = 'runtime'
 #: The mechanism the runtime asks, whose own name is what its `_declare`
@@ -49,6 +51,20 @@ GIVEN_STATE = Machine(
     ),
 )
 MACHINES = (GIVEN_STATE, PLAIN)
+
+
+class Workload(Component, pulumi_type='test:gateway:Workload'):
+    """A component that has a machine, which is what declares that machine's drop-in.
+
+    It stands in for `container.Container`: the runtime is the framework and
+    knows no service, so the file that carries one machine's restart policy and
+    bridge binding is the workload's, like every other file of that machine.
+    """
+
+    def __init__(self, name: str, *, runtime: NspawnRuntime, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.dropin: DeviceFile = runtime.dropin(PLAIN.name, bridge='br5', opts=self.child_opts())
+        self.register_outputs({})
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
@@ -130,6 +146,89 @@ def test_the_watchdog_is_a_unit_and_an_executable_rather_than_a_boot_script() ->
     assert f'ExecStart={persistence.executable_path(nspawn.WATCHDOG_WORKER)}' in unit
     assert 'Restart=always' in unit
     assert nspawn.LIVE_NSPAWN_DIR in worker
+
+
+##
+## What a machine's unit says that its settings file cannot
+##
+
+
+def test_every_machine_is_kept_running_by_a_policy_the_template_unit_has_none_of() -> None:
+    """Without it a machine that died stays down until the next boot or push.
+
+    The policy is on the machine's own instance of the template unit, which is
+    the only place it can be: `systemd-nspawn@.service` is shared by every
+    machine on the device, and a settings file describes the container rather
+    than the unit.
+    """
+    for bridge in (None, 'br5'):
+        rendered = nspawn.machine_dropin('plain', bridge=bridge)
+
+        assert f'Restart={nspawn.RESTART_POLICY}' in rendered, bridge
+        assert f'RestartSec={nspawn.RESTART_DELAY}' in rendered, bridge
+
+    assert nspawn.MACHINE_DROPIN.endswith(persistence.DROPIN_SUFFIX)
+
+
+def test_a_machine_on_a_bridge_is_bound_to_that_bridge_being_there() -> None:
+    """A dependency rather than a retry loop.
+
+    Ordered after the bridge's device unit, so the machine is never started
+    against a bridge that is not up yet, and bound to it, so it is stopped
+    rather than left running with an interface enslaved to nothing.
+    """
+    rendered = nspawn.machine_dropin('plain', bridge='br5')
+    unit = nspawn.interface_device_unit('br5')
+
+    assert unit == 'sys-subsystem-net-devices-br5.device'
+    assert f'After={unit}' in rendered
+    assert f'BindsTo={unit}' in rendered
+
+
+def test_a_machine_in_the_hosts_namespace_is_bound_to_no_bridge() -> None:
+    """It has no bridge to be bound to, and the file says nothing about one.
+
+    The overlay daemon runs in the host's network namespace, so the section a
+    binding would go in is absent rather than empty — a machine that named a
+    device unit nothing creates would never start.
+    """
+    rendered = nspawn.machine_dropin('plain', bridge=None)
+
+    assert 'BindsTo' not in rendered
+    assert '[Unit]' not in rendered
+
+
+def test_an_interfaces_device_unit_is_its_escaped_sysfs_path() -> None:
+    """systemd names a device unit after its path, and escapes what a path may not carry.
+
+    A bridge whose name carries a hyphen is the case that separates the escaped
+    name from the plain one: unescaped, the unit would name a device that does
+    not exist, and a machine bound to it would never start.
+    """
+    assert nspawn.interface_device_unit('br-lan') == 'sys-subsystem-net-devices-br\\x2dlan.device'
+
+
+@pytest.mark.asyncio
+async def test_a_machines_drop_in_is_a_resource_of_the_component_that_has_the_machine(
+    monitor: Recorder, runtime: NspawnRuntime
+) -> None:
+    """The runtime decides what the unit must say; the file belongs to the caller.
+
+    A machine's drop-in is declared when that machine is, by the component that
+    declares the machine, so the statement comes off the unit in the session
+    that stops declaring it — while where such a file goes and what runs once it
+    lands stays layer one's.
+    """
+    unit = nspawn.machine_unit('plain')
+    async with declaring():
+        workload = Workload('workload', runtime=runtime)
+
+    inputs = monitor.inputs_of(f'{MECHANISM}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}')
+
+    assert inputs['path'] == persistence.dropin_source(unit, nspawn.MACHINE_DROPIN)
+    assert f'Restart={nspawn.RESTART_POLICY}' in str(inputs['content'])
+    assert str(await workload.dropin.urn.future()).endswith(f'{nspawn.MACHINE_DROPIN}')
+    assert monitor.options_of(f'{MECHANISM}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}').parent.endswith('::workload')
 
 
 ##
