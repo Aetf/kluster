@@ -120,19 +120,10 @@ def test_a_row_the_map_calls_built_is_a_command_the_tree_carries() -> None:
 
 
 def declared_environments() -> dict[str, set[str]]:
-    """Every Environment the forge stack declares, by the repository it declares it in."""
-    # Imported here rather than at module scope: `slots` must not depend on the
-    # Pulumi provider SDKs, and this is the file that ties the two together
-    # without letting the dependency into the command.
-    from kluster.stacks import github
-
+    """Every Environment the forge census declares, by the repository it sits in."""
     return {
-        f'{github.OWNER}/{github.DEPLOYMENT_REPO}': {
-            *github.PREVIEWED_LAYERS,
-            github.PLAN_ENVIRONMENT,
-            github.APPLY_ENVIRONMENT,
-        },
-        f'{github.OWNER}/{github.OPS_REPO}': {github.DRILL_ENVIRONMENT},
+        repository.full_name: {environment.name for environment in repository.environments}
+        for repository in conventions.forge.REPOSITORIES
     }
 
 
@@ -154,19 +145,14 @@ def undeclared_environments(rows: Mapping[str, slots.Row]) -> dict[str, set[str]
     return undeclared
 
 
-def test_the_map_targets_environments_the_forge_stack_declares() -> None:
-    from kluster.stacks import github
+def test_the_map_targets_environments_the_forge_census_declares() -> None:
+    """A secret pushed into an Environment nothing declares is one no job will ever see.
 
-    assert slots.REPOSITORY == f'{github.OWNER}/{github.DEPLOYMENT_REPO}'
-    assert slots.OPS_REPOSITORY == f'{github.OWNER}/{github.OPS_REPO}'
-    assert set(slots.ENVIRONMENTS) == declared_environments()[slots.REPOSITORY]
-    # The ops repository's one Environment, held by name the way the deployment
-    # repository's are: the map addresses it as a constant, and the stack that
-    # creates it is the only thing that decides what it is called.
-    assert slots.DRILL_ENVIRONMENT == github.DRILL_ENVIRONMENT
-    assert declared_environments()[slots.OPS_REPOSITORY] == {slots.DRILL_ENVIRONMENT}
-    # A secret pushed into an Environment the stack does not declare is a
-    # secret no job will ever see.
+    The map and the `github` stack read the same census, so what is left to
+    check is the rows: a row may name any Environment it likes -- several do,
+    literally (`ZEROTIER_PHYSICAL`, `ZEROTIER_DNS`) -- and only the census says
+    which of them exist.
+    """
     assert undeclared_environments(slots.ROWS) == {}
 
 

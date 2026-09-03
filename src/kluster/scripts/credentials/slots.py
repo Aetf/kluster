@@ -88,20 +88,15 @@ from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
 
-#: The two repositories, `owner/name` as the API spells them. The `github`
-#: stack declares both; a test holds the two equal rather than importing that
-#: module, which would drag the Pulumi provider SDKs into `credentials --help`.
-REPOSITORY = 'Aetf/kluster'
-OPS_REPOSITORY = 'Aetf/kluster-ops'
-
-#: The deployment Environments, in the order the merge chain runs them (ci.md
-#: §3). `physical` is two of them because its plan is ungated and its apply is
-#: reviewer-gated; both hold the same credentials.
-ENVIRONMENTS = ('physical-plan', 'physical', 'dns', 'k8s-base', 'apps')
-
-#: The ops repository's own Environment, which carries the unattended drills'
-#: credentials and is ungated because its scope is the gate (§4).
-DRILL_ENVIRONMENT = 'drill'
+#: The two repositories, `owner/name` as the API spells them, the deployment
+#: Environments in the order the merge chain runs them (ci.md §3), and the ops
+#: repository's own. All four are read from `conventions.forge`, the one home
+#: this command and the `github` stack share: a script may import `conventions`
+#: and nothing a stack declares from.
+REPOSITORY = conventions.forge.DEPLOYMENT.full_name
+OPS_REPOSITORY = conventions.forge.OPS.full_name
+ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments)
+DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 
 #: The Environments whose jobs join ZeroTier, one identity domain each
 #: (physical/gateway.md §2.1). `k8s-base` and `apps` join nothing: the
