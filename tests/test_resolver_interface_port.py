@@ -19,7 +19,7 @@ on.
 
 from __future__ import annotations
 
-from test_device_services import caddy
+from test_device_services import caddy, served
 from test_flow_rules import RESOLVERS, rules
 
 from kluster import conventions
@@ -29,15 +29,12 @@ from kluster.components.gateway import container
 PORT = 80
 
 
-def test_every_declaration_of_the_resolvers_interface_names_the_same_port() -> None:
+def test_every_declaration_of_the_resolvers_interface_names_the_port_the_appliance_answers_on() -> None:
     """The two vhosts, the initial state and the flow rule, held to one value."""
-    # The proxy dials the same two addresses again in its legacy block, for the
-    # three names the device answers today, so the file is cut at that block:
-    # what the two vhosts are is the part serving the device's own zone, and an
-    # assertion satisfied by a legacy row would not notice a vhost moving.
-    served, _, _ = container.caddyfile(caddy()).partition(f'*.{conventions.gateway.ZONE_LEGACY}')
+    vhosts = served(container.caddyfile(caddy()))
     for resolver in conventions.gateway.RESOLVERS:
-        assert f'reverse_proxy http://{resolver.address}:{PORT}\n' in served
+        assert resolver.vhost is not None
+        assert vhosts[resolver.vhost] == (f'reverse_proxy http://{resolver.address}:{PORT}',)
 
     address = conventions.gateway.ADGUARD_ALICE.address
     assert f'address: {address}:{PORT}\n' in container.adguard_initial_state(address)
