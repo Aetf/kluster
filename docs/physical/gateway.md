@@ -363,12 +363,16 @@ reach `10-packages.sh` without that script naming a package of its own.
 The machines themselves are the workloads on it, and they own nothing
 of the framework.
 
-### 1.3 The routing configuration, and what installs it
+### 1.3 The routing daemon: its configuration, its on-state, and what converges both
 
 The BGP session the `lan` pool arrives over
 (cluster/architecture.md §3.4) is held by the device's own routing
-daemon, FRR, which this program neither installs nor supervises. What
-it owns is the configuration that daemon reads, and it exists twice:
+daemon suite, FRR, which ships in the firmware and which this program
+neither installs nor supervises. What it owns is what makes a session
+exist at all: the configuration the daemon reads, the daemon's presence
+in the firmware's list of what runs, and the daemon running at boot.
+
+**The configuration exists twice.**
 
 -   **`/data/custom/frr/frr.conf`** is the declared one — a rendered
     file naming the worker VM as a BGP peer, with the inbound
@@ -382,32 +386,82 @@ it owns is the configuration that daemon reads, and it exists twice:
 
 Between them sits **`frr-config.sh`**, an executable in `bin/` run by
 **`frr-config.service`**, a `Type=oneshot` unit wanted by
-`multi-user.target` and installed like every other unit here. Where the
-daemon does not already hold what the source says, it installs the
-declared file and reloads: `systemctl reload frr`, falling back to a
-restart for the boot where the daemon is not up yet to be reloaded.
-Reload rather than restart because a restart drops every routing
-session the device holds, including ones this file is not about;
-neither outcome is silenced, because a step that cannot make the file
-take effect has failed.
+`multi-user.target` and installed like every other unit here. One run
+converges the toggle, the file and the running daemon, in that order,
+and does nothing where all three already hold.
+
+**The toggle is a converged fact rather than a hand edit.**
+`/etc/frr/daemons` is the firmware's own file — the list of which
+daemons of the suite the supervisor starts — and it ships with the
+protocol daemon off (`bgpd=no`), which is why a device nobody has
+declared a session on holds none. A firmware update restores that file
+exactly as it restores `frr.conf`, so `frr-config.sh` switches the line
+on at every run and then **asserts** it: a file reshaped until the
+substitution matches nothing would otherwise leave the executable
+reporting success over a daemon that never starts the protocol. A
+switch that had to be flipped is itself a reason to restart, so the
+toggle is checked before the file comparison that would otherwise say
+there is nothing to do.
+
+**Nothing enables the daemon; the unit that runs `frr-config.sh`
+wants it.**
+`frr-config.service` carries `Wants=frr.service` and
+`After=frr.service`, and `20-units.sh` enables `frr-config.service` at
+every boot — so what starts the daemon is a line in a file this program
+already delivers, converges and retires, rather than a mutation of
+`/etc` that a boot script would have to re-assert and a retirement
+would have to undo. Two things follow. **`systemctl is-enabled frr`
+stays `disabled` forever and is not a check**; what answers the
+question is `systemctl is-active frr`, and
+`systemctl list-dependencies --reverse frr.service` for the edge
+itself. And the ordering is deliberately *after* the daemon: a
+unit ordered before it could not restart it synchronously, because
+the daemon's start job would wait on `frr-config.service` and that unit
+on the restart. The unit carries no `ConditionPathExists`, either — a
+failed condition still pulls in and orders `Wants=` dependencies, so it
+would gate nothing that matters while implying that it does, and the
+executable already exits successfully when this program declares no
+configuration.
+
+**The executable restarts the daemon, because this firmware cannot
+reload it.**
+`frrinit.sh reload` needs `frr-reload.py`, which the image does not
+ship and which the distribution's packaging cannot supply at a version
+matching the firmware's FRR — so a `reload || restart` pair would fail
+its first half on every single run and only ever execute the fallback.
+A restart is cheap here for the reason it is expensive elsewhere: the
+daemon holds no session besides this one, so the cost is the seconds
+the supervisor takes to bring the daemons back, on the runs where the
+configuration or the toggle actually changed. Nothing is silenced,
+because a step that cannot make the file take effect has failed.
+
+**A candidate configuration is parsed before anything is installed.**
+`vtysh -C -f` parses a file against the command tree the installed
+daemons have, with none of them running. It is there because a
+successful `frr.service` proves less than it looks: starting the unit
+starts only the supervisor, which returns, and the configuration is
+pushed into the daemons afterward by the supervisor itself — whose
+failure fails nothing. The installed file and its stamp therefore prove
+*installed*, not *accepted*, and the pre-check is what turns a firmware
+update whose parser no longer likes one of these lines into a
+converge-time failure instead of a peer that never establishes.
 
 **What says the daemon already holds it is a stamp, not the installed
-file.** The write happens before the reload is attempted, so a run that
-failed at the reload leaves two identical copies behind — and a rerun
-deciding on those alone would exit successfully having told the daemon
-nothing, leaving the session on the old configuration under an apply
-that reported success. The stamp is a checksum written beside
-`/etc/frr/frr.conf` after the reload returns, so what is skipped is
+file.** The write happens before the restart is attempted, so a run
+that failed at the restart leaves two identical copies behind — and a
+rerun deciding on those alone would exit successfully having told the
+daemon nothing, leaving the session on the old configuration under an
+apply that reported success. The stamp is a checksum written beside
+`/etc/frr/frr.conf` after the restart returns, so what is skipped is
 work whose *effect* has landed. It is off `/data` with the file it
-describes: an update takes both, and the next boot installs and reloads
-from scratch.
+describes: an update takes both, and the next boot installs and
+restarts from scratch.
 
-**The daemon's unit name and its reload verb are assumed until the
-first push.** `frr.service`, `systemctl reload frr` and
-`/etc/frr/frr.conf` are FRR's own names on Debian-family packaging,
-which is what the device's firmware is built on; nothing here has been
-observed on the box, and nothing confirms that UniFi's own provisioning
-leaves that file alone. The first push is what settles all three.
+**The daemon's copy is installed `frr:frr` 0640**, which is the daemon
+suite's own convention on this device and what an operator writing the
+configuration out from a running daemon expects to overwrite. It is not
+load-bearing: the supervisor keeps root, and the reader it runs to push
+the file into the daemons takes a root-owned file fine.
 
 **The same executable is the configuration file's post-apply hook**, so
 the boot path and the push path run the one program and the boot path
@@ -419,7 +473,51 @@ of systemd's own, which is what §1.2's rule turns on.
 **A configuration this program stops declaring is not a configuration
 taken away.** The executable does nothing when the source is absent:
 the daemon is the device's own, running on what it has, and a file this
-program stops declaring is no reason to leave the router with none.
+program stops declaring is no reason to leave the router with none — or
+to switch the protocol back off underneath it.
+
+**The controller's own BGP feature is never configured while this
+program owns the daemon**, and a BGP object on the controller is drift
+like any other undeclared object (§4.2). The controller drives BGP by
+spawning the same binaries as its own child processes from a blob it
+writes itself; it reads and writes nothing under `/etc/frr` and it
+neither starts nor enables `frr.service`, so neither manager destroys
+the other's files. What they cannot do is coexist: there is one
+`bgpd`, one TCP 179 and one kernel routing table, and whichever starts
+second fails and stays failed. The cost of ever configuring that page
+is therefore no session rather than the wrong one, and the cure is this
+rule rather than a mechanism.
+
+**What the daemon does to the rest of the box** — measured on the
+device 2026-09-02, on UniFi OS 5.1.31 with Network 10.6.101 and FRR
+10.1.2, and worth re-reading after a firmware jump because it is a
+statement about that firmware:
+
+-   **The startup sweep removes nothing.** The kernel-facing daemon
+    deletes, at start, routes carrying the protocol ids it considers
+    its own: {11, 42, 186–198}. Every route the device holds carries an
+    id from {2, 3, 9, 16, 200} — kernel, boot, DHCP, router
+    advertisement, and the controller's own policy id — so the two sets
+    are disjoint. Two name collisions between the controller's
+    vocabulary and FRR's are cosmetic, because the decision is by
+    number.
+-   **What it adds is `proto bgp` in the main table and nothing else.**
+    The declared file has no interface stanza, no redistribution and no
+    static routes; the firmware's build compiles the static-route daemon
+    out entirely, which is why `cannot start staticd` appears in the
+    journal at every start and is expected noise rather than a fault.
+-   **The overlay's routes (§2.2) are `proto static`, id 4**, outside
+    the sweep set. The daemon replaces only entries carrying its own
+    ids, so the two route sources do not interfere.
+
+**What the first push settles** is the one thing reading the device
+cannot: no controller provisioning pass has yet happened while this
+daemon runs. Everything measured says the two managers ignore each
+other; the proof is that the same `up` provisions the gateway for the
+firewall, and afterward `frr.service` is still active with the same
+`bgpd` process and `ip route show proto bgp` is unchanged. A daemon
+found stopped, or those routes gone, is the single outcome that would
+reopen the controller path.
 
 ### 1.4 Authorized keys
 
