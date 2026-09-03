@@ -195,9 +195,9 @@ if B2's 3×-stored egress allowance ever bites.
 **Placement rule (2026-08-22)**: the **backup** bucket must not live
 with the provider whose loss it insures — OCI tenancy termination is an
 enumerated risk (nodes.md §3.1), so cluster backups stay on B2
-regardless of where the cloud pool lands. It is also the estate's only
-object bucket: the second one this rule used to distinguish itself from
-was the JuiceFS chunk bucket, and that filesystem is gone (§6). The
+regardless of where the cloud pool lands. It is also the installation's
+only object bucket: the second one this rule used to distinguish itself
+from was the JuiceFS chunk bucket, and that filesystem is gone (§6). The
 bucket, its keys and its lifecycle rules are Pulumi-managed like
 everything else.
 

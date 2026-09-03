@@ -87,8 +87,8 @@ leaked join credential does not buy general LAN access. Residual on
 record (audit M6): the AdGuard credential is full-admin (AdGuard has
 no scoped API), so LAN-DNS control rides the `dns` tier — the tier
 that already holds the Cloudflare token, and therefore the whole of
-the estate's naming rather than only its LAN half. `apps`, the tier
-that changes daily, holds neither that credential nor a ZeroTier
+this installation's naming rather than only its LAN half. `apps`, the
+tier that changes daily, holds neither that credential nor a ZeroTier
 identity.
 
 **Join mechanics, and why they need a lock of their own.** The

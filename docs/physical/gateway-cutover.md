@@ -3,9 +3,9 @@
 The one maintenance window that hands the device over: it stops being
 converged by the retiring gw-config repository and starts being converged
 by this program. It is the opening of the bring-up ceremony
-([gateway.md](gateway.md) §2.5) — the first estate push is the push this
-window prepares for, and what has to happen before it is moving the live
-container state to where the declaration expects it.
+([gateway.md](gateway.md) §2.5) — the first push from this program is
+the push this window prepares for, and what has to happen before it is
+moving the live container state to where the declaration expects it.
 
 Everything below runs as `root` in a LAN session on the device, except
 where a step says otherwise. That is not a preference: there is no
