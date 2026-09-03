@@ -24,9 +24,10 @@ the *how* for the `physical` stack of [README.md](README.md) §1.
 
 Owns: OCI (network, nodes, NLB, IPs, volumes, guardrails),
 libvirt on the homelab host (the worker VM and its storage), Talos
-day-1 (secrets → configs → apply → bootstrap), the gw-config and unifi
-resources on the UDM, and the B2 backup bucket. DNS lives in the `dns`
-stack (declarative/dns.md), which consumes this stack's IP outputs.
+day-1 (secrets → configs → apply → bootstrap), the device files and
+unifi resources on the UDM, and the B2 backup bucket. DNS lives in
+the `dns` stack (declarative/dns.md), which consumes this stack's IP
+outputs.
 
 Explicitly **not** owned: the state-backend E2.1.Micro (a bootstrap
 dependency of Pulumi itself — hand-created, documented in
@@ -249,10 +250,10 @@ them for day-2 once v0.12 is stable *and* has reached the Pulumi bridge.
     §13. The libvirt session above is unaffected — it is the worker
     VM's, and so is everything §3 declares.
 
-## 4. UDM (gw-config dynamic provider + bridged filipowm/unifi)
+## 4. UDM (device-files dynamic provider + bridged filipowm/unifi)
 
 Per architecture.md §5.2 (full push-direction absorption): the
-gw-config provider (SSH, `/data`, idempotent diff/apply, post-apply
+device-files provider (SSH, `/data`, idempotent diff/apply, post-apply
 hooks; the UDM's **SSH host key is pinned** — the session crosses
 ZeroTier, and an accept-new first contact would hand a MITM root on
 the gateway. The pin is a `conventions` constant and a declared input
@@ -271,9 +272,7 @@ its machine config, and everything that names it — the routing session, the
 peer-port forward, day 1's apid dial — reads that same constant, so no session
 depends on a lease), the nspawn container services
 (units + digest-pinned rootfs images from homelab-containers CI via
-`DeviceArtifact` (architecture.md §5.2), pulled from the registry and
-flattened on the runner because the device boots a directory and has
-no container engine — including
+`DeviceArtifact` (architecture.md §5.2) — including
 the **ZeroTier member container**, host-networking + `/dev/net/tun` +
 `/data`-persisted identity, architecture.md §5.3), the recovery script
 in `on_boot.d` that re-establishes all of it after a firmware update
@@ -287,6 +286,24 @@ rotation visible, and the traps that come with all three — is
 from the `physical` stack via the bridged `zerotier/zerotier`
 provider (architecture.md §5.3). The gw-config repo retires;
 periodic backup *pulls* move to a yadm timer on the homelab host.
+
+A root filesystem is a tree rather than bytes in state, so
+`DeviceArtifact`'s surface is `root` — the directory the tree is
+unpacked into — plus the pin that fills it. **The device does the
+pulling.** Handed `repository@digest` over the session already open, it
+runs `skopeo copy` into a staging OCI layout beside the tree and
+`umoci raw unpack` out of that layout, then swaps the result into place
+with two renames: no archive crosses the runner and no image is decoded
+on it, digest verification belonging to `skopeo` and the whiteout and
+extended-attribute semantics to `umoci`. Both binaries reach the device
+in the persistence layer's package set (physical/gateway.md §1.2), and
+a device without them fails the pull by name. Beside the tree the device
+keeps one marker naming the manifest digest it came from, which is what
+a preview compares against the pin. The marker is written **before** the
+hook, because the hook restarts the container only when it sees the
+marker change, and a hook that does not succeed withdraws it again —
+leaving a tree of unknown provenance, which the next preview reports as
+work to do.
 
 The **unifi provider (filipowm/unifi via the Terraform bridge,
 architecture.md §5.1)** manages the controller-side resources, **all
@@ -328,7 +345,7 @@ declarative/dns.md.)
 
 Order within the first `pulumi up`: OCI network → instances (user_data
 configs) ∥ libvirt VM → bootstrap (first CP) → health → outputs; the
-NLB and gw-config/FRR settle in parallel once IPs exist, and the `dns`
+NLB and the device's FRR settle in parallel once IPs exist, and the `dns`
 stack's anchors follow from the IP outputs.
 Manual preconditions: OCI tenancy on PAYG, the state-backend micro
 (ci.md §1), and the homelab host-prep change-set (§3). ZeroTier
@@ -351,7 +368,8 @@ filipowm/unifi provider round-tripping a scratch
 `firewall_zone_policy` (create → clean diff → delete) against the
 UDM's current Network release — the resource is experimental and
 targets UniFi OS ≥9, and a failure here flips the rules to the
-gw-config `UnifiFirewallPolicy` fallback (architecture.md §5.1) —
+device-files provider's `UnifiFirewallPolicy` fallback
+(architecture.md §5.1) —
 plus the legacy port-forward endpoint still accepting writes on a
 zone-firewall controller.
 

@@ -69,7 +69,7 @@ the instance moves from the homelab host to an **OCI VM.Standard.E2.1.Micro**
 | OCI / Cloudflare / B2 APIs | all layers (Cloudflare: `dns`, `apps`) | public |
 | kube API, cloud Talos apid | `k8s-base`, `apps` | public (NLB 6443/50000, mTLS) |
 | homelab worker's Talos apid | `physical` | public — the cluster endpoint (NLB 50000), naming `--nodes <homelab>`; the control plane that answers proxies over KubeSpan (**bootstrap verification item**) |
-| libvirt + gw-config (UDM SSH), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
+| libvirt + UDM SSH (the device files), UniFi Network API (firewall rules — `physical` only, API-key auth), AdGuard APIs | `physical`, `dns` (AdGuard rewrites) | **per-run ZeroTier join** (pre-authorized CI member identities, gateway.md §2.1/§2.6) — no standing runner, no home inbound ports |
 | State backend | all layers | public TLS (§1) |
 
 Only the `physical` and `dns` jobs touch ZeroTier; `apps` — the stack
@@ -229,8 +229,8 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     rather than one because GitHub scopes permissions per App
     (register rows in credentials.md). The playbook a diff calls for
     is human review, then reconcile reality or deploy — drift here
-    means something changed behind Pulumi's back, the gw-config
-    device files and the OCI console being the realistic sources.
+    means something changed behind Pulumi's back, the device files
+    and the OCI console being the realistic sources.
     **How the human learns of it is not built**: the intended route is
     the same `actionable` alert the producer step raises
     (architecture.md §4.3), and neither exists, so today a diff is a
@@ -240,11 +240,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     `--refresh` is load-bearing for the second source: a plain
     preview diffs code against *cached* state and never queries
     providers, so a console hand-edit leaves code == state and
-    reports zero diff — only the gw-config device files would surface
-    without it (`DeviceFile`/`DeviceArtifact` `diff` reads the device,
-    architecture.md §5.2). Consequence carried consciously:
-    `--refresh` rewrites state to match reality, so a drift run
-    adopts the drift into state and the next deploy's diff is
+    reports zero diff — only the device files would surface without it
+    (`DeviceFile`, `DeviceDirectory` and `DeviceArtifact` all read the
+    device in `diff`, architecture.md §5.2). Consequence carried
+    consciously: `--refresh` rewrites state to match reality, so a
+    drift run adopts the drift into state and the next deploy's diff is
     desired-vs-reality — acceptable, because the alert fires first
     and reconciling is exactly what its playbook demands. This
     closes the "hand edits never surface" gap that deleting the

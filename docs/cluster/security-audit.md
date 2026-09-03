@@ -274,7 +274,7 @@ With all DNS in Pulumi and issuance entirely DNS-01, add per-zone CAA
 (pin Let's Encrypt) and enable DNSSEC — cheap misissuance defence.
 *Lives in* dns.md §1.
 
-### L4 — gw-config SSH host-key pinning
+### L4 — device-files SSH host-key pinning
 
 The provider does root-level writes to the UDM over ZeroTier; an
 accept-new first contact would let any ZT member MITM into gateway
