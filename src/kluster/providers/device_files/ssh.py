@@ -45,6 +45,7 @@ __all__ = (
     'DEFAULT_TIMEOUT',
     'DIRECTORY',
     'NOT_EMPTY',
+    'SYMBOLIC_LINK',
     'CommandFailed',
     'CommandResult',
     'Device',
@@ -79,8 +80,12 @@ DEFAULT_TIMEOUT = 600.0
 #: `NOT_EMPTY` is "this directory has something in it", which `rmdir` reports
 #: with the same status as a directory it may not touch, in whatever language
 #: the session speaks.
+#: `SYMBOLIC_LINK` is "a link is at this path", which no command reports with a
+#: status of its own: the ones that would converge it follow it, and `rmdir`
+#: refuses it with the status it gives everything else.
 ABSENT = 42
 NOT_EMPTY = 43
+SYMBOLIC_LINK = 44
 
 #: The word `stat`'s `%F` gives a directory, which is the only kind any caller
 #: here asks about.

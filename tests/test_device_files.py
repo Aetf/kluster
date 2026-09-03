@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import subprocess
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, final
 
 import asyncssh
@@ -726,7 +728,9 @@ def test_making_a_directory_sets_its_mode_and_ownership_in_one_idempotent_comman
     """
     script = provider.make_script(DIRECTORY_PATH, '0750', 'root:staff')
 
-    assert script == f'mkdir -p {DIRECTORY_PATH} && chmod 0750 {DIRECTORY_PATH} && chown root:staff {DIRECTORY_PATH}'
+    assert script.endswith(
+        f'mkdir -p {DIRECTORY_PATH} && chmod 0750 {DIRECTORY_PATH} && chown root:staff {DIRECTORY_PATH}'
+    )
 
 
 def test_a_directory_with_no_declared_owner_keeps_whatever_the_device_gave_it() -> None:
@@ -736,6 +740,7 @@ def test_a_directory_with_no_declared_owner_keeps_whatever_the_device_gave_it() 
 def test_a_directory_path_a_shell_would_mangle_is_quoted() -> None:
     assert "mkdir -p '/data/a dir; rm -rf /'" in provider.make_script('/data/a dir; rm -rf /', '0755', None)
     assert "rmdir '/data/a dir; rm -rf /'" in provider.remove_script('/data/a dir; rm -rf /')
+    assert "[ -L '/data/a dir; rm -rf /' ]" in provider.symlink_test('/data/a dir; rm -rf /')
 
 
 def test_a_directory_someone_removed_on_the_device_is_a_change(device: Device) -> None:
@@ -874,7 +879,8 @@ def test_a_removal_of_a_directory_that_is_already_gone_is_a_success() -> None:
     """Nothing to remove is the outcome a delete wanted, so the script exits 0."""
     script = provider.remove_script(DIRECTORY_PATH)
 
-    assert script.startswith(f'if [ ! -e {DIRECTORY_PATH} ]; then exit 0; fi')
+    assert f'if [ ! -e {DIRECTORY_PATH} ]; then exit 0; fi' in script
+    assert script.index('! -e') < script.index('ls -A'), 'nothing there is answered before contents are counted'
     assert f'exit {ssh.NOT_EMPTY}' in script
     assert script.endswith(f'rmdir {DIRECTORY_PATH}')
     assert 'rm -r' not in script
@@ -901,6 +907,43 @@ def test_a_directory_that_could_not_be_made_fails_the_apply(device: Device) -> N
 
     assert 'exited 5' in str(raised.value)
     assert DIRECTORY_HOOK not in device.commands
+
+
+def test_a_symlink_where_a_directory_is_declared_fails_the_apply(device: Device) -> None:
+    """A link is refused rather than converged through, so the drift is named.
+
+    The device follows a link in every command that would converge it, so the
+    apply that ended in a link's target would report success and leave the same
+    drift for the next preview to report again.
+    """
+    device.statuses = {'-L': ssh.SYMBOLIC_LINK}
+
+    with pytest.raises(provider.SymbolicLinkAtPath) as raised:
+        _ = directory_provider().create(directory_props())
+
+    assert DIRECTORY_PATH in str(raised.value)
+    assert DIRECTORY_HOOK not in device.commands, 'nothing was converged, so nothing is told it was'
+
+
+def test_a_symlink_where_a_directory_is_declared_fails_the_delete(device: Device) -> None:
+    """The halves agree: what the create will not make, the delete will not take away."""
+    made(device, directory_props())
+    device.statuses = {'-L': ssh.SYMBOLIC_LINK}
+
+    with pytest.raises(provider.SymbolicLinkAtPath) as raised:
+        directory_provider().delete('id', directory_props())
+
+    assert DIRECTORY_PATH in str(raised.value)
+    assert DIRECTORY_HOOK not in device.commands
+
+
+def test_both_halves_ask_about_a_link_before_anything_follows_one() -> None:
+    """The question has to be first: every command after it follows a link."""
+    asked = provider.symlink_test(DIRECTORY_PATH)
+
+    assert provider.make_script(DIRECTORY_PATH, '0755', 'root:root').startswith(asked)
+    assert provider.remove_script(DIRECTORY_PATH).startswith(asked)
+    assert f'exit {ssh.SYMBOLIC_LINK}' in asked
 
 
 def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
@@ -953,6 +996,36 @@ def test_a_relative_directory_is_refused_before_anything_is_made() -> None:
     assert [failure.property for failure in result.failures] == ['path']
 
 
+def test_a_directory_path_that_is_not_the_one_spelling_of_its_place_is_refused() -> None:
+    """A trailing slash means the same place and answers a different question.
+
+    `[ -L /data/x/ ]` is false however plainly `/data/x` is a link, because a
+    path ending in a slash is resolved through to a directory -- so a spelling
+    `check` let through would carry the declaration past the test that guards
+    it. The canonical spelling is the whole rule, and the failure names the
+    slash rather than reciting it.
+    """
+    trailing = directory_provider().check({}, directory_props(path=f'{DIRECTORY_PATH}/'))
+
+    assert [failure.property for failure in trailing.failures] == ['path']
+    assert 'trailing slash' in trailing.failures[0].reason
+    assert repr(DIRECTORY_PATH) in trailing.failures[0].reason, 'the failure says how to spell it instead'
+
+    for spelling in (f'{DIRECTORY_PATH}/.', '/data/custom/../custom/machines', '/data//custom/machines'):
+        result = directory_provider().check({}, directory_props(path=spelling))
+        assert [failure.property for failure in result.failures] == ['path'], spelling
+
+
+def test_every_declared_path_is_held_to_the_same_spelling() -> None:
+    """The rule is the path's, not the directory resource's: a file and a tree
+    are addressed by the same tests in the same scripts."""
+    file_result = file_provider().check({}, file_props(path=f'{CONFIG_PATH}/'))
+    artifact_result = artifact_provider().check({}, artifact_props(root=f'{ROOTFS_TREE}/'))
+
+    assert [failure.property for failure in file_result.failures] == ['path']
+    assert [failure.property for failure in artifact_result.failures] == ['root']
+
+
 def test_a_directory_mode_that_is_not_octal_is_refused() -> None:
     result = directory_provider().check({}, directory_props(mode='rwxr-xr-x'))
 
@@ -982,6 +1055,93 @@ def test_every_resource_of_this_module_carries_the_one_version(monkeypatch: pyte
     }
 
     assert stamped == {provider.VERSION}
+
+
+## What a link at the path does to `mkdir -p`, to `chmod` and to `[ -e ]` is the
+## shell's answer rather than this repository's, so the tests below ask a shell
+## instead of restating the belief. The scripts are the shipped ones and the tree
+## is a temporary one; nothing here needs a device.
+
+
+def sh(script: str) -> int:
+    """Run one of the scripts the way the device's shell runs it, and report the status."""
+    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+        ['/bin/sh', '-c', script],  # noqa: S607 -- the shell the device's own scripts name
+        capture_output=True,
+        check=False,
+    )
+    return completed.returncode
+
+
+def test_the_scripts_make_and_remove_an_ordinary_directory(tmp_path: Path) -> None:
+    """The ordinary path through a real shell: made with a mode, taken away, gone twice."""
+    path = tmp_path / 'machines'
+
+    assert sh(provider.make_script(str(path), '0750', None)) == 0
+    assert path.is_dir()
+    assert path.stat().st_mode & 0o777 == 0o750
+    assert sh(provider.remove_script(str(path))) == 0
+    assert not path.exists()
+    assert sh(provider.remove_script(str(path))) == 0, 'nothing to remove is the outcome a delete wanted'
+
+
+def test_a_shell_refuses_to_remove_a_directory_somebody_filled(tmp_path: Path) -> None:
+    """The status the provider reads as `DirectoryNotEmpty`, as a shell produces it."""
+    path = tmp_path / 'machines'
+    path.mkdir()
+    _ = (path / 'kept').write_text('put there by whoever fills the directory\n')
+
+    assert sh(provider.remove_script(str(path))) == ssh.NOT_EMPTY
+    assert (path / 'kept').exists()
+
+
+def test_a_link_to_a_directory_stops_the_make_before_the_target_is_touched(tmp_path: Path) -> None:
+    """`mkdir -p`, `chmod` and `chown` all follow a link and none of them says so.
+
+    The target is a directory nothing here declared, and its mode is the proof
+    that no command reached it.
+    """
+    target = tmp_path / 'elsewhere'
+    target.mkdir()
+    target.chmod(0o755)
+    link = tmp_path / 'machines'
+    link.symlink_to(target)
+
+    assert sh(provider.make_script(str(link), '0700', None)) == ssh.SYMBOLIC_LINK
+    assert target.stat().st_mode & 0o777 == 0o755
+    assert link.is_symlink()
+
+
+def test_a_link_to_a_directory_stops_the_remove_with_the_same_status(tmp_path: Path) -> None:
+    """`rmdir` refuses a link of its own accord, but as an error of the device's.
+
+    Refusing it here instead gives the two halves one status, and it is the one
+    that names what is wrong with the path.
+    """
+    target = tmp_path / 'elsewhere'
+    target.mkdir()
+    link = tmp_path / 'machines'
+    link.symlink_to(target)
+
+    assert sh(provider.remove_script(str(link))) == ssh.SYMBOLIC_LINK
+    assert link.is_symlink()
+    assert target.is_dir()
+
+
+def test_a_link_pointing_at_nothing_is_something_there_to_both_halves(tmp_path: Path) -> None:
+    """`[ -e ]` follows a link, so a dangling one reads as an empty path.
+
+    Answered by existence alone the two halves disagree about it -- `mkdir -p`
+    will not take the link, while the remove reports the success of having found
+    nothing and leaves the link standing. Asked about the link itself they agree,
+    and neither takes away an indirection this resource did not put there.
+    """
+    link = tmp_path / 'machines'
+    link.symlink_to(tmp_path / 'never-made')
+
+    assert sh(provider.make_script(str(link), '0755', None)) == ssh.SYMBOLIC_LINK
+    assert sh(provider.remove_script(str(link))) == ssh.SYMBOLIC_LINK
+    assert link.is_symlink()
 
 
 ##
