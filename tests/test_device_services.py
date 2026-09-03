@@ -406,7 +406,7 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
     rendered = container.caddyfile(caddy())
 
     zone = conventions.ZONE_PRIMARY
-    assert f'\n*.{zone} {{\n' in rendered
+    assert re.search(rf'^\*\.{re.escape(zone)} \{{$', rendered, re.MULTILINE)
     # One block for the zone, so one certificate for it: a second site block
     # under the same zone would be a second request for the same names.
     assert rendered.count(f'{zone} {{') == 1
@@ -528,7 +528,7 @@ def test_an_empty_census_is_a_file_with_no_legacy_block_in_it() -> None:
     assert conventions.gateway.ZONE_LEGACY not in rendered
     assert rendered.count('abort') == 1
     # And what the device's own services are served under is untouched.
-    assert f'\n*.{conventions.ZONE_PRIMARY} {{\n' in rendered
+    assert re.search(rf'^\*\.{re.escape(conventions.ZONE_PRIMARY)} \{{$', rendered, re.MULTILINE)
     assert conventions.gateway.VHOST_CONTROLLER in rendered
 
 
