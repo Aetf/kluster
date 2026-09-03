@@ -209,21 +209,21 @@ def test_a_minted_token_may_not_manage_tokens_at_all(api: FakeApi) -> None:
         _ = cloudflare.Session.authorize(value).tokens()
 
 
-def _estate(api: FakeApi) -> dict[str, str]:
+def _installation(api: FakeApi) -> dict[str, str]:
     """The zones the register scopes the provider token to, in the fake account."""
     return {name: api.add_zone(name) for name in conventions.ALL_ZONES}
 
 
-def test_the_zones_token_is_scoped_to_exactly_the_estate_zones(api: FakeApi) -> None:
-    zone_ids = _estate(api)
+def test_the_zones_token_is_scoped_to_exactly_the_installation_zones(api: FakeApi) -> None:
+    zone_ids = _installation(api)
     api.add_zone('someone-elses.example')
     session = cloudflare.Session.authorize(_seed(api))
 
     minted = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
 
-    # One policy: record edit on the estate's zones by id, the read the
+    # One policy: record edit on the installation's zones by id, the read the
     # provider needs beside it, and no token permission — the only class the
-    # platform mints. A zone that is not the estate's is not in it.
+    # platform mints. A zone that is not the installation's is not in it.
     (policy,) = list[dict[str, Any]](api.posted[-1]['policies'])
     assert set(policy['resources']) == {f'{cloudflare.ZONE_RESOURCE}.{zone_id}' for zone_id in zone_ids.values()}
     assert policy['permission_groups'] == [{'id': 'dns-write'}, {'id': 'zone-read'}]
@@ -232,7 +232,7 @@ def test_the_zones_token_is_scoped_to_exactly_the_estate_zones(api: FakeApi) -> 
 
 
 def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
-    zones = _estate(api)
+    zones = _installation(api)
     api.zones[conventions.ZONE_FAMILY[0]]['account'] = {}
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -246,7 +246,7 @@ def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
 
 
 def test_a_zone_the_seed_cannot_see_is_refused_before_anything_is_minted(api: FakeApi) -> None:
-    zones = _estate(api)
+    zones = _installation(api)
     del api.zones[conventions.ZONE_FAMILY[0]]
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -258,7 +258,7 @@ def test_a_zone_the_seed_cannot_see_is_refused_before_anything_is_minted(api: Fa
 
 
 def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api: FakeApi) -> None:
-    _ = _estate(api)
+    _ = _installation(api)
     api.seed_sees_zones = False
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -267,7 +267,7 @@ def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api
 
 
 def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeApi) -> None:
-    zone_ids = _estate(api)
+    zone_ids = _installation(api)
     api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -278,7 +278,7 @@ def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeAp
 
 
 def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
-    zone_ids = _estate(api)
+    zone_ids = _installation(api)
     session = cloudflare.Session.authorize(_seed(api))
     working = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
     api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
@@ -299,7 +299,7 @@ def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi
 
 
 def test_a_renamed_permission_group_is_named_rather_than_guessed(api: FakeApi) -> None:
-    _ = _estate(api)
+    _ = _installation(api)
     api.groups['dns-write'] = {**api.groups['dns-write'], 'name': 'DNS Edit'}
     session = cloudflare.Session.authorize(_seed(api))
 
@@ -327,7 +327,7 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi) -> None:
 def test_a_zone_without_an_account_is_refused_naming_the_entry() -> None:
     answer = [
         {'id': 'zone-1', 'name': 'example.test', 'account': {'id': ACCOUNT_ID}},
-        {'id': 'zone-2', 'name': 'other.test', 'account': {'name': 'estate'}},
+        {'id': 'zone-2', 'name': 'other.test', 'account': {'name': 'installation'}},
     ]
 
     # Which call, which row, which field: the account id reaches a stack's
@@ -361,7 +361,7 @@ def test_a_permission_group_without_a_name_is_skipped_rather_than_refusing_the_t
 
 
 def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi) -> None:
-    _ = _estate(api)
+    _ = _installation(api)
     # The catalogue is the whole platform's, and `scopes` is optional on it.
     # An entry for a product this repository never asks about is in no zone
     # catalogue, which is a fact about that entry rather than a broken answer.

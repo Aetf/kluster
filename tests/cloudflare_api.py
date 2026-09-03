@@ -101,7 +101,7 @@ class FakeApi:
 
     def add_zone(self, name: str, account_id: str = ACCOUNT_ID) -> str:
         zone_id = f'zone-{name.replace(".", "-")}'
-        self.zones[name] = {'id': zone_id, 'name': name, 'account': {'id': account_id, 'name': 'estate'}}
+        self.zones[name] = {'id': zone_id, 'name': name, 'account': {'id': account_id, 'name': 'installation'}}
         return zone_id
 
     def _carried(self, token: dict[str, Any]) -> set[str]:

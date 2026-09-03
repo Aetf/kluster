@@ -41,7 +41,7 @@ class Controller(Recorder):
 
 
 def pin(service: conventions.gateway.ContainerService) -> container.Rootfs:
-    return container.Rootfs(repository=f'registry.invalid/estate/{service.artifact}', tag='7', digest=DIGEST)
+    return container.Rootfs(repository=f'registry.invalid/installation/{service.artifact}', tag='7', digest=DIGEST)
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)

@@ -46,7 +46,7 @@ ADDRESSES = {
 
 
 def pin(service: str) -> container.Rootfs:
-    return container.Rootfs(repository=f'registry.invalid/estate/{service}', tag=TAG, digest=DIGEST)
+    return container.Rootfs(repository=f'registry.invalid/installation/{service}', tag=TAG, digest=DIGEST)
 
 
 def caddy(

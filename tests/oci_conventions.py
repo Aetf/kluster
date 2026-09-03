@@ -2,8 +2,9 @@
 
 The tenancy is one frozen structure, so a test that wants part of it different —
 a compartment named but not yet created, a compartment recorded against an OCID
-the tenancy does not have, an account that is not this estate's — replaces the
-whole structure for the length of the test rather than reaching into it.
+the tenancy does not have, an account that is not this installation's —
+replaces the whole structure for the length of the test rather than reaching
+into it.
 """
 
 from __future__ import annotations

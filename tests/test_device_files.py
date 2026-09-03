@@ -82,7 +82,7 @@ DIRECTORY_HOOK = 'systemctl daemon-reload'
 #: directory is an entry whose contents nothing reads.
 DIRECTORY_ENTRY = b'a directory, as far as `stat` is concerned'
 
-ROOTFS_REPOSITORY = 'registry.invalid/estate/adguard'
+ROOTFS_REPOSITORY = 'registry.invalid/installation/adguard'
 #: Deliberately unlike everything else here, so that a test asserting the pull
 #: does not name the tag can tell the difference.
 ROOTFS_TAG = 'v7.2.1'
@@ -1253,7 +1253,7 @@ def test_a_relative_tree_is_refused_before_anything_is_pushed() -> None:
 
 @pytest.mark.parametrize(
     'value',
-    ['alpine', 'library/alpine', 'estate/adguard'],
+    ['alpine', 'library/alpine', 'installation/adguard'],
     ids=['bare name', 'namespaced name', 'two components, no host'],
 )
 def test_a_repository_that_does_not_name_its_registry_is_refused(value: str) -> None:
@@ -1266,7 +1266,7 @@ def test_a_repository_that_does_not_name_its_registry_is_refused(value: str) -> 
 
 
 def test_a_repository_on_a_registry_with_a_port_is_accepted() -> None:
-    result = artifact_provider().check({}, artifact_props(repository='registry.invalid:5000/estate/adguard'))
+    result = artifact_provider().check({}, artifact_props(repository='registry.invalid:5000/installation/adguard'))
 
     assert result.failures == []
 

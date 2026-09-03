@@ -101,7 +101,7 @@ def test_the_cluster_anchor_is_dual_stack(stack: AppliedPhysical) -> None:
 
     An A-only anchor would publish an IPv4-only front door: every app record
     is a CNAME to this name, so the families it carries are the families the
-    whole estate is reachable on.
+    whole installation is reachable on.
     """
     anchor = records_of(stack, conventions.ZONE_PRIMARY)[
         f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_CLUSTER}-aaaa'

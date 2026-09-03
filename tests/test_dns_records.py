@@ -85,8 +85,8 @@ def test_the_retired_members_are_published_by_nobody() -> None:
     """Leaving the roster is what retires a record; nothing else does.
 
     Three members were dropped when the census was imported and one more when
-    the estate was reconciled against Central, all for the same reason: the
-    overlay no longer knows them.
+    the installation was reconciled against Central, all for the same reason:
+    the overlay no longer knows them.
     """
     members = {entry.name for entry in conventions.overlay.ROSTER}
 
