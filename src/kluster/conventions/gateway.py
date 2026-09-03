@@ -66,14 +66,25 @@ DATA_ROOT = '/data'
 ON_BOOT_D = f'{DATA_ROOT}/on_boot.d'
 CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 
-#: AdGuard Home's administration and API port. Three declarations meet on it:
-#: the caddy vhost that proxies each instance's interface, the initial state
-#: that tells the instance where to listen, and the overlay flow rule that
+#: The port a resolver's interface and API answer on. Every declaration naming
+#: that interface meets here: the caddy vhost that proxies each instance's
+#: interface, the three legacy names the census below transcribes, the initial
+#: state that tells an instance where to listen, and the overlay flow rule that
 #: admits a continuous-integration member to exactly that port so the `dns`
 #: stack can write its rewrites. It is a convention rather than a constant each
-#: of them keeps, because the three are free to disagree and the failure is a
+#: of them keeps, because they are free to disagree and the failure is a
 #: resolver that answers nothing anyone asked it.
-ADGUARD_API_PORT = 3000
+#:
+#: **The value is the appliance's, and the declaration follows it.** Both
+#: instances bind their interface to 80. The cutover carries each instance's
+#: live configuration into its machine directory whole, and the initial state
+#: declared here is installed only into a state directory that has never held
+#: one — so an instance that already has a configuration never reads it, and no
+#: other value could ever have become true of a running instance.
+#:
+#: A resolver machine therefore serves two ports, this one and DNS on 53, and
+#: nothing else inside it may claim 80.
+ADGUARD_API_PORT = 80
 
 
 @dataclass(frozen=True)
@@ -258,14 +269,6 @@ ZONE_LEGACY = f'lan.{ZONE_SHORT}'
 #: rows can disagree about it.
 LEGACY_UPSTREAM_HOST = 'aetf-arch-homelab.home.arpa'
 
-#: The port the resolvers' interfaces answer the legacy names on, which is not
-#: `ADGUARD_API_PORT`. The cutover carries each instance's live configuration
-#: into its machine directory, and that configuration binds the interface to
-#: port 80; the API port is what an instance that started with no state would
-#: bind. The three rows below name the instances the device is running, so they
-#: move to the API port when those instances do.
-LEGACY_RESOLVER_PORT = 80
-
 
 class RetirementWave(Enum):
     """When a legacy vhost goes, named as `cluster/migration.md` §2 numbers the waves.
@@ -338,18 +341,18 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
     # at alice, which is the pair's sync origin.
     LegacyVhost(
         label='dns',
-        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=LEGACY_RESOLVER_PORT),
+        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=ADGUARD_API_PORT),
         wave=RetirementWave.B,
         bare_name=True,
     ),
     LegacyVhost(
         label='dns-alice',
-        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=LEGACY_RESOLVER_PORT),
+        upstream=PlainUpstream(host=str(ADGUARD_ALICE.address), port=ADGUARD_API_PORT),
         wave=RetirementWave.B,
     ),
     LegacyVhost(
         label='dns-bob',
-        upstream=PlainUpstream(host=str(ADGUARD_BOB.address), port=LEGACY_RESOLVER_PORT),
+        upstream=PlainUpstream(host=str(ADGUARD_BOB.address), port=ADGUARD_API_PORT),
         wave=RetirementWave.B,
     ),
     # The controller console, which `VHOST_CONTROLLER` also serves. It keeps the
