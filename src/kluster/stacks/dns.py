@@ -123,11 +123,11 @@ def _anchors(physical: pulumi.StackReference) -> Sequence[Record]:
     The state backend deliberately has no anchor: its clients pin its IP, and
     its hot path must not depend on this stack.
 
-    These are also the only anchors in the estate that are not literals, and
-    nothing here awaits them. An address the `physical` stack has not
-    published yet travels into the record as an unresolved output rather than
-    raising, so this program declares the same records whether or not
-    `physical` has been applied — which is the state it is in today.
+    These are also the only anchors that are not literals, and nothing here
+    awaits them. An address the `physical` stack has not published yet
+    travels into the record as an unresolved output rather than raising, so
+    this program declares the same records whether or not `physical` has been
+    applied — which is the state it is in today.
     """
     return (
         a(

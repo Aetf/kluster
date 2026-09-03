@@ -29,8 +29,9 @@ from __future__ import annotations
 import pulumi
 import pulumi_github as github
 
-#: The account both repositories live under. An installation fact, like the
-#: names in `conventions`: this stack is not parameterized for another owner.
+#: The account both repositories live under. A fact of this installation,
+#: like the names in `conventions`: this stack is not parameterized for
+#: another owner.
 OWNER = 'Aetf'
 
 DEPLOYMENT_REPO = 'kluster'
