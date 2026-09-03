@@ -1,8 +1,18 @@
 # RFC 003: The `dns` and `github` Stacks Under the Style Rules
 
-*   **Status:** Proposed, 2026-08-29. Nothing below is built; the slices of §18
+*   **Status:** Proposed, 2026-08-29. Nothing below is built; the slices of §19
     are cut from this text once the operator approves it.
 *   **Created:** 2026-08-29
+*   **Updated:** 2026-09-03, revised under review. §4 inverts the record
+    tables: the unit is a block of records naming the zone set it appears in,
+    and the per-zone view the provider takes is derived. §5 is new — nothing
+    mirrors, so the fan-out set retires, the copies it produced are dropped,
+    and a public record is published only in a zone that answers for the name.
+    §6 gains the field that keeps an application's own records in its census
+    row, and the seam test that compares record keys. §1 and §19 say that the
+    `dns` stack's state is imported rather than applied and that the retiring
+    DNSControl program is authoritative until cutover. §11 records the settled
+    vocabulary, §20 is new, and §§6–19 are renumbered from §§5–18.
 *   **Authority:** the style rules (`docs/style/`) and the design documents are
     what this document obeys. Where they are silent, a rule proposed here is
     marked **new rule**.
@@ -11,14 +21,17 @@
     precedents are cited at each use rather than re-argued, and its
     measurements are cited rather than re-run.
 *   **In scope:** the internal organization of the two stacks rfc-002 moved
-    into the new tree and otherwise left alone — the `dns` record censuses, the
-    route model, the AdGuard rewrite provider, the forge's declarations, both
-    stack programs' configuration reading and shape, and the vocabulary of
-    both.
-*   **Out of scope:** which names each zone carries — no record is added,
-    dropped or repointed here; the `apps` stack's route helpers (dns.md §5),
-    of which this document fixes only the census they consume; the shared test
-    machinery; and the `k8s-base` stack, which is unwritten.
+    into the new tree and otherwise left alone — the `dns` record censuses and
+    the shape they are written in, what each zone is for and which zones a
+    record is published in, the route model, the AdGuard rewrite provider, the
+    forge's declarations, both stack programs' configuration reading and shape,
+    and the vocabulary of both.
+*   **Out of scope:** the records this document keeps — nothing is added and
+    nothing is repointed, and the rows it drops are enumerated in §5.3; the
+    `apps` stack's route helpers (dns.md §5), of which this document fixes only
+    the census they consume; whether the redirect zones' undeclared redirect is
+    adopted or deleted (§5.4); the shared test machinery; and the `k8s-base`
+    stack, which is unwritten.
 
 --------------------------------------------------------------------------------
 
@@ -33,39 +46,57 @@ census rules put it, a dynamic provider carrying its credential as a resource
 input, a stack program that declares every resource itself, and one word this
 repository has retired everywhere else.
 
+It also leaves one thing that is not a matter of style. The `dns` tables are
+written the way Cloudflare's API takes them, one entry per zone, so a set of
+records that four zones share is a tuple four entries splice in and two of the
+six zones are not in the dict literal at all. Nobody can answer "what does this
+zone carry" without executing the code, and nobody can answer "where does this
+block appear" without reading every entry (§4).
+
 **One document for two stacks**, because the two halves apply the same handful
 of rules and the second half is small: the `github` stack is one program
 declaring two repositories' worth of settings against one account. Splitting it
-into a document of its own would mean restating §3's census rule, §12's
-provider rule and §18's sequencing to say four things with them. What the two halves do not share is
-sequencing, so §18 keeps them apart there.
+into a document of its own would mean restating §3's census rule, §13's
+provider rule and §19's sequencing to say four things with them. What the two
+halves do not share is sequencing, so §19 keeps them apart there.
 
-**One difference from rfc-002 runs through everything below.** rfc-002 could
-rename freely because the `physical` stack had no state. **Both stacks here
-have one.** `dns` holds the zones, their DNSSEC state and the records pushed on
-2026-08-26; `github` holds what was applied on 2026-08-25 (github.md §2). A
-logical name or a parent that moves in either stack is a replacement of a live
-resource, and the zones and both repositories carry `protect`, so such a
-replacement is refused rather than performed — the same trap github.md §3.1
-records for an unparented import.
+**Both stacks here have state, and the stack rfc-002 rebuilt had none.** `dns`
+holds the six zones, their DNSSEC settings and their records; `github` holds
+what was applied on 2026-08-25 (github.md §2). A logical name or a parent that
+moves in either stack is a replacement of a live resource, and the zones and
+both repositories carry `protect`, so such a replacement is refused rather than
+performed — the same trap github.md §3.1 records for an unparented import.
 
-That makes "does this move a live URN" a question every slice below has to
-answer rather than a property either stack grants for free:
+**The `dns` stack's state was imported, not applied, and it is not yet the
+source of truth.** At Cloudflare's authoritative servers the primary zone
+answers a set of CAA values the census does not declare, the other public zones
+answer none, the cluster anchor does not resolve, and `unlimitedcodeworks.xyz`
+carries neither the overlay host block nor the copy of the legacy VPS anchor
+that the declaration gives it. The retiring DNSControl program
+([Aetf/dns](https://github.com/Aetf/dns)) still owns these zones. So this
+stack's first `up` is not merely unrun, it is **not to be run** while that
+program is authoritative, or the two write over each other. Two things follow,
+and they run through §19: the first `up` is a cutover step and no slice's
+done-condition, and the imported state is disposable — if it is in the way, the
+zones are deleted from state and imported again.
+
+That still leaves "does this move a live URN" a question every slice below has
+to answer rather than a property either stack grants for free:
 
 *   **The `dns` renames do not move one, by construction.** A resource's URN is
     its type, its parent and its logical name, and none of the three moves.
     `ManagedZone` stays in `zone.py` under its own name, so the component's
-    type token is untouched, and the module renames of §10 — `zones.py`,
+    type token is untouched, and the module renames of §11 — `zones.py`,
     `model.py` and `adguard.py` — carry no resource class between them. The
     zone and record logical names are built from the zone name and the record's
     state key, neither of which changes, and the published `zt` label stays on
-    the wire (§10). The rewrites are the one place a logical name changes
-    (§7.3), and there is no rewrite in state to move: the route census is
+    the wire (§11). The rewrites are the one place a logical name changes
+    (§8.3), and there is no rewrite in state to move: the route census is
     empty. **Still a done-condition, not an assumption**: each `dns` slice is
-    finished when its preview shows no replacement and no delete, and any
-    rename found to move a live URN either ships an `aliases` option or is
-    dropped.
-*   **The `github` component does move URNs** (§13), because introducing a
+    finished when its preview shows no replacement and no delete it did not
+    intend, and any rename found to move a live URN either ships an `aliases`
+    option or is dropped.
+*   **The `github` component does move URNs** (§14), because introducing a
     parent changes every child's. That slice ships aliases, and its
     done-condition is the same preview.
 
@@ -78,13 +109,13 @@ lands in these two stacks.
 
 | Precedent | Applied here |
 | --- | --- |
-| rfc-002 §8.1 — every provider explicit, credential read at the line that builds it | the forge provider, which is ambient today (§12); the Cloudflare provider's namespace (§8) |
-| rfc-002 §7.4 — a dynamic provider carries no connection state | the AdGuard rewrite provider (§7) |
-| rfc-002 §5.3 — a census is a table; a declaration is what a component takes | the route census (§5) and the rewrites (§6) |
-| rfc-002 §10.1 — related constants are one structure | the forge census (§11) |
-| rfc-002 §10.3 — account facts are conventions, account secrets are configuration | the Cloudflare account (§8) |
-| rfc-002 §12 — one shape per role, no `declare_*` | `declare_rewrites` (§6), the `github` program (§13) |
-| rfc-002 §3 — one term per concept, descriptive over metaphorical | the vocabulary of §10 |
+| rfc-002 §8.1 — every provider explicit, credential read at the line that builds it | the forge provider, which is ambient today (§13); the Cloudflare provider's namespace (§9) |
+| rfc-002 §7.4 — a dynamic provider carries no connection state | the AdGuard rewrite provider (§8) |
+| rfc-002 §5.3 — a census is a table; a declaration is what a component takes | the record blocks (§4), the route census (§6) and the rewrites (§7) |
+| rfc-002 §10.1 — related constants are one structure | the forge census (§12) |
+| rfc-002 §10.3 — account facts are conventions, account secrets are configuration | the Cloudflare account (§9) |
+| rfc-002 §12 — one shape per role, no `declare_*` | `declare_rewrites` (§7), the `github` program (§14) |
+| rfc-002 §3 — one term per concept, descriptive over metaphorical | the vocabulary of §11, and the zone sets of §5.2 |
 
 --------------------------------------------------------------------------------
 
@@ -118,18 +149,23 @@ The extension is the word *program*. `conventions` is the only home a stack
 and a script can share: a script may import `conventions` and `lib` and
 nothing else (AGENTS.md's import contract), so a table both a stack program
 and the credentials command must agree on has exactly one legal home, and
-today the forge census instead has two copies held equal by a test (§11).
+today the forge census instead has two copies held equal by a test (§12).
+
+**What decides is how many programs must agree, not which program derives from
+the table.** That distinction is the one this rule is easiest to get wrong on,
+and §6.4 is where it bites: a record only the `dns` stack turns into a resource
+still belongs in the shared census if both stacks have to know it is published.
 
 Applied to every table in these two stacks:
 
 | Table | Decided by | Home |
 | --- | --- | --- |
-| the base records, per zone | `dns` alone | `components/dns/base.py` (§4) |
-| the app records still on the VPS | `dns` alone | `components/dns/legacy.py` |
-| the CAA issuer sets | `dns` alone | `components/dns/base.py` |
-| the application routes | `apps` and `dns` | `conventions/routes.py` (§5) |
-| the AdGuard endpoints | four declarations | `conventions/gateway.py` (§7.3) |
-| repositories and Environments | the `github` stack and the credentials command | `conventions/forge.py` (§11) |
+| the base record blocks | `dns` alone | `components/dns/base.py` (§4) |
+| the app records still on the VPS | `dns` alone | `components/dns/legacy.py` (§4.5) |
+| the CAA issuer sets | `dns` alone | `components/dns/base.py` (§4.4) |
+| the application routes | `apps` and `dns` | `conventions/routes.py` (§6) |
+| the AdGuard endpoints | four declarations | `conventions/gateway.py` (§8.3) |
+| repositories and Environments | the `github` stack and the credentials command | `conventions/forge.py` (§12) |
 
 So the record tables stay where they are, and the two tables a second program
 reads move. The record tables are the interesting half of that verdict, and §4
@@ -141,14 +177,14 @@ gives the argument in full rather than leaving it to the table above.
 
 ## 4. The record tables
 
-### 4.1 They stay, and why that is not an exemption
+### 4.1 They stay in the `dns` area
 
-`ESTATE` and `LEGACY` are censuses by any reading: one row per record, read top
-to bottom, asserted on by tests. They stay in `components/dns/` because no
-second program decides anything from them. `apps` publishes CNAMEs to an
-anchor whose *name* is a convention (`conventions.ANCHOR_CLUSTER`) and never
-reads a row of these tables; `physical` reads neither. What crosses is the
-zone list, the zone sets and the anchor labels — and those are already in
+`BASE_RECORDS` and `LEGACY` are censuses by any reading: one row per record,
+read top to bottom, asserted on by tests. They stay in `components/dns/`
+because no second program decides anything from them. `apps` publishes CNAMEs
+to an anchor whose *name* is a convention (`conventions.ANCHOR_CLUSTER`) and
+never reads a row of these tables; `physical` reads neither. What crosses is
+the zone list, the zone sets and the anchor labels — and those are already in
 `conventions.dns`, which is exactly the split this document ratifies.
 
 The content is the other half of the argument. A DKIM public key, a site
@@ -156,57 +192,264 @@ verification token and a mail exchanger are not decisions this repository
 makes; they are facts about services outside it, transcribed. `conventions` is
 where a value *this program must agree with itself about* lives, and inflating
 it with 300 lines that one program reads once would make the layer every
-script imports the home of the estate's mail configuration.
+script imports the home of this installation's mail configuration.
 
 **What the rule does require is already true**: `ManagedZone` receives the
 records it declares and holds none of its own, and the stack program is what
 hands them over.
 
-### 4.2 The composition leaves the stack program
+### 4.2 The unit is a block, and the per-zone view is derived
 
-What a zone carries is assembled in the program today, in a list comprehension
-with two conditional arms: the base records, the legacy records, the overlay
-block *if the zone is a full mirror*, and the anchors *if the zone is the
-primary*. Those two conditions are the mirror rule and the anchor rule — design
-decisions from dns.md §2, sitting in the wiring. The tests reconstruct the same
-composition to assert on it, which is the usual sign that it is stated in the
-wrong place.
+Where the tables live is settled by §3. Which way round they are written is
+the defect, and it is what makes a zone unreadable.
 
-One function in `base.py` owns it:
+Today `zones.py` is a mapping from zone name to what that zone carries. A set
+of records four zones share is a tuple those four entries splice in; two of the
+six zones are absent from the dict literal entirely and arrive through a loop;
+the CAA rows are appended by a comprehension outside every per-zone function;
+and the same pair of zones is spelled a second time as a literal in
+`legacy.py`. On top of that the stack program assembles the final answer in a
+comprehension with two conditional arms — the overlay block *if the zone is a
+mirror*, the anchors *if the zone is the primary* — which are design decisions
+from dns.md §2 sitting in the wiring, and which the tests rebuild beside it in
+order to assert on them.
+
+**The unit becomes the block: records that appear together, in every zone of
+one set.**
 
 ```python
-def zone_records(zone: str, *, anchors: Sequence[Record]) -> tuple[Record, ...]: ...
+@dataclass(frozen=True)
+class Block:
+    """Records that appear together, in every zone of one set."""
+
+    zones: tuple[str, ...]
+    records: tuple[Record, ...]
+
+
+def zone_records(zone: str, blocks: Iterable[Block]) -> tuple[Record, ...]:
+    """What one zone carries: the provider's per-zone view, derived."""
+    return tuple(
+        record for block in blocks if zone in block.zones for record in block.records
+    )
 ```
 
-It returns everything the zone carries: the base records, the legacy records,
-the overlay block for a full mirror, and the anchors for the primary. The
-stack program builds the anchors — they are the machine facts that reach across
-the StackReference, and only they — and passes them in. The mirror rule and the
-anchor rule are then written once, and the census tests assert on the same
-function the program calls instead of rebuilding it beside it.
+The zone set belongs to the block rather than to the record, which is the
+illegal-states rule applied to data: a mail block in which one exchanger had
+wandered into a different zone set is a state a per-record field would make
+writable, and a block header does not.
 
-`base.py` imports `legacy.py` for this, which fixes the import direction
-between them as well: the legacy VPS's address and its anchor name move into
-`legacy.py`, the module that empties at Wave F, and `base.py` reads them from
-there. Today the direction is the other way round and the address of the thing
-being retired lives in the module that outlives it.
+`base.py` is then a table read top to bottom, one row per block, with the zone
+set in the first column:
 
-### 4.3 The apex is the exception the anchor rule needs
+```python
+BASE_RECORDS: tuple[Block, ...] = (
+    # The zones that answer for a website: the apex and www, served by a web
+    # server rather than by an app.
+    Block((*conventions.WEB_ZONES, *conventions.REDIRECT_ZONES), (
+        a('@', legacy.IP_ARCHVPS, proxied=True, comment='web origin; repoints to kluster.hosts at migration'),
+        cname('www', legacy.ANCHOR_ARCHVPS, proxied=True),
+    )),
+    # The overlay host block, one record per roster member.
+    Block(conventions.PRIMARY_ONLY, overlay_records()),
+    # The mail zones: the exchangers, SPF, the in-cluster DKIM key and DMARC,
+    # identical in both.
+    Block(conventions.MAIL_ZONES, WORKSPACE_MAIL),
+    # What only the primary carries of its own: its Workspace DKIM key and its
+    # site verifications.
+    Block(conventions.PRIMARY_ONLY, (...)),
+    Block(('unlimitedcodeworks.xyz',), (...)),
+    # jiahui.id: a Google Site, mail forwarded by the registrar. Nothing of
+    # ours in it.
+    Block(('jiahui.id',), (...)),
+    # jiahui.love: everything is the apex; the labels alias it, so a repoint is
+    # one record.
+    Block(('jiahui.love',), (...)),
+    # CAA: per zone, by who issues for it. One block per issuer set.
+    *caa_blocks(ZONE_ISSUERS),
+)
+```
+
+**`ManagedZone` is untouched.** It still takes the records of one zone.
+Cloudflare's API is per zone, the component is generic, and a component that
+took the blocks and filtered them itself would be exactly the failure §3's rule
+names — receiving a table it then ignores most of. The inversion is resolved by
+`zone_records` in front of the component, not inside it.
+
+The stack program keeps its loop and loses both conditional arms:
+
+```python
+blocks = base.blocks(anchors=_anchor_addresses(physical))
+zones = {
+    zone: ManagedZone(zone, zone=zone, account_id=account,
+                      records=zone_records(zone, blocks), opts=on_cloudflare)
+    for zone in conventions.ALL_ZONES
+}
+```
+
+**No state key moves.** A record's URN is the zone plus `{zone}-{key}`, and the
+key comes from the record constructors: the inversion changes which Python
+structure a row sits in and nothing about the row. Registration order is not
+part of a URN, so the reordering costs nothing. Three places a builder could
+move a key without meaning to, which the slice's brief names: the site
+verification keys are positional, so each zone's tokens keep their order; the
+per-zone Workspace DKIM record keeps `key='dkim-google'`, because a tidier
+`dkim-google-ucw` would be a replacement; and the anchor constructors change
+file without changing their calls.
+
+`base.py` imports `legacy.py` for the web origin's address and the legacy
+anchor's name, which fixes the import direction between them as well: those two
+values move into `legacy.py`, the module that empties at Wave F, and `base.py`
+reads them from there. Today the direction is the other way round, and the
+address of the thing being retired lives in the module that outlives it.
+
+**New rule**, which is the census rule stated for the shape of a table rather
+than for its home:
+
+> A census is declared in the terms of this installation, not of the provider
+> it is pushed to. Where its natural statement is "these records, in these
+> zones", the unit is the block and the named zone set, and the per-member form
+> the provider takes is derived by one function.
+
+It is the third instance of the same principle in this repository, after the
+overlay roster — one entry per member, not one per network object — and
+`Exposure`, which says what an application's reachability *is* rather than
+which two resources it produces.
+
+### 4.3 The blocks, category by category
+
+The zone sets in the second column are §5.2's.
+
+| Block | Zone set | Form |
+| --- | --- | --- |
+| web origin | `WEB_ZONES` and `REDIRECT_ZONES` | block |
+| overlay host block | `PRIMARY_ONLY` | block, derived from the roster |
+| Workspace mail | `MAIL_ZONES` | block; the two zones are identical, which a per-zone parameter blurred |
+| Workspace DKIM key | one zone each | zone-specific: one key is issued per domain, so it is the one mail record that is per-zone by nature |
+| site verifications | one zone each | zone-specific, as singleton blocks |
+| the two family zones | one zone each | zone-specific |
+| CAA | by issuer set | zone-first, and stays so (§4.4) |
+| cluster anchors | `PRIMARY_ONLY` | block; the shape moves into `base.py` and the program supplies three addresses |
+| legacy VPS anchor | `PRIMARY_ONLY` | block, in `legacy.py` |
+| the names the VPS still serves | `PRIMARY_ONLY`, one block per application | block, in `legacy.py` (§4.5) |
+| the website co-host's own names | its own zone | block, in `legacy.py` |
+
+A singleton block — a zone set of one — is how a per-zone row is written in the
+same grammar rather than in a second one. The family zones are singletons for
+that reason and not because they are special: `jiahui.love` puts everything at
+the apex and aliases it with labels, so its `www` targets its own apex rather
+than the web origin's anchor, and it shares no block with anything.
+
+### 4.4 CAA stays zone-first
+
+A zone's CAA set says which certificate authorities may issue for any name
+under its apex, and who those are is decided per zone by what the zone is used
+for. It is the one table where "which zones" is the *answer* rather than the
+premise, so `ZONE_ISSUERS` stays a zone-keyed table and `caa_blocks` groups its
+rows by issuer set: the CAA row then reads like every other row of §4.3 while
+the decision stays where it is made. Inverting it would work today only because
+the five pinned zones agree, and a second issuer set would send the next
+builder straight back to a per-zone table. The cost is two grammars in one
+file, and it is the honest one.
+
+**It cannot be derived from the zone-set vocabulary either.** The sets of §5.2
+group zones by what serves them, and issuance does not follow that grouping —
+the family pair holds one zone that takes the edge's whole partner set beside
+one pinned to nothing at all. Nor can it be derived from the records: the edge
+issues for the zone rather than for a record, minting an apex and a wildcard
+for every zone it hosts, proxied or not; and the names the cluster and the
+gateway issue certificates for carry no records at all by design, because
+LAN-only names are rewrite-only precisely to keep them out of public DNS
+(dns.md §4). A union taken over the records would omit exactly the issuers
+whose renewal then fails silently.
+
+**A zone's set is what serves it, which gives one zone a second stage.** Both
+redirect zones (§5.2) keep the edge's set, because the redirect is served at
+the edge on the edge's own certificate. `ucw.phd` is also the zone the
+gateway's proxy holds `*.lan.ucw.phd` under (dns.md §4), and while the edge
+answers there that costs the zone no extra row: `letsencrypt.org` is a member
+of the edge's set, so one set authorizes both. If that zone's redirect is
+dropped and the zone emptied (§5.4), the gateway's need stands alone, and the
+set becomes `CLUSTER_ISSUERS` — `letsencrypt.org`, with `issuewild` the tag
+that matters, since the gateway asks for the wildcard alone and never the apex
+— for as long as the gateway's ACME scope names the zone, and none afterward.
+`peifeng.phd` has no second stage: nothing of ours issues there, so if its
+redirect goes it carries no CAA at all, by the same rule that leaves the Google
+Site's zone unpinned.
+
+**What keeps the table from going stale is not a test.** The pinned edge set is
+a copy of somebody else's list, and nothing in this repository can see that
+list; a test that fetched it would put a network call in the gate. What
+notices a partner authority this repository does not authorize is the edge
+itself, whose Universal SSL notification reports a validation or renewal
+failure before the certificate expires — the one guard here that is not a human
+remembering. Two invariants can be held offline and are worth a test: every
+zone with a proxied record carries the edge set, and every zone in the
+gateway's ACME scope authorizes `letsencrypt.org` for `issuewild`. The
+remainder — a third party moving certificate authority under a zone this
+repository does not serve — is a periodic read of Certificate Transparency per
+zone, which belongs in each milestone's review checkpoint beside the
+documentation audit, written as a procedure in dns.md.
+
+### 4.5 `legacy.py` is one block per application
+
+`legacy.py` holds the names the retiring VPS still serves, and every row in it
+is deleted when its application migrates and declares the same name against the
+cluster anchor (dns.md §6). Today it is three tuples keyed by which zones a row
+appears in, with the application named informally in a comment column. The unit
+of every remaining edit to the module is an application — migration.md's waves
+are enumerated by application — so the module is cut **one `Block` per
+application**, each deleted whole at that application's migration. The comment
+column becomes structure, and the module empties block by block through Wave F.
+
+A migration is then three files in one pull request:
+
+```diff
+ # components/dns/legacy.py
+-    # immich -- Wave C
+-    Block(conventions.PRIMARY_ONLY, (cname('photos', ANCHOR_ARCHVPS, comment='immich; unproxied for large uploads'),)),
+
+ # conventions/routes.py
++PHOTOS = Route('photos', exposure=Exposure.SPLIT, proxied=False)
+
+ # components/apps/immich.py
++        self.public_route(conventions.routes.PHOTOS)
+```
+
+**The set the old tuples were keyed by never exists.** The DNSControl program
+this replaces declared the primary zone once and copied its application names
+into two of the other zones with a loop; those copies are dropped rather than
+carried (§5.3), so there is no surviving set of zones the VPS published a name
+in, and every application block that remains is the primary's own. The website
+co-host's three names are its own and always were.
+
+**The cut names the rows no application owns**, which is what it is for: as
+rows in a sixteen-row tuple they were invisible, and as blocks with no
+application in the header they are obvious. Four of them — `login`, `k8s`,
+`test` and `files` — are no longer used and are deleted from the module. Each
+deletion unpublishes a name, so the slice states them as deletions in their own
+right rather than as tidying. `mon` is different: it is the monitoring
+dashboard, it is in use, and it keeps its block with its owner named in the
+comment. Where it lands after migration follows from a classification the
+monitoring design owes an answer to (§20), and the ordering is easy either way,
+because monitoring is rebuilt fresh in Wave B rather than migrated — the name's
+new home exists before its old one is deleted.
+
+### 4.6 The apex is the exception the anchor rule needs
 
 dns.md §2 states that IP literals exist only under the anchor namespace, and
-the census breaks it in two places. The web origin every full mirror carries is
-an apex `A`, and so is jiahui.love's; **a zone apex cannot be a CNAME**, so a
-name at the apex is either an address or nothing. And jiahui.id's apex and
-`www` both address a site served entirely outside this estate, which publishes
-no name of ours for them to alias.
+the census breaks it in two places. The web origin every website zone carries
+is an apex `A`, and so is `jiahui.love`'s; **a zone apex cannot be a CNAME**, so
+a name at the apex is either an address or nothing. And `jiahui.id`'s apex and
+`www` both address a site served entirely outside this installation, which
+publishes no name of ours for them to alias.
 
 Neither is an oversight and neither can be fixed, so the rule gains the two
 clauses it is missing: an address may sit outside the anchor namespace where
-the name cannot be an alias, and where there is no name of this estate's to
-alias. That lands in dns.md §2, and `base.py` says the same beside the
+the name cannot be an alias, and where there is no name of this installation's
+to alias. That lands in dns.md §2, and `base.py` says the same beside the
 literals. Nothing in the census changes.
 
-### 4.4 The duplicate-key refusal stays
+### 4.7 The duplicate-key refusal stays
 
 `ManagedZone` raises when two records in one zone share a state key, and a test
 holds the same invariant over the declared tables. rfc-002 §10.2 retired
@@ -218,13 +461,158 @@ on. The roster's validation was a function over one table this repository owns.
 This is a component's refusal about the argument it was handed, and the
 component is generic: it declares whatever records it is given, and it has no
 way to know its caller's table is under test. The test covers the census; the
-refusal covers the component. Neither makes the other redundant.
+refusal covers the component. Neither makes the other redundant. The inversion
+of §4.2 makes the refusal cover one case more, since two blocks naming
+overlapping zone sets can now collide where two entries of a per-zone mapping
+could not.
 
 --------------------------------------------------------------------------------
 
-## 5. The route census
+## 5. What each zone is for
 
-### 5.1 It moves to `conventions`
+### 5.1 Nothing mirrors
+
+The design this stack inherited treats four zones as mirrors of one another:
+they share a block of base records, and an application name fans out across the
+set by default. Measured against what the zones actually answer with, the
+premise does not hold.
+
+*   **`peifeng.phd` and `ucw.phd` serve nothing.** Every request in either zone
+    — the apex, `www`, and every application name — is answered by a Cloudflare
+    redirect rule that keeps the path and replaces the host with the primary's.
+    It fires on plain HTTP, and it fires for names nothing serves anywhere, so
+    the origin never sees a request for either zone. No certificate has ever
+    been issued at the origin for a name in either: the only certificates
+    naming those zones are the edge's own and the gateway's `*.lan.ucw.phd`.
+    Every application name published in the two zones is dead today, and if the
+    redirect rule were removed each would become an edge error rather than a
+    service. Neither zone is referenced anywhere outside this stack's own
+    declaration and its test fixtures.
+*   **`unlimitedcodeworks.xyz` answers for a website and nothing else.** Its
+    apex and `www` serve the same site, from the same instance, as the
+    primary's. It carries none of the application names, has never carried
+    them, and holds three names of its own.
+*   **The applications could not be mirrored even with DNS and certificates in
+    place.** Every forward-auth application shares one SSO cookie domain and
+    one portal URL; every OIDC application registers its redirect URIs against
+    a hostname; several hold an absolute origin of their own; and the matrix
+    server's own name is immutable once it has federated. A second hostname for
+    any of them is a login that loops or is refused. The names with no
+    structural objection to a second zone are the website's, and they are
+    already published in both zones that serve it.
+
+**So no zone is a mirror, and the fan-out set retires.** A route's zone set
+becomes what serves the application, and the default is the primary alone.
+
+This reverses the earlier ruling that `unlimitedcodeworks.xyz` would become a
+real mirror and gain application names as applications migrate. Under it every
+migration would have published a working name in the primary beside a broken
+one in the mirror — permanently, for every application, into a zone with no
+cookie domain of its own, no registered redirect URI and no application-side
+origin. The zone is a website co-host instead: its apex and `www`, its two game
+names, its own mail and its own site verifications, and no application names at
+all. Whether it is kept at all is a larger question than this document's, since
+it carries live mail (§20).
+
+**New rule**, for dns.md §2, replacing the bullet that says membership of the
+fan-out set means full mirror:
+
+> A public record is published in a zone only where a listener and a
+> certificate answer for the name. A route's zone set is what serves the
+> application, and the default is the primary; a name that resolves is a
+> promise the origin has to keep.
+
+The alternative was to declare the wider fan-out and defer the serving
+question. Deferring it does not defer the cost — it *is* the cost: an origin
+certificate per zone, a listener per zone, a separate login per zone because
+sessions are per cookie domain, a second registered redirect URI per OIDC
+application, and an absolute-origin decision for every application that stores
+one. All of it for names no configuration in any repository references, and
+until the work is done a mirror name is a link that resolves, presents a valid
+certificate, and then serves the wrong thing.
+
+### 5.2 The zone sets
+
+Every block and every route row is declared against the same words:
+
+| Name | Meaning |
+| --- | --- |
+| `PRIMARY_ONLY` | the primary alone: every route's default, both anchor blocks, the overlay block, and every application name the VPS still serves |
+| `WEB_ZONES` | the zones whose apex and `www` are served: the primary and the website co-host |
+| `REDIRECT_ZONES` | the two zones that answer only with a redirect: an apex, a `www`, a CAA set, nothing else |
+| `MAIL_ZONES` | the two Workspace domains; it lives beside the one block that names it |
+| `ZONE_FAMILY` | the two family zones — taxonomy only, so that `ALL_ZONES` reads; no block names it |
+| `ALL_ZONES` | every zone the stack declares, which is what the program loops over |
+
+The web origin block names `WEB_ZONES` and `REDIRECT_ZONES` together, because
+all four zones carry the identical apex and `www` today. The two sets are
+separate all the same, because they part company the moment the redirect zones'
+answer changes (§5.4) — and because one pair is served at the origin while the
+other is intercepted at the edge before the origin is consulted, which is the
+fact a reader of the table needs.
+
+Three names retire. `PUBLIC_ALL` retires as a fan-out set, since nothing
+legitimately fans out to four zones; `ZONE_MIRRORS` retires because a
+primary-excluding set is declared against by nothing; `ALIAS_ZONES` retires
+with the loop that was its only job, the one that kept two zones out of the
+dict literal. In prose "mirror", "full mirror" and "alias zone" go with them:
+zones differ by what serves them, and the sets say which. The trap the old
+vocabulary created — one zone in the fan-out set for base records and absent
+from it in application names, visible only by noticing which tuple a function
+handed it — stops existing rather than being documented.
+
+### 5.3 What is dropped, enumerated
+
+This is the one place this document changes what a zone carries, so the change
+is a list rather than a principle:
+
+*   **The overlay host block becomes `PRIMARY_ONLY`.** Its copies in the two
+    redirect zones are deleted, and the copy the declaration would create in
+    the website co-host is not created. Nothing anywhere references a copy —
+    every overlay name used in a configuration file names the primary's — and
+    private addresses in public DNS are published once instead of three times.
+*   **The copy of the legacy VPS anchor becomes `PRIMARY_ONLY`.** The copies in
+    the redirect zones are deleted and the one in the co-host is not created.
+    Nothing targets a copy: the legacy CNAMEs all name the primary's.
+*   **The application names in the two redirect zones are deleted** — sixteen
+    labels and the identity SRV that rides with them, in each zone. They are
+    dropped in one change rather than one at a time as their applications
+    migrate: what authorizes the deletion is the measurement in §5.1, which is
+    a single finding about both zones, and spreading it across the whole
+    migration would make each wave re-derive it. A migration afterward is one
+    delete and one create, in one zone.
+
+Nothing else is added, dropped or repointed by this document. Two of the three
+items above are also creates the first `up` would otherwise perform, so they
+land before it (§19).
+
+### 5.4 The redirect rules are undeclared, and their fate is not decided here
+
+The redirect rule that makes both redirect zones behave is declared nowhere —
+not in the retiring DNSControl program, not in the cluster's own program, and
+not here, which manages records and not rulesets. It was added when the domains
+were registered and nothing depends on it, so declaring it and dropping it are
+both acceptable and the choice is not this document's:
+
+*   **Declared** — one Cloudflare ruleset per redirect zone, imported into this
+    stack so that the first preview adopts what exists rather than creating a
+    second rule beside it. Its one benefit is that those zones' apex and `www`
+    can then address a documented placeholder instead of the legacy VPS, so
+    they reference the VPS anchor nowhere and Wave F's check clears for them
+    without waiting on the website's own migration.
+*   **Dropped** — the rule deleted, and the zones carry an apex, a `www` and a
+    CAA set against nothing, or nothing at all. That branch is what §4.4's
+    second stage is written for.
+
+Either way the zones' purpose is stated in dns.md, because the records alone do
+not carry it. The work is sequenced after the first `up`, being a new resource
+type rather than a record, and §20 keeps the question.
+
+--------------------------------------------------------------------------------
+
+## 6. The route census
+
+### 6.1 It moves to `conventions`
 
 `ROUTES` is the definition of a table two stacks decide from: `apps` builds
 HTTPRoutes and public records from a row, `dns` builds the split-horizon
@@ -240,9 +628,23 @@ DNS is one of the two things read out of it.
 
 `Rewrite` and the `rewrites()` function that derives one set from the other do
 **not** move. Only `dns` derives rewrites, so the derivation lives beside the
-component that declares from it (§6).
+component that declares from it (§7) — which is also where it goes: after the
+move `components/dns/routes.py` would hold no `Route`, so the remnant is
+absorbed into `rewrites.py` rather than left in a module named for what it no
+longer holds.
 
-### 5.2 The exposure model is ratified
+### 6.2 The zone set is what serves the application
+
+`Route.zones` defaults to `conventions.PRIMARY_ONLY` (§5.1). A row names any
+other zone only by saying so in the open, and there are two kinds of deviation:
+a name whose owner wants it in one particular other zone — the co-host's game
+names are the case today — and a rewrite-only LAN name, where the zone decides
+which wildcard certificate covers the name, so a LAN-only name fanned across
+four zones would buy four wildcards for a name no public resolver answers. What
+the LAN-only helper's default zone should be is the `apps` stack's question and
+not settled here (§20).
+
+### 6.3 The exposure model is ratified
 
 `Exposure` is one field carrying two facts — whether a public record is
 published, and which VIP answers on the LAN — and the obvious critique is that
@@ -260,7 +662,60 @@ helper only. If an application ever needs both, the answer is a fifth value and
 not a split into two flags — the state that must stay unwritable is unaffected
 by adding a value and is reintroduced by splitting the field.
 
-### 5.3 A rewrite's answer is an address
+### 6.4 An application's own records live in its route row
+
+A few applications publish more than a name. The matrix server publishes an
+identity SRV beside its CNAME, and a verification token could be next. Those
+records belong in the route row, in a field for what is published beside the
+name and derived by no helper:
+
+```python
+MATRIX = Route('matrix', proxied=False,
+               extras=(srv('_matrix-identity._tcp', priority=10, weight=0,
+                           port=443, target=SELF),))
+```
+
+**Not beside the component**, which is where the reasoning "`dns` derives
+nothing from an SRV, so no second program has a claim on it" would put them.
+That reads the census rule off the wrong noun: what decides where a census
+lives is how many programs must agree on it, not which program derives from it
+(§3). A record declared beside its component is a published record that lives
+in neither the census nor the `dns` tables and can be found only by reading the
+components, and "what is in this zone" would gain a fourth place to look. With the field in
+the row it stays at three files: `base.py`, `legacy.py` and the route census.
+
+*   **The component declares it through the same one line every application
+    writes**, `public_route(conventions.routes.MATRIX)`. The renderer emits the
+    CNAME and the extra records together, with `SELF` resolving to the row's
+    own host, so the name is spelled once.
+*   **The component still owns what the application serves.** The `.well-known`
+    documents the SRV pairs with are served, not published; they stay with the
+    application. The census carries what DNS publishes; the component carries
+    what the application answers with. That is the line between them.
+*   **Not a literal in the `dns` tables either.** The SRV's target is the
+    application's own hostname, so the row's host would be spelled a second
+    time in another stack, and at migration the application's DNS would become
+    a delete here, a move there and a row — co-location broken exactly where
+    dns.md §6 promises it holds.
+*   **The field is empty on every row but one**, and that row is one a reader
+    has to open anyway to learn that the application publishes more than its
+    name. What it costs is that a port and a service name sit in the census
+    rather than in the component, one hop away — the same hop the CNAME already
+    costs.
+
+**The row states the record and the renderer builds it.** `Record` is the `dns`
+area's model of what the provider takes, and `conventions` sits below
+`components` in the layering contract, so a route row cannot hold one. That is
+not only the contract talking: it is §4.2's new rule applied to itself — the
+row says what is published, in this installation's terms, and the renderer in
+`apps` turns it into the provider's shape. Moving `Record` down into
+`conventions` was the alternative, and it loses twice: it would put a
+provider-shaped model in the layer every script imports, and it would carry
+down the one concession that model makes to Pulumi, the field that admits an
+unresolved output, so that the cluster anchors can be declared — which is
+what keeps the primary zone from being readable as data.
+
+### 6.5 A rewrite's answer is an address
 
 `Rewrite.answer` is a string today, and the provider recovers the address
 family from it by looking for a colon. The addresses it is built from are typed
@@ -269,7 +724,7 @@ at the boundary and guessed back afterward. `answer` becomes
 `IPv4Address | IPv6Address`, with the family a property of the row, and the
 string spelling happens where the resource input is built.
 
-### 5.4 The census has invariants, and they are a test
+### 6.6 The census has invariants, and they are a test
 
 The roster's precedent (rfc-002 §10.2) applies unchanged: a static table's
 invariants are checked once, in a test, because nothing can break them at
@@ -282,7 +737,7 @@ runtime that the test did not already catch. For routes:
 The first is the one that matters. A typo in a zone name today produces
 rewrites for a domain nobody serves and no Cloudflare record at all, silently.
 
-### 5.5 What `apps` inherits
+### 6.7 What `apps` inherits, and the seam between the stacks
 
 The census being static is what lets an application's route be a *reference*
 rather than a repetition, which is rfc-002 §5.3's rule for the gateway's
@@ -295,9 +750,35 @@ publishes a name `dns` never rewrites then cannot be written.
 That is a contract this document fixes and the `apps` stack implements; dns.md
 §5 is where it lands, and no slice here builds it.
 
+**Both stacks write into the same zones, and the split is by resource.** Three
+facts govern the seam:
+
+1.  `dns` exports the zone identifiers and `apps` reads them across the
+    StackReference — machine facts, the one crossing dns.md §1 allows. Nothing
+    else crosses but the census row itself.
+2.  **Cloudflare refuses a second CNAME at a name**, so a migrated name cannot
+    be created by `apps` while `dns` still holds the legacy row. The order is a
+    delete in `dns` and then a create in `apps`, which is the pipeline's order
+    when both land in one merge. **The name is dark between the two applies** —
+    immediately for a proxied name, up to the cached TTL for a name the proxy
+    does not front.
+    That gap is the cost of co-location; it fits inside the per-application
+    cutover window the waves already have, and the alternative with no gap is
+    state surgery per record per zone.
+3.  **A test holds the halves apart.** For every zone, the record keys the
+    legacy blocks publish there and the keys every route row renders there are
+    disjoint. It compares record keys rather than hostnames because a row
+    publishes more than its name (§6.4): a migration that adds the row and
+    forgets to delete the legacy SRV is caught by the key comparison and would
+    not have been caught by the host. A record sitting beside a component could
+    not have been compared at all.
+
+That test is what catches a migration pull request that added the row and
+forgot to delete the block, before a preview shows the collision.
+
 --------------------------------------------------------------------------------
 
-## 6. The rewrites are a component per instance
+## 7. The rewrites are a component per instance
 
 `declare_rewrites` is the last `declare_*` function in the repository, and it
 is exactly what rfc-002 §12 retires: a module function that builds resources
@@ -320,7 +801,7 @@ cross product inside, it is a property a reader has to derive from the resource
 names.
 
 The component takes the census entry of the resolver it writes to, not a URL —
-which is what makes §7.3's derivation the only spelling of the endpoint — and
+which is what makes §8.3's derivation the only spelling of the endpoint — and
 it takes the rewrites as a parameter, because deriving them from `ROUTES`
 inside would be a component reaching for a census instead of receiving one.
 
@@ -328,13 +809,13 @@ The stack program builds one per entry of `conventions.gateway.RESOLVERS`,
 unconditionally. With an empty route census the component declares nothing,
 which is the same outcome as today's `if entries:` and one branch fewer in the
 wiring — and, because no dynamic resource exists, the provider process never
-starts, and the credential is never read (§7.3).
+starts, and the credential is never read (§8.3).
 
 --------------------------------------------------------------------------------
 
-## 7. The AdGuard rewrite provider
+## 8. The AdGuard rewrite provider
 
-### 7.1 What it is today
+### 8.1 What it is today
 
 `providers/adguard_rewrites/` is the third dynamic provider, and the one
 rfc-002 §7.4 named and did not fix: *"its endpoint, username and password are
@@ -361,7 +842,7 @@ untidiness.
     census is empty, which is exactly why the name is fixed before the first
     row lands.
 
-### 7.2 The shape
+### 8.2 The shape
 
 The provider takes the shape slice 9 gave the device-file provider, which is
 the shape framework/pulumi.md §5.2 now documents for the repository. The
@@ -391,7 +872,7 @@ did not already settle.
     the instance could notice is a replacement — there is no update endpoint —
     so an update can only ever mean that a stamp moved. It returns the checked
     inputs as the new output bag (E9) and makes no request. This is the
-    positive form of the defect in §7.1: the method exists, and what it does is
+    positive form of the defect in §8.1: the method exists, and what it does is
     exactly nothing to the instance.
 
 One correction rides along inside this module and goes no further. Its own
@@ -399,7 +880,7 @@ documentation names the accepted residual behind the credential as L11; the
 audit's list ends at L10, and the finding is M6, which is how dns.md and ci.md
 already spell it. Only this module's line is this document's to fix.
 
-### 7.3 The endpoint, the identity, and the credential
+### 8.3 The endpoint, the identity, and the credential
 
 **The endpoint is a declared input, not provider state.** This is where
 rfc-002's own construction moved (its status header records it): a provider
@@ -447,7 +928,7 @@ nothing.
 > target a delete and a create of everything declared against it, and a
 > logical name is half of the URN that state is keyed by.
 
-### 7.4 `diff` does not read the instance, and that is deliberate
+### 8.4 `diff` does not read the instance, and that is deliberate
 
 The device-file provider opens a session in `diff`, so an edit made on the box
 appears in a preview without a refresh. This provider does not, and the
@@ -472,7 +953,7 @@ asymmetry is a decision rather than an omission:
 If the drift window ever proves too wide, the change is a `diff` that dials —
 recorded here so that re-opening it is a decision rather than a surprise.
 
-### 7.5 What a live drill must show
+### 8.5 What a live drill must show
 
 The change is provider-facing, so the slice ships a drill transcript
 (framework/testing.md §5) or an explicit unproven-live note. What the first
@@ -487,13 +968,13 @@ live run must confirm, none of it re-establishing a mechanism E1–E10 settled:
 
 --------------------------------------------------------------------------------
 
-## 8. What the `dns` stack reads
+## 9. What the `dns` stack reads
 
 | Key | After |
 | --- | --- |
 | `cloudflare:apiToken` | `kluster-py:cloudflareApiToken`, read at the provider line |
 | `cloudflareAccountId` | `conventions.providers.CLOUDFLARE_ACCOUNT` |
-| `adguardEndpoints` | retires, derived (§7.3) |
+| `adguardEndpoints` | retires, derived (§8.3) |
 | `adguardUsername` | read by the rewrite provider in `configure`, by nothing else |
 | `adguardPassword` | the same |
 
@@ -517,6 +998,13 @@ credential handled. `pulumi:disable-default-providers` keeps listing
 `cloudflare` and never becomes `*`: the dynamic rewrites depend on the
 `pulumi-python` default provider (rfc-002 §8.1).
 
+**The key's writer moves with the key.** This value is minted by
+`credentials derived cloudflare-zones mint`, and the slot map names where the
+mint puts it. A key renamed in the stack file alone leaves the command writing
+a key the stack no longer reads, and the stack refusing by name for a value
+that is present under its old name. The rename is one edit in three places —
+the stack file, the slot map, and the mint — and the slice carries all three.
+
 **The account identifier is a fact, so it is a convention.** rfc-002 §10.3
 split account facts from account secrets — the OCI region and tenancy OCID and
 the B2 region became `conventions.providers` while the keys stayed
@@ -528,51 +1016,51 @@ three secrets, two of which only the provider reads.
 
 --------------------------------------------------------------------------------
 
-## 9. The `dns` stack program
+## 10. The `dns` stack program
 
-After §4.2, §6 and §8 the program is wiring and nothing else: it builds the
-zones provider at the line that reads its token, builds one `ManagedZone` per
-zone from `zone_records`, builds one `ResolverRewrites` per resolver, and
-exports the zone identifiers in one block.
+After §4.2, §7 and §9 the program is wiring and nothing else: it builds the
+zones provider at the line that reads its token, composes the blocks, builds
+one `ManagedZone` per zone from `zone_records`, builds one `ResolverRewrites`
+per resolver, and exports the zone identifiers in one block.
 
-Two things it keeps. `_anchors` and `_address` stay private helpers of the
-program: they turn the one StackReference this stack is allowed into records,
-which is a read the component cannot do for itself, and rfc-002 §12 keeps
-exactly that kind of helper. And the StackReference stays the recorded
-exception it already is — the cluster anchors, and nothing else.
+One thing it keeps, and one it loses. The private helpers that turn the one
+StackReference this stack is allowed into three addresses stay in the program:
+that is a read the component cannot do for itself, and rfc-002 §12 keeps
+exactly that kind of helper. The StackReference stays the recorded exception it
+already is — the cluster anchors, and nothing else. What leaves is the anchor
+records' *shape*: their labels, families, TTLs and comments are census data
+that happened to be written in the program, and they move into `base.py` with
+the rest (§4.3). What the program supplies is three addresses.
 
 --------------------------------------------------------------------------------
 
-## 10. Vocabulary
+## 11. Vocabulary
 
 | Today | Becomes | Why |
 | --- | --- | --- |
 | `ESTATE`, "the estate records" | `BASE_RECORDS`, "the base records" | below |
-| `MIRRORED_ESTATE` | `MIRRORED_BASE` | the same word, the same reason |
+| `MIRRORED_ESTATE` | *(deleted)* | there is no shared block object: a block names its own zone set (§4.2) |
+| `PUBLIC_ALL`, `ZONE_MIRRORS`, `ALIAS_ZONES` | *(deleted)* | §5.2 |
+| "mirror", "full mirror", "alias zone" | *(retired)* | nothing mirrors (§5.1) |
 | `zones.py` | `base.py` | it holds the base records; `zone.py` holds the component |
 | `model.py` | `record.py` | it holds `Record` and its constructors |
 | `adguard.py` | `rewrites.py` | named for what it declares, beside `Rewrite` |
 | `ZT_LABEL` | `OVERLAY_LABEL` | the value stays `zt` |
 | `zt_records`, `zt_label` | `overlay_records`, `overlay_label` | one term per concept |
-| `declare_rewrites`, `instance_label` | *(deleted)* | §6, §7.3 |
+| `declare_rewrites`, `instance_label` | *(deleted)* | §7, §8.3 |
 
 **"Estate" leaves the `dns` package.** rfc-002 §3.2 kept the word alive in one
 meaning — the DNS records that belong to no application — and left the decision
 about even that one to this document. Two rules decide it against the word.
 *Descriptive over metaphorical*: what the table holds is the records a zone
 carries before any application publishes into it, and "base" says that where
-"estate" is a figure of speech that has already meant four different things in
-these documents. *One term per concept*: the whole-deployment sense of the word
-is still in use across `docs/credentials.md`, the README, the import contract
-and several components' own documentation, and that sense is the one with no
-plain replacement.
-
-**Sequenced with the pending ruling on that other sense.** What becomes of the
-deployment-wide meaning is an operator decision still open, and the rename here
-holds either way: if "estate" is ratified as the deployment-wide word, the DNS
-sense must move regardless; if it is retired there too, this is one sweep
-instead of two. So the slice waits for that ruling rather than depending on its
-outcome.
+"estate" is a figure of speech that has already meant several different things
+in these documents. *One term per concept*: the word now has exactly one
+sanctioned sense in this repository, the operator's personal holdings and their
+succession, which `docs/credentials.md` reasons about — and a DNS table is not
+that. The deployment-wide sense the word also carried is settled separately and
+becomes **installation**, which is the word this document uses for it
+throughout.
 
 **`zt` stays on the wire.** `*.zt.<zone>` is a published DNS label, and
 renaming it renames live records for a code-hygiene reason. The rule rfc-002
@@ -586,10 +1074,10 @@ string, and the two functions that build the block.
 
 The half of this document that says what actually needs to move. The stack is
 small, it was applied on 2026-08-25, and most of it is conformant already
-(§14). Three things are not, and one thing a workflow depends on is missing
-from it entirely (§13).
+(§15). Three things are not, and one thing a workflow depends on is missing
+from it entirely (§14).
 
-## 11. The forge census
+## 12. The forge census
 
 The repositories and the Environments are declared twice: in `stacks/github.py`
 as `OWNER`, `DEPLOYMENT_REPO`, `OPS_REPO`, `PREVIEWED_LAYERS`,
@@ -620,7 +1108,7 @@ class Repository:
     public: bool
     environments: tuple[Environment, ...]
     #: The labels a workflow branches on, which is why they are declared
-    #: rather than made by hand (§13).
+    #: rather than made by hand (§14).
     labels: tuple[str, ...] = ()
 
     @property
@@ -655,7 +1143,7 @@ What stays in the stack program is what only it decides: the required check
 names, the repository descriptions, the merge-strategy flags. Those are this
 stack's own business and no second program reads them.
 
-## 12. The provider, explicitly
+## 13. The provider, explicitly
 
 The `github` stack is the last program in the repository with an ambient
 provider: it builds none, so every resource takes the default one, which
@@ -668,8 +1156,8 @@ rather than a component — with `owner` set from the census and the token read
 at that line. `Pulumi.github.yaml` gains
 `pulumi:disable-default-providers: [github]`.
 
-**New rule.** §8.1 says a provider credential is read at the line that builds
-the provider, *out of stack configuration*. This one is not in stack
+**New rule.** rfc-002 §8.1 says a provider credential is read at the line
+that builds the provider, *out of stack configuration*. This one is not in stack
 configuration and must not be: it is an account root held in the personal
 estate, materialized into the environment by `mise.toml` from a workstation
 slot, and its absence is what stops this stack from being applied by accident
@@ -690,7 +1178,7 @@ performs for a forgotten provider. The value carries no secret marking of its
 own, so it is wrapped as a secret on the way in, or the token lands in state in
 the clear as a provider input.
 
-## 13. `ManagedRepository`
+## 14. `ManagedRepository`
 
 The stack program declares every resource itself, which style/pulumi.md
 forbids in as many words: a stack program is wiring and declares no resource.
@@ -738,7 +1226,7 @@ URN of every child, and this stack is applied: without aliases the preview is
 `protect`ed repository is refused. The slice is done when the preview shows no
 replacement and no delete.
 
-## 14. What is already conformant
+## 15. What is already conformant
 
 Named so that a reader of this document does not go looking for work in it:
 
@@ -756,42 +1244,61 @@ Named so that a reader of this document does not go looking for work in it:
     not re-open it.
 *   **The first-apply story.** github.md §3.1's import of the two repositories,
     and its explanation of why `physical-plan` is not imported, stay exactly as
-    they are. §13's aliases are the same mechanism applied to a URN that moves.
+    they are. §14's aliases are the same mechanism applied to a URN that moves.
 
 --------------------------------------------------------------------------------
 
-## 15. What does not propagate
+## 16. What does not propagate
 
 rfc-002 is a large document, and most of it is about a machine neither of these
 stacks touches. What is deliberately not applied:
 
-*   **The template mechanism** (§9). Neither stack renders another program's
-    configuration. The long literals in `base.py` — a DKIM public key, site
-    verification tokens — are *record values*, not a configuration language:
-    the rule they would fall under exists so that a rendered file is a file,
-    and a TXT record's value is the record.
-*   **The `versions:` namespace** (§11.1). Nothing in either stack is pinned to
-    a build.
-*   **A drift-reading `diff`** (§7.2). The device-file provider dials in
-    `diff`; the AdGuard provider does not, and §7.4 is the argument.
+*   **The template mechanism** (rfc-002 §9). Neither stack renders another
+    program's configuration. The long literals in `base.py` — a DKIM public
+    key, site verification tokens — are *record values*, not a configuration
+    language: the rule they would fall under exists so that a rendered file is
+    a file, and a TXT record's value is the record.
+*   **The `versions:` namespace** (rfc-002 §11.1). Nothing in either stack is
+    pinned to a build.
+*   **A drift-reading `diff`** (rfc-002 §7.2). The device-file provider dials
+    in `diff`; the AdGuard provider does not, and §8.4 is the argument.
 *   **The connection structure** (rfc-002 §7.4's `Connection`). One URL is not
     a host, port, user and pinned key, and there is nothing to pin: the session
     is plain HTTP to a LAN address over a flow-rule-confined path. That its
     credential is a full admin login rather than a scoped token is the residual
     the audit records as M6, and not this document's to change.
 *   **The vocabulary of the device** — gateway, device, UDM, overlay, site.
-    Only the overlay half reaches these stacks, in §10.
+    Only the overlay half reaches these stacks, in §11.
 *   **Aliases**, in the `dns` half — not because that stack is empty, which it
     is not, but because none of its renames moves a live URN (§1). The
     condition is checked in each slice's preview rather than assumed.
+*   **A rendered copy of the census.** The gateway's rendered configuration is
+    checked in and held current by a test, and the same treatment was weighed
+    for the zones: one zone file per zone, regenerated and diffed. It loses
+    because it is not the same case. The gateway's file is a transcript of what
+    a device is given; a rendered zone file would be a second spelling of the
+    declaration, checked against nothing external, and two files would change
+    for every record edit — including in briefs whose owned paths are in
+    `conventions` alone. §4.2 makes the declaration itself readable instead,
+    which is what the render was wanted for.
 
-## 16. What the tests look like after
+## 17. What the tests look like after
 
 *   **The census tests assert on the composition rather than rebuilding it**
-    (§4.2). `_records()` in the record tests is the same expression the stack
-    program uses; both become `zone_records`.
-*   **The route census gains an invariants test** (§5.4), which is what the
+    (§4.2). The expression the record tests reconstruct a zone with is the one
+    the stack program uses; both become `zone_records`, and every
+    subscript of the old per-zone mapping becomes the same call the program
+    makes.
+*   **The block invariants replace the mirror-mechanism test.** What the old
+    suite asserted — that the shared block is a subset of every mirror zone —
+    the shape now makes unwritable otherwise. What is worth asserting in its
+    place is what the shape does not enforce: that every zone a block names is
+    one `ALL_ZONES` declares, and that the redirect zones carry an apex, a
+    `www` and CAA and nothing else (§5.2).
+*   **The route census gains an invariants test** (§6.6), which is what the
     roster has.
+*   **The seam between the stacks gains one** (§6.7): per zone, the legacy
+    blocks' record keys and the route rows' rendered record keys are disjoint.
 *   **The rewrite tests re-cut per instance.** The declaration cases move from
     a helper's cross product to one component per resolver, and the endpoint
     assertions read `conventions.gateway` instead of a literal URL.
@@ -800,67 +1307,122 @@ stacks touches. What is deliberately not applied:
     is a change nobody declared, two credentials are two fingerprints, an
     update returns the bag state keeps, and an unchanged run asks the instance
     for nothing.
-*   **The forge equality test shrinks** (§11) to the one claim that survives
+*   **The forge equality test shrinks** (§12) to the one claim that survives
     the census move, and stops importing a stack module inside a test body.
 *   **The `github` stack tests keep every assertion they make.** The settings
     do not move; only where they are declared from does.
 
-## 17. The documents this content lands in
+## 18. The documents this content lands in
 
-| Document | What lands there |
-| --- | --- |
-| declarative/dns.md | §2's apex exception; §3's endpoint derivation and the retired key; the base-records vocabulary; the rewrite component's shape; §5's helper taking a census row; the status header, which still calls the stack unapplied |
-| framework/github.md | §3's declaration list as components; the provider and where its token is read; the labels a workflow reads |
-| declarative/README.md | the census discriminator of §3, in both directions |
-| style/pulumi.md | the three new rules: the census discriminator (§3), the credential store (§12), and that a logical name is never derived from an address (§7.3) |
-| framework/pulumi.md | §5.2 gains nothing new; it is cited here, not extended |
-| cluster/security-audit.md | nothing; M6 stands as written |
+| Document | What lands there | Slice |
+| --- | --- | --- |
+| declarative/dns.md | §5's zone purposes and the rule that replaces the mirror bullet; who is authoritative until cutover; §4.5's per-application cut; §4.6's apex exception; §4.4's second stage and its Transparency procedure; the base-records vocabulary; §8.3's endpoint derivation and the retired key; the rewrite component's shape; §6.7's helper taking a census row | 2, 3, 5 |
+| framework/github.md | §14's declaration list as components; the provider and where its token is read; the labels a workflow reads | 7 |
+| declarative/README.md | the census discriminator of §3, in both directions | 1 |
+| style/pulumi.md | the census discriminator (§3); a census in this installation's terms (§4.2); a logical name never derived from an address (§8.3); where a provider's credential is read (§13) | 1, 3, 5, 7 |
+| framework/pulumi.md | nothing; §5.2 is cited here, not extended | — |
+| cluster/security-audit.md | nothing; M6 stands as written | — |
 
 Per AGENTS.md, each of those edits ships inside the slice that makes it true,
-not as a follow-up.
+not as a follow-up; the third column is where, so that no row belongs to
+nobody.
 
-## 18. How we get there
+## 19. How we get there
 
-Six slices. The two halves are independent and can run in parallel; within each
-half the order keeps anything from being moved twice.
+Seven slices. The two halves are independent and can run in parallel; within
+each half the order keeps anything from being moved twice.
 
 **The `dns` half:**
 
-1.  **The route census moves to `conventions`** (§5.1–§5.4): `Route`,
-    `Exposure` and `ROUTES`, the typed answer, and the invariants test. Nothing
-    declares from it yet, so the diff is mechanical. One line rides along:
-    dns.md's status header still says the stack is not yet applied, and it is —
-    the zones and their records went in on 2026-08-26.
-2.  **The record tables** (§4, §10): the module renames, `zone_records`, the
-    import direction between base and legacy, the overlay identifiers, and the
-    apex exception in dns.md. **Sequenced after the pending ruling on
-    "estate"**, so that one sweep settles the word. It is the slice with the
-    most renames in it and the stack is applied, so its done-condition is a
-    preview with no replacement and no delete (§1).
-3.  **The Cloudflare provider's namespace and account fact** (§8): a
-    configuration move and a constant. The encrypted value moves to its new key
-    unchanged, as slice 5's did; no resource is touched, so the preview is
-    empty.
-4.  **The rewrite provider and its component** (§6, §7): the stateless
+1.  **The route census moves to `conventions`** (§6.1, §6.2, §6.3, §6.5, §6.6):
+    `Route`, `Exposure` and `ROUTES`, the primary-only default, the field for an
+    application's own records, the typed answer, the invariants test, and the
+    census discriminator written into declarative/README.md and
+    style/pulumi.md. Nothing declares from the census yet, so the diff is
+    mechanical. **Done** when the gate passes and the discriminator reads as a
+    rule in the style document rather than as a citation of this one.
+2.  **What each zone is for** (§5): the zone sets re-cut, the overlay block and
+    the legacy VPS anchor made primary-only, the application names deleted from
+    the two redirect zones, and dns.md's mirror bullet replaced by the rule
+    that a public record needs a listener and a certificate — plus the sentence
+    that the retiring DNSControl program is authoritative until cutover. It
+    changes what the zones carry, so its preview shows deletes by design.
+    **Done** when the preview's deletes are exactly the rows §5.3 enumerates,
+    and it shows no replacement.
+3.  **The record tables become blocks** (§4, §11): `Block` and `zone_records`,
+    `base.py` as a table, the per-application cut of `legacy.py` with the four
+    unowned names deleted and the monitoring name's owner written into its
+    comment, the module renames, the import direction between base and legacy,
+    the anchor shape moving out of the program, the overlay identifiers, the
+    apex exception in dns.md, and the installation-terms rule in
+    style/pulumi.md. It is the slice with the most renames in it. **Done** when
+    the set of zone-and-key pairs the declaration produces is identical before
+    and after — the pull request carries that comparison — and the preview adds
+    no replacement and no delete beyond the four names.
+4.  **The Cloudflare provider's namespace and account fact** (§9): a
+    configuration move, a constant, and the two other places the key is named,
+    the slot map and the mint. The encrypted value moves to its new key
+    unchanged, as slice 5's did; no resource is touched. **Done** when the
+    preview is empty and the mint writes the key the stack reads.
+5.  **The rewrite provider and its component** (§7, §8): the stateless
     provider, `configure`, the two stamps, the re-stamping update, the instance
-    identity, the endpoints from `conventions`, and `ResolverRewrites`. This is
-    the one slice with a live drill (§7.5). It renames the rewrite resources,
-    which exist in no state today; the same preview condition applies, and if
-    the census is no longer empty when it lands, the renames ship aliases.
+    identity, the endpoints from `conventions`, `ResolverRewrites`, the remnant
+    of `routes.py` absorbed into `rewrites.py`, and the logical-name rule in
+    style/pulumi.md. It renames the rewrite resources, which exist in no state.
+    **Done** when the pull request carries the drill of §8.5 or an explicit
+    unproven-live note saying what the first live run must confirm.
 
 **The `github` half:**
 
-5.  **The forge census** (§11): `conventions/forge.py`, both readers pointed at
+6.  **The forge census** (§12): `conventions/forge.py`, both readers pointed at
     it, the invoke retired, the equality test shrunk. No resource moves and no
-    input changes, so no alias is needed — the recorded user identifier is the
-    one the invoke resolves today, and a preview proves it by showing nothing.
-6.  **The provider and the component** (§12, §13): the explicit provider,
+    input changes, so no alias is needed. **Done** when the preview shows
+    nothing, which is also what proves the recorded user identifier is the one
+    the invoke resolves today.
+7.  **The provider and the component** (§13, §14): the explicit provider,
     `disable-default-providers`, `ManagedRepository`, the `expect-changes`
-    label it adopts, and the aliases that keep every existing URN. Verified by a preview from the operator's machine
-    showing no replacement and no delete.
+    label it adopts, the aliases that keep every existing URN, and github.md's
+    half of §18. **Done** when a preview from the operator's machine shows no
+    replacement and no delete.
 
-Both stacks are applied, so no slice here is free by default. What makes the
-`dns` half a set of renames rather than migrations is that none of them moves a
-live URN, and every one of those slices proves it with a preview rather than
-asserting it. Slice 6 is the one that does move URNs, and the alias is what
-keeps it a rename there too.
+**The first `up` is a cutover step, not a slice.** `github` is applied; `dns`
+is imported and the retiring DNSControl program still owns the zones (§1), so
+no slice here is judged by an apply. What keeps slices 1, 3, 4 and 5 renames
+rather than migrations is that none of them moves a live URN, and each proves
+it with a preview rather than asserting it. Slice 2 is the one that changes
+what the zones carry, and it says which rows. Slice 7 is the one that moves
+URNs, and the alias is what keeps it a rename there too. A preview any of them
+is judged by will also contain the creates the first `up` will perform — the
+CAA and DNSSEC settings on the pinned zones and the cluster anchors among them
+— and those are not the slice's doing.
+
+## 20. Open questions
+
+*   **Whether the redirect zones' rule is declared or deleted** (§5.4). Either
+    is acceptable and neither blocks anything here; it is sequenced after the
+    first `up`, and the second branch is what §4.4's second stage describes.
+*   **Where the monitoring dashboard's name lands** (§4.5). Whether monitoring
+    is cluster infrastructure or an application decides which component
+    declares `mon` after migration and therefore which wave deletes its legacy
+    block. The monitoring design answers it, and the ordering is safe either
+    way because monitoring is rebuilt fresh rather than migrated.
+*   **Three more legacy names answer nothing in the primary either** — `bt`,
+    `mcmap` and `archvps.stats`. Unlike the four §4.5 deletes, no ruling covers
+    them, and unpublishing a name is a decision rather than tidying, so they
+    keep their blocks until one is taken.
+*   **Whether the primary's live CAA values are records or the edge's
+    injection.** Nothing of this repository's authored them, and one query of
+    the zone's records settles whether the first `up` creates the whole set or
+    adopts most of it. It changes no design and no slice; it changes what the
+    first apply's plan looks like, which is worth knowing before it is read.
+*   **The LAN-only helper's default zone** (§6.2). A rewrite-only name buys one
+    wildcard certificate per zone it is published in, so the default should be
+    one zone; which one is the `apps` stack's design and not this document's.
+*   **Whether the website co-host zone is kept at all.** It carries live mail,
+    so retiring it is a mail decision rather than a DNS one. §5.1 settles only
+    what it carries while it exists.
+*   **Whether co-location holds.** This document keeps it: an application's
+    records are declared by the application's component, from a row both stacks
+    read. The alternative — every published record declared in the `dns` stack
+    — would reverse dns.md §§1–2 and §6 and workloads.md §1 together, and is
+    those documents' decision rather than a side effect of §6.4.
