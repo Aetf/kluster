@@ -70,24 +70,29 @@ not moved.
     three files gw-config pushed are overwritten by the first push. They
     are removed by hand in §4 anyway, because between the stop and the
     push they are the only thing that would still describe a machine.
--   **The routing configuration is installed, and the daemon started.**
-    `/etc/frr/frr.conf` on the device today is FRR's stock file — one
-    `log syslog informational` line — with the daemon inactive and
-    `bgpd=no` in `/etc/frr/daemons`, so the push drops no session: this
-    is the site's first BGP configuration, not a replacement for one
-    (gateway.md §1.3). Three consequences for the window. The installing
-    script's `systemctl reload frr` fails against an inactive daemon and
-    falls back to `systemctl restart frr`, which is a start. **Started is
-    not enabled**: the unit is `disabled` on the device and nothing here
-    enables it, and the script's stamp lives beside the installed file in
-    `/etc`, which a reboot keeps — so the first reboot of the soak finds
-    file and stamp equal, exits without doing anything, and leaves the
-    daemon down. That is the known state, not a regression
-    (Aetf/kluster-ops#167 owns enabling it). And the session will not
-    come up while `bgpd=no`, because `/etc/frr/daemons` is the device's
-    file and nothing here declares it; enabling `bgpd` is a device-side
-    edit, off `/data` and therefore lost to a firmware update, and it
-    changes nothing until the worker VM exists to peer with.
+-   **The routing configuration is installed, the protocol daemon
+    switched on, and the daemon started.** `/etc/frr/frr.conf` on the
+    device today is FRR's stock file — one `log syslog informational`
+    line — with the daemon inactive and `bgpd=no` in `/etc/frr/daemons`,
+    so the push drops no session: this is the site's first BGP
+    configuration, not a replacement for one (gateway.md §1.3). The
+    toggle and the file are converged by the one executable, which
+    switches `bgpd=no` to `bgpd=yes` and then asserts the result — so a
+    run that reaches the restart has the protocol daemon on, or has
+    already failed. Three further consequences for the window. It **restarts** the daemon rather than reloading it — the
+    reload verb needs a helper this firmware does not ship — and a
+    restart against an inactive daemon is a start. **Started is not
+    enabled, and is not meant to become enabled**: nothing enables
+    `frr.service`, so `systemctl is-enabled frr` answers `disabled` here
+    and on every healthy day after, and is not a check of anything. What
+    starts the daemon at each boot is the `Wants=frr.service` edge in
+    `frr-config.service`, which `20-units.sh` enables at every boot; the
+    executable's stamp lives beside the installed file in `/etc`, which
+    a reboot keeps, so the first reboot of the soak finds file and stamp
+    equal and exits having done nothing — with the daemon up regardless,
+    because the edge started it. And **no session comes up until the
+    worker VM exists** to peer with: the declared peer is dialed and
+    nothing answers, which is the expected state rather than a fault.
 
 ## 3. Before the window opens
 
@@ -267,25 +272,73 @@ object with no file behind it and goes at the next boot, or to
 -   **A second `pulumi up` reports no changes and restarts nothing**,
     which is the stamp mechanism proving itself on the path every later
     apply takes.
--   **The routing configuration landed and was accepted.** What proves
-    it is the pair of files, not the daemon's view:
+-   **The routing daemon runs this program's configuration.** The
+    installed file is the smaller half of that; the daemon is the rest:
 
     ```sh
-    cmp /data/custom/frr/frr.conf /etc/frr/frr.conf
+    systemctl is-active frr                              # active
+    systemctl list-dependencies --reverse frr.service    # frr-config.service
+    grep -x 'bgpd=yes' /etc/frr/daemons
+    stat -c '%U:%G %a' /etc/frr/frr.conf                 # frr:frr 640
     ls /etc/frr/frr.conf.kluster-applied
+    cmp /data/custom/frr/frr.conf /etc/frr/frr.conf
+    vtysh -c 'show daemons'                              # lists bgpd
+    vtysh -c 'show bgp neighbors 192.168.70.10 json' | jq '.[].bgpState'
     ```
 
-    The stamp is written only where the reload returned, so the pair
-    means the file is installed and `frr.service` came up. It does not
-    mean the daemons read it: on this firmware the start script brings
-    `watchfrr` up and returns, and the configuration is pushed afterward
-    by `watchfrr`, whose failure fails nothing here. The declared peer
-    does **not** appear in `vtysh -c 'show running-config'` yet: that is
-    collected from the daemons vtysh is connected to, and `bgpd` is not
-    running while `/etc/frr/daemons` says `bgpd=no`. No session is
-    expected before the worker VM exists either way. `systemctl is-active
-    frr` answers yes here and no after the soak's first reboot, because
-    the push starts the daemon and nothing enables it (§2).
+    **`systemctl is-enabled frr` is not on that list and never will
+    be.** Nothing enables the daemon's unit, so it answers `disabled` on
+    a perfectly healthy device; the reverse dependency above is what
+    replaces it, because the edge that starts the daemon at every boot
+    is a `Wants=` line in `frr-config.service`, and that unit naming
+    itself there *is* the edge (§2, gateway.md §1.3).
+
+    **Before the worker VM exists the peer state is `Active` or
+    `Connect`** — the daemon holding our configuration and dialing a
+    peer that is not there yet. Once the worker peers it is
+    `Established`, and `ip route show proto bgp` lists the pool's host
+    routes. `cannot start staticd: daemon binary not installed` in the
+    journal at every start is expected noise: this firmware's build
+    compiles that daemon out, and the set that runs is `watchfrr`,
+    `zebra`, `mgmtd` and `bgpd`.
+
+    **What a green run does not prove.** The stamp and the file
+    comparison prove the file is installed and `frr.service` came up.
+    They do not prove the daemons read it: on this firmware the start
+    script brings `watchfrr` up and returns, and the configuration is
+    pushed into the daemons afterward by `watchfrr`, whose failure fails
+    nothing here. The executable's `vtysh -C -f` pre-check narrows the
+    gap — a line this firmware's parser rejects fails the converge
+    before anything is installed — but it proves *parsed*, not
+    *accepted*. A line can parse and still be refused by the daemon,
+    which surfaces only at that later push. The peer state is what
+    closes the gap, and is why it is on the list.
+-   **The controller's provisioning pass left the daemon alone.** The
+    same `up` provisions the gateway for the firewall, so this window is
+    the first time a controller pass runs on a device where this daemon
+    is up — the one thing about the two managers that reading the device
+    could not settle (gateway.md §1.3). Once the push is done:
+
+    ```sh
+    systemctl is-active frr                        # active
+    pgrep -x bgpd                                  # one process
+    cat /proc/"$(pgrep -x bgpd)"/cgroup            # frr.service
+    ip route show proto bgp                        # unchanged
+    ```
+
+    The two halves happen inside one `up` and their order within it is
+    not fixed, so what this establishes is the end state rather than a
+    before-and-after: a controller pass has run on this device, and the
+    daemon is up and holding under `frr.service`. Before the worker
+    exists the last reading is empty, which is still the check — the
+    point is that it does not change, not that it has anything in it. A
+    daemon found stopped, a `bgpd` in a control group other than
+    `frr.service`'s — that one is the controller's own — or a
+    `proto bgp` route gone is the single outcome that reopens the
+    question of who owns the daemon on this device. Nothing is lost in
+    the window if it happens, because no session exists yet, but record
+    exactly what was seen: it is what that question would be re-decided
+    on.
 
 **Nothing in §4 or §5 is irreversible.** The point of no return is §7:
 the cleanup deletes the old trees, and the removal commit takes the
@@ -374,16 +427,23 @@ serving again with all of it in place:
 -   `frr-config.service` and `authorized-keys.service`, enabled, with
     their executables under `bin/`, and `machine-rollback` beside them —
     the retiring push writes one file into `bin/` and takes nothing out
-    of it. Both units converge a file each; the keys one is append-only,
-    and the routing one does nothing the device is not already doing.
--   **`frr.service`, running.** The push started it and nothing in §6
-    stops it, so `zebra`, `staticd` and `watchfrr` stay up until the next
-    reboot; `systemctl stop frr` is the way back to what the device ran
-    before the window.
+    of it. The keys one is append-only. The routing one is not idle: it
+    wants `frr.service`, so it starts the daemon again at every boot,
+    and its executable holds the toggle and the installed configuration
+    where they are.
+-   **`frr.service`, running** — `watchfrr`, `zebra`, `mgmtd` and
+    `bgpd`, and no `staticd`, which this firmware's build compiles out.
+    The push started it and nothing in §6 stops it. Going back to what
+    the device ran before the window is therefore two commands rather
+    than one: `systemctl disable --now frr-config.service` takes the
+    boot edge away, and `systemctl stop frr` stops the daemon. `bgpd=yes`
+    stays in `/etc/frr/daemons` — one line in a file a firmware update
+    restores anyway, and inert with the daemon stopped.
 -   `/etc/frr/frr.conf` on the declared content, with its stamp beside
     it. The stock file is not restored, and nothing routes differently
-    for this one: the peer it declares belongs to a daemon that is not
-    running while `bgpd=no` (§2).
+    for it: the peer it declares is the worker VM, which does not exist,
+    so the daemon dials an address that never answers and learns no
+    route (§2).
 -   `/data/custom/frr`, one directory holding one configuration file.
 -   `machines-new/`, which is where the overlay member's minted identity
     now lives — `machines-new/zerotier/state`. **A retry of the window
