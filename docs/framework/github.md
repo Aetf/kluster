@@ -5,7 +5,8 @@ the Environments that partition CI's credentials, the gates and
 protections that make the zero-diff proof load-bearing, and the two
 single-purpose Apps. Everything here is `github` stack content
 ([declarative/README.md](../declarative/README.md) §1); this document
-holds the *why*, the stack holds the *what*.
+holds the *why*, and the *what* is split between the census §3 opens
+with and the stack program that declares from it.
 
 It exists because the forge was the one part of this installation with
 no declaration anywhere. The repository this file lives in is deployed by
@@ -79,6 +80,33 @@ gives, not because the plan forbids it.
 
 ## 3. What is declared
 
+**The roll lives in `conventions/forge.py`.** Which repositories
+exist, whether each is public, which Environments each carries and in
+what order the merge chain runs them, and which of those a reviewer
+gates are one table there rather than constants in the stack program,
+because a second program reads the same table: the `credentials`
+command pushes a secret into every Environment the register names
+(credentials.md §3), and a script may import `conventions` but nothing
+a stack declares from. It also carries the labels a workflow branches
+on — today `expect-changes` (ci.md §3) — held no shorter than what the
+workflows actually read by a test; nothing declares them as resources
+yet.
+
+**A row carries what defines the entry, not what GitHub stores about
+it.** The credential partition is defined in exactly these terms
+(ci.md §3), which is why the branch policy and the gate are census
+fields; what the stack program keeps is the repositories' own settings,
+which define no entry and which nothing else reads — the required check
+names, the descriptions, and the merge-strategy flags.
+
+Two things follow from the table's shape. Whether the plan offers a
+repository the public-only features of §2 is *derived* from its
+visibility rather than written beside it, so the two cannot be left
+disagreeing. And the account is one entry carrying both of the names it
+answers to, its login and its numeric user id: an id is minted once and
+never changes, so the reviewer gate below is named from a recorded
+value rather than from a lookup on every run.
+
 -   **Repositories**: `kluster` (public) and `kluster-ops` (private;
     the notification and drill repo, ci.md §3) — visibility, the merge
     strategy, issue/wiki/project surface, vulnerability alerts, and
@@ -100,7 +128,7 @@ gives, not because the plan forbids it.
     in the ops repo (ungated — its scope is the gate,
     credentials.md §4). Which secrets each carries is the register's
     business (credentials.md §3); which exist, and which has a
-    reviewer, is this stack's.
+    reviewer, is the table above.
 -   **The reviewer gate on `physical`**, with the operator as the
     reviewer and self-review permitted: the installation has one person,
     so self-review is the only review there is, and forbidding it would
