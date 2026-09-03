@@ -723,11 +723,12 @@ drives gw-config**:
     `{path, mode, owner, hook}`, whose existence and shape are compared
     against the device the way a file's content is, and which declares
     nothing about the contents — hence a delete that takes the directory
-    away only while it is empty. Implementation rule for all three
-    resources: secret-bearing inputs (device secrets in `DeviceFile`
-    content) are declared secret
-    (`Output.secret`/`additional_secret_outputs`) so they never
-    render in plain preview or state output.
+    away only while it is empty. Implementation rule: the one
+    secret-bearing input among the three — a `DeviceFile`'s content, on
+    request — is declared secret (`additional_secret_outputs`) so it
+    never renders in plain preview or state output; an artifact's
+    reference and digest, a directory's path, mode and owner, and the
+    pinned host key are public by design.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
     address families, plus a static route for the `lan` pool subnet's
     firewall context) is rendered from the physical layer's outputs and

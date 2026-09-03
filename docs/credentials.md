@@ -540,9 +540,11 @@ and AdGuard Home has no scoped API at all, so its admin account *is* the
 API credential — the residual the security audit records as M6. Both
 instances answer to the same login, because a rewrite is written to
 alice and bob directly rather than synchronized (declarative/dns.md §3),
-and that account is part of the static configuration the `physical`
-stack pushes to the device. The ZeroTier Central token is the same
-shape one layer out: Central publishes no token API, so an account
+and that account lives in each instance's own `AdGuardHome.yaml`, state
+the device keeps: the `physical` stack installs an initial state only
+where an instance has never had one, and that initial state names no
+account (physical/gateway.md §1.1). The ZeroTier Central token is the
+same shape one layer out: Central publishes no token API, so an account
 token made in its web console is what `physical` authenticates with,
 as broad as the account it belongs to because Central offers nothing
 narrower. None of the three is minted here, so
