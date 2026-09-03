@@ -602,13 +602,14 @@ class _CaddyParams:
     second list to keep in step.
     """
 
+    acme_contact: str
     zone: str
     controller: str
+    controller_upstream: conventions.gateway.SelfSignedUpstream
     token_path: str
     api_port: int
     vhosts: tuple[conventions.gateway.BridgedService, ...]
     legacy_zone: str
-    legacy_resolver: str
     legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
 
@@ -640,10 +641,33 @@ def caddyfile(declaration: CaddyService) -> str:
     label, so every name the gateway serves has to be one label under the zone;
     that is a property of the census and `test_conventions` holds it there.
 
-    The controller console is reverse-proxied to the device's own port 443 over
-    a connection whose certificate cannot be verified, because the certificate
-    it presents is the device's self-signed one; the name that matters is the
-    one the client asked for, which is forwarded unchanged.
+    The controller console is reverse-proxied to the device's own leg on the
+    container VLAN over a connection whose certificate cannot be verified,
+    because the certificate it presents is the device's self-signed one. Caddy
+    forwards the client's `Host` unchanged, and the block names it anyway: the
+    console answers a WebSocket upgrade whose `Origin` does not match the
+    request's `Host` with a 500, and the requirement is worth a line where a
+    reader meets it.
+
+    **No site block asks a resolver of its own about the challenge.** The proxy
+    asks one resolver for everything it names — its `home.arpa` upstreams, the
+    registrar's API, the ACME directory, and the zone and the name servers of
+    the zone being challenged — and the challenge record itself is then verified
+    against that zone's authoritative servers, so no forwarder's cache is in
+    that path. Naming a resolver here is what would put one there: given one,
+    the client stops asking the authoritative servers and asks that resolver's
+    cache instead, which holds the answer it gave before the record was written
+    for the zone's negative TTL.
+
+    **Three global options open the file.** The contact
+    (`conventions.gateway.ACME_CONTACT`) is what the account in the state
+    directory is loaded by, and its value is not free to change. `debug` is
+    permanent: the ACME path's record of which servers a propagation check asked
+    exists at no other level, and what it costs is a small share of a journal
+    the device caps anyway. `admin off` because nothing here reconfigures the proxy
+    through the API — a content change restarts the machine — so the endpoint is
+    a listener with no user, and the consequence is that runtime reconfiguration
+    is not available.
 
     **A second site block serves the retiring LAN zone**, under a second
     wildcard, and it is shaped the same way: one certificate, the census
@@ -659,13 +683,14 @@ def caddyfile(declaration: CaddyService) -> str:
         TEMPLATE_PACKAGE,
         'templates/Caddyfile.j2',
         _CaddyParams(
+            acme_contact=conventions.gateway.ACME_CONTACT,
             zone=conventions.ZONE_PRIMARY,
             controller=conventions.gateway.VHOST_CONTROLLER,
+            controller_upstream=conventions.gateway.CONTROLLER_UPSTREAM,
             token_path=CADDY_TOKEN_PATH,
             api_port=conventions.gateway.ADGUARD_API_PORT,
             vhosts=declaration.vhosts,
             legacy_zone=conventions.gateway.ZONE_LEGACY,
-            legacy_resolver=conventions.gateway.LEGACY_ACME_RESOLVER,
             legacy=declaration.legacy,
         ),
     )

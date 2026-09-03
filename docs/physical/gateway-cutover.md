@@ -26,10 +26,11 @@ two kinds of state under that layout are not re-derivable:
     held one (gateway.md §1.1), so a resolver whose state is not in place
     before the push comes up on factory configuration with the LAN's
     filters, clients and rewrites gone.
--   **The proxy's ACME account.** Its `Caddyfile` names no contact
-    address, so the proxy reuses an account it finds in its storage
-    rather than registering one; that storage is what the window carries
-    across. The *certificates* in it are for the names the old proxy
+-   **The proxy's ACME account.** The declared `Caddyfile` names the
+    contact the account already carries, which is the key the proxy
+    loads it by; that storage is what the window carries across, and a
+    different address would register a new account and leave the old one
+    behind. The *certificates* in it are for the names the old proxy
     served, so a fresh issuance at first start is expected — see §5,
     which checks that the issuance **succeeded**, not that none happened.
 
@@ -252,16 +253,16 @@ object with no file behind it and goes at the next boot, or to
     `journalctl -u systemd-nspawn@caddy.service` shows the obtain
     completing rather than retrying.
 
-    **A stalled DNS-01 challenge is the failure to expect here**
-    (Aetf/kluster-ops#166). The declared `Caddyfile` carries no
-    `resolvers` line inside its `tls` block, so the propagation check
-    asks the resolver the machine was given — this device's dnsmasq at
-    `10.0.5.1` — which caches the `_acme-challenge` answer it got before
-    the record was published for that answer's whole negative TTL. The
-    live file pins `resolvers 1.1.1.1` for exactly this. What it looks
-    like is a propagation timeout in the log followed by the proxy's own
-    retries, which are slow and unattended: read the log, and do not
-    intervene between them.
+    **A stalled DNS-01 challenge is the failure to expect here.**
+    Neither site block names a resolver, so the propagation check asks
+    the challenged zone's own name servers (gateway.md §1), and this
+    window is the first time that path runs on this device. The log at
+    debug level is what shows it: before each check the proxy writes
+    `checking authoritative nameservers` naming the servers it is about
+    to ask, and `certificate obtained successfully` when the order
+    completes. What a stall looks like is a propagation timeout followed
+    by the proxy's own retries, which are slow and unattended: read the
+    log, and do not intervene between them.
 -   **A second `pulumi up` reports no changes and restarts nothing**,
     which is the stamp mechanism proving itself on the path every later
     apply takes.

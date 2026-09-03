@@ -20,6 +20,7 @@ from typing import ClassVar
 
 from kluster.conventions.dns import ZONE_PRIMARY, ZONE_SHORT
 from kluster.conventions.identity import CLUSTER_NAME
+from kluster.conventions.site import CONTAINER_VLAN
 
 #: The account the gateway is configured as. It has no other.
 SSH_USER = 'root'
@@ -74,10 +75,70 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #: resolver that answers nothing anyone asked it.
 ADGUARD_API_PORT = 3000
 
+
+@dataclass(frozen=True)
+class PlainUpstream:
+    """A proxied vhost's upstream, reached over plain HTTP.
+
+    There is nothing to configure beyond where it is: no transport, no
+    certificate to trust, and no header to correct — which is why the two kinds
+    of upstream are two types rather than one type with flags that only apply
+    to half the rows.
+    """
+
+    host: str
+    port: int
+
+    #: What the render branches on: this kind has no transport to configure.
+    self_signed: ClassVar[bool] = False
+
+    @property
+    def dial(self) -> str:
+        """What `reverse_proxy` is given, with the scheme and port explicit."""
+        return f'http://{self.host}:{self.port}'
+
+
+@dataclass(frozen=True)
+class SelfSignedUpstream:
+    """A proxied vhost's upstream, reached over HTTPS on a certificate of its own.
+
+    That certificate is not verified: the upstream is an appliance whose
+    certificate is its own to choose and not this program's to replace, and
+    what the client asked for is terminated at the proxy.
+    """
+
+    host: str
+    #: Whether the client's `Host` header is named on the way to the upstream.
+    #: Caddy forwards it unchanged with or without the line — the reverse proxy
+    #: restores the client's host on every attempt — so what the line does is
+    #: state a requirement where a reader meets it: the controller console
+    #: answers a WebSocket upgrade whose `Origin` does not match the request's
+    #: `Host` with a 500, which blanks its own interface. It sits on this kind
+    #: because the console is the only upstream that requires it and the console
+    #: is reached this way.
+    pass_host_header: bool = False
+
+    #: What the render branches on: this kind configures a transport.
+    self_signed: ClassVar[bool] = True
+
+    @property
+    def dial(self) -> str:
+        """What `reverse_proxy` is given. The scheme carries the port."""
+        return f'https://{self.host}'
+
+
 #: The controller console, served by the gateway's own reverse proxy rather
 #: than by any service of the census below: what answers behind the name is the
-#: device's own web server.
+#: device's own web server, on the self-signed certificate it presents there.
+#:
+#: It is dialled at the device's leg on the container VLAN, spelled from the
+#: network rather than written out: that is the address the proxy's own default
+#: route and `resolv.conf` already name, so the console, the route and the
+#: resolver cannot disagree about where the device is. Not a loopback address,
+#: which from the proxy's network namespace is the proxy itself, and not a LAN
+#: name, which resolves to an address that moves with the delegated prefix.
 VHOST_CONTROLLER = f'unifi.{ZONE_PRIMARY}'
+CONTROLLER_UPSTREAM = SelfSignedUpstream(host=str(CONTAINER_VLAN.require_gateway()), pass_host_header=True)
 
 #: The controller site the UniFi resources are declared in. `default` is the
 #: internal name whatever the site is labelled in the interface.
@@ -170,6 +231,17 @@ OVERLAY = HostNetworkService(name='zerotier', artifact='zerotier')
 #: the roster of unit names, the configuration completeness check.
 SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 
+#: The contact the proxy's ACME account carries, and the key it is loaded by.
+#: The value is not free: certmagic finds a stored account by its contact, so
+#: this address finds the account the device already holds and any other address
+#: misses, registers a fresh one, and abandons the account the cutover carries
+#: across (gateway-cutover.md §1) — a role address instead of this personal one
+#: would discard it silently. Declared rather than left out, because an absent
+#: contact makes the proxy take the newest account directory in storage instead
+#: of naming the one it means, and because Caddy adds its second issuer as a
+#: fallback only when the contact is non-empty.
+ACME_CONTACT = 'aetf@unlimited-code.works'
+
 #: The retiring LAN zone (dns.md §4.3), and the second wildcard the proxy holds
 #: a certificate for. It is a name inside `ZONE_SHORT` rather than a zone of
 #: its own at the registrar, so the DNS-01 challenge for it is written into
@@ -177,16 +249,6 @@ SERVICES: tuple[ContainerService, ...] = (CADDY, *RESOLVERS, OVERLAY)
 #: `ZONE_SHORT` for as long as the census below has a row in it, which is what
 #: `derived.GATEWAY_ACME_ZONES` says and `test_derived` holds it to.
 ZONE_LEGACY = f'lan.{ZONE_SHORT}'
-
-#: Which resolver the legacy block's issuance checks propagation against — a
-#: public one, named because a propagation check has to read authoritative data
-#: and the two resolvers in front of it cannot give it. The AdGuard pair
-#: answers this whole zone from a filter rule that points it at the proxy. The
-#: device's own resolver, which is the one the proxy asks, does forward the
-#: zone, but it caches: the negative answer it gave before the challenge record
-#: was written is held for that zone's SOA minimum, half an hour here, so a
-#: check asking it would be waiting on a cache rather than on propagation.
-LEGACY_ACME_RESOLVER = '1.1.1.1'
 
 #: The homelab host as the device plane names it: a DHCP-derived name the
 #: device's own resolver answers and no public one does (dns.md §4.1), which is
@@ -215,53 +277,6 @@ class RetirementWave(Enum):
     B = 'B'
     C = 'C'
     D = 'D'
-
-
-@dataclass(frozen=True)
-class PlainUpstream:
-    """A legacy vhost's upstream, reached over plain HTTP.
-
-    There is nothing to configure beyond where it is: no transport, no
-    certificate to trust, and no header to correct — which is why the two kinds
-    of upstream are two types rather than one type with flags that only apply
-    to half the rows.
-    """
-
-    host: str
-    port: int
-
-    #: What the render branches on: this kind has no transport to configure.
-    self_signed: ClassVar[bool] = False
-
-    @property
-    def dial(self) -> str:
-        """What `reverse_proxy` is given, with the scheme and port explicit."""
-        return f'http://{self.host}:{self.port}'
-
-
-@dataclass(frozen=True)
-class SelfSignedUpstream:
-    """A legacy vhost's upstream, reached over HTTPS on a certificate of its own.
-
-    That certificate is not verified: the upstream is an appliance whose
-    certificate is its own to choose and not this program's to replace, and
-    what the client asked for is terminated at the proxy.
-    """
-
-    host: str
-    #: Whether the client's `Host` header is forwarded rather than replaced by
-    #: the upstream's own name. It belongs to this kind alone, because Caddy
-    #: replaces the header only where the transport speaks TLS to the upstream,
-    #: which a plain row never does.
-    pass_host_header: bool = False
-
-    #: What the render branches on: this kind configures a transport.
-    self_signed: ClassVar[bool] = True
-
-    @property
-    def dial(self) -> str:
-        """What `reverse_proxy` is given. The scheme carries the port."""
-        return f'https://{self.host}'
 
 
 @dataclass(frozen=True)
@@ -336,11 +351,10 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
         upstream=PlainUpstream(host=str(ADGUARD_BOB.address), port=LEGACY_RESOLVER_PORT),
         wave=RetirementWave.B,
     ),
-    # The controller console, which `VHOST_CONTROLLER` also serves. Reached at
-    # the device's own name on the LAN rather than at a loopback address, which
-    # from the proxy's network namespace is the proxy. The console needs its
-    # client's `Host`: it answers a WebSocket upgrade whose `Origin` does not
-    # match the request's `Host` with a 500, which blanks its own interface.
+    # The controller console, which `VHOST_CONTROLLER` also serves. It keeps the
+    # LAN name the device's live configuration dials it at, because this row is
+    # a transcription of that file; `CONTROLLER_UPSTREAM` is where the console
+    # is dialled from the network's own address instead.
     LegacyVhost(
         label='gw',
         upstream=SelfSignedUpstream(host='dmse.home.arpa', pass_host_header=True),
