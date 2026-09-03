@@ -1,3 +1,27 @@
+{#- One upstream as `reverse_proxy` takes it, so that every vhost reaching an
+    appliance over its own certificate is written once: the transport, and the
+    `Host` line where the upstream requires it. Emitted at the indentation of a
+    `handle` body, with no newline of its own at either end. -#}
+{%- macro proxy(upstream) -%}
+{%- if upstream.self_signed %}
+		reverse_proxy {{ upstream.dial }} {
+{%- if upstream.pass_host_header %}
+			header_up Host {host}
+{%- endif %}
+			transport http {
+				tls_insecure_skip_verify
+			}
+		}
+{%- else %}
+		reverse_proxy {{ upstream.dial }}
+{%- endif %}
+{%- endmacro -%}
+{
+	email {{ acme_contact }}
+	debug
+	admin off
+}
+
 *.{{ zone }} {
 	tls {
 		dns cloudflare {file.{{ token_path }}}
@@ -5,11 +29,7 @@
 
 	@controller host {{ controller }}
 	handle @controller {
-		reverse_proxy https://127.0.0.1:443 {
-			transport http {
-				tls_insecure_skip_verify
-			}
-		}
+{{- proxy(controller_upstream) }}
 	}
 {%- for service in vhosts %}
 
@@ -28,24 +48,12 @@
 *.{{ legacy_zone }} {
 	tls {
 		dns cloudflare {file.{{ token_path }}}
-		resolvers {{ legacy_resolver }}
 	}
 {%- for vhost in legacy %}
 
 	@{{ vhost.label }} host {{ vhost.host }}
 	handle @{{ vhost.label }} {
-{%- if vhost.upstream.self_signed %}
-		reverse_proxy {{ vhost.upstream.dial }} {
-{%- if vhost.upstream.pass_host_header %}
-			header_up Host {host}
-{%- endif %}
-			transport http {
-				tls_insecure_skip_verify
-			}
-		}
-{%- else %}
-		reverse_proxy {{ vhost.upstream.dial }}
-{%- endif %}
+{{- proxy(vhost.upstream) }}
 	}
 {%- endfor %}
 

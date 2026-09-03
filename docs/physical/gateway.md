@@ -121,12 +121,24 @@ declarative/physical.md §4.
     **Which resolver a container asks is a fact about this site, not
     about the image**, so where it differs from the image's own default
     it arrives as a mounted file. The reverse proxy is the case that
-    has one: its upstreams are internal names that no public resolver
-    answers, and its certificate issuance calls the registrar's API, so
-    it is pointed at this device's own resolver — which answers the
-    first, forwards the second, and is not the AdGuard pair it fronts.
-    Exactly one entry, because the images' resolver library asks every
-    listed server in parallel and takes the first answer.
+    has one: this device's own resolver, which is not the AdGuard pair
+    the proxy fronts. Exactly one entry, because the images' resolver
+    library asks every listed server in parallel and takes the first
+    answer.
+
+    That one resolver answers everything the proxy names: the
+    `home.arpa` upstreams behind its vhosts, the registrar's API and
+    the ACME directory that issuance calls, and — for a DNS-01
+    challenge — the zone the name being issued for belongs to and that
+    zone's name servers. **What it is not asked is the challenge
+    record.** No site block names a resolver of its own, and with none
+    named the client takes the name servers it just discovered and
+    queries each of them directly for the `_acme-challenge` record, so
+    the check reads authoritative data and no forwarder's cache sits in
+    that path. Naming a resolver is what would put one there: given
+    one, the client asks that resolver's cache instead, which holds the
+    negative answer it gave before the record was written for the
+    zone's negative TTL.
 -   **Zone firewall**: UBIOS zone-based firewall, declared through the
     bridged filipowm/unifi provider (architecture.md §5.1). Target
     state: §4.
@@ -147,6 +159,19 @@ declarative/physical.md §4.
     survive each other's outage do not share a credential, and the
     device holding one of them is the one machine the cluster cannot
     re-seal.
+
+    **The ACME account is named rather than found.** The proxy's
+    configuration carries a contact address
+    (`conventions.gateway.ACME_CONTACT`), which is the key the account
+    in its state directory is loaded by. The value is not free: any
+    other address misses that account, registers a fresh one, and
+    abandons the one carried onto the device
+    (gateway-cutover.md §1). With no address at all the proxy takes the
+    newest account directory in storage instead of naming the one it
+    means. **The proxy logs at debug level permanently**, because that
+    is the only level at which the issuance path names the servers a
+    propagation check asked — which is what reading an issuance depends
+    on (gateway-cutover.md §5).
 
 ### 1.1 A machine, and what decides a restart
 
@@ -449,13 +474,9 @@ challenge and the same device credential. The zone is a name inside
 there and **the token the device answers challenges with is scoped to
 `ucw.phd` as well as to the primary zone, for as long as the census has
 a row in it** (`credentials.derived.GATEWAY_ACME_ZONES`, held equal to
-the vhosts by a test). Both narrow back when the census empties. The
-challenge's propagation check is aimed at a public resolver, because a
-check has to read authoritative data and neither resolver in front of it
-can give it: the AdGuard pair answers this zone from a rewrite, and the
-device's own resolver — the one the proxy asks — forwards the zone but
-caches, holding the negative answer it gave before the challenge record
-was written for half an hour.
+the vhosts by a test). Both narrow back when the census empties. This
+block's challenge is checked the way §1 describes, which is the same way
+the primary block's is: one rule for both zones.
 
 ## 2. ZeroTier network design
 

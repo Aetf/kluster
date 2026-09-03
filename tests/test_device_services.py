@@ -352,6 +352,46 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     assert 'tls_insecure_skip_verify' in rendered
 
 
+def test_the_file_opens_with_the_defaults_the_whole_proxy_runs_on() -> None:
+    """Three global options, and each of them is a decision rather than a default.
+
+    The contact is what loads the ACME account the cutover carries across, which
+    is why it is a constant and not a literal here. `debug` is what records which
+    servers an issuance asked, and no other level has it. `admin off` retires an
+    endpoint nothing in this program reconfigures the proxy through.
+    """
+    rendered = container.caddyfile(caddy())
+
+    assert rendered.startswith(f'{{\n\temail {conventions.gateway.ACME_CONTACT}\n\tdebug\n\tadmin off\n}}\n')
+
+
+def test_the_console_is_dialled_at_the_device_and_never_at_the_proxy_itself() -> None:
+    """A loopback address in the proxy's own network namespace is the proxy.
+
+    So the console is dialled at the device's leg on the container VLAN — the
+    address the proxy's default route and its `resolv.conf` already name — and
+    the block states the `Host` the console requires: it answers a WebSocket
+    upgrade whose `Origin` does not match it with a 500.
+    """
+    rendered = container.caddyfile(caddy())
+
+    device = conventions.CONTAINER_VLAN.require_gateway()
+    assert f'\t\treverse_proxy https://{device} {{\n\t\t\theader_up Host {{host}}\n' in rendered
+    assert '127.0.0.1' not in rendered
+
+
+def test_no_challenge_is_checked_against_a_resolver_the_file_names() -> None:
+    """Neither zone's `tls` block names one, and that is what keeps caches out.
+
+    Given a resolver, the client asks that resolver's cache for the challenge
+    record — which holds the answer it gave before the record was written for
+    the zone's negative TTL. Given none, it discovers the zone's own name
+    servers and asks them, and the only thing the proxy's resolver answers is
+    that discovery.
+    """
+    assert 'resolvers' not in container.caddyfile(caddy())
+
+
 def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
     """One site block for `*.<zone>`, and the three names matched inside it.
 
@@ -366,7 +406,7 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
     rendered = container.caddyfile(caddy())
 
     zone = conventions.ZONE_PRIMARY
-    assert rendered.startswith(f'*.{zone} {{\n')
+    assert f'\n*.{zone} {{\n' in rendered
     # One block for the zone, so one certificate for it: a second site block
     # under the same zone would be a second request for the same names.
     assert rendered.count(f'{zone} {{') == 1
@@ -462,17 +502,16 @@ def test_each_legacy_vhost_proxies_where_the_device_proxies_it() -> None:
 def test_the_legacy_block_is_its_own_certificate_and_refuses_the_rest() -> None:
     """A second zone is a second wildcard, and the block is shaped like the first.
 
-    Its own `tls` block, because the challenge for this zone is checked against
-    a public resolver rather than the LAN's, which answers the whole zone from
-    a rewrite. Its own `handle` fallback, so a name under the retiring zone
-    that nothing here serves is refused rather than answered by the block that
-    happened to match.
+    Its own `tls` block, because a second zone is a second certificate asked for
+    on the same credential. Its own `handle` fallback, so a name under the
+    retiring zone that nothing here serves is refused rather than answered by
+    the block that happened to match.
     """
     rendered = container.caddyfile(caddy())
 
     zone = conventions.gateway.ZONE_LEGACY
-    assert f'\n*.{zone} {{\n' in rendered
-    assert f'resolvers {conventions.gateway.LEGACY_ACME_RESOLVER}\n' in rendered
+    tls = f'\ttls {{\n\t\tdns cloudflare {{file.{container.CADDY_TOKEN_PATH}}}\n\t}}\n'
+    assert f'\n*.{zone} {{\n{tls}' in rendered
     assert rendered.count('abort') == 2
 
 
@@ -482,15 +521,14 @@ def test_an_empty_census_is_a_file_with_no_legacy_block_in_it() -> None:
     A block rendered unconditionally would go on asking for a wildcard for a
     zone nothing is served under, and go on needing that zone in the scope of
     the token the device answers challenges with. So the census is the switch:
-    with no rows there is no site block, no `resolvers` line and no redirect.
+    with no rows there is no site block and no redirect.
     """
     rendered = container.caddyfile(caddy(legacy=()))
 
     assert conventions.gateway.ZONE_LEGACY not in rendered
-    assert conventions.gateway.LEGACY_ACME_RESOLVER not in rendered
     assert rendered.count('abort') == 1
     # And what the device's own services are served under is untouched.
-    assert rendered.startswith(f'*.{conventions.ZONE_PRIMARY} {{\n')
+    assert f'\n*.{conventions.ZONE_PRIMARY} {{\n' in rendered
     assert conventions.gateway.VHOST_CONTROLLER in rendered
 
 
