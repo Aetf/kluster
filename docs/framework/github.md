@@ -7,8 +7,8 @@ single-purpose Apps. Everything here is `github` stack content
 ([declarative/README.md](../declarative/README.md) §1); this document
 holds the *why*, the stack holds the *what*.
 
-It exists because the forge was the one part of the estate with no
-declaration anywhere. The repository this file lives in is deployed by
+It exists because the forge was the one part of this installation with
+no declaration anywhere. The repository this file lives in is deployed by
 rules that lived only in a settings page — nothing reviewed a change to
 them, nothing detected drift in them, and rebuilding after an accident
 meant remembering.
@@ -46,9 +46,9 @@ the token file — `.credentials/roots/github.token`, from which
 environment. That paste is the only way the value ever arrives: the
 state passphrase is random too, but it is escrowed, so a machine that
 lost it runs one `recover` and has it back, while this token has no
-copy anywhere the scripts can reach and must come from the estate each
-time. Its absence is what stops this stack from being applied by
-accident.
+copy anywhere the scripts can reach and must come from the personal
+estate each time. Its absence is what stops this stack from being
+applied by accident.
 
 ## 2. What the plan permits today
 
@@ -102,8 +102,8 @@ gives, not because the plan forbids it.
     business (credentials.md §3); which exist, and which has a
     reviewer, is this stack's.
 -   **The reviewer gate on `physical`**, with the operator as the
-    reviewer and self-review permitted: the estate has one person, so
-    self-review is the only review there is, and forbidding it would
+    reviewer and self-review permitted: the installation has one person,
+    so self-review is the only review there is, and forbidding it would
     make the door impassable rather than stricter. Admin bypass is
     off for the same reason `enforce_admins` is on below.
 -   **Branch protection on `main`**: `checks` and `changes` as required

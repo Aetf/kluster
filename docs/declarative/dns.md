@@ -68,16 +68,16 @@ from the records:
     for any zone carrying at least one CAA record, invisibly and only
     while it holds the certificate; declaring it is what makes the
     authorization outlive the edge.
--   **A zone whose names something outside this estate serves gets no
-    pin invented for it.** jiahui.id is a Google Site, its certificates
-    come from `pki.goog`, and it carries no CAA — so it keeps none. A
-    pin that current issuance does not satisfy is an outage at the next
-    renewal, and no CAA is not a regression from no CAA.
+-   **A zone whose names something outside this installation serves gets
+    no pin invented for it.** jiahui.id is a Google Site, its
+    certificates come from `pki.goog`, and it carries no CAA — so it
+    keeps none. A pin that current issuance does not satisfy is an outage
+    at the next renewal, and no CAA is not a regression from no CAA.
 
 Both tags are written out: `issuewild` does not inherit from `issue`,
 and the LAN-only names are covered by per-zone wildcards (§4).
 
-The estate as classified: unlimited-code.works, unlimitedcodeworks.xyz,
+The zones as classified: unlimited-code.works, unlimitedcodeworks.xyz,
 peifeng.phd, ucw.phd and jiahui.love hold proxied names and take the
 Cloudflare set; jiahui.id takes none.
 
@@ -191,13 +191,12 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
 -   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
     config, the sync service is redundant *and* a conflict source (it
     would overwrite bob's Pulumi-written rewrites), and one standing
-    service leaves the homelab host. What the gw-config estate takes
-    over is the static half (listeners, upstreams) as a **seed**, not as
-    live state: it declares one `AdGuardHome.seed.yaml` per instance,
-    under a name the instance itself never reads, and the recovery
-    script copies it to the `AdGuardHome.yaml` the instance does read
-    only when the working directory holds no such file — after a wipe,
-    and at no other time.
+    service leaves the homelab host. What gw-config takes over is the
+    static half (listeners, upstreams) as a **seed**, not as live state:
+    it declares one `AdGuardHome.seed.yaml` per instance, under a name
+    the instance itself never reads, and the recovery script copies it to
+    the `AdGuardHome.yaml` the instance does read only when the working
+    directory holds no such file — after a wipe, and at no other time.
 -   **A seed, because the file is the instance's own.** AdGuard Home
     keeps its whole configuration in one YAML file that a running
     instance rewrites whenever it accepts a change through its API, and

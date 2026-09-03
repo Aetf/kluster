@@ -224,12 +224,12 @@ query log. The Environment's other stack credentials are the
 zone-scoped Cloudflare token and the `ci-dns` ZeroTier identity, neither
 of which writes anything on the home network: the AdGuard login is the
 deepest of the three rather than an addition to a stronger one, and it
-sits beside the token that edits the estate's public names, so one
-Environment holds both halves of the estate's naming. That Environment
-is also pull-request-reachable, unlike the main-only physical pair —
-`preview (dns)` and `prove (dns)` execute a same-repo branch's Python
-with it, and noop-automerge's path classifier routes a dependency bump
-into `prove`.
+sits beside the token that edits the installation's public names, so one
+Environment holds both halves of the installation's naming. That
+Environment is also pull-request-reachable, unlike the main-only physical
+pair — `preview (dns)` and `prove (dns)` execute a same-repo branch's
+Python with it, and noop-automerge's path classifier routes a dependency
+bump into `prove`.
 
 **Fix.** None at the credential: an admin login is the whole of what the
 appliance offers, and the rewrites are what makes LAN clients resolve

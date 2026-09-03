@@ -155,7 +155,7 @@ is a `mise.toml` template that can open neither a keyring nor a prompt;
 a second copy in the store would be exposure bought for nothing.
 `credentials root ls` says which roots this machine holds and which
 layer each came from, printing no values, and `credentials root <name>
-forget` removes both writable layers. Neither the estate
+forget` removes both writable layers. Neither the personal estate
 database nor its master password is ever opened by anything in this
 repository.
 
@@ -275,10 +275,10 @@ itself is self-service (§4.3).
     runbook) written for a **technical reader who has never seen this
     system**. Because the account roots are not in the kit, the README
     carries the one pointer that keeps succession unbroken: which
-    provider accounts exist, that their credentials live in the
-    personal estate, and that the estate's own succession is arranged
-    separately. Without it a successor can open every seed and still
-    not reach the Cloudflare seed's console-only rotation, replace the
+    provider accounts exist, that their credentials live in the personal
+    estate, and that the personal estate's own succession is arranged
+    separately. Without it a successor can open every seed and still not
+    reach the Cloudflare seed's console-only rotation, replace the
     console-made credentials §3 carries — the ZeroTier Central token,
     the two GitHub App keys — or re-seed after a total loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
@@ -438,7 +438,7 @@ cannot promise a delivery the code does not make.
 | --- | --- | --- | --- | --- |
 | OCI API key (`physical`) | OCI seed key | Its own user, group and policy; administrator of the `physical` compartment and a stranger outside it | Pulumi config secret | `physical` |
 | OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
-| Cloudflare token (zones) | CF seed token | DNS edit, estate zones only | Pulumi config secret | `dns`, `apps` |
+| Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret | cert-manager |
 | Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
@@ -458,7 +458,7 @@ cannot promise a delivery the code does not make.
 | UDM SSH key, libvirt SSH identity | installed by automation on each side: the gateway's `AuthorizedKeys` keeps the UDM key on the device (physical/gateway.md §1.4), aconfmgr provisions the homelab host's dedicated service user together with its key (physical/homelab-host.md §4) | device-file push (host key pinned) / `virsh` as a `libvirt`-group user | Pulumi config secret; the UDM key's public half is a constant | `physical` |
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
-| ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the estate's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
+| ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (pending) · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo Environment (`drill`; pending) | Drill workflows |
@@ -518,10 +518,11 @@ is a decision, and the `OCID`, which is the site fact that follows from
 creating it; a compartment created for the first time is announced as the
 line to record there and commit, because the consuming stack reads the `OCID`
 from that file and refuses by naming the mint until it is written. The
-appliance's compartment predates the model and carries the estate's own name
-rather than a per-consumer one, so the mint adopts it exactly as it adopts a
-user or a group that is already there. `--compartment` overrides the mapping
-for a drill tenancy, where none of those names mean anything.
+appliance's compartment predates the model and carries the installation's
+own name rather than a per-consumer one, so the mint adopts it exactly as
+it adopts a user or a group that is already there. `--compartment`
+overrides the mapping for a drill tenancy, where none of those names mean
+anything.
 
 **Two rows are here for their delivery rather than their birth.** The
 UDM SSH key and the libvirt identity are prerequisites rather than
@@ -563,7 +564,7 @@ re-recorded, which is why none of them is a seed: they mint nothing, so
 there is nothing for the kit to hold or to reproduce. What guarantees a
 lost one can be replaced is the account or appliance behind it — the
 Central account is one of the account roots §2 keeps out of the kit, and
-the two appliances are the estate's own.
+the two appliances are the installation's own.
 
 **Two more are made in a console and read by a workflow.** Each
 single-purpose GitHub App has a private key generated on its own settings
@@ -700,17 +701,17 @@ makes moving a key out of a kit re-runnable, and it is the same
 discipline as the rest of §4.1: whether the work is done is answered by
 looking at the product, never by a note saying a command ran.
 
-The zones token's scope is not a list in the script: it is the estate's
-zones as `conventions` names them, resolved to zone ids through the seed
-at mint time, so adding a zone there and re-running the command is the
-whole procedure for widening it. The push writes two keys, because a
-provider credential alone does not identify the account that owns those
-zones: `cloudflare:apiToken` as a config secret and the account id in
-plain text. The script writes the account id under the unqualified key
-`cloudflareAccountId`, which `pulumi config set` and `pulumi.Config()`
-both resolve against the project's own name — so the committed file reads
-`kluster-py:cloudflareAccountId`, and the project name lives in
-`Pulumi.yaml` rather than a second time in the script.
+The zones token's scope is not a list in the script: it is the
+installation's zones as `conventions` names them, resolved to zone ids
+through the seed at mint time, so adding a zone there and re-running the
+command is the whole procedure for widening it. The push writes two
+keys, because a provider credential alone does not identify the account
+that owns those zones: `cloudflare:apiToken` as a config secret and the
+account id in plain text. The script writes the account id under the
+unqualified key `cloudflareAccountId`, which `pulumi config set` and
+`pulumi.Config()` both resolve against the project's own name — so the
+committed file reads `kluster-py:cloudflareAccountId`, and the project
+name lives in `Pulumi.yaml` rather than a second time in the script.
 
 An OCI key is pushed the same way and fills more keys, because an API key
 is several things (§2.1) and a provider recovers none of them: it writes
@@ -877,11 +878,11 @@ GitHub secret — and the rest have none.
 
 -   The **SSH identities** (the UDM key and the libvirt identity) have no
     command on this side. Neither is created in a console, so there are
-    no steps to print: the estate's other automation installs them (§3),
-    and what is left here is a paste into `physical`'s configuration.
-    The **in-cluster secrets** (the DNS-01 token and the writer keys,
-    sealable only once `k8s-base` has the sealed-secrets controller up)
-    have neither half.
+    no steps to print: the installation's other automation installs them
+    (§3), and what is left here is a paste into `physical`'s
+    configuration. The **in-cluster secrets** (the DNS-01 token and the
+    writer keys, sealable only once `k8s-base` has the sealed-secrets
+    controller up) have neither half.
 -   Part of the **CI Environment half** (ci.md §3). The sink exists (§4)
     and fills what a workstation can obtain: the state passphrase and the
     `ci` client bundle, both into every Environment, and the
