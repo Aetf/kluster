@@ -16,7 +16,8 @@ and this module owns it:
     about how they are installed is mechanism and stays in the template.
 -   **`20-units.sh`**, which converges the unit sources under the custom root
     into `/etc/systemd/system`, enables them, and restarts the ones whose file
-    changed.
+    changed. It converges their drop-in directories too, where a statement lives
+    that belongs to one unit rather than to the file it is written in.
 -   **The skeleton of the custom root** — `bin/`, `dpkg/`, `units/`.
 
 **The layers above reach the mechanism through methods here, and the resource
@@ -38,7 +39,8 @@ constant and `Gateway` passes the union.
 the two mean different things the command asks which happened by looking for
 the file. That is how a unit is retired by the same apply that stops declaring
 it: the source is gone, so the hook disables the unit and removes the live copy
-instead of converging it.
+instead of converging it, and a drop-in comes off the unit it amended the same
+way.
 
 **`dpkg/` is `10-packages.sh`'s alone.** The cache is refreshed by replacing the
 whole directory in one rename, so any file Pulumi wrote in it would be deleted
@@ -53,9 +55,19 @@ which is what `dpkg/` requires and what makes the method serve any directory a
 layer fills at runtime; the delete that stops declaring one takes it away only
 while it is empty.
 
+**One directory is the exception, and it is the one no layer chooses**: a
+`<unit>.d`. Its name is decided by the unit being amended rather than by a
+caller, it exists exactly while a drop-in in it does, and two components
+amending one unit would otherwise have to agree on who declares it. So it is
+created by the delivery of the first drop-in in it and removed by the delete of
+the last (`dropin_hook`), and nothing about it is ever compared against the
+device.
+
 **New device automation is a unit plus an executable unless it manipulates
 systemd's own configuration**, in which case it is an on_boot script; the rule
-and its reasons are physical/gateway.md §1.2.
+and its reasons are physical/gateway.md §1.2. What that automation cannot state
+in a unit of its own — because the unit running it is systemd's, not this
+program's — it states in a drop-in.
 """
 
 from __future__ import annotations
@@ -78,6 +90,8 @@ __all__ = (
     'DIRECTORY_MODE',
     'DPKG',
     'DPKG_DIR',
+    'DROPIN_DIR_SUFFIX',
+    'DROPIN_SUFFIX',
     'FILE_MODE',
     'LIVE_UNIT_DIR',
     'PACKAGES_SCRIPT',
@@ -90,8 +104,12 @@ __all__ = (
     'UNIT_SOURCE_DIR',
     'UNIT_SUFFIX',
     'DevicePersistence',
+    'dropin_dir',
+    'dropin_hook',
+    'dropin_source',
     'executable_hook',
     'executable_path',
+    'live_dropin_dir',
     'on_boot_hook',
     'on_boot_path',
     'packages_script',
@@ -140,6 +158,13 @@ UDM_BOOT_UNIT = 'udm-boot.service'
 #: nothing, so `unit` refuses it rather than delivering a file with no effect.
 UNIT_SUFFIX = '.service'
 
+#: What a drop-in is, in the two halves systemd reads it by: a directory named
+#: for the unit it amends, and inside it the one file suffix systemd opens. Both
+#: are systemd's spelling rather than this program's choice, and the converger
+#: walks the source directory by the same pair.
+DROPIN_DIR_SUFFIX = '.d'
+DROPIN_SUFFIX = '.conf'
+
 #: A script and an executable are run; a unit file is read; a directory is
 #: entered and written in, which is the same bit a script needs for a different
 #: reason and so is a mode of its own.
@@ -161,6 +186,21 @@ def executable_path(name: str) -> str:
 def unit_source(name: str) -> str:
     """Where one unit's source sits, before `20-units.sh` installs it."""
     return f'{UNIT_SOURCE_DIR}/{name}'
+
+
+def dropin_dir(unit: str) -> str:
+    """Where one unit's drop-ins sit, beside the unit sources they amend."""
+    return f'{unit_source(unit)}{DROPIN_DIR_SUFFIX}'
+
+
+def dropin_source(unit: str, name: str) -> str:
+    """Where one drop-in sits, before `20-units.sh` installs it."""
+    return f'{dropin_dir(unit)}/{name}'
+
+
+def live_dropin_dir(unit: str) -> str:
+    """Where systemd reads one unit's drop-ins, which is off `/data`."""
+    return f'{LIVE_UNIT_DIR}/{unit}{DROPIN_DIR_SUFFIX}'
 
 
 def skeleton_path(name: str) -> str:
@@ -210,6 +250,30 @@ def unit_hook(name: str) -> str:
     )
 
 
+def dropin_hook(unit: str, name: str) -> str:
+    """Converge the drop-in, or take it back off the unit it amended.
+
+    The write branch is the unit's: `20-units.sh` is what installs a drop-in,
+    and it reloads systemd when one lands. The delete branch cannot be, because
+    the converger only ever walks sources — a drop-in this program has stopped
+    declaring has no source left to be noticed by. So the delete removes the
+    live copy itself, takes the directory with it once it is the last one there,
+    and reloads: what the unit loses is the statement, not the unit.
+
+    The source directory goes the same way, and for the same reason it was never
+    a resource: it is `mkdir -p`'d by the delivery of the first drop-in in it,
+    so nothing else would ever take it away.
+    """
+    source = shlex.quote(dropin_source(unit, name))
+    source_dir = shlex.quote(dropin_dir(unit))
+    live = shlex.quote(f'{live_dropin_dir(unit)}/{name}')
+    live_dir = shlex.quote(live_dropin_dir(unit))
+    return (
+        f'if [ -e {source} ]; then {on_boot_hook(UNITS_SCRIPT)}; '
+        f'else rm -f {live}; rmdir {live_dir} {source_dir} 2>/dev/null || true; systemctl daemon-reload; fi'
+    )
+
+
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -228,11 +292,19 @@ class _PackagesParams:
 @final
 @dataclass(frozen=True)
 class _UnitsParams:
-    """What `20-units.sh.j2` reads: the two directories it converges between."""
+    """What `20-units.sh.j2` reads: the two directories it converges between.
+
+    The three suffixes come with them, because the globs the script walks and
+    the kinds `unit` and `dropin` accept are one decision: a source this
+    layer hands over is a source that script picks up.
+    """
 
     cluster: str
     unit_source_dir: str
     live_unit_dir: str
+    unit_suffix: str
+    dropin_dir_suffix: str
+    dropin_suffix: str
 
 
 def packages_script(packages: Sequence[str]) -> str:
@@ -263,9 +335,15 @@ def packages_script(packages: Sequence[str]) -> str:
 def units_script() -> str:
     """The boot-chain script that installs, enables and restarts the units.
 
-    It never restarts `udm-boot.service`, which is the oneshot running it, and
-    it mirrors no deletion: the live unit directory holds units that are not
-    this program's, and the ones that are are retired by `unit_hook`.
+    It never restarts `udm-boot.service`, which is the oneshot running it.
+
+    The drop-in directories are converged before the unit files, so that a unit
+    it then restarts starts with the statements its drop-ins carry. Which of
+    the directories it mirrors deletions into and which it only adds to is one
+    rule for the whole boot chain, stated in physical/gateway.md §1.2: the unit
+    store is shared with the firmware and a unit is therefore retired from the
+    other side, by `unit_hook`, while a `<unit>.d` directory this layer has a
+    source for is wholly its own.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -274,6 +352,9 @@ def units_script() -> str:
             cluster=conventions.CLUSTER_NAME,
             unit_source_dir=UNIT_SOURCE_DIR,
             live_unit_dir=LIVE_UNIT_DIR,
+            unit_suffix=UNIT_SUFFIX,
+            dropin_dir_suffix=DROPIN_DIR_SUFFIX,
+            dropin_suffix=DROPIN_SUFFIX,
         ),
     )
 
@@ -405,6 +486,54 @@ class DevicePersistence(Component):
             content=content,
             mode=FILE_MODE,
             hook=unit_hook(name),
+            opts=opts,
+            after=(self.units, self.skeleton[UNITS]),
+        )
+
+    def dropin(self, unit: str, name: str, content: pulumi.Input[str], *, opts: pulumi.ResourceOptions) -> DeviceFile:
+        """One drop-in on a unit, converged into the live store — and taken back off it.
+
+        **A drop-in amends a unit; it does not declare one.** That is what makes
+        it the answer where `unit` is not: the unit being amended may be one this
+        program never writes, and `systemd-nspawn@<machine>.service` — systemd's
+        own template, instanced per machine — is exactly such a unit. What a
+        machine cannot say for itself in a settings file is said here instead.
+
+        The source lands in `<unit>.d` under the unit sources, where a firmware
+        update leaves it, and the hook is `20-units.sh`: installed, and systemd
+        reloaded so that the statement applies to the unit as it stands. Nothing
+        is enabled or started from a drop-in, because a drop-in directory is not
+        a unit; a statement that only takes effect at the next start is picked up
+        by whatever restarts that unit. The delete of this resource is what takes
+        the statement off again, in the same session (`dropin_hook`).
+
+        Both suffixes are held to what systemd reads, and to what the converger
+        therefore walks: a drop-in directory for a unit of another kind, or a
+        file inside one that is not a `.conf`, would land on the device and be
+        read by nobody.
+
+        It waits on the converger and on the unit source directory for the
+        reasons `unit` does. The `<unit>.d` directory itself is no resource,
+        which is this module's one exception to declaring a directory and is
+        stated with the rule above.
+        """
+        if not unit.endswith(UNIT_SUFFIX):
+            raise ValueError(
+                f'{unit!r} is not a {UNIT_SUFFIX} unit, and {UNITS_SCRIPT} converges the drop-ins of no other '
+                f'kind: a directory it does not walk would land on the device and be read by nothing'
+            )
+        if not name.endswith(DROPIN_SUFFIX):
+            raise ValueError(
+                f'{name!r} is not a {DROPIN_SUFFIX} drop-in, and systemd opens no other file in a '
+                f'{DROPIN_DIR_SUFFIX} directory: it would land on the device and be read by nothing'
+            )
+        return self._declare(
+            'dropin',
+            f'{unit}{DROPIN_DIR_SUFFIX}/{name}',
+            path=dropin_source(unit, name),
+            content=content,
+            mode=FILE_MODE,
+            hook=dropin_hook(unit, name),
             opts=opts,
             after=(self.units, self.skeleton[UNITS]),
         )

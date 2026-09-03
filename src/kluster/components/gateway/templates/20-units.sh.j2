@@ -13,18 +13,64 @@
 # else then restores itself.
 #
 # udm-boot.service is only converged and enabled, never restarted: it is the
-# oneshot running this very script. This script does not mirror deletions,
-# because {{ live_unit_dir }} also holds symlinks and units that are not this
-# program's; a unit this program stops declaring is retired by the delete of
-# the resource that declared it, which disables it and removes the live copy in
-# the same session.
+# oneshot running this very script. This script does not mirror deletions among
+# the unit files, because {{ live_unit_dir }} also holds symlinks and units that
+# are not this program's; a unit this program stops declaring is retired by the
+# delete of the resource that declared it, which disables it and removes the
+# live copy in the same session.
+#
+# Drop-ins are converged first, by the same pair of directories one level down,
+# so that a unit the loop below restarts starts with the statements its
+# drop-ins carry. There the mirror does remove: inside a
+# <unit>{{ dropin_dir_suffix }} directory this program has a source for,
+# everything is this program's.
 
 set -u
 
 srcdir={{ unit_source_dir }}
 [ -d "$srcdir" ] || exit 0
 
-for src in "$srcdir"/*.service; do
+# A drop-in amends a unit rather than declaring one, so nothing here is enabled
+# or started: the unit a drop-in directory names may be one this program never
+# writes -- systemd-nspawn@<machine>.service is systemd's own template -- and a
+# statement that only takes effect at the next start is picked up by whatever
+# restarts that unit. Reloading is what makes the rest of them apply to the unit
+# as it stands, and one reload covers however many drop-ins moved.
+reload=0
+for dir in "$srcdir"/*{{ unit_suffix }}{{ dropin_dir_suffix }}/; do
+    [ -d "$dir" ] || continue
+    unit=$(basename "$dir" {{ dropin_dir_suffix }})
+    livedir={{ live_unit_dir }}/$unit{{ dropin_dir_suffix }}
+    for src in "$dir"*{{ dropin_suffix }}; do
+        [ -e "$src" ] || continue
+        conf=$(basename "$src")
+        if ! cmp -s "$src" "$livedir/$conf"; then
+            echo "units: installing $unit{{ dropin_dir_suffix }}/$conf"
+            mkdir -p "$livedir"
+            cp "$src" "$livedir/$conf"
+            reload=1
+        fi
+    done
+    # The live directory is created by the copy above and by nothing else, so a
+    # unit whose drop-ins have never landed has nothing to walk here.
+    for live in "$livedir"/*{{ dropin_suffix }}; do
+        [ -e "$live" ] || continue
+        conf=$(basename "$live")
+        [ -e "$dir$conf" ] && continue
+        echo "units: removing $unit{{ dropin_dir_suffix }}/$conf, which nothing declares"
+        rm -f "$live"
+        reload=1
+    done
+done
+
+# An `if` rather than a `&&`: with no unit source below to walk, this is the
+# last command of the script, and "nothing moved" is not a failure. What this
+# file exits with is what the push reads.
+if [ "$reload" -eq 1 ]; then
+    systemctl daemon-reload
+fi
+
+for src in "$srcdir"/*{{ unit_suffix }}; do
     [ -e "$src" ] || continue
     unit=$(basename "$src")
     dest={{ live_unit_dir }}/$unit

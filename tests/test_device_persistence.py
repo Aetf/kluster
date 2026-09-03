@@ -6,12 +6,23 @@ a write and after a delete, whose component a file asked for through the layer
 belongs to, and what the two rendered boot-chain scripts say once the data is in
 them.
 
+**The unit converger is also run**, against a temporary tree with a `systemctl`
+that records what it was asked to do, because what matters most about the
+drop-in half of it is a property of the sequence rather than of any line the
+file contains: a drop-in this program no longer declares has to leave the
+device, and one belonging to somebody else has to stay.
+
 The renderers are plain functions, so most cases read their output directly; the
 component tree is declared once against mocks, which is where a wiring mistake
 would surface.
 """
 
 from __future__ import annotations
+
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import final
 
 import pulumi
 import pytest
@@ -21,6 +32,7 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.gateway import persistence
 from kluster.components.gateway.persistence import DevicePersistence
+from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection, DeviceDirectory, DeviceFile
 from putils import Component
 
@@ -38,10 +50,14 @@ HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 #: has to be made twice — once where it is declared and once here.
 PACKAGES = ('systemd-container', 'libnss-mymachines')
 
-#: What a consumer asks the layer for, one of each kind.
+#: What a consumer asks the layer for, one of each kind. The drop-in is on a
+#: unit this program does not declare at all, which is the case it exists for:
+#: `TEMPLATE_UNIT` stands in for systemd's own `systemd-nspawn@.service`.
 SCRIPT = '30-example.sh'
 PROGRAM = 'example-watchdog.sh'
 UNIT = 'example.service'
+TEMPLATE_UNIT = 'example@instance.service'
+DROPIN = '10-example.conf'
 DIRECTORY = 'machines'
 
 
@@ -58,6 +74,9 @@ class Layer(Component, pulumi_type='test:gateway:Layer'):
         self.script: DeviceFile = mechanism.on_boot_script(SCRIPT, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.program: DeviceFile = mechanism.executable(PROGRAM, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.unit: DeviceFile = mechanism.unit(UNIT, '[Unit]\nDescription=Example\n', opts=self.child_opts())
+        self.dropin: DeviceFile = mechanism.dropin(
+            TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n', opts=self.child_opts()
+        )
         self.directory: DeviceDirectory = mechanism.skeleton_dir(DIRECTORY, opts=self.child_opts())
         self.register_outputs({})
 
@@ -410,3 +429,284 @@ def test_the_unit_converger_never_restarts_the_oneshot_running_it() -> None:
     # The glob and the kind `unit` accepts are one decision, so a source that
     # would be installed by nothing cannot be declared in the first place.
     assert f'for src in "$srcdir"/*{persistence.UNIT_SUFFIX}; do' in script
+
+
+##
+## Drop-ins: what a unit says that its own file cannot
+##
+
+
+def test_a_drop_in_lands_beside_the_unit_it_amends_and_belongs_to_the_caller(monitor: Recorder) -> None:
+    """A statement about a unit this program never writes still has a home.
+
+    The unit being amended may be systemd's own — a machine runs on an instance
+    of `systemd-nspawn@.service` — so `unit` has nothing to offer it. The
+    drop-in goes under the unit sources in the directory systemd names after
+    the unit, and comes back as a resource of the component that asked, exactly
+    as every other kind does.
+    """
+    inputs = monitor.inputs_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
+
+    assert inputs['path'] == f'{persistence.UNIT_SOURCE_DIR}/{TEMPLATE_UNIT}.d/{DROPIN}'
+    assert inputs['mode'] == persistence.FILE_MODE
+    assert inputs['owner'] == conventions.gateway.SSH_USER
+    assert monitor.options_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}').parent.endswith(f'::{CONSUMER}')
+
+
+@pytest.mark.asyncio
+async def test_a_drop_in_waits_for_the_converger_that_installs_it(
+    monitor: Recorder, mechanism: DevicePersistence
+) -> None:
+    """The same two edges a unit has, and for the same two reasons.
+
+    Its hook is `20-units.sh`, so the script has to be on the device first; and
+    it lands under the unit source directory, which a destroy would otherwise
+    try to remove while the file was still in it.
+    """
+    converger = str(await mechanism.units.urn.future())
+    unit_dir = str(await mechanism.skeleton[persistence.UNITS].urn.future())
+    edges = monitor.depends_on(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
+
+    assert converger in edges
+    assert unit_dir in edges
+
+
+def test_a_drop_in_comes_off_the_unit_by_the_delete_that_stops_declaring_it(monitor: Recorder) -> None:
+    """The converger only ever walks sources, so the delete cannot go through it.
+
+    A drop-in this program has stopped declaring has no source left to be
+    noticed by, so the hook removes the live copy itself and reloads systemd —
+    what the unit loses is the statement, not the unit, which is why nothing
+    here disables or stops anything. The `<unit>.d` directories go with the last
+    drop-in in them, on both sides, because nothing else would ever take them
+    away.
+    """
+    hook = monitor.inputs_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')['hook']
+    source = persistence.dropin_source(TEMPLATE_UNIT, DROPIN)
+    live = f'{persistence.live_dropin_dir(TEMPLATE_UNIT)}/{DROPIN}'
+
+    assert f'if [ -e {source} ]' in hook
+    assert persistence.on_boot_path(persistence.UNITS_SCRIPT) in hook
+    assert f'rm -f {live}' in hook
+    assert f'rmdir {persistence.live_dropin_dir(TEMPLATE_UNIT)} {persistence.dropin_dir(TEMPLATE_UNIT)}' in hook
+    assert 'systemctl daemon-reload' in hook
+    assert 'disable' not in hook
+
+
+def test_a_drop_in_the_device_would_read_by_nothing_is_refused(mechanism: DevicePersistence) -> None:
+    """Two ways to land a file nobody opens, and both are refused where they start.
+
+    The converger walks the drop-in directories of one unit kind, and systemd
+    opens one file suffix inside such a directory. A source outside either would
+    reach the device, run the hook, and mean nothing — with no error anywhere.
+    """
+    content = '[Service]\nRestart=always\n'
+
+    with pytest.raises(ValueError, match=persistence.UNITS_SCRIPT):
+        _ = mechanism.dropin('example.timer', DROPIN, content, opts=pulumi.ResourceOptions())
+    with pytest.raises(ValueError, match=persistence.DROPIN_SUFFIX):
+        _ = mechanism.dropin(UNIT, '10-example.txt', content, opts=pulumi.ResourceOptions())
+
+
+##
+## What the unit converger does to a device, drop-in by drop-in
+##
+
+
+@final
+@dataclass(frozen=True)
+class _UnitsRendering:
+    """The unit converger's parameters, pointed at a temporary tree."""
+
+    cluster: str
+    unit_source_dir: str
+    live_unit_dir: str
+    unit_suffix: str
+    dropin_dir_suffix: str
+    dropin_suffix: str
+
+
+@final
+@dataclass(frozen=True)
+class _Device:
+    """One temporary stand-in for the device the converger runs on."""
+
+    script: Path
+    source: Path
+    live: Path
+    #: Where the `systemctl` stand-in records what it was asked to do.
+    commands: Path
+    #: What that stand-in records at the moment it is asked to restart a unit:
+    #: whether the drop-in below had already been installed by then. It is the
+    #: only way to see an ordering from outside, because both halves of the
+    #: script leave the same tree behind whichever ran first.
+    witness: Path
+    watched: Path
+    #: What `PATH` must start with for that stand-in to be the one found.
+    tools: Path
+
+
+def _device(tmp_path: Path) -> _Device:
+    """The converger rendered against a temporary tree, ready to run.
+
+    Rendered here rather than through `units_script` because the paths that
+    function carries are the device's absolute ones; everything else about the
+    file — which globs it walks, what it copies, what it removes — is what the
+    component ships.
+    """
+    live = tmp_path / 'live'
+    device = _Device(
+        script=tmp_path / persistence.UNITS_SCRIPT,
+        source=tmp_path / 'source',
+        live=live,
+        commands=tmp_path / 'commands',
+        witness=tmp_path / 'witness',
+        watched=live / f'{UNIT}{persistence.DROPIN_DIR_SUFFIX}' / DROPIN,
+        tools=tmp_path / 'tools',
+    )
+    device.source.mkdir()
+    device.live.mkdir()
+    device.tools.mkdir()
+
+    systemctl = device.tools / 'systemctl'
+    _ = systemctl.write_text(
+        f'#!/bin/sh\n'
+        f'echo "$*" >>{device.commands}\n'
+        f'if [ "$1" = restart ]; then\n'
+        f'  if [ -e {device.watched} ]; then echo present >>{device.witness}; '
+        f'else echo absent >>{device.witness}; fi\n'
+        f'fi\n'
+        f'exit 0\n'
+    )
+    systemctl.chmod(0o755)
+
+    _ = device.script.write_text(
+        templates.render(
+            persistence.TEMPLATE_PACKAGE,
+            f'templates/{persistence.UNITS_SCRIPT}.j2',
+            _UnitsRendering(
+                cluster=conventions.CLUSTER_NAME,
+                unit_source_dir=str(device.source),
+                live_unit_dir=str(device.live),
+                unit_suffix=persistence.UNIT_SUFFIX,
+                dropin_dir_suffix=persistence.DROPIN_DIR_SUFFIX,
+                dropin_suffix=persistence.DROPIN_SUFFIX,
+            ),
+        )
+    )
+    return device
+
+
+def _converge(device: _Device) -> tuple[int, list[str]]:
+    """Run the converger once, and read back what it asked of systemd."""
+    device.commands.unlink(missing_ok=True)
+    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+        env={'PATH': f'{device.tools}:/usr/bin:/bin'},
+        capture_output=True,
+        check=False,
+    )
+    recorded = device.commands.read_text().split('\n') if device.commands.exists() else []
+    return completed.returncode, [line for line in recorded if line]
+
+
+def _dropin(root: Path, unit: str, name: str, content: str) -> Path:
+    """One drop-in in a tree, source side or live side."""
+    directory = root / f'{unit}{persistence.DROPIN_DIR_SUFFIX}'
+    directory.mkdir(exist_ok=True)
+    written = directory / name
+    _ = written.write_text(content)
+    return written
+
+
+def test_the_converger_installs_a_drop_in_and_reloads_for_it(tmp_path: Path) -> None:
+    """The device is given the statement, and systemd is told to read it again.
+
+    Nothing is enabled or started: a drop-in directory is not a unit, and the
+    unit it names is one this program may never have written. What makes the
+    statement apply to the unit as it stands is the reload, and one covers
+    however many drop-ins moved.
+    """
+    device = _device(tmp_path)
+    _ = _dropin(device.source, TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n')
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert (device.live / f'{TEMPLATE_UNIT}.d' / DROPIN).read_text() == '[Service]\nRestart=always\n'
+    assert commands == ['daemon-reload']
+
+
+def test_a_drop_in_nothing_declares_is_removed_from_the_device(tmp_path: Path) -> None:
+    """Inside a drop-in directory this program has a source for, everything is its.
+
+    So the mirror removes, unlike the one over the unit files — a live drop-in
+    with no source is one this program stopped declaring on a device it did not
+    push the removal to, which is every recovery boot after a firmware update.
+    """
+    device = _device(tmp_path)
+    _ = _dropin(device.source, TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n')
+    stale = _dropin(device.live, TEMPLATE_UNIT, '20-stale.conf', '[Service]\nRestart=no\n')
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert not stale.exists()
+    assert (device.live / f'{TEMPLATE_UNIT}.d' / DROPIN).exists()
+    assert commands == ['daemon-reload']
+
+
+def test_a_drop_in_directory_this_program_has_no_source_for_is_left_alone(tmp_path: Path) -> None:
+    """The unit store holds units that are not this program's, and so do their drop-ins.
+
+    The firmware is free to amend its own units, and the mirror reaches only
+    into the directories this program has a source directory for.
+    """
+    device = _device(tmp_path)
+    somebody_else = _dropin(device.live, 'firmware.service', '10-vendor.conf', '[Service]\nNice=5\n')
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert somebody_else.exists()
+    assert commands == []
+
+
+def test_a_unit_is_restarted_onto_the_drop_ins_it_is_meant_to_have(tmp_path: Path) -> None:
+    """Which half of the script runs first is the whole of this claim.
+
+    A unit whose file changed is restarted, and a restart is what makes a
+    statement that only applies at start take effect. Converging the drop-ins
+    afterwards would restart the unit onto the configuration it had before,
+    leaving the new statement waiting for a restart nothing else is going to
+    do — so the stand-in is asked, at the moment of the restart, whether the
+    drop-in is already on the device.
+    """
+    device = _device(tmp_path)
+    _ = (device.source / UNIT).write_text('[Service]\nExecStart=/bin/true\n')
+    _ = (device.live / UNIT).write_text('[Service]\nExecStart=/bin/false\n')
+    _ = _dropin(device.source, UNIT, DROPIN, '[Service]\nRestart=always\n')
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert f'restart {UNIT}' in commands
+    assert device.witness.read_text().split() == ['present']
+
+
+def test_a_run_that_moved_no_drop_in_succeeds(tmp_path: Path) -> None:
+    """A run that had nothing to do is not a failure, and the push reads the status.
+
+    Every file of a machine runs this script as its hook and carries the exit
+    status out to the apply, and the boot where nothing changed is the common
+    case — here with no unit source to walk afterwards, which makes the
+    drop-ins' own reload the last decision the script makes.
+    """
+    device = _device(tmp_path)
+    _ = _dropin(device.source, TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n')
+    _ = _dropin(device.live, TEMPLATE_UNIT, DROPIN, '[Service]\nRestart=always\n')
+
+    status, commands = _converge(device)
+
+    assert status == 0
+    assert commands == []

@@ -76,13 +76,67 @@ declarative/physical.md §4.
     request time, not at start time, and the ZeroTier member carries
     the management session rather than the others' traffic.
 
-    **What the template unit does not give a machine is a restart
-    policy**, and that is the price of not writing units: a machine
-    that dies stays down until the next boot or the next push
-    converges it. The one failure this firmware actually produces is
-    narrower and has its own answer — a container's `vb-*` interface
-    comes back detached from its bridge after a restart, and a
-    watchdog unit re-attaches it (§1.2).
+    **What a settings file cannot say, a drop-in on that machine's
+    instance of the template unit says.** A settings file describes the
+    container; a restart policy and a dependency on a bridge describe
+    the *unit*, and the unit is shared by every machine on the box. So
+    each machine carries one drop-in, delivered under the unit sources
+    like any other piece of the unit store (§1.2), and it carries two
+    statements:
+
+    -   **`Restart=always`, with a five-second delay.** Without it a
+        machine that died would stay down until the next boot or the
+        next push converged it. `always` rather than `on-failure`
+        because a container that exited cleanly is still a service
+        that is meant to be running.
+
+        **A machine that cannot start retries every five seconds, and
+        nothing here stops it.** Two starts in any ten seconds stay
+        inside systemd's default start rate limit, so the unit is
+        never left in `failed` for somebody to find; it cycles between
+        activating and failed until the unit is stopped. That is the
+        trade: a condition that clears itself — a bridge that arrives
+        late, a control group that has not emptied yet — is recovered
+        from with nobody watching, and the price is a loop that is
+        loud in the journal rather than a service that gave up. It is
+        not silent, because the push that delivered the machine held
+        it to reaching active and failed red when it did not (§1.1).
+
+        **What is not a restart is a deliberate stop of the unit.**
+        `systemctl stop` on the machine's unit ends the loop, and a
+        restart policy does not act on it — which is what the push and
+        `machine-rollback` do. `machinectl poweroff` and `machinectl
+        terminate` are not that: they end the container's PID 1, which
+        is the service exiting, so the machine is back five seconds
+        later.
+    -   **`After=` and `BindsTo=` the bridge's device unit**, for the
+        three machines on the container VLAN. The machine is therefore
+        never started against a bridge that is not up yet, and is
+        stopped rather than left running with an interface enslaved to
+        nothing when the bridge goes away. The device unit is the
+        escaped `sysfs` path of the interface,
+        `sys-subsystem-net-devices-br5.device`; systemd has one for
+        every network device `udev` tags, which it does by default, so
+        this is a dependency that resolves. A device *node* has no such
+        unit, which is why the ZeroTier member's tunnel device is a
+        bind nspawn refuses to start without rather than a dependency
+        its unit could name. The machine in the host's network
+        namespace has no bridge and no binding.
+
+    **Two mechanisms keep a machine on its bridge, and the rule is
+    that they answer different failures.** The binding above is about
+    the bridge *existing*. The **bridge watchdog** (§1.2) is about an
+    interface that fell off a bridge that is still there: on this
+    firmware a container's `vb-*` interface can come back detached
+    after a restart, and that is a state systemd has no view of — the
+    machine is active, the bridge's device unit is active, and the
+    container is talking to nothing. So the watchdog re-attaches it,
+    and neither mechanism sees the other's failure.
+
+    What neither of them does is bring a machine back that systemd
+    stopped because its bridge went away: a dependency stop is not a
+    restart trigger, so that machine returns on the next boot or the
+    next push.
 
     **The images are Alpine with s6-overlay, not systemd**, which
     decides what a settings file may say. It boots what the image ships at
@@ -321,25 +375,49 @@ deleted by the next refresh and reported as drift forever after.
 **`20-units.sh` converges the unit sources** into
 `/etc/systemd/system`, enables them, and restarts the ones whose file
 changed. It never restarts `udm-boot.service`, which is the unit
-running it, and it mirrors no deletion, because the live directory also
-holds units that are not this program's. Retirement happens from the
-other side instead: deleting the resource that declared a unit removes
-its source and, in the same session, disables the unit and removes the
-live copy.
+running it.
+
+**It converges the drop-in directories first**, before the unit files,
+so that a unit it then restarts starts with the statements its
+drop-ins carry. A drop-in is where a statement lives that belongs to
+one unit rather than to the file it is written in — including a unit
+this program never writes, as `systemd-nspawn@<machine>.service` is
+(§1.1). A drop-in is an amendment and not a declaration, so nothing is
+enabled or started from one: the script installs and removes `.conf`
+files and reloads systemd, which is what makes a statement apply to
+the unit as it stands.
+
+**A script here mirrors deletions only inside a directory that is
+wholly this program's; a directory it shares, it only adds to.** That
+one rule decides all three of them. `/etc/systemd/system` is shared
+with the firmware, so a live unit file with no source is left where it
+is, and a unit is retired from the other side instead — deleting the
+resource that declared it removes the source and, in the same session,
+disables the unit and removes the live copy. `/etc/systemd/nspawn`
+(§1.1) holds nothing that is not this program's, so a settings file
+belonging to no declared machine is removed. A `<unit>.d` directory
+this program has a source for is its own the same way, so a live
+drop-in with no source goes — while a `<unit>.d` it has no source for
+belongs to whoever made it and is not entered at all.
+
+Mirroring is what makes a removal survive a device this program did
+not push it to: a recovery boot after a firmware update runs these
+scripts with no apply in flight, and in a shared directory that would
+delete the firmware's files.
 
 **The layers above reach the mechanism through it, not around it.** A
-component that needs a script in the boot chain, an executable, a unit
-or a directory asks the persistence layer for one and gets back a
-resource of its own: where the file goes, what mode it takes and what
-runs once it lands are the mechanism's decisions, while the file itself
-belongs to the component that needs it and goes away when that
-component stops declaring it. A directory is asked for the same way and
-is a resource of its own: its existence, kind, mode and ownership are
-compared against the device, so one removed there is a change the next
-preview reports, while nothing about its contents is ever declared —
-which is what lets the layer that fills it own everything inside, and
-why a directory this program stops declaring is removed only while it
-is empty.
+component that needs a script in the boot chain, an executable, a unit,
+a drop-in on one, or a directory asks the persistence layer for one and
+gets back a resource of its own: where the file goes, what mode it takes
+and what runs once it lands are the mechanism's decisions, while the
+file itself belongs to the component that needs it and goes away when
+that component stops declaring it. A directory is asked for the same way
+and is a resource of its own: its existence, kind, mode and ownership
+are compared against the device, so one removed there is a change the
+next preview reports, while nothing about its contents is ever declared
+— which is what lets the layer that fills it own everything inside, and
+why a directory this program stops declaring is removed only while it is
+empty.
 
 **New device automation is a systemd unit plus an executable in
 `bin/`**, unless the operation manipulates systemd's own configuration
@@ -354,8 +432,10 @@ what the numeric order of `on_boot.d` expresses.
 they reach the device only through it. That layer — the nspawn runtime
 — is what a machine runs on: it asks the mechanism for its two
 boot-chain scripts, for the `machines/` directory they work in, for the
-`machine-rollback` executable a failed push reaches for, and for the
-bridge watchdog as a unit and an executable pair. It also states the
+`machine-rollback` executable a failed push reaches for, for the bridge
+watchdog as a unit and an executable pair, and — once per machine, as
+that machine is declared — for the drop-in its instance of the template
+unit carries. It also states the
 packages the machines need, which is how `systemd-container`, the
 name-service module that resolves a started machine, and the two
 programs the device pulls and unpacks its own root filesystems with
