@@ -47,9 +47,9 @@ documentation the change makes true ships with it rather than after it.
   `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is
   below it and nothing above it, and four further edges are forbidden
   outright (a script reaches no declaration; a custom provider knows no
-  `conventions`; `putils` knows no estate; only `kluster.main` imports a
-  stack program). `import-linter` enforces it. The contract is in
-  `pyproject.toml`; what each layer is for is
+  `conventions`; `putils` knows no installation; only `kluster.main`
+  imports a stack program). `import-linter` enforces it. The contract is
+  in `pyproject.toml`; what each layer is for is
   `docs/rfc/rfc-002-src-layout-and-the-gateway.md` §2.
 * **Scripts are Python**, not shell — a shell script needs a reason (a
   handful of lines with no logic, or a context with no interpreter). They

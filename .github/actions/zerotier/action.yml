@@ -1,9 +1,9 @@
 name: Join ZeroTier
 description: >
-  Join the estate's ZeroTier network as a pre-authorized CI member, using an
-  identity generated in Pulumi state rather than a Central API token — a leaked
-  join credential is then one confined member, not the ability to enrol more
-  (physical/gateway.md §2.6).
+  Join this installation's ZeroTier network as a pre-authorized CI member,
+  using an identity generated in Pulumi state rather than a Central API
+  token — a leaked join credential is then one confined member, not the
+  ability to enrol more (physical/gateway.md §2.6).
 
 inputs:
   network_id:
