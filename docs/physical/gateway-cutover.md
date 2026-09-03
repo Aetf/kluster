@@ -79,13 +79,14 @@ not moved.
     toggle and the file are converged by the one executable, which
     switches `bgpd=no` to `bgpd=yes` and then asserts the result — so a
     run that reaches the restart has the protocol daemon on, or has
-    already failed. Three further consequences for the window. It **restarts** the daemon rather than reloading it — the
-    reload verb needs a helper this firmware does not ship — and a
-    restart against an inactive daemon is a start. **Started is not
-    enabled, and is not meant to become enabled**: nothing enables
-    `frr.service`, so `systemctl is-enabled frr` answers `disabled` here
-    and on every healthy day after, and is not a check of anything. What
-    starts the daemon at each boot is the `Wants=frr.service` edge in
+    already failed. Three further consequences for the window. It
+    **restarts** the daemon rather than reloading it — the reload verb
+    needs a helper this firmware does not ship — and a restart against
+    an inactive daemon is a start. **Started is not enabled, and is not
+    meant to become enabled**: nothing enables `frr.service`, so
+    `systemctl is-enabled frr` answers `disabled` here and on every
+    healthy day after, and is not a check of anything. What starts the
+    daemon at each boot is the `Wants=frr.service` edge in
     `frr-config.service`, which `20-units.sh` enables at every boot; the
     executable's stamp lives beside the installed file in `/etc`, which
     a reboot keeps, so the first reboot of the soak finds file and stamp
@@ -93,6 +94,14 @@ not moved.
     because the edge started it. And **no session comes up until the
     worker VM exists** to peer with: the declared peer is dialed and
     nothing answers, which is the expected state rather than a fault.
+
+    **The edge itself is proven only after a reboot**, which the push
+    cannot show and which nothing here schedules — the device takes one
+    on its own whenever an unattended firmware pass lands. So §5's
+    routing block is run a second time once the soak has taken a
+    reboot: `active` then is the edge working, `inactive` then is the
+    edge failed. That is the one reading a healthy device cannot give,
+    and the only thing about the boot path the push itself cannot show.
 
 ## 3. Before the window opens
 
@@ -276,13 +285,16 @@ object with no file behind it and goes at the next boot, or to
     installed file is the smaller half of that; the daemon is the rest:
 
     ```sh
-    systemctl is-active frr                              # active
-    systemctl list-dependencies --reverse frr.service    # frr-config.service
-    grep -x 'bgpd=yes' /etc/frr/daemons
-    stat -c '%U:%G %a' /etc/frr/frr.conf                 # frr:frr 640
+    systemctl is-active frr                            # active
+    systemctl list-dependencies --reverse frr.service  # frr-config.service
+    grep -x 'bgpd=yes' /etc/frr/daemons                # bgpd=yes
+    # frr:frr 640 -- as the stock file already is, so this guards the
+    # mode rather than proving the push:
+    stat -c '%U:%G %a' /etc/frr/frr.conf
     ls /etc/frr/frr.conf.kluster-applied
-    cmp /data/custom/frr/frr.conf /etc/frr/frr.conf
-    vtysh -c 'show daemons'                              # lists bgpd
+    cmp /data/custom/frr/frr.conf /etc/frr/frr.conf     # silent
+    vtysh -c 'show daemons'                             # lists bgpd
+    # "Active" or "Connect" until the worker peers, "Established" after:
     vtysh -c 'show bgp neighbors 192.168.70.10 json' | jq '.[].bgpState'
     ```
 
@@ -313,32 +325,55 @@ object with no file behind it and goes at the next boot, or to
     *accepted*. A line can parse and still be refused by the daemon,
     which surfaces only at that later push. The peer state is what
     closes the gap, and is why it is on the list.
--   **The controller's provisioning pass left the daemon alone.** The
-    same `up` provisions the gateway for the firewall, so this window is
-    the first time a controller pass runs on a device where this daemon
-    is up — the one thing about the two managers that reading the device
-    could not settle (gateway.md §1.3). Once the push is done:
+
+    **A retry loop trips the daemon's start limit**, which is three
+    starts in three minutes: a first push plus two quick retries fails
+    with `start request repeated too quickly`, and the converge stops
+    there with the stamp unwritten. `systemctl reset-failed frr` clears
+    it, and is what to run before trying again rather than reading the
+    red as a fault of the configuration.
+-   **Whether a controller pass disturbs the daemon** is the one thing
+    about the two managers that reading the device could not settle
+    (gateway.md §1.3), and the window opens the answer rather than
+    closing it. Read the end state, and write the values down:
 
     ```sh
-    systemctl is-active frr                        # active
-    pgrep -x bgpd                                  # one process
-    cat /proc/"$(pgrep -x bgpd)"/cgroup            # frr.service
-    ip route show proto bgp                        # unchanged
+    systemctl is-active frr                            # active
+    pgrep -x bgpd                                      # record the pid
+    cat /proc/"$(pgrep -x bgpd)"/cgroup                # frr.service
+    systemctl show -p NRestarts frr                    # record; expect 0
+    ip route show proto bgp                            # record
     ```
 
-    The two halves happen inside one `up` and their order within it is
-    not fixed, so what this establishes is the end state rather than a
-    before-and-after: a controller pass has run on this device, and the
-    daemon is up and holding under `frr.service`. Before the worker
-    exists the last reading is empty, which is still the check — the
-    point is that it does not change, not that it has anything in it. A
-    daemon found stopped, a `bgpd` in a control group other than
-    `frr.service`'s — that one is the controller's own — or a
-    `proto bgp` route gone is the single outcome that reopens the
-    question of who owns the daemon on this device. Nothing is lost in
-    the window if it happens, because no session exists yet, but record
-    exactly what was seen: it is what that question would be re-decided
-    on.
+    **This reading is the *before*, not the answer.** The push does
+    provision the gateway for the firewall, but the controller applies
+    asynchronously and the daemon's restart happens in the same `up`,
+    so neither the streamed order nor these values witness which came
+    first — and a pass that killed the daemon would be hidden by the
+    restart that followed it, or by the supervisor respawning `bgpd`
+    within seconds. One process under `frr.service` is consistent with
+    a daemon nothing touched *and* with one that has been killed and
+    replaced.
+
+    **The *after* is the ceremony's step 3** (gateway.md §2.5), the
+    first controller-side change that happens with this daemon already
+    up and the window closed: it declares the inbound pinhole. Re-read
+    the block there. The same process id, `NRestarts=0`, still active
+    and the route reading unchanged — empty on both sides until the
+    worker peers, which is still the check — is what settles it. A
+    changed process id, a raised restart count, a `bgpd` in a control
+    group other than `frr.service`'s — that one is the controller's own
+    — or a `proto bgp` route gone is the single outcome that reopens
+    who owns the routing daemon on this device, and it is recorded the
+    same way: exactly what was seen, because that is what the question
+    would be re-decided on. Nothing is lost either way while no session
+    exists, which is what makes this the cheap moment to find out.
+
+    A reboot between the two readings resets both — the process id and
+    the restart count belong to that boot. If one falls in between, and
+    the soak's first one is meant to (§2), take the *before* again
+    after it: the comparison is across the controller pass, not across
+    a boot.
 
 **Nothing in §4 or §5 is irreversible.** The point of no return is §7:
 the cleanup deletes the old trees, and the removal commit takes the
