@@ -227,7 +227,7 @@ All decided behavior from architecture.md §3, expressed as config:
     `CiliumBGPPeeringPolicy` is deprecated and **not used** (at the
     ≥1.20 floor it may be removed outright) — peering with the UDM
     (AS 65000) over both families, advertising `lan` VIPs as
-    /32 + /128. The UDM side is physical's gw-config provider; the
+    /32 + /128. The UDM side is physical's device-files provider; the
     session only establishes once both stacks are up — acceptable,
     nothing LAN-facing exists before apps deploy.
     **Session hardening (2026-08-23, architecture.md §4.1)**: an MD5

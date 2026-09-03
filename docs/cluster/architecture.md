@@ -718,9 +718,14 @@ drives gw-config**:
     belongs to `skopeo` and the overlay filesystem semantics to
     `umoci`, both of them packages the gateway's persistence layer must
     carry. Rootfs images ride this, keeping preview cheap and state
-    small. Implementation
-    rule for both resources: secret-bearing inputs (device secrets in
-    `DeviceFile` content) are declared secret
+    small. A directory something on the device fills at runtime gets a
+    third resource, **`DeviceDirectory`**: inputs
+    `{path, mode, owner, hook}`, whose existence and shape are compared
+    against the device the way a file's content is, and which declares
+    nothing about the contents — hence a delete that takes the directory
+    away only while it is empty. Implementation rule for all three
+    resources: secret-bearing inputs (device secrets in `DeviceFile`
+    content) are declared secret
     (`Output.secret`/`additional_secret_outputs`) so they never
     render in plain preview or state output.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both

@@ -540,12 +540,13 @@ and AdGuard Home has no scoped API at all, so its admin account *is* the
 API credential — the residual the security audit records as M6. Both
 instances answer to the same login, because a rewrite is written to
 alice and bob directly rather than synchronized (declarative/dns.md §3),
-and that account is part of the static configuration the gw-config
-estate pushes. The ZeroTier Central token is the same shape one layer
-out: Central publishes no token API, so an account token made in its web
-console is what `physical` authenticates with, as broad as the account it
-belongs to because Central offers nothing narrower. None of the three is
-minted here, so `credentials derived <row> record` (§4) is the delivery
+and that account is part of the static configuration the `physical`
+stack pushes to the device. The ZeroTier Central token is the same
+shape one layer out: Central publishes no token API, so an account
+token made in its web console is what `physical` authenticates with,
+as broad as the account it belongs to because Central offers nothing
+narrower. None of the three is minted here, so
+`credentials derived <row> record` (§4) is the delivery
 alone: the console steps, the value, the stack config that reads it. The
 consumer decides which stack — `physical` drives the UDM's Network API
 and the overlay's Central account, `dns` writes the AdGuard rewrites —

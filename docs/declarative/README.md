@@ -75,8 +75,8 @@ Created as each area reaches detailed design:
 
 -   **[physical.md](physical.md)** (written) — the `physical` stack:
     OCI resources + Talos day-1 via pulumiverse-talos (day-2 stays
-    talosctl), the libvirt worker VM, gw-config/unifi on the UDM, B2,
-    bootstrap order + verification checklist. The physical
+    talosctl), the libvirt worker VM, the device files and unifi on
+    the UDM, B2, bootstrap order + verification checklist. The physical
     *systems* it declares are designed in
     [../physical/](../physical/) (state-backend appliance, homelab
     host & VM) — this doc stays about how they're declared.
