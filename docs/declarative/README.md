@@ -54,11 +54,24 @@ Boundary rules:
 labels, storage-class names and the ZeroTier roster live in a shared
 `conventions` package that every program imports, and the singletons it
 names have autonaming disabled, so the literal in the module is the real
-name ([cluster-infra.md](cluster-infra.md) §0). A table two stacks
-decide from belongs there even when only one of them declares resources
-for it: `physical` admits overlay members by the roster while `dns`
-publishes the `*.zt` host block from the same roster, so the table is
-stated once rather than imported across a package boundary.
+name ([cluster-infra.md](cluster-infra.md) §0).
+
+**A census lives with the programs that read it.** Count them — a
+stack program or a script alike, and regardless of whether each
+declares a resource from the table. One: the table is data in that
+program's own area, beside the component that receives it and never
+inside it. More than one: it is a convention, because `conventions` is
+the only package a stack program and a script can both import. Which
+program turns the table into resources does not enter into it. A roll
+an operator supplies or rotates is stack configuration, not a census.
+
+Two tables here have two readers each: `physical` admits overlay
+members by the roster while `dns` publishes the `*.zt` host block from
+the same roster, and both `apps` and `dns` read the route census
+(`conventions/routes.py`) — so each is stated once rather than imported
+across a package boundary. A script counts as a reader because it can
+import `conventions` and `lib` and nothing else (AGENTS.md's import
+contract), which is what makes this package the only shared home.
 
 A `StackReference` therefore carries only machine facts — values no
 program can know until an apply produces them. Nearly all of them are
