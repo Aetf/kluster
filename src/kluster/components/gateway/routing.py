@@ -141,7 +141,8 @@ FRR_SERVICE = 'frr.service'
 #: How a candidate configuration is parsed before anything is installed: the
 #: file to parse is appended. It parses against the command tree the installed
 #: daemons have, with none of them running, which is the only check available
-#: here that a line will be accepted rather than merely written.
+#: here that a line will be parsed rather than merely written — what the daemon
+#: itself refuses still surfaces only at the supervisor's push.
 FRR_SYNTAX_CHECK = 'vtysh -C -f'
 
 #: How the daemon is put onto the configuration. A restart rather than a

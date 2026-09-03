@@ -509,6 +509,14 @@ statement about that firmware:
 -   **The overlay's routes (§2.2) are `proto static`, id 4**, outside
     the sweep set. The daemon replaces only entries carrying its own
     ids, so the two route sources do not interfere.
+-   **The two youngest lines of the declared file date from 2018 and
+    2020**, and they are the ones a firmware jump puts at risk first:
+    `frr defaults traditional`, the configuration-profile mechanism
+    upstream took in October 2018, and `no bgp ebgp-requires-policy`,
+    the knob added in February 2019 and needed here since FRR 7.4 in
+    July 2020 made an inbound and an outbound policy a precondition for
+    an external session to install anything. The rest is Quagga-era
+    syntax, and nothing in the file is deprecated in 10.1.
 
 **What the first push settles** is the one thing reading the device
 cannot: no controller provisioning pass has yet happened while this
