@@ -121,6 +121,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import posixpath
 import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager, suppress
@@ -167,6 +168,7 @@ __all__ = (
     'MakeDirectoryFailed',
     'PullFailed',
     'RemoveDirectoryFailed',
+    'SymbolicLinkAtPath',
     'UnpackFailed',
     'endpoint',
     'gone',
@@ -178,6 +180,7 @@ __all__ = (
     'reference',
     'remove_script',
     'secret_outputs',
+    'symlink_test',
     'unpack_script',
 )
 
@@ -340,6 +343,18 @@ class DirectoryNotEmpty(Exception):
 
 
 @final
+class SymbolicLinkAtPath(Exception):
+    """A symbolic link stands where a directory is declared; no operation acts on one (`symlink_test`)."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f'refusing to act on {path}: it is a symbolic link, and this resource declares the '
+            f'directory at that path rather than whatever the link points at'
+        )
+        self.path: str = path
+
+
+@final
 @dataclass(frozen=True)
 class Connection:
     """Where and as whom to write, and the key the device must present.
@@ -472,21 +487,55 @@ def make_script(path: str, mode: str, owner: str | None) -> str:
     the mode and the ownership are set rather than adjusted. Ownership is left
     alone where none was declared, exactly as a write does -- a directory whose
     owner this resource has no opinion about keeps whatever the device gave it.
+
+    Its first act is `symlink_test`, because every command after it follows a
+    link.
     """
     quoted = shlex.quote(path)
-    script = [f'mkdir -p {quoted}', f'chmod {shlex.quote(mode)} {quoted}']
+    script = [symlink_test(path), f'mkdir -p {quoted}', f'chmod {shlex.quote(mode)} {quoted}']
     if owner:
         script.append(f'chown {shlex.quote(owner)} {quoted}')
     return ' && '.join(script)
 
 
+def symlink_test(path: str) -> str:
+    """The test that refuses a symbolic link at the declared path.
+
+    **A directory resource declares the directory at its own path, not whatever
+    a link there points at.** The link cannot be treated as the directory,
+    because the operations disagree about it: `mkdir -p`, `chmod` and `chown`
+    follow one and would converge a directory this resource never named, while
+    `rmdir` refuses one outright -- so a resource that accepted a link would
+    report itself converged and then fail the day it was deleted. Nor can the
+    link be replaced by a directory, which would destroy an indirection
+    somebody else put there deliberately.
+
+    What is left is to say so: both halves stop, in the same words, and the
+    person who made the link decides whether the declaration or the link is
+    wrong. It applies to the last component alone -- a link higher up the path
+    is traversal that neither `stat` nor these scripts can even see, which is
+    why a device whose `/data` is a symlink is not this case.
+
+    The test is `-L` rather than `-d`, because a link is the only thing here
+    that is silent: `mkdir -p` refuses a regular file at the path, and says so
+    in the device's own words.
+    """
+    quoted = shlex.quote(path)
+    return f'if [ -L {quoted} ]; then exit {ssh.SYMBOLIC_LINK}; fi'
+
+
 def remove_script(path: str) -> str:
     """The command that takes `path` away, and only while nothing is in it.
 
-    Three answers rather than two, because the caller has to tell them apart: a
-    path that was already gone is a success, a directory with something in it
-    exits `ssh.NOT_EMPTY`, and anything else is the device's own failure with
-    its own message. `rmdir` would collapse the last two into one status.
+    Four answers rather than two, because the caller has to tell them apart: a
+    symbolic link at the path exits `ssh.SYMBOLIC_LINK`, a path that was
+    already gone is a success, a directory with something in it exits
+    `ssh.NOT_EMPTY`, and anything else is the device's own failure with its own
+    message. `rmdir` would collapse the last two into one status.
+
+    `symlink_test` comes before the absence test rather than after it, because
+    `[ -e ]` follows a link and a link pointing at nothing would otherwise read
+    as "already gone".
 
     The emptiness test asks about a directory first. `ls -A` on a regular file
     prints that file's own name, so a file left at the declared path would be
@@ -497,6 +546,7 @@ def remove_script(path: str) -> str:
     quoted = shlex.quote(path)
     return '; '.join(
         (
+            symlink_test(path),
             f'if [ ! -e {quoted} ]; then exit 0; fi',
             f'if [ -d {quoted} ] && [ -n "$(ls -A {quoted})" ]; then exit {ssh.NOT_EMPTY}; fi',
             f'rmdir {quoted}',
@@ -573,13 +623,42 @@ def _observed_owner(declared: Any, stat: ssh.FileStat) -> str | None:
     return f'{stat.owner}:{stat.group}' if ':' in str(declared) else stat.owner
 
 
-def _absolute(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
+def _canonical_path(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
+    """Refuse a path that is not the device's own single spelling of one place.
+
+    **Absolute**, because a relative path would be resolved against whatever
+    directory a session happens to start in, and no declaration here chose one.
+
+    **Canonical** -- the spelling `posixpath.normpath` leaves alone, the leading
+    `//` it preserves included -- because a place with two spellings is a place
+    the comparison and the operations can disagree about. A trailing slash is
+    the one that bites: a path ending in one is resolved through to a directory
+    by every shell test, by `stat` and by `mv`, so the spelling names the same
+    place and answers a different question about it.
+    """
     value = props.get(key)
     if value is None or is_unknown(value):
         return []
-    if not str(value).startswith('/'):
-        return [dynamic.CheckFailure(key, f'must be an absolute path on the device, got {value!r}')]
+    path = str(value)
+    if not path.startswith('/'):
+        return [dynamic.CheckFailure(key, f'must be an absolute path on the device, got {path!r}')]
+    canonical = posixpath.normpath(path)
+    if canonical.startswith('//'):
+        # `normpath` keeps exactly two leading slashes, which POSIX leaves to
+        # the implementation to read as it likes. The device reads them as one.
+        canonical = canonical[1:]
+    if path != canonical:
+        return [dynamic.CheckFailure(key, f'{_misspelling(path)}, so declare it as {canonical!r}, not {path!r}')]
     return []
+
+
+def _misspelling(path: str) -> str:
+    """Which departure from the canonical spelling this path took, in its own words."""
+    if path != '/' and path.endswith('/'):
+        # Named on its own because it is the one that reads as harmless: the
+        # place is the same one, and every test of it answers differently.
+        return 'a trailing slash is a path resolved through to a directory, not the path itself'
+    return 'a path names its place once, without a doubled slash, a "." or a ".."'
 
 
 def _registry_qualified(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
@@ -682,7 +761,7 @@ class DeviceFileProvider(DeviceProvider):
     """One desired-state file on the device: write it, then make it take effect."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        return self._stamp(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
+        return self._stamp(news, [*_canonical_path(news, 'path'), *_octal(news, 'mode')])
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         run_sync(self._apply(props))
@@ -765,7 +844,7 @@ class DeviceArtifactProvider(DeviceProvider):
     """A digest-pinned root filesystem on the device, tracked by a marker file."""
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        failures = [*_absolute(news, 'root'), *_registry_qualified(news, 'repository')]
+        failures = [*_canonical_path(news, 'root'), *_registry_qualified(news, 'repository')]
         digest = news.get('digest')
         if digest is not None and not is_unknown(digest) and not _is_digest(str(digest)):
             failures.append(dynamic.CheckFailure('digest', f'must be a `sha256:<hex>` manifest digest, got {digest!r}'))
@@ -874,10 +953,13 @@ class DeviceDirectoryProvider(DeviceProvider):
     -- but a diff that could not see it would report no change for as long as
     the mode and the owner happened to match, which is exactly the directory
     this resource exists to notice.
+
+    A **symbolic link** at the path is drift the comparison reports and the
+    operations refuse rather than act through (`symlink_test`).
     """
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
-        return self._stamp(news, [*_absolute(news, 'path'), *_octal(news, 'mode')])
+        return self._stamp(news, [*_canonical_path(news, 'path'), *_octal(news, 'mode')])
 
     def create(self, props: dict[str, Any]) -> dynamic.CreateResult:
         run_sync(self._make(props))
@@ -916,6 +998,8 @@ class DeviceDirectoryProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             made = await transport.run(make_script(path, str(props['mode']), _owner(props)))
+            if made.exit_status == ssh.SYMBOLIC_LINK:
+                raise SymbolicLinkAtPath(path)
             if not made.ok:
                 raise MakeDirectoryFailed(path, made.exit_status, made.stderr)
             await run_hook(transport, props)
@@ -925,9 +1009,10 @@ class DeviceDirectoryProvider(DeviceProvider):
             stat = await transport.stat(str(props['path']))
             if stat is None or not stat.is_directory:
                 # Which is the gap this resource closes: a directory removed by
-                # hand, taken by a firmware update, or replaced by a file of the
-                # same name is work the next preview sees without anyone asking
-                # for a refresh.
+                # hand, taken by a firmware update, or replaced by a file or a
+                # link of the same name is work the next preview sees without
+                # anyone asking for a refresh. A link is drift, not the
+                # directory it points at.
                 return True
             return not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat)
 
@@ -946,6 +1031,8 @@ class DeviceDirectoryProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             removed = await transport.run(remove_script(path))
+            if removed.exit_status == ssh.SYMBOLIC_LINK:
+                raise SymbolicLinkAtPath(path)
             if removed.exit_status == ssh.NOT_EMPTY:
                 raise DirectoryNotEmpty(path)
             if not removed.ok:
@@ -1035,6 +1122,10 @@ class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
         runtime -- and it is why the delete removes an empty directory and
         refuses a full one: what is inside was put there by whoever fills it, and
         this program never claimed it.
+
+        **`path` is the directory, not a symbolic link to one.** A link found
+        there fails the operation by name, either way round, and the answer is to
+        declare the path the link points at (`symlink_test`).
 
         `path` is therefore the only replacement. A directory cannot be in two
         places, and one left behind at the old path would be an orphan nothing

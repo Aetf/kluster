@@ -723,7 +723,9 @@ drives gw-config**:
     `{path, mode, owner, hook}`, whose existence and shape are compared
     against the device the way a file's content is, and which declares
     nothing about the contents — hence a delete that takes the directory
-    away only while it is empty. Implementation rule: the one
+    away only while it is empty. The path is the directory and not a
+    symbolic link to one: a link there fails the operation by name,
+    whether it is being made or taken away. Implementation rule: the one
     secret-bearing input among the three — a `DeviceFile`'s content, on
     request — is declared secret (`additional_secret_outputs`) so it
     never renders in plain preview or state output; an artifact's
