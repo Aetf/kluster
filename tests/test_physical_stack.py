@@ -99,7 +99,7 @@ ACCOUNT_CONFIG = {
 }
 
 
-class Estate(Recorder):
+class Installation(Recorder):
     """Every account and appliance the program reaches, as far as it reads them back.
 
     The values are invented; what the suite is for is that each is read at the
@@ -200,7 +200,7 @@ STACK_CONFIG = {
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Estate:
+async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Installation:
     with_compartment(monkeypatch, COMPARTMENT)
     with_tenancy_ocid(monkeypatch, TENANCY_ID)
     # The run materializes the libvirt session's credential into the checkout's
@@ -209,7 +209,7 @@ async def setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Estate:
     # behind and, worse, overwrite the operator's.
     monkeypatch.setattr(workstation, 'repo_root', lambda: tmp_path)
     pulumi.runtime.set_all_config(dict(STACK_CONFIG))
-    return await run_with(Estate(), stack='physical')
+    return await run_with(Installation(), stack='physical')
 
 
 #: The provider of each domain the design has, by the prefix its type tokens
@@ -219,7 +219,7 @@ DOMAIN_PROVIDERS = ('oci', 'talos', 'libvirt', 'b2', 'unifi', 'zerotier')
 
 
 @pytest.mark.asyncio
-async def test_the_stack_declares_every_domain_of_the_design(setup: Estate) -> None:
+async def test_the_stack_declares_every_domain_of_the_design(setup: Installation) -> None:
     # The whole program against the mocks, which is where a wiring mistake
     # surfaces — an argument the provider would reject, or a dependency that
     # needs the endpoint before it exists.
@@ -233,7 +233,7 @@ async def test_the_stack_declares_every_domain_of_the_design(setup: Estate) -> N
 
 
 @pytest.mark.asyncio
-async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Estate) -> None:
+async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Installation) -> None:
     """The controller's address is derived, not recorded beside its key.
 
     The gateway's overlay address is handed out by this program's own ZeroTier
@@ -258,7 +258,7 @@ async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(set
 
 
 @pytest.mark.asyncio
-async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Estate) -> None:
+async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_out(setup: Installation) -> None:
     """The zone matrix as the whole run declares it, not as one component does.
 
     A zone the controller has just been told about is denied against every
@@ -305,7 +305,7 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
 
 @pytest.mark.asyncio
 async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
-    setup: Estate,
+    setup: Installation,
     tmp_path: Path,
 ) -> None:
     """The libvirt endpoint is derived from the roster and the checkout.
@@ -345,7 +345,7 @@ async def test_the_libvirt_session_is_dialled_where_the_roster_placed_the_host(
 
 
 @pytest.mark.asyncio
-async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Estate) -> None:
+async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolvers(setup: Installation) -> None:
     """The policy is composed here, out of the facts the program already holds.
 
     `Overlay` declares none of it (rfc-002 §6), so this is where the four
@@ -371,7 +371,7 @@ async def test_the_overlay_carries_rules_composed_from_the_roster_and_the_resolv
 
 
 @pytest.mark.asyncio
-async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Estate) -> None:
+async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup: Installation) -> None:
     """First bring-up dials the device over the LAN, on both channels.
 
     The overlay address answers only once the overlay daemon's container is on
@@ -395,7 +395,7 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
 
 
 @pytest.mark.asyncio
-async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Estate) -> None:
+async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setup: Installation) -> None:
     """A pin nobody can read is a pin nobody reviews (rfc-002 §11).
 
     The key the device must present is a public key and a decision of this
@@ -412,7 +412,7 @@ async def test_the_pin_a_preview_shows_is_the_constant_the_repository_holds(setu
 
 
 @pytest.mark.asyncio
-async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(setup: Estate) -> None:
+async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_with(setup: Installation) -> None:
     """The door this program comes through is one it declares, or an update closes it.
 
     `/root` is off `/data`, so the key that authorizes every push is exactly as
@@ -431,7 +431,7 @@ async def test_the_device_is_told_to_keep_accepting_the_key_this_stack_dials_wit
 
 
 @pytest.mark.asyncio
-async def test_the_device_is_given_the_packages_its_container_runtime_needs(setup: Estate) -> None:
+async def test_the_device_is_given_the_packages_its_container_runtime_needs(setup: Installation) -> None:
     """The gateway's persistence layer is declared, and with the set as data.
 
     What a firmware update wipes is reinstalled by a script in the device's boot
@@ -451,7 +451,7 @@ async def test_the_device_is_given_the_packages_its_container_runtime_needs(setu
 
 
 @pytest.mark.asyncio
-async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Estate) -> None:
+async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Installation) -> None:
     """The second nested egg: the address is SLAAC off a network this run makes.
 
     The worker's global address is formed from the router advertisement of the
@@ -478,7 +478,7 @@ async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(se
 
 
 @pytest.mark.asyncio
-async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Estate) -> None:
+async def test_the_pinhole_admits_the_configured_address_once_it_is_known(setup: Installation) -> None:
     """And with the address configured, the rule is back and carries it.
 
     Step three of the bring-up ceremony is writing the key, so what follows it
@@ -615,7 +615,7 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
 
 
 @pytest.mark.asyncio
-async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Estate) -> None:
+async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Installation) -> None:
     """The worker's apid is reached without a route to its LAN address.
 
     apid routes by the node a call names, so the worker's configuration apply
@@ -643,7 +643,7 @@ INSTANCE_IDS = {node: f'{conventions.CLUSTER_NAME}-{node}_id' for node in conven
 
 
 @pytest.mark.asyncio
-async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Estate) -> None:
+async def test_every_volume_is_attached_to_the_node_the_table_names(setup: Installation) -> None:
     """A block volume attaches only within its own availability domain.
 
     Both halves come off the instance rather than out of a constant, because
@@ -697,7 +697,7 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
 
 @pytest.mark.asyncio
-async def test_the_quota_names_the_compartment_this_program_decided(setup: Estate) -> None:
+async def test_the_quota_names_the_compartment_this_program_decided(setup: Installation) -> None:
     """A quota statement has no OCID form and names its compartment by name.
 
     Which is why that name is a convention rather than something read back from
@@ -714,7 +714,7 @@ async def test_the_quota_names_the_compartment_this_program_decided(setup: Estat
 
 
 @pytest.mark.asyncio
-async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Estate) -> None:
+async def test_the_budget_alerts_reach_the_addresses_configuration_names(setup: Installation) -> None:
     """The only signal this stack raises that does not go through the cluster.
 
     The addresses are the one thing about the guardrails an operator supplies,
@@ -915,7 +915,7 @@ SIGNED_BY = {
 
 
 @pytest.mark.asyncio
-async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Estate) -> None:
+async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: Installation) -> None:
     """The whole point of the slice, as one assertion over the whole program.
 
     Every resource in the stack authenticates through a provider some component
@@ -942,7 +942,7 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: E
 
 
 @pytest.mark.asyncio
-async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Estate) -> None:
+async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Installation) -> None:
     """One account, six components, one provider -- built where they meet.
 
     A provider built inside any one of them would be reached into by the other
@@ -974,7 +974,7 @@ async def test_the_cloud_provider_is_the_stack_programs_and_is_shared(setup: Est
 
 
 @pytest.mark.asyncio
-async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Estate) -> None:
+async def test_the_placement_lookups_name_the_provider_they_sign_with(setup: Installation) -> None:
     """A stack program's own invoke has no parent to inherit from.
 
     Both regional lookups are made outside any component, so nothing carries a

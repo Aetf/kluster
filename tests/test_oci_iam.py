@@ -973,9 +973,9 @@ def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxS
         seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
     )
 
-    # The override is for a tenancy that is not this estate's, where neither
-    # the names nor the OCIDs `conventions` records mean anything -- so nothing
-    # is looked up, nothing is created, and nothing is compared.
+    # The override is for a tenancy that is not this installation's, where
+    # neither the names nor the OCIDs `conventions` records mean anything -- so
+    # nothing is looked up, nothing is created, and nothing is compared.
     assert tenancy.identity.compartments == {}
     name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {drill}']

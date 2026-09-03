@@ -438,10 +438,10 @@ ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
 def recorded_compartment(tenancy: Tenancy) -> None:
     """The `physical` compartment as `conventions` records it, present in the fake.
 
-    The state the estate is in once a consumer has been minted for: the OCID is
-    committed, so a mint that names no compartment of its own adopts that one.
-    A case about what happens after the compartment is settled does not have to
-    say any of this.
+    The state the installation is in once a consumer has been minted for: the
+    OCID is committed, so a mint that names no compartment of its own adopts
+    that one. A case about what happens after the compartment is settled does
+    not have to say any of this.
     """
     intended = conventions.OCI_TENANCY.compartments[conventions.PHYSICAL]
     assert intended.ocid is not None

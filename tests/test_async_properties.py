@@ -21,7 +21,7 @@ from putils import Component, async_output, resolve
 class Engine(Recorder):
     """A monitor that hands every resource an id derived from its name.
 
-    Unlike the estate's suites this one is about the framework, so the
+    Unlike the installation's suites this one is about the framework, so the
     resources are stand-ins and the only interesting answer is the id: a
     network's is what a component's async input is computed from, and
     withholding it is what a preview of an unbuilt stack looks like.

@@ -1,4 +1,4 @@
-"""The `github` program: the forge declared as an estate of its own.
+"""The `github` program: the forge itself, declared rather than clicked.
 
 Every case here is about a setting that a later diff cannot show, because each
 is a rule about what *cannot* happen: a check that is required, a push that is
@@ -57,8 +57,8 @@ def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
 
 
 def test_the_owner_cannot_walk_around_the_gate(stack: Forge) -> None:
-    # The estate has one admin, so an unenforced protection is no protection:
-    # it would be bypassed by exactly the person it applies to.
+    # The installation has one admin, so an unenforced protection is no
+    # protection: it would be bypassed by exactly the person it applies to.
     protection = stack.by_name(BRANCH_PROTECTION)['main']
 
     assert protection['enforceAdmins'] is True

@@ -340,7 +340,7 @@ def test_a_directory_arriving_is_not_an_event_anything_is_told_about(monitor: Re
 
 
 def test_the_package_set_is_data_and_the_transaction_is_mechanism() -> None:
-    """Which packages is the estate's; how they are installed is the script's.
+    """Which packages is the installation's; how they are installed is the script's.
 
     The set is rendered into one line and nothing else about the file changes
     with it: one apt transaction, because packages version-locked to each other

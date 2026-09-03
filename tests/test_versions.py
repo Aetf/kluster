@@ -102,10 +102,10 @@ def test_an_image_pin_that_is_not_a_whole_reference_is_refused(value: str) -> No
 def test_a_registry_named_with_a_port_keeps_it_out_of_the_tag() -> None:
     """The tag is what follows the *last* colon, and never contains a slash."""
     pulumi.runtime.set_all_config(
-        dict(PINS) | {'versions:image-gateway-caddy': f'registry.invalid:5000/estate/caddy:3@{DIGEST}'}
+        dict(PINS) | {'versions:image-gateway-caddy': f'registry.invalid:5000/installation/caddy:3@{DIGEST}'}
     )
 
-    assert versions.image['gateway-caddy'] == ImagePin('registry.invalid:5000/estate/caddy', '3', DIGEST)
+    assert versions.image['gateway-caddy'] == ImagePin('registry.invalid:5000/installation/caddy', '3', DIGEST)
 
 
 def test_a_chart_pin_that_names_no_version_at_all_is_refused_by_name() -> None:

@@ -131,7 +131,7 @@ def test_a_terminated_address_does_not_count() -> None:
 
 COMPARTMENT = 'ocid1.compartment.oc1..appliance'
 APPLIANCE_USER = 'ocid1.user.oc1..kluster-state-backend'
-APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..estate'
+APPLIANCE_TENANCY = 'ocid1.tenancy.oc1..installation'
 
 
 @pytest.fixture
@@ -168,7 +168,7 @@ def test_an_explicit_compartment_wins_over_the_convention(slots: Path) -> None:
 
     client = provision.OciClients.load('ocid1.compartment.oc1..elsewhere')
 
-    # The drill escape: a run against a tenancy that is not this estate's
+    # The drill escape: a run against a tenancy that is not this installation's
     # names its own compartment, because none of the mapping applies there.
     assert client.compartment_id == 'ocid1.compartment.oc1..elsewhere'
 
