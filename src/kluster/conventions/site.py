@@ -64,7 +64,7 @@ SERVER_LAN = SiteNetwork(name='server', v4=IPv4Network('192.168.80.0/24'))
 #: Home Assistant and its devices — the LAN's least-trusted population.
 IOT_VLAN = SiteNetwork(name='iot', v4=IPv4Network('192.168.90.0/24'))
 
-#: The gateway's own container estate, on the bridge the device calls `br5`.
+#: The gateway's own containers, on the bridge the device calls `br5`.
 CONTAINER_VLAN = SiteNetwork(
     name='container',
     v4=IPv4Network('10.0.5.0/24'),

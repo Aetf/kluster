@@ -62,8 +62,8 @@ async def main() -> None:
     config = pulumi.Config()
     account_id = config.require('cloudflareAccountId')
 
-    # One provider for every zone: the token is scoped to the estate's zones
-    # as a set, so a provider built inside one zone's component would be
+    # One provider for every zone: the token is scoped to the installation's
+    # zones as a set, so a provider built inside one zone's component would be
     # reached into by the rest (rfc-002 §8.1).
     zone_provider = cloudflare.Provider(
         f'{conventions.CLUSTER_NAME}-cloudflare',

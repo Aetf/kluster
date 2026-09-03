@@ -55,10 +55,10 @@ log = logging.getLogger(__name__)
 PATH_ENV = 'KLUSTER_KDBX'
 
 #: Secret Service collection entries are keyed by (service, account); the
-#: database's path is the account, so the kit and the estate never collide and
-#: a database moved to a new path simply stops matching. The path is resolved
-#: first (`KdbxStore.account`), so the several ways of naming one file are one
-#: account rather than several.
+#: database's path is the account, so the kit and the personal estate never
+#: collide and a database moved to a new path simply stops matching. The path
+#: is resolved first (`KdbxStore.account`), so the several ways of naming one
+#: file are one account rather than several.
 KEYRING_SERVICE = 'kluster-credentials'
 
 #: The attributes an entry carries natively; anything else is a custom

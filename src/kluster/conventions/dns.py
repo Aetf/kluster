@@ -1,4 +1,4 @@
-"""The zones this estate publishes in, and the anchors app records point at."""
+"""The zones this installation publishes in, and the anchors app records point at."""
 
 from __future__ import annotations
 

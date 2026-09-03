@@ -183,8 +183,8 @@ source_modules = ["kluster.scripts"]
 forbidden_modules = ["kluster.stacks", "kluster.components", "kluster.providers"]
 
 # A custom provider is generic code for a class of system; which host, which
-# name and which credential are the estate's decisions, and they belong to the
-# provider's callers.
+# name and which credential are the installation's decisions, and they belong
+# to the provider's callers.
 [[tool.importlinter.contracts]]
 name = "A provider knows no conventions"
 type = "forbidden"
@@ -192,9 +192,9 @@ source_modules = ["kluster.providers"]
 forbidden_modules = ["kluster.conventions"]
 
 # Not a rule so much as what `putils` is: the framework of rfc-001, which
-# knows no estate.
+# knows no installation.
 [[tool.importlinter.contracts]]
-name = "The framework knows no estate"
+name = "The framework knows no installation"
 type = "forbidden"
 source_modules = ["putils"]
 forbidden_modules = ["kluster"]

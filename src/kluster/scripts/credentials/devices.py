@@ -40,8 +40,8 @@ account, and `dns` writes the split-horizon rewrites on the AdGuard pair
 
 §3's other pasted row — the UDM SSH key and the libvirt identity — has no
 member here, because there are no console steps to print for it: nobody
-creates either in a console. The estate's other automation installs them (§3),
-and the act on this side is a paste with nothing to guide.
+creates either in a console. The installation's other automation installs them
+(§3), and the act on this side is a paste with nothing to guide.
 """
 
 from __future__ import annotations

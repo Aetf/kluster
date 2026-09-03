@@ -76,8 +76,9 @@ class ImagePin(NamedTuple):
     were found, but the pin carries all three, because a reference is what an
     image *is* — it is the form renovate maintains natively, the form a reader
     recognizes, and the form a third-party image can be pinned in at all. An
-    estate that also decides where its own builds are published expresses that
-    as a check against the pin rather than as a value the pin has to omit.
+    installation that also decides where its own builds are published
+    expresses that as a check against the pin rather than as a value the pin
+    has to omit.
     """
 
     repository: str
@@ -116,7 +117,7 @@ class ImageVersions(_Kind):
     tag and the digest together and reads the repository out of the same line.
     A tag alone would be a moving pin, a digest alone a pin nobody can read,
     and a reference without its repository would be a kind that only an image
-    this estate publishes could belong to.
+    this installation publishes could belong to.
 
     Where a build *should* come from is a separate question with a separate
     answer: a caller that has an opinion — the gateway does, since two of its

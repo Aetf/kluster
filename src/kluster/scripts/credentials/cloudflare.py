@@ -45,8 +45,8 @@ log = logging.getLogger(__name__)
 
 API = 'https://api.cloudflare.com/client/v4'
 
-#: How many zones one listing page carries. The estate is far below it, so the
-#: pagination below exists for correctness rather than for the estate's size.
+#: How many zones one listing page carries. This installation is far below it,
+#: so the pagination below exists for correctness rather than for its size.
 PAGE_SIZE = 50
 
 #: The permission the seed must carry for any of this to work. Checked by name
@@ -312,8 +312,8 @@ class Session:
         Behaviour rather than permission names, because the listing is what the
         seed is used for: a token may carry zone read and still be scoped to
         zones this account does not have. Non-empty is the whole test -- which
-        zones the estate expects is `conventions`' business, and adoption comes
-        before any of it.
+        zones the installation expects is `conventions`' business, and adoption
+        comes before any of it.
         """
         if not self.zones():
             raise CredentialRejected(
@@ -480,7 +480,7 @@ def _confirm_scope(value: str, expected: Sequence[str]) -> None:
     place to narrow it is the policy above, not a failed run that leaves the
     stack with no credential at all.
     """
-    log.info('checking the minted token against the %d estate zones', len(expected))
+    log.info('checking the minted token against the %d zones of this installation', len(expected))
     visible = {zone.name for zone in Session.authorize(value).zones()}
     missing = [name for name in expected if name not in visible]
     if missing:
@@ -499,7 +499,7 @@ def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> Zon
     retired, so a credential that cannot do the job never reaches a slot and
     never costs the predecessor that still could.
     """
-    log.info('resolving %d estate zones through the Cloudflare seed', len(zones))
+    log.info('resolving %d zones of this installation through the Cloudflare seed', len(zones))
     account_id, zone_ids = _resolve_zones(session, zones)
     policies = [
         {

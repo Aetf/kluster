@@ -29,8 +29,8 @@ from __future__ import annotations
 import pulumi
 import pulumi_github as github
 
-#: The account both repositories live under. An estate fact, like the names in
-#: `conventions`: this stack is not parameterized for another owner.
+#: The account both repositories live under. An installation fact, like the
+#: names in `conventions`: this stack is not parameterized for another owner.
 OWNER = 'Aetf'
 
 DEPLOYMENT_REPO = 'kluster'
@@ -98,7 +98,7 @@ async def main() -> None:
     ops = github.Repository(
         OPS_REPO,
         name=OPS_REPO,
-        description='Operations for the kluster estate: alert issues, drills, scheduled workflows',
+        description='Operations for the kluster installation: alert issues, drills, scheduled workflows',
         visibility='private',
         has_issues=True,
         has_projects=False,
@@ -166,10 +166,10 @@ async def main() -> None:
         environment=APPLY_ENVIRONMENT,
         deployment_branch_policy={'protected_branches': True, 'custom_branch_policies': False},
         reviewers=[{'users': [int(operator.id)]}],
-        # The estate has one operator, so the reviewer is the person who opened
-        # the change; self-review is the only review there can be. Admin bypass
-        # is off for the same reason enforce_admins is on above -- a door with a
-        # key under the mat.
+        # The installation has one operator, so the reviewer is the person who
+        # opened the change; self-review is the only review there can be. Admin
+        # bypass is off for the same reason enforce_admins is on above -- a door
+        # with a key under the mat.
         prevent_self_review=False,
         can_admins_bypass=False,
         opts=pulumi.ResourceOptions(parent=deployment),

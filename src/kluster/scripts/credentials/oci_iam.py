@@ -1346,9 +1346,9 @@ class ApiKey:
     """A minted API key, as the five things a signing configuration needs.
 
     Three are carried and two are derived, for the reason the kit's row stores
-    three (§2): the region is a constant of this estate, and the fingerprint is
-    a function of the key, so a carried copy of either could only ever disagree
-    with what it describes.
+    three (§2): the region is a constant of this installation, and the
+    fingerprint is a function of the key, so a carried copy of either could
+    only ever disagree with what it describes.
     """
 
     #: The tenancy the user belongs to.
@@ -1374,8 +1374,8 @@ def verify_tenancy(tenancy: str) -> None:
     The tenancy OCID is a fact rather than a credential, so it has one home
     (`conventions.OCI_TENANCY`) and a mint copies nothing: it authenticated as
     a seed that belongs to some account, and all that is left is to prove the
-    account is this estate's. The two ways it can fail to be are the ways the
-    fact goes stale — a kit re-seeded from a different tenancy, and an OCID
+    account is this installation's. The two ways it can fail to be are the ways
+    the fact goes stale — a kit re-seeded from a different tenancy, and an OCID
     recorded wrong — and both would deliver a key that signs somewhere the
     stack does not act, so both are worth stopping over.
     """
@@ -1393,9 +1393,9 @@ def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) 
     """The compartment one consumer's key is confined to, created if it is not there.
 
     `override` is the drill-tenancy escape and is taken as given: a tenancy
-    that is not this estate's has neither the names nor the OCIDs `conventions`
-    records, so a run pointed at one names its compartment on the command line
-    and nothing here second-guesses it.
+    that is not this installation's has neither the names nor the OCIDs
+    `conventions` records, so a run pointed at one names its compartment on the
+    command line and nothing here second-guesses it.
 
     Otherwise the compartment is `conventions`': looked up by name, which is
     the half of the mapping that is a decision rather than a discovery.
