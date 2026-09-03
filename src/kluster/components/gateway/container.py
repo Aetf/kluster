@@ -140,8 +140,8 @@ CADDY_CONFIG = f'{CADDY_CONFIG_HOME}/caddy/Caddyfile'
 #: A device secret of its own, read by nothing else on the box.
 CADDY_TOKEN_PATH = '/etc/caddy/cloudflare.token'  # noqa: S105 -- a path, not a credential
 
-#: Where the image's resolver library reads which resolver to ask. Which one an
-#: estate offers is a site fact rather than an image fact, so it is delivered
+#: Where the image's resolver library reads which resolver to ask. Which one is
+#: offered is a site fact rather than an image fact, so it is delivered
 #: rather than baked: the image's own default is a public resolver, which
 #: answers none of the internal names this proxy's upstreams have.
 CADDY_RESOLV_CONF = '/etc/resolv.conf'

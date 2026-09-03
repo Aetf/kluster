@@ -25,8 +25,8 @@ root**, in this order, first hit wins:
 
 Three properties decide the shape:
 
--   **The estate is never opened.** Each root's fields live in the desktop
-    secret store under their own keys, put there once by `credentials root
+-   **The personal estate is never opened.** Each root's fields live in the
+    desktop secret store under their own keys, put there once by `credentials root
     <member> remember`, and a run reads exactly the fields it needs — so no
     command here asks for the master password of a personal database holding
     everything the operator owns.

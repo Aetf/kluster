@@ -388,12 +388,12 @@ LEGACY_VHOSTS: tuple[LegacyVhost, ...] = (
 )
 
 #: Where the container root filesystems are published: one registry repository
-#: per build, under a namespace of this estate's own. A pin carries its whole
-#: reference (`versions:image-gateway-…`), and this is what that reference is
-#: *checked against* rather than what it is assembled from — which is what
-#: keeps two services that must run one build from pointing at two repositories
-#: (rfc-002 §11.1). Moving publication elsewhere is then an edit here and to
-#: the pins, reviewed together.
+#: per build, under a namespace of this installation's own. A pin carries its
+#: whole reference (`versions:image-gateway-…`), and this is what that
+#: reference is *checked against* rather than what it is assembled from —
+#: which is what keeps two services that must run one build from pointing at
+#: two repositories (rfc-002 §11.1). Moving publication elsewhere is then an
+#: edit here and to the pins, reviewed together.
 #:
 #: The device is the site's UDM and there is one of it, and each repository
 #: holds that one architecture, so a pin names no platform.

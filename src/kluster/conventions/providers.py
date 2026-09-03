@@ -111,9 +111,9 @@ class B2Account:
 
 
 #: The appliance's compartment is the tenancy's original one: it was made by
-#: hand before this program existed, so it carries the estate's own name rather
-#: than a per-consumer one, and the mint adopts it exactly as it adopts a user
-#: or a group that is already there.
+#: hand before this program existed, so it carries the installation's own name
+#: rather than a per-consumer one, and the mint adopts it exactly as it adopts
+#: a user or a group that is already there.
 OCI_TENANCY = OciTenancy(
     region='us-phoenix-1',
     tenancy_ocid='ocid1.tenancy.oc1..aaaaaaaaoomhmb7xh4l2xwe3wsnik24hflgpfwxl44m7vsg6repjhufueufq',

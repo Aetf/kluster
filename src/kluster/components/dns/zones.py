@@ -165,9 +165,9 @@ ALIAS_ZONES: tuple[str, ...] = ('peifeng.phd', 'ucw.phd')
 
 #: Zone → the CA set its CAA names, keyed by who actually issues for names in
 #: it (dns.md §1). A zone absent from this table carries no CAA at all, which
-#: is the only safe answer for a zone something outside this estate issues
-#: for: a pin that current issuance does not satisfy is an outage on the next
-#: renewal.
+#: is the only safe answer for a zone something outside this installation
+#: issues for: a pin that current issuance does not satisfy is an outage on
+#: the next renewal.
 ZONE_ISSUERS: Mapping[str, tuple[str, ...]] = {
     conventions.ZONE_PRIMARY: CLOUDFLARE_ISSUERS,
     'unlimitedcodeworks.xyz': CLOUDFLARE_ISSUERS,

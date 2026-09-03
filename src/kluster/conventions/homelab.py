@@ -49,7 +49,7 @@ HOMELAB_STORAGE_DIR = '/var/lib/libvirt/kluster'
 #: The host's SSH host key, pinned. It is code rather than configuration for
 #: two reasons: a public key is not a secret, and a pin typed in beside the
 #: client credential could be replaced by whoever could already replace the
-#: credential. Stored in the estate's `authorized_keys` form — the bare
+#: credential. Stored in the installation's `authorized_keys` form — the bare
 #: `ssh-ed25519 AAAA…` blob, no host name in front of it
 #: (`providers/device_files/ssh.py`) — so the address it is written against is
 #: decided where the session is dialled rather than carried around with the key.

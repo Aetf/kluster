@@ -75,8 +75,8 @@ KEY_SUFFIX = '.pub'
 ACCOUNT_HOME = '/root'
 
 #: The file the device's ssh daemon actually reads. It is off `/data`, so a
-#: firmware update takes it away and the converger is what puts the estate's
-#: key back.
+#: firmware update takes it away and the converger is what puts the
+#: installation's key back.
 AUTHORIZED_KEYS = f'{ACCOUNT_HOME}/.ssh/authorized_keys'
 
 #: The converger, and the unit that runs it at boot.

@@ -110,5 +110,6 @@ def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
     return tuple(emitted)
 
 
-#: Every application route in the estate. Empty until `apps` declares one.
+#: Every application route in the installation. Empty until `apps` declares
+#: one.
 ROUTES: tuple[Route, ...] = ()

@@ -222,8 +222,8 @@ def _add_oci_mint_options(command: argparse.ArgumentParser, consumer: str) -> No
     )
     # Optional because this repository does know it: `conventions` names one
     # compartment per consumer, and the mint creates the one that is not there
-    # yet. The flag is for a tenancy that is not this estate's -- a drill --
-    # where those names mean nothing.
+    # yet. The flag is for a tenancy that is not this installation's -- a
+    # drill -- where those names mean nothing.
     _ = command.add_argument(
         '--compartment',
         default=None,
@@ -662,8 +662,8 @@ def build_parser() -> argparse.ArgumentParser:
         help='the zone-scoped Cloudflare provider token',
         description=(
             "The token the DNS stack's Cloudflare provider signs with. It carries record edit on the "
-            "estate's zones and nothing else, so widening it means adding a zone to the estate's list and "
-            'running the mint again.'
+            "installation's zones and nothing else, so widening it means adding a zone to the "
+            "installation's list and running the mint again."
         ),
     )
     zones_verbs = zones_row.add_subparsers(dest='action', required=True, metavar='<verb>')
@@ -671,12 +671,12 @@ def build_parser() -> argparse.ArgumentParser:
         'mint',
         help="mint it from the seed into the dns stack's config secret, with the account id beside it",
         description=(
-            'Open the Cloudflare seed in the kit, look up the ids of the zones this estate owns, mint a '
-            'token scoped to exactly those, and write it into the stack config as an encrypted value -- '
-            'with the account id beside it in the clear, which the program needs and which is no secret. '
-            'The push is read back before the run succeeds, and the committed file is the delivery, so '
-            'the change has to be committed afterwards. A live token of the same name is retired once '
-            'its successor is verified.'
+            'Open the Cloudflare seed in the kit, look up the ids of the zones this installation owns, '
+            'mint a token scoped to exactly those, and write it into the stack config as an encrypted '
+            'value -- with the account id beside it in the clear, which the program needs and which is '
+            'no secret. The push is read back before the run succeeds, and the committed file is the '
+            'delivery, so the change has to be committed afterwards. A live token of the same name is '
+            'retired once its successor is verified.'
         ),
     )
     _ = zones_mint.add_argument(
@@ -778,8 +778,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_bundle_dir(management_mint)
 
     # The rows whose credential is made in the console that checks it rather
-    # than minted from a seed -- an appliance of the estate, or the platform
-    # itself where that platform publishes no API for making one. `record`
+    # than minted from a seed -- an appliance of the installation, or the
+    # platform itself where that platform publishes no API for making one. `record`
     # prints the console steps that create it, takes the value without echoing
     # it and pushes it into the stack that reads it (`devices.py`); nothing
     # here mints anything, so the delivery is the whole of the act.
@@ -789,8 +789,8 @@ def build_parser() -> argparse.ArgumentParser:
             help=f'{device.title}, made in the console that checks it',
             description=(
                 f'Nothing here mints {device.title}: it is made in the console that checks it -- an '
-                'appliance of the estate, or the platform itself where that platform publishes no API for '
-                f'making one -- and this side of the system only delivers it into the {device.stack} '
+                'appliance of the installation, or the platform itself where that platform publishes no '
+                f'API for making one -- and this side of the system only delivers it into the {device.stack} '
                 'stack, the one consumer that authenticates with it.'
             ),
         )

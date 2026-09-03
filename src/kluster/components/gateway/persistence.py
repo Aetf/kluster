@@ -244,10 +244,10 @@ def packages_script(packages: Sequence[str]) -> str:
     for the boot where apt is unreachable.
 
     The set is sorted and deduplicated here, so the file the device holds is a
-    function of what the estate requires rather than of the order the callers
-    happened to state it in, and each name is quoted for the shell that reads
-    the array — a package name is a caller's string, and one carrying a space
-    would otherwise become two entries the device cannot install.
+    function of what the installation requires rather than of the order the
+    callers happened to state it in, and each name is quoted for the shell that
+    reads the array — a package name is a caller's string, and one carrying a
+    space would otherwise become two entries the device cannot install.
     """
     return templates.render(
         TEMPLATE_PACKAGE,

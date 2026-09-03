@@ -11,8 +11,8 @@ CLUSTER_NAME = 'kluster'
 #: packages have to agree on is a convention, not a setting of any one of them.
 STATE_BACKEND = 'state-backend'
 
-#: The stack that owns the cloud estate (declarative/physical.md), which is
-#: likewise one name in three places: the stack itself, the IAM principal it
+#: The stack that owns the cloud installation (declarative/physical.md), which
+#: is likewise one name in three places: the stack itself, the IAM principal it
 #: signs as, and the compartment that principal administers.
 PHYSICAL = 'physical'
 

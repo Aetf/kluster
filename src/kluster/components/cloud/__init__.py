@@ -1,4 +1,4 @@
-"""The cloud estate: everything declared against the OCI account.
+"""The cloud installation: everything declared against the OCI account.
 
 The area holds the network below, the nodes and their load balancer
 (`nodes`), the tenancy-level quotas and budget that keep the account inside

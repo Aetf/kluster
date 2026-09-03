@@ -34,8 +34,8 @@ log = logging.getLogger(__name__)
 #: successor is verified, so one live token of this name is the invariant.
 ZONES_TOKEN_NAME = 'kluster-zones'
 
-#: The stack that manages the estate's DNS records, and therefore the slot the
-#: zones token is delivered into.
+#: The stack that manages the installation's DNS records, and therefore the slot
+#: the zones token is delivered into.
 ZONES_STACK = 'dns'
 
 #: The name the gateway's ACME token is minted under, on the same rule as the
@@ -50,8 +50,8 @@ GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
 #: and both resolver interfaces are names under the primary zone. The names it
 #: still serves for applications that have not migrated are under
 #: `lan.<short zone>`, and a challenge for that wildcard is written into the
-#: short zone itself — so the scope is wider than the estate's end state by
-#: exactly one zone, and **narrows back to the primary alone when
+#: short zone itself — so the scope is wider than the installation's end state
+#: by exactly one zone, and **narrows back to the primary alone when
 #: `conventions.gateway.LEGACY_VHOSTS` empties**, which the plan puts at the
 #: end of Wave D. It stays deliberately narrower than the zones token's: the
 #: gateway issues for itself, and a credential on a device the cluster cannot
@@ -136,8 +136,8 @@ B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> str:
     """Mint the zones token from the seed and install it in a stack's config.
 
-    The scope is the estate's zones as `conventions` lists them, so adding a
-    zone there and re-running is the whole procedure for widening it. Returns
+    The scope is the installation's zones as `conventions` lists them, so adding
+    a zone there and re-running is the whole procedure for widening it. Returns
     the account id it discovered, which the same push writes beside the token.
     """
     zones = conventions.ALL_ZONES
@@ -199,8 +199,8 @@ def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str
 
     What the push does *not* write is which account the key acts in and where
     inside it, and that is three things: the tenancy OCID, the region and the
-    compartment are all constants of this estate (`conventions`). A fact the
-    program already holds is not something a credential delivery gets to
+    compartment are all constants of this installation (`conventions`). A fact
+    the program already holds is not something a credential delivery gets to
     restate — the mint proves the key it issues matches it instead
     (`oci_iam.verify_tenancy`).
     """

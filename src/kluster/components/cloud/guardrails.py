@@ -54,12 +54,12 @@ BLOCK_STORAGE_GB_PER_AD = 270
 #: them — durability is backup/restore through the object store (storage.md §5).
 VOLUME_BACKUPS = 5
 
-#: Regional. The estate declares no bucket in this compartment — its one
-#: object bucket is on the other provider on purpose (storage.md §4) — so this
-#: caps what the tenancy stores here on the estate's behalf. It is not zeroed
-#: the way the compute families are: a custom image import is not clearly
-#: outside this family, and a quota that refused the machine image would
-#: refuse the fleet.
+#: Regional. This installation declares no bucket in this compartment — its
+#: one object bucket is on the other provider on purpose (storage.md §4) — so
+#: this caps what the tenancy stores here on the installation's behalf. It is
+#: not zeroed the way the compute families are: a custom image import is not
+#: clearly outside this family, and a quota that refused the machine image
+#: would refuse the fleet.
 OBJECT_STORAGE_GB = 250
 
 #: A month's spend the design already accepts: the A1 fleet under the
