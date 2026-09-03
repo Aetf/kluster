@@ -79,11 +79,12 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #: instances bind their interface to 80. The cutover carries each instance's
 #: live configuration into its machine directory whole, and the initial state
 #: declared here is installed only into a state directory that has never held
-#: one — so an instance that already has a configuration never reads it, and no
-#: other value could ever have become true of a running instance.
+#: one — so an instance that already has a configuration never reads it, and a
+#: value here other than the one the instances bind describes a listener that
+#: does not exist.
 #:
-#: A resolver machine therefore serves two ports, this one and DNS on 53, and
-#: nothing else inside it may claim 80.
+#: A resolver machine serves two ports, this one and DNS on 53, and nothing
+#: else inside it may claim 80.
 ADGUARD_API_PORT = 80
 
 
