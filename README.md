@@ -10,11 +10,11 @@ state. Everything is Pulumi Python, applied by CI, and the design decisions
 behind it are written down in `docs/` rather than lost.
 
 It succeeds a k3s-based cluster and will run nearly the same workloads on new
-infrastructure. It is not a template: it names one estate's hosts, networks
-and accounts throughout, and nothing here is parameterized for reuse. It is
-public because the CI security model needs it to be — branch protection is
-not available on a private repository under this plan — and readable because
-the reasoning is the point.
+infrastructure. It is not a template: it names one installation's hosts,
+networks and accounts throughout, and nothing here is parameterized for
+reuse. It is public because the CI security model needs it to be — branch
+protection is not available on a private repository under this plan — and
+readable because the reasoning is the point.
 
 Managed with [uv](https://github.com/astral-sh/uv) and
 [mise](https://mise.jdx.dev).
@@ -78,8 +78,8 @@ master github remember` is how the value from the personal estate gets into
 the slot.
 
 The console scripts — `credentials`, `state-backend`, `update_crds` — are the
-operator-side half of the estate; each one's `--help` is written to say when it
-is run, not only what it does.
+operator-side half of the installation; each one's `--help` is written to say
+when it is run, not only what it does.
 
 ## Docs
 
@@ -107,8 +107,8 @@ Under construction, in the open. Built and running: the framework (RFC-001
 Rev 3), the stack dispatch, the credential scripts, the state-backend
 appliance — a Fedora CoreOS box in OCI serving Pulumi's Postgres state over
 mutual TLS, whose only apply path is re-provisioning it from this repository
-— and the `dns` stack, which declares the estate's Cloudflare zones and
-records and is applied against them. The CI workflow set and renovate are
+— and the `dns` stack, which declares this installation's Cloudflare zones
+and records and is applied against them. The CI workflow set and renovate are
 wired, and the `images` workflow builds and publishes the self-built
 container images in `docker/` to ghcr, multi-arch on native runners.
 
