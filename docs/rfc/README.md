@@ -35,5 +35,5 @@ is not on `main` yet.
 | --- | --- | --- | --- |
 | [rfc-001](rfc-001-native-async-inputs.md) | Native async inputs for Pulumi Python components: `async_output`, `resolve`, preview safety. | Implemented | The mechanism is [framework/pulumi.md](../framework/pulumi.md) §1 and §2; the implementation is `src/putils/`. |
 | [rfc-002](rfc-002-src-layout-and-the-gateway.md) | The source layout, the gateway as a component tree, custom providers, `conventions`, and the `physical` stack's configuration surface. | Implemented | Its own status header names them. |
-| rfc-003 | The `dns` and `github` stacks under the style rules: census homes, the AdGuard rewrite provider, the forge's declarations. | Proposed, in [Aetf/kluster#137](https://github.com/Aetf/kluster/pull/137) | Its §17 names where it will land. |
+| [rfc-003](rfc-003-dns-and-github-stacks.md) | The `dns` and `github` stacks under the style rules: census homes, the record tables as blocks, what each zone serves, the AdGuard rewrite provider, the forge's declarations. | Accepted | Nowhere yet; its §18 names where it will land. |
 | [rfc-004](rfc-004-rfc-process.md) | The RFC process: when one is required, what it contains, its lifecycle and review gate, amendment, numbering. | Accepted | The mechanism is [framework/rfc.md](../framework/rfc.md); its §11 names where the rest lands. |
