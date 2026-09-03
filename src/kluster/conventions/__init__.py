@@ -15,17 +15,20 @@ structure rather than a flat namespace, so using one without its siblings does
 not parse (rfc-002 §10.1). Most of the surface is re-exported here, so a reader
 says `conventions.X` and does not have to know which domain owns `X`.
 
-**Two domains are read qualified instead**: `conventions.gateway` and
-`conventions.overlay`. Their names used to carry a `GW_`/`ZT_` prefix so that a
-flat namespace could hold them, and the prefix is what the module path now says
-(rfc-002 §3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES`.
-It is also the distinction the naming rules care about most: which network a
-name belongs to is never a thing to guess.
+**Three domains are read qualified instead**: `conventions.gateway`,
+`conventions.overlay` and `conventions.forge`. The first two's names used to
+carry a `GW_`/`ZT_` prefix so that a flat namespace could hold them, and the
+prefix is what the module path now says (rfc-002 §3.1) —
+`conventions.overlay.ROSTER`, `conventions.gateway.SERVICES`. It is also the
+distinction the naming rules care about most: which network a name belongs to
+is never a thing to guess. `forge` is qualified from the other side: its names
+are common nouns — `Repository`, `Environment`, `Account` — that mean one
+particular thing only while the forge stands beside them.
 """
 
 from __future__ import annotations
 
-from kluster.conventions import gateway, overlay
+from kluster.conventions import forge, gateway, overlay
 from kluster.conventions.backup import (
     BACKUP_VERSION_RETENTION_DAYS,
     BUCKET_BACKUP,
@@ -205,6 +208,7 @@ __all__ = (
     'SiteNetwork',
     'Vip',
     'barman_repo_path',
+    'forge',
     'gateway',
     'overlay',
     'ula_subnet',
