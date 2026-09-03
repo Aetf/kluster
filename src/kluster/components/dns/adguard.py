@@ -49,13 +49,16 @@ def declare_rewrites(
     for endpoint in endpoints:
         instance = instance_label(endpoint)
         for entry in entries:
-            family = 'v6' if ':' in entry.answer else 'v4'
+            # The wire takes a string: the address is spelled here and
+            # nowhere earlier, and the family in the resource name comes from
+            # the address itself.
+            family = f'v{entry.answer.version}'
             name = f'{instance}-{entry.domain}-{family}'
             declared[name] = AdGuardRewrite(
                 name,
                 endpoint=endpoint,
                 domain=entry.domain,
-                answer=entry.answer,
+                answer=str(entry.answer),
                 opts=opts,
             )
     return declared

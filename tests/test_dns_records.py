@@ -13,7 +13,7 @@ import pytest
 from kluster import conventions
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.model import Record
-from kluster.components.dns.routes import Exposure, Rewrite, Route, rewrites
+from kluster.components.dns.routes import Rewrite, rewrites
 from kluster.components.dns.zones import (
     ALIAS_ZONES,
     CLOUDFLARE_ISSUERS,
@@ -24,6 +24,7 @@ from kluster.components.dns.zones import (
     zt_label,
     zt_records,
 )
+from kluster.conventions.routes import Exposure, Route
 
 
 def _zt() -> tuple[Record, ...]:
@@ -299,10 +300,10 @@ def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
     route = Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd'))
 
     assert rewrites([route]) == (
-        Rewrite(domain='photos.ucw.phd', answer=str(conventions.LAN_POOL.default_vip.v4)),
-        Rewrite(domain='photos.ucw.phd', answer=str(conventions.LAN_POOL.default_vip.v6)),
-        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.LAN_POOL.default_vip.v4)),
-        Rewrite(domain='photos.peifeng.phd', answer=str(conventions.LAN_POOL.default_vip.v6)),
+        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v4),
+        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v6),
+        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v4),
+        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v6),
     )
 
 
@@ -312,9 +313,13 @@ def test_both_families_are_rewritten() -> None:
     AdGuard answers a rewrite only for the family of its answer, so a v4-only
     rewrite leaves AAAA resolving to the cloud path (RFC 6724).
     """
-    answers = {entry.answer for entry in rewrites([Route(host='tube', exposure=Exposure.SPLIT, zones=('ucw.phd',))])}
+    entries = rewrites([Route(host='tube', exposure=Exposure.SPLIT, zones=('ucw.phd',))])
 
-    assert answers == {str(conventions.LAN_POOL.default_vip.v4), str(conventions.LAN_POOL.default_vip.v6)}
+    assert {entry.answer for entry in entries} == {
+        conventions.LAN_POOL.default_vip.v4,
+        conventions.LAN_POOL.default_vip.v6,
+    }
+    assert {entry.answer.version for entry in entries} == {4, 6}
 
 
 def test_an_iot_route_is_answered_by_the_media_vip() -> None:
@@ -322,8 +327,8 @@ def test_an_iot_route_is_answered_by_the_media_vip() -> None:
     route = Route(host='tube', exposure=Exposure.IOT, zones=('ucw.phd',))
 
     assert {entry.answer for entry in rewrites([route])} == {
-        str(conventions.LAN_POOL.media_vip.v4),
-        str(conventions.LAN_POOL.media_vip.v6),
+        conventions.LAN_POOL.media_vip.v4,
+        conventions.LAN_POOL.media_vip.v6,
     }
 
 

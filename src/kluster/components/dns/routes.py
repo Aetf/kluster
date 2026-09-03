@@ -1,15 +1,14 @@
-"""Route declarations: one row an app writes, two stacks read.
+"""The split-horizon rewrites a route census implies: one per name per family.
 
-A route says how an application is reachable -- which hostname, in which
-zones, through which gateways. `apps` builds HTTPRoutes and public CNAMEs
-from these rows; `dns` builds the AdGuard rewrites from the same rows
-(dns.md §3). That is why they are plain data in a module both stacks
-import rather than a helper on a component: an app cannot forget its
-rewrite, because it never writes one.
+The rows themselves are a convention (`kluster.conventions.routes`) because
+`apps` and `dns` both read them. The derivation below is not: only `dns` turns
+a route into rewrites, so it lives beside the component that declares them
+(`adguard.py`).
 
-The census is empty while `apps` is unwritten. It grows one row per app as
-the migration proceeds, and each row's rewrite appears in a `dns` preview
-the same day the app's route does.
+A rewrite answers with an address and never with a name. That is the row's
+type rather than a convention, so a rewrite that pointed at another name --
+resolvable only if some sibling rewrite happened to exist, and silently
+NXDOMAIN if it did not -- cannot be written here at all.
 
 **The first LAN-side row makes `adguardEndpoints` required.** The `dns` stack
 reads that key only when there is a rewrite to write (`stacks/dns.py`), which
@@ -25,56 +24,14 @@ beside it (`adguardUsername` / `adguardPassword`) are already in that file.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum
+from ipaddress import IPv4Address, IPv6Address
 
 from kluster import conventions
+from kluster.conventions.routes import Exposure, Route
 
-__all__ = ('ROUTES', 'Exposure', 'Rewrite', 'Route', 'rewrites')
-
-
-class Exposure(Enum):
-    """Which gateways serve a name, which is also what the rewrite says.
-
-    The values are the §3.6 matrix in one field: an app is reachable from
-    the internet, from the LAN, or from both, and the IoT VLAN is a
-    LAN-side variant answered by the media VIP rather than the LAN one.
-    """
-
-    PUBLIC = 'public'
-    """Internet gateway only; LAN clients take the cloud path."""
-    SPLIT = 'split'
-    """Both gateways; LAN and ZeroTier clients are steered to the LAN VIP."""
-    LAN_ONLY = 'lan-only'
-    """LAN gateway only, and no public record at all -- the name resolves
-    for LAN clients and NXDOMAINs everywhere else (dns.md §4)."""
-    IOT = 'iot'
-    """As LAN_ONLY, but answered by the media VIP so the IoT VLAN reaches
-    it (cluster-infra.md §2)."""
-
-
-@dataclass(frozen=True)
-class Route:
-    """One application hostname."""
-
-    host: str
-    """The label, relative to each zone it is published in."""
-    exposure: Exposure = Exposure.PUBLIC
-    zones: Sequence[str] = conventions.PUBLIC_ALL
-    proxied: bool = True
-    """Cloudflare proxy on the public record. Off for non-HTTP ports and
-    for uploads larger than the proxy's body limit."""
-
-    @property
-    def public(self) -> bool:
-        """Whether a public record is published for this name."""
-        return self.exposure in (Exposure.PUBLIC, Exposure.SPLIT)
-
-    @property
-    def lan_side(self) -> bool:
-        """Whether LAN clients must be steered away from the public answer."""
-        return self.exposure is not Exposure.PUBLIC
+__all__ = ('Rewrite', 'rewrites')
 
 
 @dataclass(frozen=True)
@@ -82,7 +39,8 @@ class Rewrite:
     """One AdGuard rewrite: a name, and the address LAN clients get for it."""
 
     domain: str
-    answer: str
+    answer: IPv4Address | IPv6Address
+    """The address the instance answers with; its family is a property of it."""
 
 
 def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
@@ -94,22 +52,16 @@ def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
     rewrite only for the family its answer is in, and a LAN client that
     prefers IPv6 (RFC 6724) would otherwise fall through to the public
     answer and take the cloud path.
+
+    The only answers this can produce are the two LAN VIPs, so the addresses
+    are the site's own and the gateway resolves them without help.
     """
     emitted: list[Rewrite] = []
     for route in routes:
         if not route.lan_side:
             continue
-        v4, v6 = (
-            (conventions.LAN_POOL.media_vip.v4, conventions.LAN_POOL.media_vip.v6)
-            if route.exposure is Exposure.IOT
-            else (conventions.LAN_POOL.default_vip.v4, conventions.LAN_POOL.default_vip.v6)
-        )
+        vip = conventions.LAN_POOL.media_vip if route.exposure is Exposure.IOT else conventions.LAN_POOL.default_vip
         for zone in route.zones:
             domain = f'{route.host}.{zone}'
-            emitted.extend((Rewrite(domain=domain, answer=str(v4)), Rewrite(domain=domain, answer=str(v6))))
+            emitted.extend((Rewrite(domain=domain, answer=vip.v4), Rewrite(domain=domain, answer=vip.v6)))
     return tuple(emitted)
-
-
-#: Every application route in the installation. Empty until `apps` declares
-#: one.
-ROUTES: tuple[Route, ...] = ()
