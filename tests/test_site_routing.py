@@ -6,14 +6,16 @@ which piece of the persistence layer each part of the component arrives
 through, and what the converger does at boot, after a push, and after the
 configuration is undeclared.
 
-**The converger is also run**, against a temporary tree and a `systemctl` that
-records what it was asked to do, because the property that matters most about
-it -- that a failed reload is retried -- is a property of the sequence rather
-than of any line the file contains.
+**The converger is also run**, against a temporary tree with a `systemctl` and
+a `vtysh` that record what they were asked to do, because the properties that
+matter most about it -- that a step which failed is retried, and that the
+daemon is switched on again after a firmware update took the toggle away -- are
+properties of the sequence rather than of any line the file contains.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,64 +39,85 @@ HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 BGP_PASSWORD = 'a-session-password'
 PACKAGES = ('systemd-container',)
 
+#: The daemon list as the firmware ships it and as every firmware update
+#: restores it: the protocol daemon switched off, which is why a device nobody
+#: has declared a session on holds none.
+STOCK_DAEMON_LIST = 'zebra=yes\nbgpd=no\nospfd=no\n'
+
 
 @final
 @dataclass(frozen=True)
 class _Device:
     """One temporary stand-in for the device the converger runs on."""
 
-    #: The rendered converger, and the three files it works between.
+    #: The rendered converger, and the four files it works between.
     script: Path
     source: Path
     live: Path
     stamp: Path
-    #: Where the `systemctl` stand-in records what it was asked to do, and the
-    #: flag that decides whether it agrees to do it.
+    daemons: Path
+    #: Where the two stand-ins record what they were asked to do, and the flags
+    #: that decide whether they agree to do it: `refusal` is the daemon that
+    #: will not restart, `rejection` the parser that will not take the file.
     commands: Path
+    checks: Path
     refusal: Path
-    #: What `PATH` must start with for that stand-in to be the one found.
+    rejection: Path
+    #: What `PATH` must start with for those stand-ins to be the ones found.
     tools: Path
 
 
 @final
 @dataclass(frozen=True)
 class _Run:
-    """What one run of the converger did: its exit status, and what it asked of systemd."""
+    """What one run did: its status, what it asked of systemd, what it parsed."""
 
     status: int
     commands: list[str]
+    checks: list[str]
     #: Whether the stamp existed when the run ended, which is the record that
-    #: the daemon accepted what was installed.
+    #: the daemon was restarted onto what was installed.
     stamped: bool
 
 
-def _device(tmp_path: Path, *, configuration: str) -> _Device:
+def _device(tmp_path: Path, *, configuration: str, daemons: str = STOCK_DAEMON_LIST) -> _Device:
     """The converger rendered against a temporary tree, ready to run.
 
     The template is rendered here rather than through `converger_script`
-    because the paths it carries are the device's absolute ones; everything
-    else about the file — including the reload command — is what the component
-    ships.
+    because the paths it carries are the device's absolute ones, and because
+    ownership on the device is a user this suite is not; everything else about
+    the file — the toggle, the syntax check, the restart — is what the
+    component ships.
     """
     device = _Device(
         script=tmp_path / 'frr-config.sh',
         source=tmp_path / 'source' / 'frr.conf',
         live=tmp_path / 'live' / 'frr.conf',
         stamp=tmp_path / 'live' / f'frr.conf.{conventions.CLUSTER_NAME}-applied',
+        daemons=tmp_path / 'live' / 'daemons',
         commands=tmp_path / 'commands',
+        checks=tmp_path / 'checks',
         refusal=tmp_path / 'refuses',
+        rejection=tmp_path / 'rejects',
         tools=tmp_path / 'tools',
     )
     device.source.parent.mkdir()
     device.live.parent.mkdir()
     device.tools.mkdir()
     _ = device.source.write_text(configuration)
+    _ = device.daemons.write_text(daemons)
 
     systemctl = device.tools / 'systemctl'
     # Records the verb and the unit, and refuses while the flag file exists —
-    # which is the daemon that is not up yet, or is up and unhappy.
+    # which is the daemon that will not come back.
     _ = systemctl.write_text(f'#!/bin/sh\necho "$*" >>{device.commands}\n[ -e {device.refusal} ] && exit 1\nexit 0\n')
     systemctl.chmod(0o755)
+
+    vtysh = device.tools / 'vtysh'
+    # Records which file it was pointed at, and rejects while the flag file
+    # exists — which is the parser that will not take one of these lines.
+    _ = vtysh.write_text(f'#!/bin/sh\necho "$*" >>{device.checks}\n[ -e {device.rejection} ] && exit 1\nexit 0\n')
+    vtysh.chmod(0o755)
 
     _ = device.script.write_text(
         templates.render(
@@ -105,8 +128,14 @@ def _device(tmp_path: Path, *, configuration: str) -> _Device:
                 source=str(device.source),
                 live=str(device.live),
                 stamp=str(device.stamp),
+                daemons=str(device.daemons),
+                daemon=routing.BGP_DAEMON,
+                # The only owner an unprivileged runner can install as.
+                owner=str(os.getuid()),
+                group=str(os.getgid()),
                 mode=routing.FRR_MODE,
-                reload=routing.FRR_RELOAD,
+                check=routing.FRR_SYNTAX_CHECK,
+                restart=routing.FRR_RESTART,
             ),
         )
     )
@@ -122,17 +151,24 @@ class _Rendering:
     source: str
     live: str
     stamp: str
+    daemons: str
+    daemon: str
+    owner: str
+    group: str
     mode: str
-    reload: str
+    check: str
+    restart: str
 
 
-def _converge(device: _Device, *, daemon_answers: bool = True) -> _Run:
+def _converge(device: _Device, *, daemon_answers: bool = True, syntax_accepted: bool = True) -> _Run:
     """Run the converger once, and read back what it did."""
-    if daemon_answers:
-        device.refusal.unlink(missing_ok=True)
-    else:
-        _ = device.refusal.write_text('')
+    for flag, agrees in ((device.refusal, daemon_answers), (device.rejection, syntax_accepted)):
+        if agrees:
+            flag.unlink(missing_ok=True)
+        else:
+            _ = flag.write_text('')
     device.commands.unlink(missing_ok=True)
+    device.checks.unlink(missing_ok=True)
 
     completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
         ['/bin/sh', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
@@ -140,10 +176,15 @@ def _converge(device: _Device, *, daemon_answers: bool = True) -> _Run:
         capture_output=True,
         check=False,
     )
-    asked = device.commands.read_text().split('\n') if device.commands.exists() else []
+
+    def _recorded(record: Path) -> list[str]:
+        lines = record.read_text().split('\n') if record.exists() else []
+        return [line for line in lines if line]
+
     return _Run(
         status=completed.returncode,
-        commands=[command for command in asked if command],
+        commands=_recorded(device.commands),
+        checks=_recorded(device.checks),
         stamped=device.stamp.exists(),
     )
 
@@ -287,48 +328,164 @@ async def test_the_configuration_waits_for_the_executable_that_applies_it(monito
     assert str(await site.directory.urn.future()) in depends
 
 
+def test_the_unit_starts_the_daemon_rather_than_anything_enabling_it(monitor: Recorder) -> None:
+    """The daemon ships disabled, and this edge is the whole of what starts it.
+
+    An enable would be a mutation of `/etc` that a boot script would have to
+    re-assert and a retirement would have to undo; the edge is a line in a file
+    this program already delivers and retires. It is ordered *after* the daemon
+    because a converger ordered before it could not restart it synchronously.
+    And it carries no condition on the configuration's presence: a failed
+    condition still pulls in and orders `Wants=`, so it would gate nothing
+    while implying that it does.
+    """
+    unit = monitor.inputs_of(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')['content']
+
+    assert f'Wants={routing.FRR_SERVICE}' in unit
+    assert f'After={routing.FRR_SERVICE}' in unit
+    assert f'Before={routing.FRR_SERVICE}' not in unit
+    assert '\nCondition' not in unit, 'a condition here would gate nothing while implying that it does'
+
+
+@pytest.mark.asyncio
+async def test_the_unit_waits_for_the_configuration_it_is_about_to_start_a_daemon_on(
+    monitor: Recorder, site: SiteRouting
+) -> None:
+    """So a first push lands the file and the toggle before the daemon is started.
+
+    The unit is what pulls the daemon in, and the unit converger starts it the
+    moment its source lands. Started before the configuration exists, the
+    daemon comes up with the protocol switched off and is restarted a moment
+    later — correct, and a restart nobody needed.
+    """
+    depends = monitor.depends_on(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')
+
+    assert str(await site.config.urn.future()) in depends
+    assert str(await site.converger.urn.future()) in depends
+
+
 ##
 ## What the converger does
 ##
 
 
-def test_the_converger_reloads_the_daemon_rather_than_restarting_it() -> None:
-    """A restart drops every session the device holds, including ones not ours.
+def test_the_converger_restarts_the_daemon_because_this_firmware_cannot_reload_it() -> None:
+    """The reload verb needs a helper script the image does not ship.
 
-    Reload is what the daemon offers for a configuration change; the restart is
-    the fallback for the boot where the daemon is not up to be reloaded, and
-    neither is silenced — a converger that cannot make the file take effect has
-    failed, and the hook's non-zero exit fails the apply that ran it.
+    So the reload half of a `reload || restart` pair would fail on every single
+    run and only the fallback would ever execute. A restart costs what a reload
+    would have saved only where the daemon holds other sessions, and on this
+    device it holds none. Nothing is silenced: a converger that cannot make the
+    file take effect has failed, and the hook's non-zero exit fails the apply
+    that ran it.
     """
     script = routing.converger_script()
 
-    assert routing.FRR_RELOAD in script
+    assert routing.FRR_RESTART in script
+    assert 'systemctl reload' not in script
     assert '|| true' not in script
 
 
-def test_a_run_that_finds_the_daemon_already_holding_the_configuration_does_nothing(tmp_path: Path) -> None:
+def test_the_daemons_copy_is_installed_with_the_ownership_the_daemon_suite_uses() -> None:
+    """Which is convention rather than a requirement, and cheap to match.
+
+    The supervisor that pushes the file into the daemons keeps root, so a
+    root-owned file would be read fine; what the ownership buys is that an
+    operator writing the configuration out from a running daemon overwrites
+    this file rather than failing on it.
+    """
+    script = routing.converger_script()
+
+    assert f'install -o {routing.FRR_OWNER} -g {routing.FRR_GROUP} -m {routing.FRR_MODE}' in script
+
+
+def test_a_run_that_finds_the_daemon_switched_on_and_holding_the_configuration_does_nothing(tmp_path: Path) -> None:
     """The converger runs at every boot and after every push of the file.
 
-    A reload the daemon did not ask for is a reload that can fail for reasons
-    this program did not cause, so a run that finds its own stamp beside a live
-    copy that matches leaves the daemon alone.
+    A restart the daemon did not need drops the session for no reason, so a run
+    that finds its own stamp beside a live copy that matches, with the toggle
+    already switched on, leaves the daemon alone.
     """
     device = _device(tmp_path, configuration='router bgp 65000\n')
 
     first = _converge(device)
     second = _converge(device)
 
-    assert first.commands == ['reload frr']
+    assert first.commands == [f'restart {routing.FRR_SERVICE}']
     assert second.commands == []
+    assert second.checks == [], 'nothing to install is nothing to parse'
     assert device.live.read_text() == device.source.read_text()
+    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
 
 
-def test_a_reload_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> None:
-    """The installed file cannot say whether the daemon accepted it.
+def test_a_daemon_list_a_firmware_update_restored_is_switched_on_again(tmp_path: Path) -> None:
+    """The list is the firmware's own file, so the toggle is a converged fact.
 
-    The write succeeds before the reload is attempted, so a run that fails at
-    the reload leaves two identical copies behind. Deciding on those alone, the
-    retry — the one the operator makes with the daemon healthy — would exit
+    An update puts the stock list back while leaving the daemon's copy of the
+    configuration in place, so the run that repairs it is exactly the run whose
+    file comparison says there is nothing to do. The toggle is therefore
+    checked before that comparison, and a switch that had to be flipped is
+    itself a reason to restart.
+    """
+    device = _device(tmp_path, configuration='router bgp 65000\n')
+    _ = _converge(device)
+
+    _ = device.daemons.write_text(STOCK_DAEMON_LIST)
+    repaired = _converge(device)
+
+    assert repaired.status == 0
+    assert repaired.commands == [f'restart {routing.FRR_SERVICE}']
+    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
+
+
+def test_a_daemon_list_carrying_neither_toggle_line_fails_the_run(tmp_path: Path) -> None:
+    """A file reshaped past what this program understands must not pass silently.
+
+    The substitution matches nothing there, so a converger that only edited
+    would install the configuration, restart, and report success over a daemon
+    that never starts the protocol. Asserting the line afterwards is what turns
+    that into a failed apply an operator sees.
+    """
+    device = _device(tmp_path, configuration='router bgp 65000\n', daemons='zebra=yes\n')
+
+    run = _converge(device)
+
+    assert run.status != 0
+    assert run.commands == [], 'nothing is restarted onto a daemon list this program cannot read'
+    assert not run.stamped
+
+
+def test_a_configuration_the_parser_rejects_is_never_installed_and_is_retried(tmp_path: Path) -> None:
+    """The supervisor pushes the file into the daemons after the unit returns.
+
+    Its rejection of a line fails nothing, so an installed file and a stamp
+    prove installed rather than accepted. Parsing the candidate first is what
+    turns a firmware update whose parser no longer likes one of these lines
+    into a failed converge instead of a peer that never establishes — and
+    because the failure lands before the write, the retry is a full attempt.
+    """
+    device = _device(tmp_path, configuration='router bgp 65000\n')
+
+    rejected = _converge(device, syntax_accepted=False)
+    nothing_installed = not device.live.exists()
+    retried = _converge(device)
+
+    assert rejected.status != 0
+    assert rejected.checks == [f'-C -f {device.source}'], 'the candidate is parsed, not the installed copy'
+    assert rejected.commands == [], 'nothing is restarted onto a file the parser refused'
+    assert nothing_installed, 'the parse comes before the write, so a refusal leaves the daemon on what it had'
+    assert not rejected.stamped
+    assert retried.status == 0
+    assert retried.commands == [f'restart {routing.FRR_SERVICE}']
+    assert retried.stamped
+
+
+def test_a_restart_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> None:
+    """The installed file cannot say whether the daemon came back onto it.
+
+    The write succeeds before the restart is attempted, so a run that fails at
+    the restart leaves two identical copies behind. Deciding on those alone,
+    the retry — the one the operator makes with the daemon healthy — would exit
     successfully having told the daemon nothing, and the session would stay on
     the old configuration under a green apply.
     """
@@ -338,23 +495,28 @@ def test_a_reload_that_failed_is_retried_by_the_next_run(tmp_path: Path) -> None
     retried = _converge(device)
 
     assert failed.status != 0, 'a converger that could not make the file take effect must fail its apply'
-    assert failed.commands == ['reload frr', 'restart frr']
+    assert failed.commands == [f'restart {routing.FRR_SERVICE}']
     assert not failed.stamped, 'nothing may record an effect that did not happen'
-    assert retried.commands == ['reload frr']
+    assert retried.commands == [f'restart {routing.FRR_SERVICE}']
     assert retried.status == 0
     assert retried.stamped
 
 
-def test_undeclaring_the_configuration_does_not_take_the_daemons_away() -> None:
+def test_undeclaring_the_configuration_does_not_take_the_daemon_away(tmp_path: Path) -> None:
     """The hook runs after the delete too, and what it must not do then is act.
 
     The daemon is the device's own and it is running on the configuration it
     has; this program ceasing to declare one is not a reason to leave the
-    router with none.
+    router with none, nor to switch the protocol off again.
     """
-    script = routing.converger_script()
-    unit = routing.converger_unit()
+    device = _device(tmp_path, configuration='router bgp 65000\n')
+    _ = _converge(device)
+    device.source.unlink()
 
-    assert '[ -e "$source" ] || exit 0' in script
-    assert f'ConditionPathExists={routing.FRR_CONFIG}' in unit
+    undeclared = _converge(device)
+
+    assert undeclared.status == 0
+    assert undeclared.commands == []
+    assert device.live.read_text() == 'router bgp 65000\n'
+    assert f'{routing.BGP_DAEMON}=yes' in device.daemons.read_text()
     assert routing.FRR_LIVE_CONFIG not in routing.converger_hook()

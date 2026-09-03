@@ -3,8 +3,22 @@
 The device routes for the site, and one of the routes it must know is not the
 site's: the pool the cluster hands out to its own load balancers, learned from
 the homelab worker over BGP (cluster-infra.md §2). The daemon that holds the
-session is the device's own; what this program owns is the configuration it
-reads and the converger that installs it.
+session ships with the firmware; what this program owns is the configuration it
+reads, the converger that installs it, and the daemon's on-state — because a
+configuration nothing reads holds no session.
+
+**The on-state is two facts, and the firmware resets both.** The protocol
+daemon is switched off in the firmware's own daemon list, and the daemon suite
+is not enabled, so the site has no routing daemon until this program declares
+one. The toggle is converged by the same executable that installs the
+configuration, re-checked on every run because a firmware update restores the
+firmware's file. What starts the daemon at boot is a `Wants=` edge in the
+converger's unit rather than an enable: the enable is a mutation of `/etc` that
+a boot script would have to re-assert and a second path would have to undo,
+while the edge is a line in a file this program already delivers, converges and
+retires. Its consequence is worth knowing before reading the device:
+`systemctl is-enabled` for the daemon stays `disabled` forever, and says
+nothing about whether the daemon runs.
 
 **The configuration is desired state, the daemon's copy is not.** The file
 lands under the custom root, where a firmware update leaves it, and the daemon
@@ -16,10 +30,18 @@ configuration file manipulates nothing of systemd's own (physical/gateway.md
 the boot path and the push path are one converger, so the recovery path cannot
 rot unnoticed.
 
-**The converger reloads rather than restarts** where the daemon lets it. A
-restart drops every session the device holds, including the ones this file is
-not about; a reload is what the daemon offers for a configuration change, and
-the fallback exists for the boot where the daemon is not running yet.
+**The converger restarts the daemon**, because this firmware ships no reload.
+The reload verb needs a helper script the image does not carry, and the daemon
+holds no session besides this one for a restart to drop. What a restart costs
+is the seconds the supervisor takes to bring the daemons back, on the runs
+where the configuration or the toggle actually changed.
+
+**A candidate configuration is parsed before it is installed.** The supervisor
+pushes the file into the daemons after the unit has already returned, so its
+rejection of a line fails nothing — an installed file and a stamp prove
+installed, not accepted. Parsing the source first is what turns a firmware
+update whose parser no longer likes one of these lines into a converge-time
+failure rather than a peer that never establishes.
 
 **The content is a secret**, because the session's authentication password is
 in it — which is also why the file is not world-readable on the device.
@@ -46,14 +68,20 @@ from kluster.providers.device_files.provider import Connection, DeviceDirectory,
 from putils import Component
 
 __all__ = (
+    'BGP_DAEMON',
     'CONVERGER',
     'CONVERGER_UNIT',
     'FRR_APPLIED',
     'FRR_CONFIG',
+    'FRR_DAEMON_LIST',
     'FRR_DIRECTORY',
+    'FRR_GROUP',
     'FRR_LIVE_CONFIG',
     'FRR_MODE',
-    'FRR_RELOAD',
+    'FRR_OWNER',
+    'FRR_RESTART',
+    'FRR_SERVICE',
+    'FRR_SYNTAX_CHECK',
     'MAX_PREFIXES',
     'RoutingSession',
     'SiteRouting',
@@ -85,17 +113,43 @@ FRR_APPLIED = f'{FRR_LIVE_CONFIG}.{conventions.CLUSTER_NAME}-applied'
 #: The session password is in it, so it is not world-readable.
 FRR_MODE = '0640'
 
+#: Who owns the daemon's copy: the daemon suite's own convention on this device,
+#: and what an operator writing the configuration out from a running daemon
+#: expects to overwrite. Not load-bearing — the supervisor that pushes the file
+#: into the daemons keeps root and reads it whoever owns it.
+FRR_OWNER = 'frr'
+FRR_GROUP = 'frr'
+
+#: The firmware's list of which daemons of the suite run, and the one entry in
+#: it this program has an opinion about. The file is the firmware's own and an
+#: update restores it, so the entry is converged on every run rather than
+#: edited once; the protocol daemon is off in the stock file, which is why the
+#: site has no session until this program switches it on.
+FRR_DAEMON_LIST = '/etc/frr/daemons'
+BGP_DAEMON = 'bgpd'
+
 #: The converger, and the unit that runs it at boot.
 CONVERGER = 'frr-config.sh'
 CONVERGER_UNIT = 'frr-config.service'
 
-#: How the daemon is told to read the file again. Reload is what a
-#: configuration change asks for — a restart would drop every routing session
-#: the device holds, this one included — and the restart is the fallback for
-#: the boot where the daemon is not up yet to be reloaded. Neither is silenced:
-#: a converger that cannot make the file take effect has failed, and a hook's
-#: non-zero exit fails the apply that ran it.
-FRR_RELOAD = 'systemctl reload frr || systemctl restart frr'
+#: The firmware's unit for the daemon suite. The converger's unit wants it, so
+#: that starting the converger at boot starts the daemon, and the converger
+#: restarts it by the same name — which is why a firmware that renamed the unit
+#: is a change to one constant.
+FRR_SERVICE = 'frr.service'
+
+#: How a candidate configuration is parsed before anything is installed: the
+#: file to parse is appended. It parses against the command tree the installed
+#: daemons have, with none of them running, which is the only check available
+#: here that a line will be accepted rather than merely written.
+FRR_SYNTAX_CHECK = 'vtysh -C -f'
+
+#: How the daemon is put onto the configuration. A restart rather than a
+#: reload, because the reload verb needs a helper script this firmware does not
+#: ship and the daemon holds no session besides this one to drop. It is not
+#: silenced: a converger that cannot make the file take effect has failed, and
+#: a hook's non-zero exit fails the apply that ran it.
+FRR_RESTART = f'systemctl restart {FRR_SERVICE}'
 
 #: The routing session's inbound cap. The prefix-list already confines what the
 #: peer may announce to the pool; this bounds how many /32s out of it arrive, so
@@ -144,23 +198,33 @@ class _FrrParams:
 @final
 @dataclass(frozen=True)
 class _ConvergerParams:
-    """What `frr-config.sh.j2` reads: the two paths, and how the daemon is told."""
+    """What `frr-config.sh.j2` reads: the files it works between, and the commands.
+
+    Ownership is parameters rather than literals in the template because the
+    tests run the rendered file as an unprivileged user against a temporary
+    tree, where the only owner it can install as is its own.
+    """
 
     cluster: str
     source: str
     live: str
     stamp: str
+    daemons: str
+    daemon: str
+    owner: str
+    group: str
     mode: str
-    reload: str
+    check: str
+    restart: str
 
 
 @final
 @dataclass(frozen=True)
 class _UnitParams:
-    """What `frr-config.service.j2` reads: what it runs and what must be there."""
+    """What `frr-config.service.j2` reads: what it runs, and what it starts."""
 
     cluster: str
-    source: str
+    daemon_unit: str
     executable: str
 
 
@@ -212,19 +276,28 @@ def frr_config(
 
 
 def converger_script() -> str:
-    """The executable that installs the configuration and tells the daemon.
+    """The executable that gives the daemon its configuration and switches it on.
 
     Written in POSIX shell, for a device whose interpreters are whatever its
     firmware ships. It does nothing at all when the source is absent — the
     state after this program stops declaring the file, and not one in which
     taking the daemon's configuration away would be an improvement — and
-    nothing when the daemon has already accepted what the source says.
+    nothing when the daemon is already switched on and running what the source
+    says.
 
-    **What says it has is the stamp, not the installed file.** The reload can
-    fail after the write succeeded, so a rerun that compared only the two
-    copies would find them equal and report success over a daemon still running
-    the old configuration. The stamp is written after the reload returns, which
-    is what makes the whole effect idempotent rather than only the copy.
+    **The toggle is asserted, not merely edited.** Switching the protocol
+    daemon on is a substitution on the firmware's own line, and a firmware that
+    reshaped that file until the substitution matches nothing would leave a
+    converger reporting success over a daemon that never starts. So the run
+    fails unless the switched-on line is there when it is done, and a
+    substitution that had to happen is itself a reason to restart.
+
+    **What says the daemon holds it is the stamp, not the installed file.** The
+    restart can fail after the write succeeded, so a rerun that compared only
+    the two copies would find them equal and report success over a daemon still
+    running the old configuration. The stamp is written after the restart
+    returns, which is what makes the whole effect idempotent rather than only
+    the copy.
     """
     return templates.render(
         TEMPLATE_PACKAGE,
@@ -234,14 +307,30 @@ def converger_script() -> str:
             source=FRR_CONFIG,
             live=FRR_LIVE_CONFIG,
             stamp=FRR_APPLIED,
+            daemons=FRR_DAEMON_LIST,
+            daemon=BGP_DAEMON,
+            owner=FRR_OWNER,
+            group=FRR_GROUP,
             mode=FRR_MODE,
-            reload=FRR_RELOAD,
+            check=FRR_SYNTAX_CHECK,
+            restart=FRR_RESTART,
         ),
     )
 
 
 def converger_unit() -> str:
-    """The oneshot that runs the converger at boot.
+    """The oneshot that runs the converger at boot, and starts the daemon with it.
+
+    `Wants=` on the daemon's unit is how the daemon comes up at all: nothing
+    enables it, and this unit is enabled by the unit converger like every other
+    unit here, so wanting the daemon is what pulls it into the boot. `After=`
+    the same unit, because a converger ordered before it could not restart it
+    synchronously — the daemon's start job would wait on this unit and this
+    unit on the restart. There is deliberately no condition on the
+    configuration's presence: a failed condition still pulls in and orders
+    `Wants=` dependencies, so it would gate nothing that matters while implying
+    that it does, and the converger already exits successfully when the source
+    is absent.
 
     `RemainAfterExit` is what makes a finished run look finished: the unit
     converger starts a unit it finds inactive, and a oneshot without it is
@@ -253,7 +342,7 @@ def converger_unit() -> str:
         f'templates/{CONVERGER_UNIT}.j2',
         _UnitParams(
             cluster=conventions.CLUSTER_NAME,
-            source=FRR_CONFIG,
+            daemon_unit=FRR_SERVICE,
             executable=executable_path(CONVERGER),
         ),
     )
@@ -287,11 +376,6 @@ class SiteRouting(Component):
 
         self.directory: DeviceDirectory = mechanism.skeleton_dir(FRR_DIRECTORY, opts=self.child_opts())
         self.converger: DeviceFile = mechanism.executable(CONVERGER, converger_script(), opts=self.child_opts())
-        # The unit is what runs the converger at boot; it waits for the
-        # executable, because installing a unit starts it.
-        self.unit: DeviceFile = mechanism.unit(
-            CONVERGER_UNIT, converger_unit(), opts=self.child_opts(depends_on=[self.converger])
-        )
         # The daemon's configuration, applied by the same executable the unit
         # runs. It waits for the directory it lands in and for the hook it will
         # run: a hook that is not on the device yet fails the write that
@@ -308,6 +392,14 @@ class SiteRouting(Component):
             hook=converger_hook(),
             secret=True,
             opts=self.child_opts(depends_on=[self.directory, self.converger]),
+        )
+        # The unit is what runs the converger at boot and what starts the
+        # daemon; it waits for the executable, because installing a unit starts
+        # it, and for the configuration, because starting it any earlier would
+        # start a daemon with the protocol switched off and restart it a moment
+        # later — correct, and a restart nobody needed.
+        self.unit: DeviceFile = mechanism.unit(
+            CONVERGER_UNIT, converger_unit(), opts=self.child_opts(depends_on=[self.converger, self.config])
         )
 
         self.register_outputs({})

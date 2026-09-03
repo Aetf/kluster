@@ -1,10 +1,20 @@
 [Unit]
 # Managed by the {{ cluster }} physical stack. Local edits are overwritten.
 Description={{ cluster }} routing configuration
-# Nothing to converge where this program declares no configuration, and the
-# reload wants a daemon that is already up: after it, never pulling it in.
-ConditionPathExists={{ source }}
-After=frr.service
+# The daemon is the device's own and is never enabled: this edge is what starts
+# it at boot, delivered and retired with this unit rather than as a mutation of
+# /etc that a second path would have to undo. So `systemctl is-enabled
+# {{ daemon_unit }}` stays disabled forever and says nothing about whether the
+# daemon runs.
+Wants={{ daemon_unit }}
+# After rather than before: a converger ordered before the daemon cannot
+# restart it synchronously -- the daemon's start job would wait on this unit
+# and this unit on the restart.
+After={{ daemon_unit }}
+# No ConditionPathExists: a failed condition still pulls in and orders Wants=
+# dependencies, so it would gate nothing that matters here while implying it
+# does. The converger's own guard is that it exits successfully when this
+# program declares no configuration.
 
 [Service]
 Type=oneshot

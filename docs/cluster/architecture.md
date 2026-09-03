@@ -730,12 +730,15 @@ drives gw-config**:
     reference and digest, a directory's path, mode and owner, and the
     pinned host key are public by design.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
-    address families, plus a static route for the `lan` pool subnet's
-    firewall context) is rendered from the physical layer's outputs and
-    applied through the UniFi BGP feature's config path. If the device-side
-    apply hook for FRR proves fragile, fall back to writing the file and
-    surfacing a "reload needed" diff — still one source of truth, one less
-    manual upload.
+    address families, with an inbound prefix-list and a prefix cap) is
+    rendered from the physical layer's outputs and delivered as a
+    `DeviceFile` under `/data`. An executable of this program's own — the
+    file's post-apply hook, and a `Type=oneshot` unit at boot — installs
+    it into `/etc/frr`, switches the BGP daemon on in the firmware's own
+    daemon list, and restarts the daemon. **The UniFi BGP feature is
+    never configured**: it drives the same binaries from a blob of its
+    own, and the two managers cannot coexist, so a BGP object on the
+    controller is drift (physical/gateway.md §1.3).
 -   **Scope — full absorption of the push direction (2026-08-22)**:
     the provider manages *all* desired-state files on the device —
     FRR/BGP, the nspawn container services (unit files, rootfs
