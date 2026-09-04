@@ -113,9 +113,9 @@ def test_the_cluster_anchor_is_dual_stack(stack: AppliedPhysical) -> None:
 
 
 def test_the_anchors_live_only_in_the_primary_zone(stack: AppliedPhysical) -> None:
-    # A rebuild moves one record, not one per zone: the mirrors' app records
-    # are CNAMEs to the primary's anchor. Names are fully qualified, so this
-    # asks about the name the mirror's own copy would have.
+    # A rebuild moves one record, not one per zone: every application record
+    # in every zone is a CNAME to the primary's anchor. Names are fully
+    # qualified, so this asks about the name a copy would have.
     for zone in conventions.ALL_ZONES:
         if zone == conventions.ZONE_PRIMARY:
             continue
@@ -164,15 +164,36 @@ def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference(stack: 
     )
 
 
-def test_the_overlay_block_reaches_every_mirror_and_no_other_zone(stack: AppliedPhysical) -> None:
-    # It is part of the mirrored estate: a name fanned across `PUBLIC_ALL`
-    # resolves in all of it, and the family zones carry none of it.
+def test_the_overlay_block_is_declared_in_the_primary_zone_alone(stack: AppliedPhysical) -> None:
+    """Private addresses in public DNS are published once, not once per zone.
+
+    Every overlay name a configuration file anywhere in this installation
+    holds is the primary's, so a copy in another zone is a second publication
+    of the same private address with no reader.
+    """
     for zone in conventions.ALL_ZONES:
         names = {record['name'] for record in records_of(stack, zone).values()}
         expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.overlay.ROSTER}
 
-        assert (expected <= names) is (zone in conventions.PUBLIC_ALL), zone
-        assert (expected & names == set()) is (zone not in conventions.PUBLIC_ALL), zone
+        assert (expected <= names) is (zone in conventions.PRIMARY_ONLY), zone
+        assert (expected & names == set()) is (zone not in conventions.PRIMARY_ONLY), zone
+
+
+def test_a_parked_zone_is_declared_with_its_web_origin_and_its_caa(stack: AppliedPhysical) -> None:
+    """The whole of what the program declares in a parked zone, by record type.
+
+    A parked zone holds nothing of this installation's: its apex and `www` are
+    addressed at the legacy VPS and answered by that machine's catch-all, and
+    its CAA authorizes the certificate the edge mints for a zone it hosts.
+    Read as a set of types, this is the shape that says no application name
+    and no host address is declared there.
+    """
+    for zone in conventions.PARKED_ZONES:
+        declared = records_of(stack, zone).values()
+        by_type = {inputs['type'] for inputs in declared}
+
+        assert by_type == {'A', 'CNAME', 'CAA'}, zone
+        assert {inputs['name'] for inputs in declared if inputs['type'] != 'CAA'} == {zone, f'www.{zone}'}, zone
 
 
 def test_structured_records_travel_as_data_not_content(stack: AppliedPhysical) -> None:

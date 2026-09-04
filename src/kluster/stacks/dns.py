@@ -2,7 +2,7 @@
 
 Per-app records live beside their apps in `apps` (docs/declarative/dns.md);
 what lands here is what has no app to co-locate with — mail, the ZeroTier host
-block, verifications, the family and alias zones — plus the anchors every app
+block, verifications, the family and parked zones — plus the anchors every app
 record points at, plus the split-horizon rewrites for every app: they are
 read from the same plain-data route declaration `apps` builds its routes
 from, and they are the reason this is the one stack that joins ZeroTier.
@@ -83,9 +83,10 @@ async def main() -> None:
             records=[
                 *ESTATE[zone],
                 *LEGACY.get(zone, ()),
-                # The overlay block belongs to the mirrored estate, so it
-                # reaches exactly the zones that carry the rest of it.
-                *(overlay if zone in conventions.PUBLIC_ALL else ()),
+                # The overlay block is primary-only: nothing anywhere names
+                # an overlay host by any other zone, so the private addresses
+                # under `*.zt` are published once rather than three times.
+                *(overlay if zone in conventions.PRIMARY_ONLY else ()),
                 # Only the primary carries the cluster anchors: every app
                 # record in every zone is a CNAME to the one in the primary,
                 # so a rebuild moves one record, not one per zone.
