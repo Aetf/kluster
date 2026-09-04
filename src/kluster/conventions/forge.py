@@ -81,6 +81,24 @@ class Environment:
 
 @final
 @dataclass(frozen=True)
+class Label:
+    """One issue label a workflow branches on.
+
+    The name and what it means travel together, because a switch whose name is
+    declared and whose meaning is not is one a reader has to reconstruct from
+    the workflow that reads it. What it looks like is not here: every declared
+    label carries the same color, and nothing outside the component that
+    declares them has an opinion about which, so that is the component's own.
+    """
+
+    name: str
+    #: What GitHub shows beside the name, for whoever is deciding whether to
+    #: reach for it.
+    description: str
+
+
+@final
+@dataclass(frozen=True)
 class Repository:
     """One repository as this installation defines it, rather than as GitHub stores it.
 
@@ -100,7 +118,7 @@ class Repository:
     #: declares fails in the quietest way there is — the condition is simply
     #: never true — so the set is written down here rather than made by hand in
     #: a console.
-    labels: tuple[str, ...] = ()
+    labels: tuple[Label, ...] = ()
 
     @property
     def full_name(self) -> str:
@@ -119,6 +137,11 @@ class Repository:
         """
         return self.public
 
+
+#: The escape hatch that opts a pull request out of the zero-diff proof
+#: (ci.md §3): `noop-automerge.yml` branches on it, and it is the only label
+#: any workflow of this installation reads.
+EXPECT_CHANGES = Label('expect-changes', 'Opts a PR out of the noop-automerge zero-diff path (ci.md §3)')
 
 #: The ops repository's only Environment, which carries the unattended drills'
 #: credentials. Ungated because its scope is the gate (credentials.md §4).
@@ -145,9 +168,7 @@ DEPLOYMENT = Repository(
         Environment('k8s-base', BranchPolicy.ANY_BRANCH),
         Environment('apps', BranchPolicy.ANY_BRANCH),
     ),
-    # `noop-automerge.yml` branches on this one: it is the escape hatch that
-    # opts a pull request out of the zero-diff proof (ci.md §3).
-    labels=('expect-changes',),
+    labels=(EXPECT_CHANGES,),
 )
 
 #: The notification and drill repository. Private on purpose — it holds the

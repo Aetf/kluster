@@ -2,7 +2,9 @@
 
 Every case about the program is a setting that a later diff cannot show,
 because each is a rule about what *cannot* happen: a check that is required, a
-push that is refused, a repository a destroy may not delete.
+push that is refused, a repository a destroy may not delete. Two more are
+about where a resource *is* rather than what it says: the provider that signs
+it, and the URN it keeps.
 
 The census (`conventions.forge`) is pinned here as well, in literals. The
 program's cases read it, so a census that quietly changed would move what they
@@ -12,14 +14,18 @@ setting nobody meant.
 """
 
 import re
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from typing import Any
 
 import pulumi
+import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
+from kluster.components.forge import LABEL_COLOR, ManagedRepository
+from kluster.stacks import github as program
 
 WORKFLOWS = Path(__file__).parent.parent / '.github' / 'workflows'
 
@@ -31,6 +37,40 @@ REPOSITORY = 'github:index/repository:Repository'
 BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'
 ENVIRONMENT = 'github:index/repositoryEnvironment:RepositoryEnvironment'
 VULNERABILITY_ALERTS = 'github:index/repositoryVulnerabilityAlerts:RepositoryVulnerabilityAlerts'
+LABEL = 'github:index/issueLabel:IssueLabel'
+MANAGED_REPOSITORY = 'kluster:components:forge:ManagedRepository'
+PROVIDER = 'pulumi:providers:github'
+
+#: Not the operator's. The variable this program reads is materialized on the
+#: operator machine by `mise.toml` out of an account-root token file
+#: (framework/github.md §1), so every run under `mise` has the real one in the
+#: environment -- and a declaration suite that let it through would print a
+#: live credential the first time an assertion failed.
+TOKEN = 'a-token-that-opens-nothing'
+
+#: How a secret arrives on the wire: Pulumi's special-signature key, carrying
+#: the signature that means "secret", beside the value itself.
+SECRET = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
+
+
+class EveryRegistration(dict[str, Any]):
+    """Every registration request, and not only the last under each logical name.
+
+    The shared recorder keys them by logical name alone, and a repository is
+    declared three times under its own name -- the component, the repository,
+    and its vulnerability alerts -- so the last of the three would be the only
+    one left. The requests are where a resource's *options* are, which is
+    where an alias is, so the cases below need all of them.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: In registration order.
+        self.every: list[Any] = []
+
+    def __setitem__(self, name: str, request: Any) -> None:
+        self.every.append(request)
+        super().__setitem__(name, request)
 
 
 class Forge(Recorder):
@@ -40,21 +80,35 @@ class Forge(Recorder):
     knows about the account itself, it knows from the census.
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: The dict the shared recorder writes every registration into, under
+        #: a name of its own so that the list beside it is reachable.
+        self.requests = EveryRegistration()
+        self.registrations = self.requests
+
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == REPOSITORY:
             return {'nodeId': f'node_{args.name}', 'fullName': f'{conventions.forge.ACCOUNT.login}/{args.name}'}
         return {}
 
+    def request(self, typ: str, name: str) -> Any:
+        """The registration request of one resource, named by type as well as by name."""
+        found = [request for request in self.requests.every if (request.type, request.name) == (typ, name)]
+        if len(found) != 1:
+            raise AssertionError(f'{typ} {name!r} was registered {len(found)} times, not once')
+        return found[0]
+
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
-async def stack() -> Forge:
+async def stack() -> AsyncGenerator[Forge]:
     """The whole program, declared once: every case below reads the same run."""
-    from kluster.stacks import github
-
-    monitor = await run_with(Forge(), stack='github')
-    async with declaring():
-        await github.main()
-    return monitor
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setenv(program.TOKEN_VARIABLE, TOKEN)
+        monitor = await run_with(Forge(), stack='github')
+        async with declaring():
+            await program.main()
+        yield monitor
 
 
 def test_the_census_names_the_two_repositories_and_what_the_plan_gives_each() -> None:
@@ -106,7 +160,7 @@ def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
     that. Reading the workflows is what keeps the census from being shorter
     than what they depend on.
     """
-    declared = {label for repository in conventions.forge.REPOSITORIES for label in repository.labels}
+    declared = {label.name for repository in conventions.forge.REPOSITORIES for label in repository.labels}
     read = {
         label
         for workflow in sorted(WORKFLOWS.glob('*.yml'))
@@ -248,3 +302,169 @@ def test_vulnerability_alerts_are_asked_for_where_the_provider_still_answers(sta
     assert set(alerts) == {'kluster', 'kluster-ops'}
     assert all(inputs['enabled'] is True for inputs in alerts.values())
     assert all('vulnerabilityAlerts' not in inputs for inputs in stack.by_name(REPOSITORY).values())
+
+
+def test_the_provider_is_built_here_and_signs_every_resource(stack: Forge) -> None:
+    """Nothing rides the ambient provider, which is what the stack config now forbids.
+
+    A default provider configures itself from the environment and, with no
+    token there, `pulumi_github` runs *anonymously*: the failure is a write
+    refused partway through rather than a run that never starts. One provider
+    built in the program, inherited through each component, is what makes the
+    absence of the credential a stop instead.
+    """
+    provider = stack.by_name(PROVIDER)
+
+    assert set(provider) == {f'{conventions.CLUSTER_NAME}-github'}
+    # The account is named from the census, not from an invoke that resolves it.
+    assert provider[f'{conventions.CLUSTER_NAME}-github']['owner'] == conventions.forge.ACCOUNT.login
+
+    signed = {declaration.provider for declaration in stack.declared if declaration.typ.startswith('github:')}
+
+    assert '' not in signed, 'a resource was registered against the ambient provider'
+    # The two repositories are two trees against one account, so one provider
+    # signs both -- reached through each component's options, never re-plumbed
+    # onto a resource.
+    assert len(signed) == 1
+    assert f'::{conventions.CLUSTER_NAME}-github::' in signed.pop()
+
+
+def test_the_token_reaches_the_provider_from_the_environment_and_marked_secret(stack: Forge) -> None:
+    """The credential the provider opens with is the variable's value, and state never sees it.
+
+    Two claims in one line, because they fail the same way. The program reads
+    the variable itself rather than leaving the SDK to find it, and the
+    marking that keeps an account root out of state in the clear is the
+    generated provider's own -- so this is what would notice a release that
+    stopped applying it, before a state file did.
+    """
+    assert stack.by_name(PROVIDER)[f'{conventions.CLUSTER_NAME}-github']['token'] == SECRET | {'value': TOKEN}
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_the_token_refuses_by_name() -> None:
+    """The absence of the credential is what keeps this stack from being applied by accident.
+
+    So it has to be a refusal that names the variable, not a run that
+    authenticates as nobody and discovers it on the first write.
+    """
+    with pytest.MonkeyPatch.context() as patched:
+        patched.delenv(program.TOKEN_VARIABLE, raising=False)
+        monitor = await run_with(Forge(), stack='github')
+
+        with pytest.raises(ValueError, match=program.TOKEN_VARIABLE):
+            await program.main()
+
+    assert monitor.declared == [], 'the refusal must come before anything is declared'
+
+
+def test_each_repository_keeps_the_urn_it_was_declared_at(stack: Forge) -> None:
+    """Introducing the component moved every URN down a level, and an alias is what makes that a rename.
+
+    Without one the preview is "create the parented one, delete the
+    unparented one", and the delete of a `protect`ed repository is refused.
+    One alias per repository is enough for its whole subtree: everything the
+    component declares is parented on the repository rather than on the
+    component, so each of them inherits the repository's alias and lands back
+    on the URN it already has.
+    """
+    for entry in conventions.forge.REPOSITORIES:
+        aliases = list(stack.request(REPOSITORY, entry.name).aliases)
+
+        assert len(aliases) == 1, entry.name
+        # Everything else left at its default, which reads as "same name, same
+        # type, this stack, this project" -- so the alias is exactly the URN
+        # this repository had when the stack program declared it itself.
+        assert aliases[0].spec.noParent is True
+        assert (aliases[0].spec.name, aliases[0].spec.type, aliases[0].spec.stack, aliases[0].spec.project) == (
+            '',
+            '',
+            '',
+            '',
+        )
+
+
+def test_nothing_below_a_repository_moved(stack: Forge) -> None:
+    """The subtree's URNs are preserved by parenting, not by a second alias each.
+
+    Each resource under a repository names the repository as its parent, which
+    is both what it is -- a property of that repository -- and what makes the
+    one alias above cover it. A resource re-parented onto the component would
+    silently need an alias of its own.
+    """
+    for entry in conventions.forge.REPOSITORIES:
+        assert stack.request(REPOSITORY, entry.name).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')
+
+        # The repository's own URN, as its children carry it: the component's
+        # type, then the repository's, then the repository's name.
+        repository = stack.request(VULNERABILITY_ALERTS, entry.name).parent
+        assert repository.endswith(f'{MANAGED_REPOSITORY}${REPOSITORY}::{entry.name}')
+
+        for typ, name in _below(entry):
+            assert stack.request(typ, name).parent == repository, name
+            assert list(stack.request(typ, name).aliases) == [], name
+
+
+def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
+    """Every resource `ManagedRepository` hangs off one repository, by type and name."""
+    below = [(VULNERABILITY_ALERTS, entry.name)]
+    below += [(LABEL, f'{entry.name}-{label.name}') for label in entry.labels]
+    below += [(ENVIRONMENT, environment.name) for environment in entry.environments]
+    if entry is conventions.forge.DEPLOYMENT:
+        below.append((BRANCH_PROTECTION, 'main'))
+    return below
+
+
+def test_the_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) -> None:
+    """A label made by hand is one the next rebuild does not have.
+
+    The workflow that reads it then fails in the quietest way there is -- the
+    condition is never true and nothing reports it -- so the label is declared
+    from the census like everything else here.
+    """
+    labels = stack.by_name(LABEL)
+
+    assert set(labels) == {
+        f'{repository.name}-{label.name}'
+        for repository in conventions.forge.REPOSITORIES
+        for label in repository.labels
+    }
+    declared = labels[f'{conventions.forge.DEPLOYMENT.name}-{conventions.forge.EXPECT_CHANGES.name}']
+    assert declared['name'] == conventions.forge.EXPECT_CHANGES.name
+    assert declared['description'] == conventions.forge.EXPECT_CHANGES.description
+    assert declared['color'] == LABEL_COLOR
+    assert declared['repository'] == conventions.forge.DEPLOYMENT.name
+
+
+def test_only_the_repository_that_merges_unattended_offers_auto_merge(stack: Forge) -> None:
+    """Auto-merge and branch updating are what noop-automerge needs, and only it needs them.
+
+    One queues a merge behind the checks; the other lets a pull request
+    satisfy "must be up to date" without a human. The ops repository merges
+    nothing unattended, so it asks for neither.
+    """
+    repositories = stack.by_name(REPOSITORY)
+
+    assert repositories[conventions.forge.DEPLOYMENT.name]['allowAutoMerge'] is True
+    assert repositories[conventions.forge.DEPLOYMENT.name]['allowUpdateBranch'] is True
+    assert 'allowAutoMerge' not in repositories[conventions.forge.OPS.name]
+    assert 'allowUpdateBranch' not in repositories[conventions.forge.OPS.name]
+
+
+@pytest.mark.asyncio
+async def test_required_checks_on_a_repository_the_plan_cannot_guard_are_refused() -> None:
+    """Branch protection is public-repository-or-paid on this account.
+
+    Naming required checks where none can be enforced would leave a repository
+    looking guarded and not be, which is the same quiet failure the declared
+    label exists to prevent.
+    """
+    _ = await run_with(Forge(), stack='github')
+
+    with pytest.raises(ValueError, match='no branch protection'):
+        _ = ManagedRepository(
+            conventions.forge.OPS.name,
+            entry=conventions.forge.OPS,
+            description='a private repository',
+            required_checks=('checks',),
+        )
