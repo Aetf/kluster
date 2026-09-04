@@ -1,52 +1,45 @@
-"""The `dns` stack: zones, the estate records that belong to no app, anchors.
+"""The `dns` stack: zones, the base records that belong to no app, anchors.
 
 Per-app records live beside their apps in `apps` (docs/declarative/dns.md);
-what lands here is what has no app to co-locate with — mail, the ZeroTier host
+what lands here is what has no app to co-locate with — mail, the overlay host
 block, verifications, the family and parked zones — plus the anchors every app
 record points at, plus the split-horizon rewrites for every app: they are
 read from the same plain-data route declaration `apps` builds its routes
 from, and they are the reason this is the one stack that joins ZeroTier.
 
-The records themselves are data (`kluster.components.dns.zones`, `kluster.components.dns.legacy`),
-so this program is only the wiring: which zones exist, which records go in
-them, which addresses the anchors carry, and which instances the rewrites are
-written to.
+The records themselves are data, written as blocks — the records that appear
+together, in every zone of one set (`kluster.components.dns.base`,
+`kluster.components.dns.legacy`). This program is only the wiring: which zones
+exist, which addresses the anchors carry, and which instances the rewrites are
+written to. What each zone carries is derived from the blocks by
+`zone_records`, so no zone set is spelled out here.
 
-The anchors, `kluster.hosts` and `vip1.hosts`, are built here rather than
-written down: the addresses in them are machine facts the `physical` stack
-hands out, so they come across the StackReference, and they are the only thing
-that does. The ZeroTier host block is built here too but reaches no other
-stack — it is one record per member of the overlay roster
-(`conventions.overlay.ROSTER`), at the address that roster gives the member.
-Anchors are the one place an IP literal is allowed, the overlay block
-excepted: private addresses under `*.zt` are an existing deliberate practice
-(dns.md §2).
+The anchors, `kluster.hosts` and `vip1.hosts`, are the one thing whose
+contents are not written down: the addresses in them are machine facts the
+`physical` stack hands out, so they come across the StackReference, and they
+are the only thing that does. Their shape — labels, families, TTLs and
+comments — is census data and lives with the rest of it; what this program
+supplies is three addresses.
 """
 
 from __future__ import annotations
-
-from collections.abc import Sequence
 
 import pulumi
 import pulumi_cloudflare as cloudflare
 
 from kluster import conventions
-from kluster.components.dns.adguard import declare_rewrites
+from kluster.components.dns import base
 from kluster.components.dns.legacy import LEGACY
-from kluster.components.dns.model import Record, a, aaaa
+from kluster.components.dns.record import zone_records
+from kluster.components.dns.rewrites import declare_rewrites
 from kluster.components.dns.routes import rewrites
 from kluster.components.dns.zone import ManagedZone
-from kluster.components.dns.zones import ESTATE, zt_records
 
 #: The `physical` outputs the anchors are made of: the load balancer's two
 #: public addresses, and the reserved IPv4 behind the dedicated VIP.
 OUTPUT_CLUSTER_V4 = 'cluster_endpoint'
 OUTPUT_CLUSTER_V6 = 'cluster_endpoint_v6'
 OUTPUT_VIP1_V4 = 'vip1'
-
-#: Both families of the cluster anchor say the same thing to a reader of the
-#: Cloudflare dashboard, so they say it in the same words.
-ANCHOR_CLUSTER_COMMENT = 'cluster ingress; every app record is a CNAME here'
 
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). It keeps the provider's own
@@ -72,26 +65,18 @@ async def main() -> None:
     on_cloudflare = pulumi.ResourceOptions(providers=[zone_provider])
 
     physical = pulumi.StackReference(f'{pulumi.get_organization()}/{pulumi.get_project()}/physical')
-    anchors = _anchors(physical)
-    overlay = zt_records()
 
+    # The whole declaration, as blocks: what belongs to no application, and
+    # what the legacy VPS still serves until each application migrates. Which
+    # zones a block appears in is the block's own first column, so this loop
+    # has no zone in it but the one it is building.
+    blocks = (*base.blocks(anchors=_anchor_addresses(physical)), *LEGACY)
     zones = {
         zone: ManagedZone(
             zone,
             zone=zone,
             account_id=account_id,
-            records=[
-                *ESTATE[zone],
-                *LEGACY.get(zone, ()),
-                # The overlay block is primary-only: nothing anywhere names
-                # an overlay host by any other zone, so the private addresses
-                # under `*.zt` are published once rather than three times.
-                *(overlay if zone in conventions.PRIMARY_ONLY else ()),
-                # Only the primary carries the cluster anchors: every app
-                # record in every zone is a CNAME to the one in the primary,
-                # so a rebuild moves one record, not one per zone.
-                *(anchors if zone == conventions.ZONE_PRIMARY else ()),
-            ],
+            records=zone_records(zone, blocks),
             opts=on_cloudflare,
         )
         for zone in conventions.ALL_ZONES
@@ -111,44 +96,20 @@ async def main() -> None:
     pulumi.export('zone_ids', {zone: managed.zone.id for zone, managed in zones.items()})
 
 
-def _anchors(physical: pulumi.StackReference) -> Sequence[Record]:
-    """The anchor namespace, from the physical stack's addresses.
+def _anchor_addresses(physical: pulumi.StackReference) -> base.AnchorAddresses:
+    """The three addresses the anchors carry, out of the physical stack.
 
-    `kluster.hosts` is the cluster's front door — the network load balancer,
-    which is dual-stack (architecture.md §3.2), so the anchor carries both an
-    A and an AAAA and an app CNAME to it inherits both families. `vip1.hosts`
-    is the dedicated VIP, which nothing resolves in anger: it is there so an
-    operator can name the address without looking it up. It is IPv4 only by
-    construction — the VIP is a reserved public IPv4 that OCI 1:1-NATs onto a
-    secondary private address, and that mechanism has no IPv6 counterpart.
-    The state backend deliberately has no anchor: its clients pin its IP, and
-    its hot path must not depend on this stack.
-
-    These are also the only anchors that are not literals, and nothing here
-    awaits them. An address the `physical` stack has not published yet
-    travels into the record as an unresolved output rather than raising, so
-    this program declares the same records whether or not `physical` has been
-    applied — which is the state it is in today.
+    Reading them is a job the census cannot do for itself, and this is the one
+    place in the stack that reaches across a StackReference. Nothing here
+    awaits: an address the `physical` stack has not published yet travels into
+    the record as an unresolved output rather than raising, so this program
+    declares the same records whether or not `physical` has been applied —
+    which is the state it is in today.
     """
-    return (
-        a(
-            conventions.ANCHOR_CLUSTER,
-            _address(physical, OUTPUT_CLUSTER_V4),
-            ttl=conventions.ANCHOR_TTL,
-            comment=ANCHOR_CLUSTER_COMMENT,
-        ),
-        aaaa(
-            conventions.ANCHOR_CLUSTER,
-            _address(physical, OUTPUT_CLUSTER_V6),
-            ttl=conventions.ANCHOR_TTL,
-            comment=ANCHOR_CLUSTER_COMMENT,
-        ),
-        a(
-            conventions.ANCHOR_VIP1,
-            _address(physical, OUTPUT_VIP1_V4),
-            ttl=conventions.ANCHOR_TTL,
-            comment='dedicated VIP, operator convenience; IPv4 only by construction',
-        ),
+    return base.AnchorAddresses(
+        cluster_v4=_address(physical, OUTPUT_CLUSTER_V4),
+        cluster_v6=_address(physical, OUTPUT_CLUSTER_V6),
+        vip1_v4=_address(physical, OUTPUT_VIP1_V4),
     )
 
 

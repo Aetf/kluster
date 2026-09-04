@@ -30,7 +30,7 @@ the row the resource declares -- so the update records the new stamps and
 calls no endpoint at all.
 
 Which names are rewritten, and on which instances, is
-`kluster.components.dns.adguard`'s business, not this package's.
+`kluster.components.dns.rewrites`'s business, not this package's.
 """
 
 from __future__ import annotations

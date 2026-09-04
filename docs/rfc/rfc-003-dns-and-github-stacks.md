@@ -16,6 +16,10 @@
     imported rather than applied and that the retiring DNSControl program is
     authoritative until cutover. §11 records the settled vocabulary, §20 is
     new, and §§6–19 are renumbered from §§5–18.
+*   **Updated:** 2026-09-04. §4.2's sketch of `base.py` writes `MAIL_ZONES`
+    unqualified, because §5.2 places the set beside the one block that names
+    it rather than in `conventions`, where every set a second program agrees
+    on lives.
 *   **Authority:** the style rules (`docs/style/`) and the design documents are
     what this document obeys. Where they are silent, a rule proposed here is
     marked **new rule**.
@@ -255,7 +259,7 @@ BASE_RECORDS: tuple[Block, ...] = (
     Block(conventions.PRIMARY_ONLY, overlay_records()),
     # The mail zones: the exchangers, SPF, the in-cluster DKIM key and DMARC,
     # identical in both.
-    Block(conventions.MAIL_ZONES, WORKSPACE_MAIL),
+    Block(MAIL_ZONES, WORKSPACE_MAIL),
     # What only the primary carries of its own: its Workspace DKIM key and its
     # site verifications.
     Block(conventions.PRIMARY_ONLY, (...)),

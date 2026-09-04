@@ -3,7 +3,7 @@
 The rows themselves are a convention (`kluster.conventions.routes`) because
 `apps` and `dns` both read them. The derivation below is not: only `dns` turns
 a route into rewrites, so it lives beside the component that declares them
-(`adguard.py`).
+(`rewrites.py`).
 
 A rewrite answers with an address and never with a name. That is the row's
 type rather than a convention, so a rewrite that pointed at another name --

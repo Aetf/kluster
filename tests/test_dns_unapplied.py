@@ -16,7 +16,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.dns.zones import zt_label
+from kluster.components.dns.base import overlay_label
 
 ACCOUNT_ID = 'cf-account'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
@@ -78,12 +78,14 @@ def test_the_overlay_block_is_the_whole_roster_and_waits_on_no_other_stack(stack
     names = record_names(stack)
 
     for entry in conventions.overlay.ROSTER:
-        assert f'{conventions.ZONE_PRIMARY}-{zt_label(entry.name)}.{conventions.ZT_LABEL}-a' in names, entry.name
+        assert f'{conventions.ZONE_PRIMARY}-{overlay_label(entry.name)}.{conventions.OVERLAY_LABEL}-a' in names, (
+            entry.name
+        )
 
 
-def test_the_rest_of_the_estate_is_declared_too(stack: EmptyPhysical) -> None:
-    # The estate is literals: nothing about it should have been held up by
-    # the one part of the program that reads another stack.
+def test_the_rest_of_the_census_is_declared_too(stack: EmptyPhysical) -> None:
+    # The base records are literals: nothing about them should have been held
+    # up by the one part of the program that reads another stack.
     names = record_names(stack)
 
     assert all(any(name.startswith(f'{zone}-') for name in names) for zone in conventions.ALL_ZONES)

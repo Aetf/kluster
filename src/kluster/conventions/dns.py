@@ -45,7 +45,8 @@ ANCHOR_CLUSTER = f'kluster.{ANCHOR_LABEL}'
 ANCHOR_VIP1 = f'vip1.{ANCHOR_LABEL}'
 ANCHOR_TTL = 300
 
-#: The ZeroTier host block — private addresses in public DNS, an existing
+#: The overlay host block — private addresses in public DNS, an existing
 #: deliberate practice. Its contents are the overlay roster, one record per
-#: member.
-ZT_LABEL = 'zt'
+#: member. The label stays `zt`: it is a published DNS name, and ZeroTier is
+#: the target system's own word.
+OVERLAY_LABEL = 'zt'

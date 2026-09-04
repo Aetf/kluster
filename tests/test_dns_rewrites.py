@@ -4,7 +4,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.dns.adguard import declare_rewrites
+from kluster.components.dns.rewrites import declare_rewrites
 from kluster.components.dns.routes import rewrites
 from kluster.conventions.routes import Exposure, Route
 from kluster.providers import configured
