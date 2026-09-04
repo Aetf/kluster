@@ -23,8 +23,13 @@ BindsTo={{ bridge_device }}
 #
 # A machine that cannot start retries every five seconds for as long as it is
 # left alone. Two starts in any ten seconds stay inside systemd's default start
-# rate limit, so nothing here ever gives up -- `systemctl stop` is what ends the
-# loop, while `machinectl poweroff` and `machinectl terminate` are the service
-# exiting and bring it back five seconds later.
+# rate limit, so nothing here ever gives up: `systemctl stop` ends the loop, and
+# through systemd 257 so does `machinectl terminate`, which stops this unit
+# (`--keep-unit` makes it the machine's registration); from 258 it SIGTERMs
+# systemd-nspawn instead and the machine comes back, and `systemctl --version`
+# says which side this box is on. What bounces a machine on either side is
+# `machinectl reboot`: it sends SIGINT, s6 reboots on that, and the Restart=
+# below brings the machine back whatever exit status that path produces, while
+# `machinectl poweroff` signals the container's PID 1, which s6 does not act on.
 Restart={{ restart }}
 RestartSec={{ restart_delay }}
