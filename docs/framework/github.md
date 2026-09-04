@@ -51,6 +51,25 @@ copy anywhere the scripts can reach and must come from the personal
 estate each time. Its absence is what stops this stack from being
 applied by accident.
 
+**The token is read at the line that builds the provider, and a run
+without it stops there.** `pulumi_github` falls back to `GITHUB_TOKEN`
+by itself and, failing that, runs *anonymously* — so a provider left
+to configure itself turns a missing credential into a write refused
+partway through an apply rather than into a refusal. The stack program
+reads the variable and refuses by name when it is unset. What keeps the
+value out of state in the clear is the generated provider, which marks
+this input secret itself; a case over the declaration pins that rather
+than the program wrapping it a second time. `Pulumi.github.yaml`
+carries `pulumi:disable-default-providers: [github]`, which is the same
+conversion for a resource that misses the explicit provider: an error
+rather than a silent fallback.
+
+Which store a provider's credential comes from is the credential's own
+design — stack configuration for most of this repository's providers,
+the environment for this one. Escrowing it would remove the property
+the paragraph above rests on, that a machine which does not already
+hold the token cannot apply this stack.
+
 ## 2. What the plan permits today
 
 `kluster` is **public** (2026-08-25), which is what makes the rest of
@@ -89,8 +108,8 @@ command pushes a secret into every Environment the register names
 (credentials.md §3), and a script may import `conventions` but nothing
 a stack declares from. It also carries the labels a workflow branches
 on — today `expect-changes` (ci.md §3) — held no shorter than what the
-workflows actually read by a test; nothing declares them as resources
-yet.
+workflows actually read by a test, and declared as resources like
+everything else below.
 
 **A row carries what defines the entry, not what GitHub stores about
 it.** The credential partition is defined in exactly these terms
@@ -106,6 +125,17 @@ disagreeing. And the account is one entry carrying both of the names it
 answers to, its login and its numeric user id: an id is minted once and
 never changes, so the reviewer gate below is named from a recorded
 value rather than from a lookup on every run.
+
+**Each repository is one `ManagedRepository`** (`components/forge`), so
+the stack program is wiring rather than a list of resources: the
+component owns one repository plus the resources that must come with
+it and are invisible until they are needed — its vulnerability alerts,
+the branch protection where the plan offers it, one label per census
+entry, and one Environment per census entry. What differs between the
+two repositories is census fields and parameters — visibility, the
+Environments, whether required checks are named — rather than branches
+in the component. It is the same shape, and the same name, as the
+`dns` stack's `ManagedZone`.
 
 -   **Repositories**: `kluster` (public) and `kluster-ops` (private;
     the notification and drill repo, ci.md §3) — visibility, the merge
@@ -134,6 +164,15 @@ value rather than from a lookup on every run.
     so self-review is the only review there is, and forbidding it would
     make the door impassable rather than stricter. Admin bypass is
     off for the same reason `enforce_admins` is on below.
+-   **Labels**: one resource per census entry, which today is
+    `expect-changes` on `kluster` and nothing on `kluster-ops`. A
+    workflow that reads a label nothing declares fails in the quietest
+    way there is — the condition is simply never true, so the escape
+    hatch is unavailable at the moment somebody needs it and nothing
+    reports that the mechanism this document describes is absent.
+    Every declared label carries the same color: these are switches a
+    workflow reads rather than a taxonomy a reader browses, so a hue
+    apiece would be meaning nobody put there.
 -   **Branch protection on `main`**: `checks` and `changes` as required
     status checks, plus "branch must be up to date". Those two run on
     every pull request regardless of paths, which is what a required
@@ -177,13 +216,25 @@ is `pulumi state unprotect <urn>` then `pulumi state delete <urn>`: both
 touch state only, leaving the Environment on GitHub for the create to
 adopt.
 
+`IssueLabel` needs no import for the same reason: its create is a
+create-or-update, so declaring a label that already exists adopts it.
+
+**The repositories' URNs moved when the component was introduced**, and
+each repository carries an alias naming the URN it had while the stack
+program declared it directly. Without one the preview would be "create
+the parented one, delete the unparented one", and the delete is refused
+by the `protect` above. One alias per repository covers its whole
+subtree: everything the component declares is parented on the
+repository rather than on the component, so each of those resources
+inherits the alias and keeps the URN it already has.
+
 ## 4. What is not declared
 
 -   **The Apps themselves, and their installations.** Creating an App
     and generating its private key is console-only (credentials.md
     §2), which is why those keys are seeds rather than derived
-    credentials. Installation is console state too, for a measured
-    reason: the endpoints that manage which repositories an
+    credentials. An App's installation is console state too, for a
+    measured reason: the endpoints that manage which repositories an
     installation covers (`/user/installations/…`) reject a personal
     access token of either kind — they take only a user-to-server
     token from that App's own OAuth flow, an 8-hour credential the

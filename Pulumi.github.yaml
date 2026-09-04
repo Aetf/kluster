@@ -1,1 +1,4 @@
 encryptionsalt: v1:k/5C+10HWMo=:v1:aM77/U0d1SYA+Muj:Oq5piTNLJkfl5x0L+q41crFrv4Ashw==
+config:
+  pulumi:disable-default-providers:
+    - github
