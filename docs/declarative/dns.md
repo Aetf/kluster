@@ -17,25 +17,28 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > (`zone.py`, `adguard.py`, the latter over the custom provider in
 > `src/kluster/providers/adguard_rewrites/`). The route rows themselves
 > are a convention, `src/kluster/conventions/routes.py`, because `apps`
-> and `dns` both read them (README.md §2). Not yet applied: the
-> zones exist at Cloudflare and are imported into state before the
-> first `up`.
+> and `dns` both read them (README.md §2). **The retiring DNSControl
+> program is authoritative until cutover**: the zones exist at
+> Cloudflare and their state is imported rather than applied, so this
+> stack's first `up` is a cutover step and is not to be run while that
+> program still owns the zones, or the two write over each other. Every
+> change here is judged by a preview until that day.
 
 ## 1. Why a fourth stack
 
 The DNSControl census: ZeroTier host records, Google Workspace mail
 (MX/SPF/DKIM/DMARC per zone), site verifications, external hosts
-(abacus), two family zones (jiahui.id / jiahui.love), and two alias
-zones (peifeng.phd, ucw.phd) mirroring the primary
-(unlimited-code.works). unlimitedcodeworks.xyz carries the same shared
-estate block, with mail and site verifications of its own on top (§2);
-its app half is transitional — today it publishes none of the app names
-the other mirrors carry and three of its own, and it becomes a mirror in
-app names as apps migrate and take the default zone set (§2). None of
-that has an app to co-locate with — so it gets its own stack with its own
-(rare) change cadence, and non-cluster DNS edits never touch a cluster
-stack. Ordering: `physical → dns ∥ k8s-base → apps`; `apps` references
-`dns` for zone IDs and `dns` references `physical` for anchor IPs.
+(abacus), two family zones (jiahui.id / jiahui.love), and two parked
+zones (peifeng.phd, ucw.phd) that this installation holds and does not
+serve (§2). unlimitedcodeworks.xyz is a website co-host: it answers for
+the same apex and `www` as the primary (unlimited-code.works), from the
+same instance, and carries mail, site verifications and three names of
+its own on top. It publishes no application name and is not going to
+(§2). None of that has an app to co-locate with — so it gets its own
+stack with its own (rare) change cadence, and non-cluster DNS edits
+never touch a cluster stack. Ordering:
+`physical → dns ∥ k8s-base → apps`; `apps` references `dns` for zone
+IDs and `dns` references `physical` for anchor IPs.
 
 The `dns` stack owns: zone resources, the estate records above, the
 **anchors** (§2), a reusable per-zone mail component
@@ -106,10 +109,10 @@ Cloudflare set; jiahui.id takes none.
 -   **Anchors are declared in the primary zone only.** An app
     publishing in several zones gets a CNAME in each, and every one of
     them targets `kluster.hosts.unlimited-code.works`, so a node
-    rebuild moves one record instead of one per zone. The mirrors do
-    carry an `archvps.hosts` copy of their own — ported with the rest
-    of the live estate — but nothing targets it: the legacy CNAMEs name
-    the primary's copy as well, and the copies retire with the VPS.
+    rebuild moves one record instead of one per zone. The legacy VPS
+    anchor `archvps.hosts` is in the primary zone alone for the same
+    reason: every CNAME that names the VPS, in every zone, targets that
+    one record, and it retires with the machine.
     Declaring the anchors reaches across a StackReference and nothing
     else in this stack does, so it is written not to await: an address
     `physical` has not published yet becomes an unresolved record input
@@ -127,37 +130,63 @@ Cloudflare set; jiahui.id takes none.
     `physical` stack declares the membership from (physical/gateway.md
     §2.1). A device joins the overlay and gets its name here by one
     declaration, and a device that leaves loses both — so the legacy
-    VPS's record goes when its roster entry does, in Wave F. Nothing
-    here crosses the StackReference: an entry carries the member's name
-    and its overlay address together, so the whole block is code, and it
-    is declared identically before and after `physical` is applied. The
+    VPS's record goes when its roster entry does, in Wave F. The block
+    is declared in the primary zone alone: every overlay name a
+    configuration file in this installation holds is the primary's, so
+    a copy in another zone would republish a private address nothing
+    reads. Nothing here crosses the StackReference: an entry carries
+    the member's name and its overlay address together, so the whole
+    block is code, and it is declared identically before and after
+    `physical` is applied. The
     gateway is the one member the roster may not carry yet, and `udm.zt`
     appears with its entry (physical/gateway.md §2.5).
 -   **Apps are CNAMEs to anchors**: `<app>.<zone>` → `kluster.hosts.…`
     declared inside the app component. A node rebuild or VIP re-home
     touches exactly one anchor record, previewed in `dns`.
--   **Alias zones via zone sets, not copy-paste**: the mirrors
-    (unlimitedcodeworks.xyz, peifeng.phd, ucw.phd) were maintained as
-    duplicated record blocks. `conventions` defines zone sets (e.g.
-    `PUBLIC_ALL`, `PRIMARY_ONLY`); an app declares `public_route(host=…,
-    zones=PUBLIC_ALL)` once and the helper fans records out across the
-    set.
--   **`PUBLIC_ALL` membership means full mirror**: every zone in the
-    set carries one shared estate block — the legacy VPS anchor and the
-    web origin (`dns/zones.py`, `MIRRORED_ESTATE`) — plus the ZeroTier
-    host records, which reach the same set from the stack program
-    because they are derived rather than literal. So a name fanned
-    across the set resolves in all of it. The cluster anchors those
-    names CNAME to are not in the block: they are in the primary alone,
-    per the bullet above. A zone joins the set by carrying the block,
-    not by being listed; the two facts are held together by a test.
-    What a mirror may add on top of the block is its own mail and site
-    verifications, which are per-domain by nature. Membership is also a
-    promise about app names that only the migration makes true:
-    unlimitedcodeworks.xyz is in the set and carries none of the app
-    names the other mirrors do (`dns/legacy.py` — the VPS never served
-    them there), so the fan-out first reaches it when an app moves into
-    `apps` and takes the default zone set.
+-   **A public record needs a listener and a certificate.** A public
+    record is published in a zone only where a listener and a
+    certificate answer for the name. A route's zone set is what serves
+    the application, and the default is the primary; a name that
+    resolves is a promise the origin has to keep. **No zone mirrors
+    another**, and an application could not be mirrored even with DNS
+    and a certificate in place: every forward-auth application shares
+    one SSO cookie domain and one portal URL, every OIDC application
+    registers its redirect URIs against a hostname, several hold an
+    absolute origin of their own, and a federated matrix server's name
+    is immutable. A second hostname for any of them is a login that
+    loops or is refused.
+-   **Zone sets, not copy-paste**: `conventions` names the zone sets a
+    route row is declared against and a record block is described by;
+    the blocks name them once the record tables become blocks.
+    `PRIMARY_ONLY` is the primary alone — every route's default, both
+    anchor blocks, the overlay block, and every application name the
+    legacy VPS still serves. `WEB_ZONES` is the zones whose apex and
+    `www` are served: the primary and the website co-host.
+    `PARKED_ZONES` is the pair held and not served (below).
+    `ZONE_FAMILY` is the family pair, taxonomy only, so that
+    `ALL_ZONES` — every zone the stack declares, which is what the
+    program loops over — can be written as a union of named sets. An
+    app writes `public_route(host=…)` and gets the primary; naming
+    another zone in the row is what says that zone serves the
+    application too, and the helper fans the records across whatever
+    the row names.
+-   **A parked zone is held and not served.** peifeng.phd and ucw.phd
+    hold nothing of this installation's: what resolves in either is a
+    copy of one of the primary's names addressed at the legacy VPS,
+    answered by that machine's own catch-all with a redirect to the
+    primary, and no certificate has ever been issued at an origin for
+    one. Parked is a state and not a stage — ucw.phd outlives its last
+    record, because it is the zone the gateway's proxy holds
+    `*.lan.ucw.phd` under (§4), so its CAA is load-bearing for the
+    gateway's renewals long after its last record goes; peifeng.phd is
+    held because a domain in hand is cheaper than a domain reacquired.
+    What each carries is the apex and `www` and the CAA set, and the
+    apex and `www` retire with the machine they address rather than
+    being repointed, since neither zone holds anything for the cluster
+    to serve. **The end state is that both zones are dark**: an old
+    link that used to land on the primary's front page stops resolving
+    rather than arriving somewhere else. Nothing in any repository,
+    configuration file or certificate references either name.
 -   **Cloudflare proxy is a helper parameter** (default on): the
     existing per-record reasons — large uploads (photos), non-HTTP
     ports (syncthing, matrix, minecraft) — become explicit
@@ -316,9 +345,13 @@ Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app migrates, then its component declares
 the same names against `kluster.hosts` (and the DNSControl entry is
 deleted). Estate records import wholesale into the `dns` stack early —
-note the handful of **estate records that themselves reference the VPS**
-(the apex/`www` A records of unlimited-code.works, unlimitedcodeworks.xyz
-and jiahui.love): they repoint to `kluster.hosts` when their serving
-apps move, and none may still reference `archvps.hosts` when the VPS
-retires (migration.md Wave F checks this). The DNSControl repo retires
+note the **estate records that themselves reference the VPS**: the
+shared web origin block — the apex and `www` of unlimited-code.works,
+unlimitedcodeworks.xyz, peifeng.phd and ucw.phd — plus `jiahui.love`'s
+apex, which is the same record declared in the family zone rather than
+a fifth member of the block. The served pair repoints to
+`kluster.hosts` when the site behind it moves; the parked pair's
+records go with the machine instead (§2). None may still reference
+`archvps.hosts` when the VPS retires (migration.md Wave F checks
+this). The DNSControl repo retires
 with a pointer commit (the old-tracker rule, migration.md §0).

@@ -3,24 +3,40 @@
 from __future__ import annotations
 
 ZONE_PRIMARY = 'unlimited-code.works'
-#: The shortest mirror, and the zone the retiring LAN names sit inside
+#: The shortest zone, and the one the retiring LAN names sit inside
 #: (`conventions.gateway.ZONE_LEGACY`). It has a name of its own because three
 #: declarations have to agree on it: that constant, the wildcard the gateway's
 #: proxy holds under it, and the scope of the token that buys the wildcard.
 ZONE_SHORT = 'ucw.phd'
-#: Mirrors of the primary zone: the same app records, fanned out by the
-#: route helpers instead of copy-pasted.
-ZONE_MIRRORS = ('unlimitedcodeworks.xyz', 'peifeng.phd', ZONE_SHORT)
-#: Family zones — estate records only, never app fan-out targets.
+
+#: The primary alone: every route's default, both anchor blocks, the overlay
+#: block, and every application name the legacy VPS still serves. A public
+#: record is published in a zone only where a listener and a certificate answer
+#: for the name (declarative/dns.md §2), and the primary is the only zone where
+#: both are true of an application.
+PRIMARY_ONLY = (ZONE_PRIMARY,)
+
+#: The zones whose apex and `www` are served: the primary and the website
+#: co-host. The co-host serves that website and nothing else — it carries no
+#: application name and could not carry one, because every application here
+#: holds one SSO cookie domain, one portal URL and one registered redirect URI.
+WEB_ZONES = (ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
+
+#: The two zones this installation holds and does not serve. What resolves in
+#: them is copies addressed at the legacy VPS, answered by that machine's
+#: catch-all rather than by anything of this installation's, and those names
+#: retire with the machine; each zone then carries the CAA set and nothing
+#: else (declarative/dns.md §2). Parked is a state and not a stage: `ZONE_SHORT`
+#: outlives its last record, because it is the zone the gateway's proxy holds
+#: `*.lan.ucw.phd` under.
+PARKED_ZONES = ('peifeng.phd', ZONE_SHORT)
+
+#: Family zones — taxonomy only, so that `ALL_ZONES` reads. Nothing is
+#: declared against this set.
 ZONE_FAMILY = ('jiahui.id', 'jiahui.love')
 
-#: Every zone an app may publish in without further thought. Membership is a
-#: promise that the zone is a *full* mirror: it carries the shared estate block
-#: (`dns.zones.MIRRORED_ESTATE`), so a name fanned out across the set resolves
-#: in all of it. Adding a zone here means making it a mirror first.
-PUBLIC_ALL = (ZONE_PRIMARY, *ZONE_MIRRORS)
-PRIMARY_ONLY = (ZONE_PRIMARY,)
-ALL_ZONES = (*PUBLIC_ALL, *ZONE_FAMILY)
+#: Every zone the `dns` stack declares, which is what the program loops over.
+ALL_ZONES = (*WEB_ZONES, *PARKED_ZONES, *ZONE_FAMILY)
 
 #: IP literals live only under the anchor namespace, with low TTLs; apps are
 #: CNAMEs to an anchor, so a node rebuild touches exactly one record.

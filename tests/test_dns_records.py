@@ -15,11 +15,11 @@ from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.model import Record
 from kluster.components.dns.routes import Rewrite, rewrites
 from kluster.components.dns.zones import (
-    ALIAS_ZONES,
     CLOUDFLARE_ISSUERS,
     CLUSTER_ISSUERS,
     ESTATE,
-    MIRRORED_ESTATE,
+    LEGACY_ANCHOR,
+    WEB_ORIGIN,
     ZONE_ISSUERS,
     zt_label,
     zt_records,
@@ -32,10 +32,10 @@ def _zt() -> tuple[Record, ...]:
 
 
 def _records(zone: str) -> tuple[Record, ...]:
-    # The overlay block is not in `ESTATE` — it is derived from the roster and
-    # added by the stack program — but it is part of what a mirror carries, so
-    # the census assertions below have to see it.
-    overlay = _zt() if zone in conventions.PUBLIC_ALL else ()
+    # The overlay block is not in `ESTATE` -- it is derived from the roster and
+    # added by the stack program -- but it is part of what the primary zone
+    # carries, so the census assertions below have to see it.
+    overlay = _zt() if zone in conventions.PRIMARY_ONLY else ()
     return (*ESTATE[zone], *LEGACY.get(zone, ()), *overlay)
 
 
@@ -246,49 +246,93 @@ def test_the_unproxied_records_stay_unproxied(label: str) -> None:
     assert record.proxied is False
 
 
-def test_the_mirrors_carry_the_same_app_names_as_the_primary() -> None:
-    # An alias zone publishes nothing of its own, so every name in it is a
-    # name the primary publishes too.
-    primary = _labels(conventions.ZONE_PRIMARY)
+def test_a_parked_zone_carries_the_web_origin_and_its_caa_and_nothing_else() -> None:
+    """A parked zone serves nothing of this installation's, so it publishes nothing.
 
-    for zone in ALIAS_ZONES:
-        assert _labels(zone) <= primary, zone
-
-
-def _estate_keys(zone: str) -> set[str]:
-    return {record.resource_key for record in ESTATE[zone]}
-
-
-def test_every_public_zone_carries_the_whole_mirrored_estate() -> None:
-    """`PUBLIC_ALL` membership is the claim that the zone is a full mirror.
-
-    The check is against the block itself rather than zone against zone,
-    because the zones legitimately differ elsewhere -- two of them carry mail
-    and site verifications of their own -- and because that makes editing the
-    block the only way to add a mirrored name.
-
-    The cluster anchors are not part of the block: they are declared in the
-    primary zone alone, and an app fanning a route across the set publishes a
-    CNAME per zone that targets the primary's anchor
-    (`test_the_anchors_live_only_in_the_primary_zone`).
+    What resolves in one is the apex and `www`, addressed at the legacy VPS
+    and answered by that machine's catch-all; those retire with the machine
+    and leave the zone dark but for its CAA. CAA is the exception by
+    construction -- the policy is a property of the zone, not of what serves
+    it -- and the edge mints a certificate for a zone it hosts whether or not
+    anything of ours answers in it.
     """
-    mirrored = {record.resource_key for record in MIRRORED_ESTATE}
+    origin = {record.resource_key for record in WEB_ORIGIN}
 
-    assert mirrored
-    for zone in conventions.PUBLIC_ALL:
-        assert mirrored <= _estate_keys(zone), zone
+    assert origin
+    for zone in conventions.PARKED_ZONES:
+        assert {record.resource_key for record in _records(zone) if record.type != 'CAA'} == origin, zone
 
 
-def test_an_alias_zone_holds_the_mirrored_estate_and_its_own_caa() -> None:
-    """Nothing else may accumulate in a zone that exists only to alias.
+@pytest.mark.parametrize('label', ['auth', 'photos', 'matrix', 'tube', '_matrix-identity._tcp'])
+def test_no_application_name_is_published_in_a_parked_zone(label: str) -> None:
+    """A name a parked zone answered reached the VPS catch-all, never the app.
 
-    CAA is the exception by construction: the policy is a property of the
-    zone, so it is appended per zone instead of living in the shared block.
+    No certificate has ever been issued at an origin for one, and no cookie
+    domain, redirect URI or absolute origin of any application names one. So
+    the name resolved and then served the wrong thing, which is the promise
+    dns.md §2 forbids making.
     """
-    mirrored = {record.resource_key for record in MIRRORED_ESTATE}
+    assert label in _labels(conventions.ZONE_PRIMARY)
+    for zone in conventions.PARKED_ZONES:
+        assert label not in _labels(zone), zone
 
-    for zone in ALIAS_ZONES:
-        assert {record.resource_key for record in ESTATE[zone] if record.type != 'CAA'} == mirrored, zone
+
+def test_every_zone_that_answers_for_a_website_carries_the_web_origin() -> None:
+    """The apex and `www` are the one block all four public zones share.
+
+    What answers differs, which is why the two sets are separate: the served
+    pair is answered by the website, the parked pair by the legacy VPS's own
+    catch-all. A zone in either set that lost the block would stop answering
+    at its own apex, and nothing else here would notice.
+    """
+    origin = {record.resource_key for record in WEB_ORIGIN}
+
+    assert origin
+    for zone in (*conventions.WEB_ZONES, *conventions.PARKED_ZONES):
+        assert origin <= {record.resource_key for record in _records(zone)}, zone
+
+
+def test_the_website_co_host_carries_a_website_its_own_mail_and_its_own_names() -> None:
+    """It answers for a website and stops there: no application name, ever.
+
+    Every application here holds one SSO cookie domain and one registered
+    redirect URI, so a second hostname for one is a login that loops. The pin
+    is the co-host's whole declared label set rather than a list of forbidden
+    names, because what would arrive is the name nobody thought to forbid --
+    an anchor copy, an overlay block, an application fanned across a set.
+    """
+    assert _labels('unlimitedcodeworks.xyz') == {
+        # The web origin's apex, which the mail and verification records
+        # share, and the `www` beside it.
+        '@',
+        'www',
+        # Mail of its own: the Workspace DKIM key is issued per domain.
+        'k8s._domainkey',
+        'google._domainkey',
+        '_dmarc',
+        # Three names of its own, which the primary does not carry.
+        'btsync',
+        'games',
+        'game',
+    }
+
+
+def test_the_legacy_anchor_and_the_overlay_block_are_the_primary_zones_alone() -> None:
+    """One record addresses the VPS, and one block publishes private addresses.
+
+    Every CNAME that names the VPS -- in every zone -- targets the primary's
+    copy, so a copy elsewhere is a record nothing reads; and an overlay host
+    is named by no configuration outside the primary. Publishing either
+    anywhere else costs the copies and buys nothing.
+    """
+    copied = {record.resource_key for record in (*LEGACY_ANCHOR, *_zt())}
+
+    assert copied
+    for zone in conventions.ALL_ZONES:
+        if zone in conventions.PRIMARY_ONLY:
+            assert copied <= {record.resource_key for record in _records(zone)}, zone
+        else:
+            assert copied & {record.resource_key for record in _records(zone)} == set(), zone
 
 
 def test_a_public_route_needs_no_rewrite() -> None:

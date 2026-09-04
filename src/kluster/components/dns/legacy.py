@@ -11,6 +11,11 @@ statement as "this module is empty" (dns.md §6, migration.md).
 They are ported rather than left behind because the DNSControl program is
 retiring: a record nobody declares is a record nobody previews.
 
+Every row is in the primary zone alone, apart from the three the website
+co-host publishes of its own. The parked zones carry no application name: what
+answered one there was the VPS's catch-all and never the application, so the
+name was dead however it resolved (dns.md §2).
+
 The import census dropped two of them outright -- `jupyter` and `mc`. Both
 were proxied to services that no longer exist (jupyter's backend was the
 retired Abacus host; the Minecraft server is gone, though `mcmap` survives).
@@ -26,9 +31,10 @@ from kluster.components.dns.zones import ANCHOR_ARCHVPS
 
 __all__ = ('LEGACY',)
 
-#: label → whether Cloudflare proxies it. Proxy off is never an oversight: it
-#: is either a non-HTTP port on the name or a body size the proxy would cap.
-_MIRRORED: tuple[tuple[str, bool, str], ...] = (
+#: The names the VPS serves, in the primary zone alone: label → whether
+#: Cloudflare proxies it → what answers. Proxy off is never an oversight: it is
+#: either a non-HTTP port on the name or a body size the proxy would cap.
+_VPS_NAMES: tuple[tuple[str, bool, str], ...] = (
     ('auth', True, 'Authelia portal'),
     ('login', True, 'SSO login page'),
     ('k8s', True, 'cluster portal'),
@@ -45,10 +51,6 @@ _MIRRORED: tuple[tuple[str, bool, str], ...] = (
     ('tube', True, 'jellyfin'),
     ('spool', True, 'spoolman'),
     ('mcmap', True, 'minecraft map renderer'),
-)
-
-#: Only the primary zone carries these; the mirrors never did.
-_PRIMARY_ONLY: tuple[tuple[str, bool, str], ...] = (
     ('archvps.stats', False, 'VPS stats'),
     ('sync-nas', True, 'syncthing on the NAS, UI only'),
     ('split', True, 'splitpro'),
@@ -77,13 +79,10 @@ def _matrix_identity() -> Record:
 
 
 def _legacy() -> Mapping[str, Sequence[Record]]:
-    records: dict[str, Sequence[Record]] = {
-        conventions.ZONE_PRIMARY: (*_cnames(_MIRRORED), *_cnames(_PRIMARY_ONLY), _matrix_identity()),
+    return {
+        conventions.ZONE_PRIMARY: (*_cnames(_VPS_NAMES), _matrix_identity()),
         'unlimitedcodeworks.xyz': _cnames(_XYZ),
     }
-    for zone in ('peifeng.phd', 'ucw.phd'):
-        records[zone] = (*_cnames(_MIRRORED), _matrix_identity())
-    return records
 
 
 #: Zone → the app records still served by the VPS.
