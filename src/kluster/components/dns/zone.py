@@ -1,7 +1,7 @@
 """A zone and everything declared in it.
 
 The component is the only place that knows Cloudflare's resource shapes:
-everywhere else a record is a `model.Record`, so adding a record is a data
+everywhere else a record is a `record.Record`, so adding a record is a data
 change and a provider upgrade is one file's problem.
 
 Two per-zone hygiene resources come with every zone rather than being
@@ -17,7 +17,7 @@ from collections.abc import Iterable
 import pulumi
 import pulumi_cloudflare as cloudflare
 
-from kluster.components.dns.model import Record
+from kluster.components.dns.record import Record
 from putils import Component
 
 __all__ = ('ManagedZone',)

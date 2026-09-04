@@ -12,7 +12,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
-from kluster.components.dns.zones import zt_label
+from kluster.components.dns.base import overlay_label
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
@@ -138,8 +138,8 @@ def test_the_vip_anchor_is_declared_and_is_v4_only(stack: AppliedPhysical) -> No
     assert f'{conventions.ZONE_PRIMARY}-{conventions.ANCHOR_VIP1}-aaaa' not in records
 
 
-def zt_record(stack: AppliedPhysical, zone: str, member: str) -> dict[str, Any]:
-    return records_of(stack, zone)[f'{zone}-{zt_label(member)}.{conventions.ZT_LABEL}-a']
+def overlay_record(stack: AppliedPhysical, zone: str, member: str) -> dict[str, Any]:
+    return records_of(stack, zone)[f'{zone}-{overlay_label(member)}.{conventions.OVERLAY_LABEL}-a']
 
 
 def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference(stack: AppliedPhysical) -> None:
@@ -153,13 +153,13 @@ def test_the_overlay_block_is_the_roster_and_reaches_across_no_reference(stack: 
     member = 'Aetf-Arch-Homelab'
 
     published = {
-        name.removeprefix(f'{conventions.ZONE_PRIMARY}-').removesuffix(f'.{conventions.ZT_LABEL}-a')
+        name.removeprefix(f'{conventions.ZONE_PRIMARY}-').removesuffix(f'.{conventions.OVERLAY_LABEL}-a')
         for name in records_of(stack, conventions.ZONE_PRIMARY)
-        if name.endswith(f'.{conventions.ZT_LABEL}-a')
+        if name.endswith(f'.{conventions.OVERLAY_LABEL}-a')
     }
 
-    assert published == {zt_label(entry.name) for entry in conventions.overlay.ROSTER}
-    assert zt_record(stack, conventions.ZONE_PRIMARY, member)['content'] == str(
+    assert published == {overlay_label(entry.name) for entry in conventions.overlay.ROSTER}
+    assert overlay_record(stack, conventions.ZONE_PRIMARY, member)['content'] == str(
         conventions.overlay.member(member).address
     )
 
@@ -173,7 +173,9 @@ def test_the_overlay_block_is_declared_in_the_primary_zone_alone(stack: AppliedP
     """
     for zone in conventions.ALL_ZONES:
         names = {record['name'] for record in records_of(stack, zone).values()}
-        expected = {f'{zt_label(entry.name)}.{conventions.ZT_LABEL}.{zone}' for entry in conventions.overlay.ROSTER}
+        expected = {
+            f'{overlay_label(entry.name)}.{conventions.OVERLAY_LABEL}.{zone}' for entry in conventions.overlay.ROSTER
+        }
 
         assert (expected <= names) is (zone in conventions.PRIMARY_ONLY), zone
         assert (expected & names == set()) is (zone not in conventions.PRIMARY_ONLY), zone

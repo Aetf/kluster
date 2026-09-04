@@ -98,7 +98,7 @@ class EnrolledMember:
 
     #: What ZeroTier Central shows the member as. Display names are what they
     #: are — several contain spaces — and DNS normalizes rather than renames
-    #: (`dns.zones.zt_label`).
+    #: (`dns.base.overlay_label`).
     name: str
     #: The ten hexadecimal digits the device's daemon minted.
     node_id: str
@@ -140,10 +140,10 @@ RosterEntry = EnrolledMember | GeneratedMember
 #: The table is a convention rather than one stack's data because two stacks
 #: decide from it and neither owns it. `physical` declares the membership from
 #: it, one authorized member per entry, and `dns` publishes the `*.zt` host
-#: block from it, one A record per entry (`dns.zones.zt_records`). A member is
-#: therefore admitted and named by the same declaration, so a member with no
-#: record is not a state either stack can be in; a device that leaves the
-#: overlay leaves this tuple, and both go with it.
+#: block from it, one A record per entry (`dns.base.overlay_records`). A
+#: member is therefore admitted and named by the same declaration, so a member
+#: with no record is not a state either stack can be in; a device that leaves
+#: the overlay leaves this tuple, and both go with it.
 #:
 #: It is a census by construction. The role tag's default value is the
 #: permissive one, so a member that arrived without a declared role would be

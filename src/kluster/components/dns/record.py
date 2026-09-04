@@ -14,11 +14,15 @@ Two fields exist for the sake of the declaration rather than the DNS wire:
     replace -- a record whenever its value is rotated.
 -   `comment` rides along to Cloudflare's per-record comment field, the only
     place the dashboard can explain why a record exists.
+
+`Block` is the unit the census is written in, and it is here rather than in
+`base.py` because `legacy.py` is written in it too and `base.py` reads
+`legacy.py` rather than the other way round.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 import pulumi
@@ -26,6 +30,7 @@ import pulumi
 __all__ = (
     'TTL_AUTO',
     'TTL_HOUR',
+    'Block',
     'Record',
     'a',
     'aaaa',
@@ -34,6 +39,7 @@ __all__ = (
     'mx',
     'srv',
     'txt',
+    'zone_records',
 )
 
 #: Cloudflare spells "let the edge pick a TTL" as a TTL of 1. It is the right
@@ -70,6 +76,19 @@ class Record:
 
     def fqdn(self, zone: str) -> str:
         return zone if self.label == '@' else f'{self.label}.{zone}'
+
+
+@dataclass(frozen=True)
+class Block:
+    """Records that appear together, in every zone of one set."""
+
+    zones: tuple[str, ...]
+    records: tuple[Record, ...]
+
+
+def zone_records(zone: str, blocks: Iterable[Block]) -> tuple[Record, ...]:
+    """What one zone carries: the provider's per-zone view, derived."""
+    return tuple(record for block in blocks if zone in block.zones for record in block.records)
 
 
 def a(

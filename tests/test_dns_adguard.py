@@ -23,7 +23,7 @@ import requests
 from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
 
-from kluster.components.dns import adguard
+from kluster.components.dns import rewrites
 from kluster.providers import adguard_rewrites, configured
 
 ENDPOINT = 'http://alice.lan:3000'
@@ -316,4 +316,4 @@ def test_delete_removes_exactly_the_declared_pair(instance: Instance) -> None:
 
 
 def test_the_instance_label_is_a_resource_name_fragment() -> None:
-    assert adguard.instance_label('http://alice.lan:3000') == 'alice-lan'
+    assert rewrites.instance_label('http://alice.lan:3000') == 'alice-lan'
