@@ -87,10 +87,27 @@ documentation the change makes true ships with it rather than after it.
 * Shared files — `AGENTS.md`, `docs/framework/ci.md`, `pyproject.toml` —
   are **serialized**: at most one open pull request may touch each of
   them, whoever opened it.
-* Work happens in a git worktree of its own, and **a worktree dies with
-  the dispatch that created it** — the agent removes its own when it
-  reports with no pull request, the merging dispatcher removes it after
-  the merge ([dispatch.md](docs/framework/dispatch.md) §1.2).
+* Work happens in a `jj` workspace of its own (`jj workspace add -r main
+  .claude/workspaces/<name>`), and **a workspace dies with the dispatch
+  that created it** — the agent removes its own when it reports with no
+  pull request, the merging dispatcher removes it after the merge.
+* **After each piece of work, `jj new`**, so that `@` is always the empty
+  change and the work sits at `@-`. Pushing is then two commands, and
+  `jj log` first, confirming the work is at `@-`, is part of the form:
+  `jj bookmark set <branch> -r @-`, then
+  `jj git push --bookmark <branch>`. Both halves exit zero without
+  pushing the work if that precondition does not hold — work left in
+  `@` puts `main` on the branch instead, and a bookmark nobody moved
+  reports `Nothing changed` and sends nothing at all. Read the head SHA
+  back with `jj log -r <branch> --no-graph -T commit_id`;
+  `git rev-parse HEAD` answers about the primary checkout, not the
+  workspace. The failure modes and the rest of the protocol are
+  [dispatch.md](docs/framework/dispatch.md) §1.2.
+* **The switch is not finished**: a worker already in a git worktree
+  keeps it until that work is done, and there the git forms still
+  apply — including `git rev-parse HEAD`, which is wrong only inside a
+  `jj` workspace. The two are never mixed on one repository
+  ([dispatch.md](docs/framework/dispatch.md) §1.2).
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint, and a register row

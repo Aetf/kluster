@@ -11,10 +11,10 @@ document is the protocol behind it.
 `main` is protected: everything lands through a pull request whose
 `checks` and `changes` are green on an up-to-date branch, the account
 owner included ([github.md](github.md) §3). Work that can run in
-parallel therefore runs as **one agent per issue, each in its own git
-worktree, each opening its own pull request**. The dispatcher
+parallel therefore runs as **one agent per issue, each in its own `jj`
+workspace, each opening its own pull request**. The dispatcher
 commissions the review (§3) and merges; it does not also implement the
-work it dispatched.
+work it dispatched (§1.3).
 
 **Path ownership is what makes it parallel.** Two agents may not be
 able to edit the same file, so each brief names the paths its work
@@ -48,36 +48,155 @@ them:
     shorthand, no credentials, no host names that are not already in
     the repository.
 
-### 1.2 A worktree dies with the dispatch
+### 1.2 A workspace dies with the dispatch
 
-Work happens in a git worktree of its own under
-`.claude/worktrees/<name>`, and none outlives the dispatch that
-created it:
+Work happens in a **`jj` workspace** of its own under
+`.claude/workspaces/<name>`:
+
+    mkdir -p .claude/workspaces
+    jj workspace add -r main .claude/workspaces/<name>
+
+`add` takes the workspace's name from the last element of the path and
+starts it on an empty change on top of `main`. It errors on a missing
+parent rather than creating one, and `.claude/` is untracked, so the
+`mkdir` is not optional in a fresh clone. None of these outlives the
+dispatch that created it:
 
 -   An agent that finishes **without** a pull request removes its own
-    worktree and branch before it reports — `git worktree remove
-    <path>` and `git branch -D <branch>`.
--   An agent that **opened** a pull request leaves the worktree
+    workspace before it reports — `jj workspace forget <name>`, run
+    **from the primary workspace**, and then `rm -rf <path>`. Two
+    commands, because `forget` deliberately leaves the directory alone;
+    from the primary, because `forget` run inside its own workspace
+    succeeds with a warning and leaves the agent standing in the
+    directory it is about to remove.
+-   An agent that **opened** a pull request leaves the workspace
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label and the card,
     because each dispatcher merges only its own pull requests (§2).
--   A reviewer's throwaway checkout is deleted when the review is
+-   A reviewer's throwaway workspace is deleted when the review is
     written (§3.2).
 
-Neither `/tmp` nor the home directory keeps a dead tree. A worktree
-whose branch is merged or abandoned is a trap for the next agent,
-which can read a stale copy of a file it is about to edit, and
-`git worktree list` is the census that shows them.
+Neither `/tmp` nor the home directory keeps a dead workspace. One whose
+work is merged or abandoned is a trap for the next agent, which can
+read a stale copy of a file it is about to edit. `jj workspace list` is
+the census that shows them, a directory that was deleted without being
+forgotten included: that one lists with no path, and `jj workspace
+forget` clears it.
 
-Two conditions say a branch is safe to delete. **Merged content is
-established by `git cherry origin/main <branch>`, not by ancestry**:
-this repository rebase-merges, so a merged branch's commits keep their
-pre-merge hashes and are ancestors of nothing — `git cherry` compares
-patches instead, and no line starting with `+` means every commit has
-an equivalent on `main`. **And the working tree is clean**:
-`git status --porcelain` in the worktree prints nothing, so no
-uncommitted work goes with it. `git worktree prune` clears the
-administrative entries of directories that are already gone.
+**A workspace goes stale when another workspace rewrites the commits it
+is sitting on**, which a dispatcher's `jj git fetch` does routinely
+while a builder is live. Every command in the stale workspace then
+fails with `The working copy is stale`, and `jj workspace update-stale`
+is the fix. It is a working-copy repair, not a recovery: if the commits
+were abandoned, it updates to a fresh empty change and takes the files
+off disk with it, so read the paragraph on losing work below before
+running it.
+
+**`@` is always the empty change, and keeping it that way is a rule,
+not a habit.** After each piece of work: describe it, then `jj new`, so
+that the work is at `@-` and `@` is empty again. Only then:
+
+    jj bookmark set <branch> -r @-
+    jj git push --bookmark <branch>
+
+`--bookmark` tracks a bookmark the remote has never seen, so a first
+push needs no extra flag. **Both halves of this fail silently if the
+precondition does not hold**, which is why `jj log` before every push,
+confirming the work is the commit at `@-`, is part of the form:
+
+-   Work still sitting in `@` — the ordinary `jj` habit of edit,
+    describe, push, with no `jj new` — makes `@-` the tip of `main`.
+    The bookmark is then created pointing at `main`, the push reports
+    `bookmark: <branch> [add to <sha>]` and exits zero, and the branch
+    on the forge carries none of the work. A confident-looking push and
+    an empty pull request.
+-   A bookmark left where it was on a second round of work, because a
+    bookmark does not follow commits made after it was set, makes
+    `jj git push` report `Nothing changed`, exit zero, and push nothing.
+
+These replace git's "forgot to commit" as the way work is lost here, and
+neither returns a non-zero exit. What catches both is the head SHA the
+report names (§4), **read with `jj` after the push**:
+
+    jj log -r <branch> --no-graph -T commit_id
+
+**Do not use `git rev-parse HEAD` for this.** An added workspace has no
+git repository of its own and sits inside the colocated primary, so git
+walks up and answers about the primary: `git rev-parse HEAD` returns
+`main`, and `git status --porcelain` describes the primary's tree, not
+the one the agent is working in. Both answer confidently and both are
+about the wrong directory.
+
+**Whether a change merged is the forge's answer, not the
+repository's.** This repository rebase-merges, so a merged change's
+commits keep their pre-merge hashes, are ancestors of nothing, and no
+local query distinguishes them from unmerged ones. The proof is that
+the pull request is `MERGED` and that the head it merged is the head
+the builder's report named — the same equality §2 rule 8 checks before
+merging, which is why the report's SHA has to be right:
+
+    gh pr view <n> --json state,headRefOid
+
+**A local query answers a different question: what would be lost.**
+Before deleting a workspace or a bookmark, run
+
+    jj log -r 'mutable() & ~::main & ~empty()'
+
+which lists the commits `main` does not contain, the empty working-copy
+change every workspace carries excluded. The list covers work an agent
+never described, because the working copy is itself a commit and
+unsaved work is not a state that exists. **Run it before fetching.** A
+fetch empties it regardless of whether the work landed: deleting the
+head branch on the forge — which the merge does automatically — leaves
+the local commits unreferenced, and the next `jj git fetch` abandons
+them, prints `Abandoned N commits that are no longer reachable` naming
+each one, and leaves any workspace sitting on them stale with its files
+still on disk until `update-stale` takes them. That naming line is the
+one to keep: it carries the commit id an abandoned change is revived
+by (§2 rule 8). A change that genuinely merged still lists before that
+fetch; a change where nothing merged lists as empty after it. The
+verdict turns on the branch deletion alone, so it is a statement about
+what is still here, never about what landed.
+
+**The two models are not mixed on one repository, and the switch is not
+finished.** A worker already running keeps its git worktree until that
+work finishes and the worktree is removed; nothing is migrated
+mid-dispatch. Until the last worktree drains, the primary checkout is
+still a plain git clone, so `jj workspace add` has nothing to add to —
+an agent that finds no `.jj` there is in the transition, not in a
+broken repository. In a git worktree the git forms are the correct
+ones: the tree lives under `.claude/worktrees/<name>`, `git worktree
+remove <path>` and `git branch -D <branch>` clean it up, and the
+report's head SHA is `git rev-parse HEAD`, which is wrong only
+*inside a `jj` workspace*, where it answers about the primary
+checkout. Colocating the primary checkout (`jj git init --colocate`,
+then `jj bookmark track main@origin` so that local `main` follows the
+remote rather than freezing at the moment of colocation) is the
+dispatcher's step once that happens, tracked as Aetf/kluster-ops#214.
+
+### 1.3 The three roles
+
+Who may do what is protocol rather than habit. Which model a role runs
+on is deliberately absent: that lives in the agent definitions, outside
+this repository, and changes far more often than this document.
+
+-   **Dispatcher** — the session the operator starts. It commissions
+    the work, commissions the review (§3), merges, absorbs its own
+    rebases, files issues and keeps the ledger (§4). It does not design
+    and it does not implement. It does write, though: issue bodies
+    edited in place, briefs, and the commit messages a fold produces
+    are all records of decisions already taken. The boundary is between
+    designing and recording, not between writing and not writing.
+-   **Tech lead** — architect and reviewer. Every design longer than a
+    paragraph is a tech-lead dispatch: an RFC ([rfc.md](rfc.md)), a
+    design proposal on a `decision/*` issue (§4.1), the slice plan that
+    turns an accepted design into issues, and each angle of a pull
+    request's review (§3). It never merges, and it writes to the
+    repository only where the deliverable is a document.
+-   **Builder** — implementation. One issue, one workspace, one pull
+    request, an explicit brief, and only the paths that brief names.
+
+A dispatcher that finds itself designing has skipped a dispatch.
 
 ## 2. Concurrent dispatchers
 
@@ -103,12 +222,17 @@ milestone). The rules that keep them out of each other's way:
     most one open pull request may touch each of them, whoever opened
     it.
 4.  **Each dispatcher merges only its own pull requests** and absorbs
-    its own rebases when another's merge advances `main`; no one ever
-    force-touches a branch that is not theirs.
-5.  **The primary checkout stays on `main`.** Builders work in their
-    own worktrees already; a dispatcher's direct edits go through a
-    worktree of its own, never by switching branches in the shared
-    checkout.
+    its own rebases when another's merge advances `main` — `jj rebase
+    -d main`, which rewrites commit hashes but carries every change ID
+    through, so the branch stays the same piece of work under a new
+    parent. No one ever force-touches a branch that is not theirs.
+5.  **The primary workspace holds no work.** Its `@` is an empty change
+    on top of `main`, restored with `jj new main` after each fetch.
+    That is what "stays on `main`" means where there is no current
+    branch to be on: the working copy is a commit, and a bookmark moves
+    only when someone moves it (§1.2). Builders work in workspaces of
+    their own already, and a dispatcher's direct edits go through a
+    workspace of its own too.
 6.  **Cards follow claims**: a dispatcher moves only the board cards
     of issues it has claimed.
 7.  **Sessions talk.** Local sessions can message each other; a
@@ -123,9 +247,14 @@ milestone). The rules that keep them out of each other's way:
     `gh api repos/<o>/<r>/issues/<n>/timeline` carries the
     `head_ref_force_pushed` and `merged` events — because every agent
     pushes as the same account and `actor.login` distinguishes nobody.
-    A commit a merge did not take survives on its branch, or in
-    `git reflog --all` until §1.2's closing step removes the worktree
-    that holds it; either way it cherry-picks onto a fresh branch.
+    A commit a merge did not take is not lost with the workspace that
+    held it: every workspace shares one repository, so the commit
+    survives under its bookmark. One that has no bookmark left survives
+    too — an abandoned commit stays addressable by its commit id, which
+    `jj op log` still shows, and `jj new <id>` revives it with the files
+    back on disk and no other effect. Reach for `jj op restore` only
+    when no one else is running: it rolls the whole repository back,
+    `main` and every other workspace's commits included.
 
 ## 3. Review
 
@@ -136,7 +265,9 @@ will. The dispatcher runs it when the builder reports, never while the
 builder is still working, and merges only when it comes back clean or
 its findings are fixed.
 
-Two angles, one reviewer each (they may run in parallel):
+**Both angles are tech-lead dispatches** (§1.3), one reviewer each,
+and they may run in parallel. The dispatcher's own contribution to a
+review is the decision to merge:
 
 1.  **Correctness**: does the change do what the issue says, does
     every new behavior have a test that fails without it, does the
@@ -177,15 +308,23 @@ nothing about it that rfc.md does not settle.
 
 A review is read-only: the reviewer does not push, does not merge,
 and moves no branch. §2 rule 4 says no one force-touches a branch that
-is not theirs; a reviewer touches none at all. Two rules carry that
-into practice:
+is not theirs; a reviewer touches none at all.
 
-1.  **The reviewer works in a checkout of its own** and never enters a
-    builder's worktree, where a rebase or a checkout fights the builder
-    still writing in that same tree.
+**A workspace is a working copy, not a repository.** Every workspace
+shares one store and one operation log, so a `jj` command that rewrites
+commits — `rebase`, `abandon`, `bookmark set` — rewrites them for every
+workspace at once, and leaves the workspaces sitting on them stale
+(§1.2). Having a workspace of one's own confers no isolation. Two rules
+carry the read-only rule into practice:
+
+1.  **The reviewer runs no repo-mutating `jj` command at all**, and
+    works in a workspace of its own so that its checkout does not fight
+    a builder writing in that same tree. Reading — `jj log`, `jj diff`,
+    `jj show` — is the whole of a reviewer's vocabulary.
 2.  **A fold is described, not rehearsed.** Ask which commits combine
-    and why; a trial rebase is the dispatcher's, in a worktree of its
-    own.
+    and why. A trial rebase is the dispatcher's, and it is not private
+    even so: it moves the branch itself, which is why it belongs to the
+    dispatcher that owns the claim.
 
 ## 4. How progress is reported
 
@@ -212,10 +351,13 @@ merge can report once:
     the ledger. One pull request may close several issues; an issue
     only partly addressed is *referenced* without the keyword and kept
     open with a comment saying what remains.
--   **A builder's report names the head SHA** of the branch it opened
-    (`git rev-parse HEAD`, read after the push), which is what the
-    dispatcher compares the pull request's head against before merging
-    (§2 rule 8).
+-   **A builder's report names the head SHA** of the branch it opened,
+    read after the push with
+    `jj log -r <branch> --no-graph -T commit_id` and never abbreviated
+    or extended by hand. That is what the dispatcher compares the pull
+    request's head against before merging (§2 rule 8), and it is why
+    `git rev-parse HEAD` is not used inside a workspace, where it
+    answers about the primary checkout instead (§1.2).
 -   **Findings become issues, not comments in passing.** An agent's
     unpredicted discovery — a mismatch, a dead mechanism, a stale
     document — is filed as its own issue, labeled and put on a

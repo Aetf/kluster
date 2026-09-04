@@ -217,6 +217,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     dispatch App whose token it would use, are **not built**. When they
     are, this job becomes the dispatch call and the webhook secret
     leaves the repository.
+-   **Version control is `jj`, and nothing here notices**: the forge
+    sees git objects, so every workflow, check and merge behaves as it
+    would under git — with the one accepted loss that rebase-merge does
+    not carry a commit's `change-id` header onto `main`
+    ([dispatch.md](dispatch.md) §1.2).
 -   **Weekly drift check (2026-08-24)**: a `workflow_dispatch`
     workflow in this repo runs
     `pulumi preview --refresh --expect-no-changes`
