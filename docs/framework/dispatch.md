@@ -50,8 +50,9 @@ them:
 
 ### 1.2 A worktree dies with the dispatch
 
-Work happens in a git worktree of its own, and none outlives the
-dispatch that created it:
+Work happens in a git worktree of its own under
+`.claude/worktrees/<name>`, and none outlives the dispatch that
+created it:
 
 -   An agent that finishes **without** a pull request removes its own
     worktree and branch before it reports — `git worktree remove
@@ -60,9 +61,8 @@ dispatch that created it:
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label and the card,
     because each dispatcher merges only its own pull requests (§2).
--   A reviewer's throwaway checkout lives under
-    `.claude/worktrees/<name>` like any other and is deleted when the
-    review is written (§3.2).
+-   A reviewer's throwaway checkout is deleted when the review is
+    written (§3.2).
 
 Neither `/tmp` nor the home directory keeps a dead tree. A worktree
 whose branch is merged or abandoned is a trap for the next agent,
@@ -114,14 +114,27 @@ milestone). The rules that keep them out of each other's way:
 7.  **Sessions talk.** Local sessions can message each other; a
     planned touch on anything ambiguous is announced to the affected
     dispatcher before it happens, not discovered in a conflict.
+8.  **The head of the builder's latest report is the head that
+    merges.** Before merging, compare
+    `gh pr view <n> --json headRefOid` against the head SHA that report
+    names (§4); a fix cycle (§3) moves the branch legitimately and ends
+    in a fresh report, so a mismatch means someone else moved it.
+    Reconstructing who is timestamp work —
+    `gh api repos/<o>/<r>/issues/<n>/timeline` carries the
+    `head_ref_force_pushed` and `merged` events — because every agent
+    pushes as the same account and `actor.login` distinguishes nobody.
+    A commit a merge did not take survives on its branch, or in
+    `git reflog --all` until §1.2's closing step removes the worktree
+    that holds it; either way it cherry-picks onto a fresh branch.
 
 ## 3. Review
 
 A pull request is merged only after an **independent review** — an
 agent that did not write the change, briefed with the diff and nothing
 of the builder's reasoning, so it reads the code the way a stranger
-will. The dispatcher runs it when the builder reports, and merges only
-when it comes back clean or its findings are fixed.
+will. The dispatcher runs it when the builder reports, never while the
+builder is still working, and merges only when it comes back clean or
+its findings are fixed.
 
 Two angles, one reviewer each (they may run in parallel):
 
@@ -162,30 +175,17 @@ nothing about it that rfc.md does not settle.
 
 ### 3.2 A reviewer does not hold the branch
 
-A brief that says *do not push, do not merge* is not enough, because
-a reviewer asked whether a fold is feasible will try it, and where it
-tries it is the whole question. Three rules keep a review from
-becoming a write:
+A review is read-only: the reviewer does not push, does not merge,
+and moves no branch. §2 rule 4 says no one force-touches a branch that
+is not theirs; a reviewer touches none at all. Two rules carry that
+into practice:
 
-1.  **The reviewer works in a checkout of its own** — a throwaway
-    worktree under `.claude/worktrees/<name>`, removed when the review
-    is written. It never enters a builder's worktree, where a rebase
-    or a checkout fights the builder still writing in that same tree.
+1.  **The reviewer works in a checkout of its own** and never enters a
+    builder's worktree, where a rebase or a checkout fights the builder
+    still writing in that same tree.
 2.  **A fold is described, not rehearsed.** Ask which commits combine
-    and why; a trial rebase belongs to the dispatcher, or to a tree
-    named for it.
-3.  **Review starts after the builder reports**, never while it is
-    still flying.
-
-The dispatcher's own guard, before it merges, is to compare
-`gh pr view <n> --json headRefOid` against the head it last saw; a
-mismatch means someone moved the branch. Reconstructing who is
-timestamp work — `gh api repos/<o>/<r>/issues/<n>/timeline` for the
-`head_ref_force_pushed` and `merged` events — because every agent
-pushes as the same account and `actor.login` distinguishes nobody.
-A commit lost to a merge that raced it is still reachable by hash:
-`git cat-file -p <sha>` confirms the object survives, and it
-cherry-picks onto a fresh branch.
+    and why; a trial rebase is the dispatcher's, in a worktree of its
+    own.
 
 ## 4. How progress is reported
 
@@ -212,6 +212,10 @@ merge can report once:
     the ledger. One pull request may close several issues; an issue
     only partly addressed is *referenced* without the keyword and kept
     open with a comment saying what remains.
+-   **A builder's report names the head SHA** of the branch it opened
+    (`git rev-parse HEAD`, read after the push), which is what the
+    dispatcher compares the pull request's head against before merging
+    (§2 rule 8).
 -   **Findings become issues, not comments in passing.** An agent's
     unpredicted discovery — a mismatch, a dead mechanism, a stale
     document — is filed as its own issue, labeled and put on a
