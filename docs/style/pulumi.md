@@ -83,6 +83,20 @@ requires specific entries, the requirement is in its parameter types or
 validated loudly at its boundary — not implied by which keys it happens
 to look up.
 
+**A census is declared in the terms of this installation, not of the
+provider it is pushed to.** Where a table's natural statement is "these
+things, in these places", the unit is that statement — the group and the
+named set it applies to — and the per-member form the provider takes is
+derived by one function in front of the component. Writing the table the
+provider's way instead splices shared groups into every member, hides
+members inside loops that fill them in, and leaves the decisions about
+which member gets what sitting in the wiring. The test: can a reader
+name the set a row belongs to by reading the row? The DNS record blocks
+are one instance, the overlay roster (one entry per member, not one per
+network object) another, and `Exposure` a third — it says what an
+application's reachability *is* rather than which two resources it
+produces.
+
 ## Resources and their contents
 
 **Runtime behavior belongs to the runtime.** Pulumi declares the
@@ -110,6 +124,8 @@ The architecture reviewer's standing questions, for the review stage
 
 -   Is every new config key read at the right layer, and is every new
     constant a decision in the right home?
+-   Is every new table written in this installation's terms, with the
+    provider's per-member form derived rather than written out?
 -   Does every new resource hang off the right component, with
     providers inherited rather than re-plumbed?
 -   Would the diff's names survive the "no metaphor, one term per

@@ -2,7 +2,7 @@
 
 How every DNS record — public and split-horizon — is declared. DNS
 splits along ownership: a small **`dns` stack** owns the zones and the
-estate records that belong to no app, while **per-app records stay
+base records that belong to no app, while **per-app records stay
 beside their apps** (the co-location principle). There is no in-cluster
 DNS controller (architecture.md §6.4); the standalone DNSControl repo
 ([Aetf/dns](https://github.com/Aetf/dns)) is absorbed and retired.
@@ -10,12 +10,12 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > **Status**: designed 2026-08-22, after a survey of the live
 > dnsconfig.js (6 zones; roughly half the records are not
 > cluster-related). Declared since 2026-08-25:
-> `src/kluster/components/dns/` holds the record model (`model.py`),
-> the estate census (`zones.py`), the app records the legacy VPS still
-> serves (`legacy.py`, transitional — §6), the rewrites the routes imply
-> (`routes.py`), and the two components that turn data into resources
-> (`zone.py`, `adguard.py`, the latter over the custom provider in
-> `src/kluster/providers/adguard_rewrites/`). The route rows themselves
+> `src/kluster/components/dns/` holds the record model and the block
+> (`record.py`), the base records (`base.py`), the app records the legacy
+> VPS still serves (`legacy.py`, transitional — §6), the rewrites the
+> routes imply (`routes.py`), and the two components that turn data into
+> resources (`zone.py`, `rewrites.py`, the latter over the custom provider
+> in `src/kluster/providers/adguard_rewrites/`). The route rows themselves
 > are a convention, `src/kluster/conventions/routes.py`, because `apps`
 > and `dns` both read them (README.md §2). **The retiring DNSControl
 > program is authoritative until cutover**: the zones exist at
@@ -40,7 +40,7 @@ never touch a cluster stack. Ordering:
 `physical → dns ∥ k8s-base → apps`; `apps` references `dns` for zone
 IDs and `dns` references `physical` for anchor IPs.
 
-The `dns` stack owns: zone resources, the estate records above, the
+The `dns` stack owns: zone resources, the base records above, the
 **anchors** (§2), a reusable per-zone mail component
 (MX/SPF/DKIM/DMARC), and — per zone — **CAA records (§1.1) and DNSSEC
 enablement**. Verified 2026-08-22: no ready-made Pulumi
@@ -55,7 +55,7 @@ values so SPF strings don't get split on spaces.
 A CAA record set speaks for every name under the apex, so it has to
 name every certificate authority that issues for any of them. Who
 those are differs by zone, which makes the classification declared
-data (`dns/zones.py`, `ZONE_ISSUERS`) rather than something derived
+data (`dns/base.py`, `ZONE_ISSUERS`) rather than something derived
 from the records:
 
 -   **Certificates the cluster obtains are all DNS-01 from Let's
@@ -90,8 +90,16 @@ Cloudflare set; jiahui.id takes none.
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live
     convention (`archvps.hosts`). **IP literals exist only here**, with
-    low TTLs. New estate: `kluster.hosts` → the NLB, an A *and* an AAAA
-    because the load balancer is dual-stack (architecture.md §3.2), and
+    low TTLs, and two clauses name where an address may sit outside it:
+    **where the name cannot be an alias**, and **where there is no name
+    of this installation's to alias**. Both are structural rather than
+    exceptions granted: a zone apex cannot be a CNAME, so the web origin
+    every website zone carries is an apex `A` and so is jiahui.love's;
+    and jiahui.id's apex and `www` address a site served entirely outside
+    this installation, which publishes no name of ours for them to alias.
+    `base.py` says the same beside the literals. New anchors:
+    `kluster.hosts` → the NLB, an A *and* an AAAA because the load
+    balancer is dual-stack (architecture.md §3.2), and
     `vip1.hosts` → the dedicated VIP (operator convenience; hath itself
     needs no DNS). Both read `physical`'s outputs rather than literals:
     `cluster_endpoint` and `cluster_endpoint_v6` for the balancer,
@@ -123,9 +131,13 @@ Cloudflare set; jiahui.id takes none.
     Publishing the AAAA is not the same as it working — that the
     balancer answers on the address is the NLB's dual-stack
     verification (physical.md §6).
--   **`*.zt.<zone>`** — the ZeroTier host block, unchanged as a
+-   **`*.zt.<zone>`** — the overlay host block, unchanged as a
     convention (private IPs in public DNS, deliberate and existing
-    practice). It is not a table: it is one A record per entry of the
+    practice). The label stays `zt` because it is a published DNS name
+    and ZeroTier is the target system's own word; what this repository
+    calls it — `conventions.OVERLAY_LABEL`, and the two functions that
+    build the block — is our own. It is not a table: it is one A record
+    per entry of the
     overlay roster, `conventions.overlay.ROSTER`, which is the same table the
     `physical` stack declares the membership from (physical/gateway.md
     §2.1). A device joins the overlay and gets its name here by one
@@ -155,9 +167,20 @@ Cloudflare set; jiahui.id takes none.
     absolute origin of their own, and a federated matrix server's name
     is immutable. A second hostname for any of them is a login that
     loops or is refused.
+-   **The unit is the block, and the per-zone view is derived.** A block
+    is the records that appear together, in every zone of one set, and
+    the zone set is the block's first column rather than a field on each
+    record — a mail exchanger that had wandered into a different zone set
+    is a state a per-record field would make writable, and a block header
+    does not. What one zone carries is `zone_records(zone, blocks)`,
+    derived in front of the zone component rather than inside it, because
+    Cloudflare's API is per zone and the component is generic. It is the
+    same principle as the overlay roster (one entry per member, not one
+    per network object) and `Exposure` (what reachability *is*, not which
+    resources it produces), and it is stated for tables generally in
+    [style/pulumi.md](../style/pulumi.md).
 -   **Zone sets, not copy-paste**: `conventions` names the zone sets a
-    route row is declared against and a record block is described by;
-    the blocks name them once the record tables become blocks.
+    route row is declared against and a record block names in its header.
     `PRIMARY_ONLY` is the primary alone — every route's default, both
     anchor blocks, the overlay block, and every application name the
     legacy VPS still serves. `WEB_ZONES` is the zones whose apex and
@@ -165,7 +188,9 @@ Cloudflare set; jiahui.id takes none.
     `PARKED_ZONES` is the pair held and not served (below).
     `ZONE_FAMILY` is the family pair, taxonomy only, so that
     `ALL_ZONES` — every zone the stack declares, which is what the
-    program loops over — can be written as a union of named sets. An
+    program loops over — can be written as a union of named sets. A zone
+    set only one block names is declared beside that block instead:
+    `MAIL_ZONES`, the two Google Workspace domains, is in `base.py`. An
     app writes `public_route(host=…)` and gets the primary; naming
     another zone in the row is what says that zone serves the
     application too, and the helper fans the records across whatever
@@ -344,14 +369,29 @@ cluster already has.
 Per-app cutover falls out of the anchor design: an app's records point
 at `archvps.hosts` until the app migrates, then its component declares
 the same names against `kluster.hosts` (and the DNSControl entry is
-deleted). Estate records import wholesale into the `dns` stack early —
-note the **estate records that themselves reference the VPS**: the
-shared web origin block — the apex and `www` of unlimited-code.works,
+deleted).
+
+**`legacy.py` is one block per application**, because the unit of every
+remaining edit to it is a migration: each block is deleted whole when the
+application named in its header migrates, and the module empties block
+by block through Wave F. A migration is therefore three files in one
+pull request — the block deleted from `legacy.py`, the row added to
+`conventions/routes.py`, and the `public_route` call added to the app's
+component — with no row of a shared tuple to pick out. A block whose
+header names no application is a block no migration will ever delete,
+publishing a name no component will ever claim, so it is dropped rather
+than carried. Two blocks are kept whose owner exists but whose component
+does not yet: `mon`, the monitoring dashboard, which is in use, and `bt`,
+which the host qbittorrent claims when it migrates. Each names that owner
+in its header, which is what says it is waiting rather than orphaned.
+
+Base records import wholesale into the `dns` stack early — note the
+**base records that themselves reference the VPS**: the shared web origin
+block — the apex and `www` of unlimited-code.works,
 unlimitedcodeworks.xyz, peifeng.phd and ucw.phd — plus `jiahui.love`'s
-apex, which is the same record declared in the family zone rather than
-a fifth member of the block. The served pair repoints to
-`kluster.hosts` when the site behind it moves; the parked pair's
-records go with the machine instead (§2). None may still reference
-`archvps.hosts` when the VPS retires (migration.md Wave F checks
-this). The DNSControl repo retires
-with a pointer commit (the old-tracker rule, migration.md §0).
+apex, which is the same record declared in the family zone rather than a
+fifth member of the block. The served pair repoints to `kluster.hosts`
+when the site behind it moves; the parked pair's records go with the
+machine instead (§2). None may still reference `archvps.hosts` when the
+VPS retires (migration.md Wave F checks this). The DNSControl repo
+retires with a pointer commit (the old-tracker rule, migration.md §0).
