@@ -60,8 +60,9 @@ dispatch that created it:
     standing and names its path in the report. Removing it is the
     merging dispatcher's closing step, beside the label and the card,
     because each dispatcher merges only its own pull requests (§2).
--   A reviewer's throwaway checkout is deleted when the review is
-    written.
+-   A reviewer's throwaway checkout lives under
+    `.claude/worktrees/<name>` like any other and is deleted when the
+    review is written (§3.2).
 
 Neither `/tmp` nor the home directory keeps a dead tree. A worktree
 whose branch is merged or abandoned is a trap for the next agent,
@@ -158,6 +159,33 @@ required and when an ops issue is enough, what one contains, the states
 it moves through and the labels that carry them, the operator's gate,
 amendment after acceptance, and numbering — and this document says
 nothing about it that rfc.md does not settle.
+
+### 3.2 A reviewer does not hold the branch
+
+A brief that says *do not push, do not merge* is not enough, because
+a reviewer asked whether a fold is feasible will try it, and where it
+tries it is the whole question. Three rules keep a review from
+becoming a write:
+
+1.  **The reviewer works in a checkout of its own** — a throwaway
+    worktree under `.claude/worktrees/<name>`, removed when the review
+    is written. It never enters a builder's worktree, where a rebase
+    or a checkout fights the builder still writing in that same tree.
+2.  **A fold is described, not rehearsed.** Ask which commits combine
+    and why; a trial rebase belongs to the dispatcher, or to a tree
+    named for it.
+3.  **Review starts after the builder reports**, never while it is
+    still flying.
+
+The dispatcher's own guard, before it merges, is to compare
+`gh pr view <n> --json headRefOid` against the head it last saw; a
+mismatch means someone moved the branch. Reconstructing who is
+timestamp work — `gh api repos/<o>/<r>/issues/<n>/timeline` for the
+`head_ref_force_pushed` and `merged` events — because every agent
+pushes as the same account and `actor.login` distinguishes nobody.
+A commit lost to a merge that raced it is still reachable by hash:
+`git cat-file -p <sha>` confirms the object survives, and it
+cherry-picks onto a fresh branch.
 
 ## 4. How progress is reported
 
