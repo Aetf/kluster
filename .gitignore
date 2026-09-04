@@ -5,6 +5,11 @@ __pycache__/
 .import_linter_cache/
 *.egg-info/
 lib/crds/build
+# Agent workspaces (docs/framework/dispatch.md §1.2) and the scratch an agent
+# leaves beside them. `jj` skips other workspaces' roots but snapshots
+# everything else on every command, so unignored scratch here is committed
+# rather than merely untracked; `git` skips nothing and sees the workspaces too.
+/.claude/
 # Every workstation slot: the seed kit, the cached Pulumi passphrase, the
 # account roots' token files, the state backend's client bundle
 # (docs/credentials.md §1 rule 6). One directory, one line, one thing on this

@@ -55,12 +55,28 @@ Work happens in a **`jj` workspace** of its own under
 
     mkdir -p .claude/workspaces
     jj workspace add -r main .claude/workspaces/<name>
+    cd .claude/workspaces/<name> && mise trust
 
 `add` takes the workspace's name from the last element of the path and
 starts it on an empty change on top of `main`. It errors on a missing
-parent rather than creating one, and `.claude/` is untracked, so the
-`mkdir` is not optional in a fresh clone. None of these outlives the
-dispatch that created it:
+parent rather than creating one, and `.claude/` is ignored rather than
+tracked, so the `mkdir` is not optional in a fresh clone.
+
+`mise trust` is not optional either, and skipping it is what the first
+gate command in a new workspace fails on. mise keys trust by absolute
+path and shares it only across git **worktrees** — a `jj` workspace is
+not one, so the workspace's `mise.toml` is untrusted at its new path
+even though the primary checkout trusts the very same tracked file, and
+every `mise x uv -- uv run …` — the form AGENTS.md requires for all
+Python tooling — refuses with `Config files … are not trusted` until
+`mise trust` has been run once inside the workspace. It grants nothing
+the primary checkout does not already have: for the `-r main` form
+above, `jj workspace add` puts there the same `mise.toml` the primary
+already trusts. A workspace started on some other revision is trusting
+that revision's `mise.toml`, which is a judgment about the branch
+rather than a formality.
+
+No workspace outlives the dispatch that created it:
 
 -   An agent that finishes **without** a pull request removes its own
     workspace before it reports — `jj workspace forget <name>`, run
@@ -114,9 +130,17 @@ confirming the work is the commit at `@-`, is part of the form:
     bookmark does not follow commits made after it was set, makes
     `jj git push` report `Nothing changed`, exit zero, and push nothing.
 
-These replace git's "forgot to commit" as the way work is lost here, and
-neither returns a non-zero exit. What catches both is the head SHA the
-report names (§4), **read with `jj` after the push**:
+A *rewrite* is the exception that proves the rule: `jj squash --into @-`
+and `jj describe` carry the bookmark to the rewritten commit, so on a
+fix round the `set` is a silent no-op and the push reports `move
+sideways` rather than an add — neither needs a force flag, because `jj
+git push` already checks the remote against what it last fetched. Run
+the `set` anyway: it costs nothing, and it is the only thing that
+catches the round where the fix landed as a new commit instead.
+
+Those two failure modes replace git's "forgot to commit" as the way work
+is lost here, and neither returns a non-zero exit. What catches both is
+the head SHA the report names (§4), **read with `jj` after the push**:
 
     jj log -r <branch> --no-graph -T commit_id
 
@@ -157,22 +181,6 @@ by (§2 rule 8). A change that genuinely merged still lists before that
 fetch; a change where nothing merged lists as empty after it. The
 verdict turns on the branch deletion alone, so it is a statement about
 what is still here, never about what landed.
-
-**The two models are not mixed on one repository, and the switch is not
-finished.** A worker already running keeps its git worktree until that
-work finishes and the worktree is removed; nothing is migrated
-mid-dispatch. Until the last worktree drains, the primary checkout is
-still a plain git clone, so `jj workspace add` has nothing to add to —
-an agent that finds no `.jj` there is in the transition, not in a
-broken repository. In a git worktree the git forms are the correct
-ones: the tree lives under `.claude/worktrees/<name>`, `git worktree
-remove <path>` and `git branch -D <branch>` clean it up, and the
-report's head SHA is `git rev-parse HEAD`, which is wrong only
-*inside a `jj` workspace*, where it answers about the primary
-checkout. Colocating the primary checkout (`jj git init --colocate`,
-then `jj bookmark track main@origin` so that local `main` follows the
-remote rather than freezing at the moment of colocation) is the
-dispatcher's step once that happens, tracked as Aetf/kluster-ops#214.
 
 ### 1.3 The three roles
 

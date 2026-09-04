@@ -103,11 +103,6 @@ documentation the change makes true ships with it rather than after it.
   `git rev-parse HEAD` answers about the primary checkout, not the
   workspace. The failure modes and the rest of the protocol are
   [dispatch.md](docs/framework/dispatch.md) §1.2.
-* **The switch is not finished**: a worker already in a git worktree
-  keeps it until that work is done, and there the git forms still
-  apply — including `git rev-parse HEAD`, which is wrong only inside a
-  `jj` workspace. The two are never mixed on one repository
-  ([dispatch.md](docs/framework/dispatch.md) §1.2).
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint, and a register row
