@@ -92,23 +92,36 @@ declarative/physical.md §4.
 
         **A machine that cannot start retries every five seconds, and
         nothing here stops it.** Two starts in any ten seconds stay
-        inside systemd's default start rate limit, so the unit is
-        never left in `failed` for somebody to find; it cycles between
-        activating and failed until the unit is stopped. That is the
-        trade: a condition that clears itself — a bridge that arrives
-        late, a control group that has not emptied yet — is recovered
-        from with nobody watching, and the price is a loop that is
-        loud in the journal rather than a service that gave up. It is
-        not silent, because the push that delivered the machine held
-        it to reaching active and failed red when it did not (§1.1).
+        inside systemd's default start rate limit, so it retries
+        instead of settling in `failed` for somebody to find, until
+        the unit is stopped. That is the trade: a condition that
+        clears itself — a bridge that arrives late, a control group
+        that has not emptied yet — is recovered from with nobody
+        watching, and the price is a loop that is loud in the journal
+        rather than a service that gave up. It is not silent, because
+        the push that delivered the machine held it to reaching active
+        and failed red when it did not (§1.1).
 
         **What is not a restart is a deliberate stop of the unit.**
         `systemctl stop` on the machine's unit ends the loop, and a
-        restart policy does not act on it — which is what the push and
-        `machine-rollback` do. `machinectl poweroff` and `machinectl
-        terminate` are not that: they end the container's PID 1, which
-        is the service exiting, so the machine is back five seconds
-        later.
+        restart policy does not act on it — which is what the push,
+        `machine-rollback` and `machinectl terminate` do, the last by
+        asking systemd to stop the unit the machine runs as, which is
+        what `--keep-unit` makes it. That route is systemd 257 and
+        older: from 258 machined records that the payload sits in a
+        control group below the unit's own, and `terminate` sends
+        `SIGTERM` to `systemd-nspawn` itself instead — the container
+        goes down with it, the unit exits, and the machine comes back.
+        `systemctl --version` on the box says which side it is on.
+        `machinectl poweroff` is not that: it signals the container's
+        PID 1, which these images' s6 does not act on. It sends
+        `SIGRTMIN+4`, s6 handles no real-time signal, and a signal a
+        container's PID 1 has no handler for never reaches it from
+        outside the namespace — so `poweroff` does nothing at all.
+        `machinectl reboot` is the verb that bounces a machine: it
+        sends `SIGINT`, s6 reboots on that, and `Restart=always`
+        brings the machine back whatever exit status the reboot path
+        produces.
     -   **`After=` and `BindsTo=` the bridge's device unit**, for the
         three machines on the container VLAN. The machine is therefore
         never started against a bridge that is not up yet, and is
