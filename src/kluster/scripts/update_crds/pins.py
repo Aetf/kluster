@@ -17,8 +17,14 @@ Everything else in §1 is listed anyway, with `crds=False`, so this file is a
 complete register of what the stack installs rather than a partial one.
 
 **These pins move by hand, and `uv run update_crds` is the other half of the
-move**: `packages/crds` is generated from the versions below, so a bump nobody
-regenerates leaves the bindings describing a release the cluster does not run.
+move** for every pin the render reads — the Helm binary, the release manifests,
+the source trees, and the charts with `crds=True`. `packages/crds` is generated
+from those, so a bump nobody regenerates leaves the bindings describing a
+release the cluster does not run. A `crds=False` entry renders nothing and is
+register only, so bumping one changes nothing here; Cilium is not the exception
+it looks like, because its chart version is held equal to the `SOURCE_TREES`
+ref, which does render.
+
 Renovate reads exactly one thing in this file — the `crd2pulumi` version and
 the digest beside it, through the custom manager in `renovate.json5` that moves
 the pair together — and it does not read the rest by design rather than by
