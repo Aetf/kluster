@@ -27,12 +27,14 @@ and ownership there, and are moved into place with `mv`, which is atomic within 
 filesystem. A write interrupted halfway therefore leaves the previous file intact
 and a stale temporary beside it, which the next write overwrites.
 
-**The two verbs that change the device refuse a symbolic link at the path they
-were given** (`symlink_test`): a write refuses one rather than replacing it or
-landing the bytes inside whatever it points at, and a remove refuses one rather
-than taking away an indirection the caller did not put there. `stat` answers
-about the path itself rather than through it, which is how a caller learns of a
-link before it asks for either.
+**The two verbs that change the device refuse to act on what they were not
+given.** A write refuses a symbolic link at the path rather than replacing it
+or landing the bytes inside whatever it points at (`symlink_test`), and
+refuses anything else that is not a regular file rather than moving the staged
+file into it (`regular_file_test`); a remove refuses a link rather than taking
+away an indirection the caller did not put there. `stat` answers about the path
+itself rather than through it, which is how a caller learns what is there
+before it asks for either.
 """
 
 from __future__ import annotations
@@ -53,6 +55,8 @@ from kluster.providers.device_files import paths
 __all__ = (
     'DEFAULT_TIMEOUT',
     'DIRECTORY',
+    'REGULAR_EMPTY_FILE',
+    'REGULAR_FILE',
     'SYMBOLIC_LINK',
     'CommandFailed',
     'CommandResult',
@@ -66,11 +70,13 @@ __all__ = (
     'SshTransport',
     'SymbolicLinkAtPath',
     'Transport',
+    'WrongKindAtPath',
     'client_credential',
     'connect',
     'pinned_host_keys',
     'same_mode',
     'same_owner',
+    'regular_file_test',
     'symlink_test',
 )
 
@@ -82,9 +88,12 @@ DEFAULT_TIMEOUT = 600.0
 
 #: The words `stat`'s `%F` gives for the kinds a caller here asks about. A
 #: resource compares them because existence alone does not say what is at a
-#: path.
+#: path. A file with nothing in it is `regular empty file` rather than
+#: `regular file`, so both words mean the one kind.
 DIRECTORY = 'directory'
 SYMBOLIC_LINK = 'symbolic link'
+REGULAR_FILE = 'regular file'
+REGULAR_EMPTY_FILE = 'regular empty file'
 
 #: The suffix a staged write uses before it is moved into place.
 STAGING_SUFFIX = '.kluster-staged'
@@ -120,6 +129,15 @@ class ReservedStatus(IntEnum):
     #: of its own: the ones that would converge it follow it, and `rmdir`
     #: refuses it with the status it gives everything else.
     SYMBOLIC_LINK = 44
+    #: Something of another kind is at this path -- a directory where a file is
+    #: declared, most of all. `mv -f` moves the staged file *into* a directory
+    #: and reports success, so this is the one wrong kind no command complains
+    #: about.
+    WRONG_KIND = 45
+
+    def __init__(self, status: int) -> None:
+        if status not in self.available():
+            raise ValueError(f'{status} is outside the range this class reserves ({self.available()})')
 
     @classmethod
     def available(cls) -> range:
@@ -149,24 +167,31 @@ class HostKeyRefused(DeviceError):
 class SymbolicLinkAtPath(DeviceError):
     """A symbolic link stands where a path was declared, so nothing acted on it.
 
-    **A declaration names the path it gives, not whatever a link there points
-    at.** The link cannot be treated as the thing declared, because the
-    operations disagree about it: the ones that would converge it follow it and
-    would converge something nobody named, while the ones that would take it
-    away refuse it or destroy it. Nor may the link be replaced, which would
-    throw away an indirection somebody placed deliberately.
-
-    What is left is to say so, and to let the person who made the link decide
-    whether the declaration or the link is wrong. It is the last component
-    alone: a link higher up the path is traversal that neither `stat` nor these
-    scripts can see, which is why a device whose `/data` is a symbolic link is
-    not this case.
+    Why a link is refused rather than followed or replaced is the rule the
+    resources above share, stated in `device_files.provider`.
     """
 
     def __init__(self, path: str) -> None:
         super().__init__(
             f'refusing to act on {path}: it is a symbolic link, and the declaration names that path '
             f'rather than whatever the link points at'
+        )
+        self.path: str = path
+
+
+@final
+class WrongKindAtPath(DeviceError):
+    """Something of another kind stands where a file was declared.
+
+    The same rule as `SymbolicLinkAtPath` and the same reason: a declaration
+    names what it declares, and a path holding something else is a decision for
+    whoever put it there.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f'refusing to write {path}: it holds something that is not a regular file, '
+            f'and the declaration names a file at that path'
         )
         self.path: str = path
 
@@ -228,6 +253,10 @@ class FileStat:
     def is_symbolic_link(self) -> bool:
         return self.kind == SYMBOLIC_LINK
 
+    @property
+    def is_regular_file(self) -> bool:
+        return self.kind in (REGULAR_FILE, REGULAR_EMPTY_FILE)
+
 
 @final
 @dataclass(frozen=True)
@@ -265,8 +294,9 @@ class Transport(Protocol):
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
         """Put `data` at `path`, creating parent directories, atomically.
 
-        A symbolic link at `path` raises `SymbolicLinkAtPath` and nothing is
-        written.
+        A symbolic link at `path` raises `SymbolicLinkAtPath` and anything else
+        that is not a regular file raises `WrongKindAtPath`; nothing is written
+        either way.
         """
         ...
 
@@ -355,18 +385,19 @@ class SshTransport:
         return FileStat(owner=owner, group=group, mode=mode, size=int(size), kind=kind.strip())
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
-        """The staged write, refusing a link at the destination.
+        """The staged write, refusing whatever the declaration did not name.
 
-        The refusal is the script's first act, in the same shell run as the
-        `mv` it guards: `mv -f` moves the staged file *into* a link that points
-        at a directory and *over* one that points at a file, and neither is
-        what the declaration asked for. The parent it creates is the one
-        `paths` gives, so the directory made is the one the declared path sits
-        in and no other spelling of it.
+        Both refusals are the script's first acts, in the same shell run as the
+        `mv` they guard, because `mv -f` is silent about everything it should
+        not do: it moves the staged file *into* a directory or a link that
+        points at one, and *over* a link that points at a file. The parent it
+        creates is the one `paths` gives, so the directory made is the one the
+        declared path sits in and no other spelling of it.
         """
         staged = shlex.quote(f'{path}{STAGING_SUFFIX}')
         script = [
             symlink_test(path),
+            regular_file_test(path),
             f'mkdir -p {shlex.quote(paths.parent(path))}',
             f'cat > {staged}',
             f'chmod {shlex.quote(mode)} {staged}',
@@ -377,6 +408,8 @@ class SshTransport:
         result = await self._sh(' && '.join(script), stdin=data)
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
+        if result.exit_status == ReservedStatus.WRONG_KIND:
+            raise WrongKindAtPath(path)
         _check(f'write {path}', result)
 
     async def remove(self, path: str) -> None:
@@ -448,17 +481,35 @@ def symlink_test(path: str) -> str:
     """The test that refuses a symbolic link at a declared path.
 
     Every script here begins with it, because every command after it follows a
-    link (`SymbolicLinkAtPath`). The test is `-L` rather than a test of the
-    kind wanted, because a link is the only thing that is silent: `mkdir -p`
-    refuses a regular file at the path and says so in the device's own words,
-    while `mv -f`, `chmod` and `rmdir` each do something to a link that nobody
-    asked for.
+    link, displaces one or deletes one (`SymbolicLinkAtPath`). It asks `-L`
+    rather than about the kind wanted, because a link is what every command is
+    silent about: `mkdir -p` refuses a regular file at the path and says so in
+    the device's own words, while `mv -f`, `chmod` and `rmdir` each do
+    something to a link that nobody asked for.
 
     An `if` whose condition is false exits zero, so the fragment chains with
     `&&` in front of the commands it guards.
     """
     quoted = shlex.quote(path)
     return f'if [ -L {quoted} ]; then exit {ReservedStatus.SYMBOLIC_LINK}; fi'
+
+
+def regular_file_test(path: str) -> str:
+    """The test that refuses anything but a regular file at a declared path.
+
+    Only a write needs it, and it needs it because `mv -f` is the one command
+    here that is silent about a wrong kind: given a directory at the path it
+    moves the staged file *inside* and exits zero, so the apply reports success
+    and the next preview asks for the same write again, forever
+    (`WrongKindAtPath`). Where a directory is declared the device says it
+    itself -- `mkdir -p` refuses a file, `rmdir` refuses a non-directory.
+
+    It follows `symlink_test` rather than standing on its own: `[ -e ]` and
+    `[ -f ]` both resolve a link, so at a link to a file this test would find a
+    regular file and pass.
+    """
+    quoted = shlex.quote(path)
+    return f'if [ -e {quoted} ] && [ ! -f {quoted} ]; then exit {ReservedStatus.WRONG_KIND}; fi'
 
 
 def same_mode(left: str, right: str) -> bool:
