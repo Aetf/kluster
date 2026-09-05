@@ -41,7 +41,14 @@ them:
     what the first live run must confirm.
 4.  **Documentation is part of the change, not a follow-up.** Docs
     describe what is, not what was done: no "verified on", no
-    narrative of attempts. The same holds for commit messages.
+    narrative of attempts. The same holds for commit messages. Where
+    this meets item 2 — a change falsifies prose the brief did not
+    single out — the **file** is what decides: an agent repairs prose
+    its own change falsified in any file its brief already names, and
+    stops and reports only when the file itself is outside the brief.
+    Either way the pull request says which call it made and on what
+    prose. Disclosing it is what the protocol asks for, not what a
+    careful agent happens to do.
 5.  **A pull request whose description is written for a stranger** —
     this repository is public. What changed and why, what a reviewer
     should check, what was deliberately left out. No internal
@@ -76,6 +83,14 @@ already trusts. A workspace started on some other revision is trusting
 that revision's `mise.toml`, which is a judgment about the branch
 rather than a formality.
 
+**Scratch belongs under the workspace's own `.claude/`.** A workspace
+root is a checkout, so a file written there is a repository path and
+the next `jj` command snapshots it into the change; `.gitignore`'s
+`/.claude/` is anchored at whatever root is being evaluated, so
+`<workspace>/.claude/` is ignored inside the workspace exactly as
+`.claude/` is in the primary, and a tool's config or a dump written
+there never enters the change at all.
+
 No workspace outlives the dispatch that created it:
 
 -   An agent that finishes **without** a pull request removes its own
@@ -99,6 +114,15 @@ the census that shows them, a directory that was deleted without being
 forgotten included: that one lists with no path, and `jj workspace
 forget` clears it.
 
+**A builder never fetches; the dispatcher fetches and rebases.** A
+branch that opens behind `main` is the expected case, because bringing
+it up to date is the merging dispatcher's step (§2 rule 4) and that is
+where `jj git fetch` and `jj rebase -d main` live. The abandonment
+hazard below is stated as that dispatcher's precondition, not as a
+general caution: a builder that reads it as "never fetch, so never
+rebase" and a builder that reads it correctly look identical until the
+merge.
+
 **A workspace goes stale when another workspace rewrites the commits it
 is sitting on**, which a dispatcher's `jj git fetch` does routinely
 while a builder is live. Every command in the stale workspace then
@@ -108,9 +132,12 @@ were abandoned, it updates to a fresh empty change and takes the files
 off disk with it, so read the paragraph on losing work below before
 running it.
 
-**`@` is always the empty change, and keeping it that way is a rule,
-not a habit.** After each piece of work: describe it, then `jj new`, so
-that the work is at `@-` and `@` is empty again. Only then:
+**`@` is the empty change and `@-` is the work.** That invariant is
+the rule; `jj new` is how it is restored after a piece of work, not a
+command to run unconditionally. Run against an `@` that is already
+empty — after a push, say — it stacks a second empty change, so `@-` is
+empty too, and the bookmark below is set on an empty change rather than
+on the work. So: describe the work, then `jj new`, and only then:
 
     jj bookmark set <branch> -r @-
     jj git push --bookmark <branch>
@@ -138,18 +165,25 @@ git push` already checks the remote against what it last fetched. Run
 the `set` anyway: it costs nothing, and it is the only thing that
 catches the round where the fix landed as a new commit instead.
 
-Those two failure modes replace git's "forgot to commit" as the way work
-is lost here, and neither returns a non-zero exit. What catches both is
-the head SHA the report names (§4), **read with `jj` after the push**:
+These failure modes replace git's "forgot to commit" as the way work is
+lost here, and none of them returns a non-zero exit. What catches them
+is the head SHA the report names (§4), **read with `jj` after the
+push**:
 
     jj log -r <branch> --no-graph -T commit_id
 
-**Do not use `git rev-parse HEAD` for this.** An added workspace has no
-git repository of its own and sits inside the colocated primary, so git
-walks up and answers about the primary: `git rev-parse HEAD` returns
-`main`, and `git status --porcelain` describes the primary's tree, not
-the one the agent is working in. Both answer confidently and both are
-about the wrong directory.
+**Not `git rev-parse HEAD`, and the reason generalizes: a git command
+run inside a workspace resolves against the primary checkout.** An
+added workspace has no git repository of its own and sits inside the
+colocated primary, so git walks up and answers about the primary — the
+`jj` form, or a tool that consults no git repository, is what to use
+instead. The rule is the content and the instances are illustration,
+because each of them answers confidently about the wrong directory and
+none of them complains: `git rev-parse HEAD` returns `main` rather than
+the workspace's head; `git status --porcelain` describes the primary's
+tree; `git apply -p1` resolves a diff's paths against the primary's
+root, drops everything outside the current directory, and exits zero
+having applied nothing, where `patch -p1` applies it.
 
 **Whether a change merged is the forge's answer, not the
 repository's.** This repository rebase-merges, so a merged change's
@@ -169,14 +203,15 @@ Before deleting a workspace or a bookmark, run
 which lists the commits `main` does not contain, the empty working-copy
 change every workspace carries excluded. The list covers work an agent
 never described, because the working copy is itself a commit and
-unsaved work is not a state that exists. **Run it before fetching.** A
-fetch empties it regardless of whether the work landed: deleting the
-head branch on the forge — which the merge does automatically — leaves
-the local commits unreferenced, and the next `jj git fetch` abandons
-them, prints `Abandoned N commits that are no longer reachable` naming
-each one, and leaves any workspace sitting on them stale with its files
-still on disk until `update-stale` takes them. That naming line is the
-one to keep: it carries the commit id an abandoned change is revived
+unsaved work is not a state that exists. **A dispatcher runs it before
+every fetch**, which is the precondition the fetch rule above points
+at. A fetch empties it regardless of whether the work landed: deleting
+the head branch on the forge — which the merge does automatically —
+leaves the local commits unreferenced, and the next `jj git fetch`
+abandons them, prints `Abandoned N commits that are no longer reachable`
+naming each one, and leaves any workspace sitting on them stale with its
+files still on disk until `update-stale` takes them. That naming line is
+the one to keep: it carries the commit id an abandoned change is revived
 by (§2 rule 8). A change that genuinely merged still lists before that
 fetch; a change where nothing merged lists as empty after it. The
 verdict turns on the branch deletion alone, so it is a statement about
