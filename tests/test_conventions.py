@@ -23,6 +23,15 @@ KNOWN_PREFIXES = {
     'cluster': IPv6Network('fd1a:665f:8bcb:70::/64'),
 }
 
+#: Which node carries the dedicated VIP, written down here as well as in the
+#: census. The volume that follows the VIP resolves its node *through*
+#: `DEDICATED_VIP_NODE`, so comparing the two is comparing a value with itself:
+#: it agrees with whatever the census says and can report no move at all. A
+#: literal is the second source that gives the comparison something to be
+#: wrong about — moving the VIP is then a two-line edit, and the second line is
+#: a reader deciding that the dataset may move with it.
+DEDICATED_VIP = 'cp1'
+
 
 def test_a_networks_v6_prefix_is_numbered_after_the_third_octet_of_its_v4() -> None:
     """The site's addressing rule, applied rather than restated.
@@ -158,11 +167,19 @@ def test_the_following_volume_is_wherever_the_dedicated_vip_is() -> None:
     So the volume's node is not a name that could be edited out of step with
     the VIP: it is the sentinel, and it resolves to whatever
     `DEDICATED_VIP_NODE` says today.
+
+    The node the sentinel resolves to is checked against `DEDICATED_VIP`, the
+    literal above, rather than against the census that computes it — the
+    expectation comes from outside the census, which is the only thing that
+    makes the equality able to fail. The two assertions either side of it are
+    the property that survives a move: the volume states the sentinel, and a
+    volume that states a node keeps it.
     """
     hath = conventions.NODE_VOLUMES['hath-cache']
 
+    assert conventions.DEDICATED_VIP_NODE == DEDICATED_VIP
     assert hath.node is conventions.FOLLOWS_DEDICATED_VIP
-    assert hath.attached_node == conventions.DEDICATED_VIP_NODE
+    assert hath.attached_node == DEDICATED_VIP
     assert conventions.NodeVolume(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
 
 
