@@ -69,12 +69,33 @@ async def test_a_component_and_the_resource_inside_it_keep_separate_options(moni
 async def test_a_name_several_registrations_answer_to_is_refused(monitor: Recorder) -> None:
     """Refused, rather than resolved to whichever registered last.
 
-    The refusal is the whole guard: a case that means the component and does
-    not say so gets an error naming both candidates, instead of an assertion
-    that quietly reads the child.
+    The refusal is the whole guard, and it carries the remedy: a case that
+    means the component and does not say so is told which types to choose
+    between, rather than shown a run to search.
     """
-    with pytest.raises(AssertionError, match='registered 2 times, not once'):
+    with pytest.raises(AssertionError) as refusal:
         _ = monitor.options_of(SHARED)
+
+    message = str(refusal.value)
+    assert f'{SHARED} was registered 2 times, not once' in message
+    assert f"name the type it means, one of ['{INNER}', '{COMPONENT}']" in message
+
+
+@pytest.mark.asyncio
+async def test_a_type_the_name_never_registered_under_echoes_both(monitor: Recorder) -> None:
+    """A typo is in one of the two arguments, and the refusal doubts neither for the reader.
+
+    So it echoes the type asked for beside the types the name does have. The
+    rest of the run is not printed: the name matched something, which is the
+    handle the reader already has.
+    """
+    with pytest.raises(AssertionError) as refusal:
+        _ = monitor.options_of(SHARED, 'test:index:Typo')
+
+    message = str(refusal.value)
+    assert f'{SHARED} was never registered as test:index:Typo' in message
+    assert INNER in message
+    assert LONE not in message
 
 
 @pytest.mark.asyncio
@@ -84,7 +105,17 @@ async def test_a_name_one_registration_answers_to_needs_no_type(monitor: Recorde
 
 
 @pytest.mark.asyncio
-async def test_a_name_nothing_registered_is_refused_with_the_run_beside_it(monitor: Recorder) -> None:
-    """A typo'd name and an ambiguous one are the same failure, and both name the run."""
-    with pytest.raises(AssertionError, match='registered 0 times, not once'):
+async def test_a_name_nothing_registered_is_refused_with_the_whole_run(monitor: Recorder) -> None:
+    """The one refusal the whole run belongs in, and the one row it leaves out.
+
+    A name that matched nothing leaves the reader no handle, so here the
+    listing is the help rather than the noise. The engine's own root resource
+    is not in it: every run registers one and no case asks about it.
+    """
+    with pytest.raises(AssertionError) as refusal:
         _ = monitor.options_of('never-declared')
+
+    message = str(refusal.value)
+    assert 'never-declared was never registered' in message
+    assert LONE in message
+    assert 'pulumi:pulumi:Stack' not in message

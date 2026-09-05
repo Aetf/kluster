@@ -44,6 +44,51 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
 
+#: The engine's own root resource. Every run registers one and no case asks
+#: about it; it reaches `requested` and not `declared`, so leaving it out of a
+#: refusal is what makes the two records describe the same run.
+_ROOT_TYPE = 'pulumi:pulumi:Stack'
+
+
+def _the_one[EntryT](name: str, typ: str | None, run: list[tuple[str, str, EntryT]], verb: str) -> EntryT:
+    """The single entry of `run` under this name, or a refusal saying what to do about it.
+
+    One lookup for both records the recorder keeps -- the declarations and the
+    raw registration requests -- because whether a name is ambiguous is a
+    property of the run rather than of which record answers. `verb` names the
+    record, and is the only thing the two messages differ by.
+
+    The three ways this goes wrong want three different things said, which is
+    why they are not one message with a count in it:
+
+    -   Several entries answer to the name. The remedy is the type, so the
+        refusal carries the types under that name and nothing else; the whole
+        run would bury the one line the reader acts on.
+    -   A type was named and nothing has it. The type asked for is echoed
+        beside the types the name does have, because the mistake is a typo in
+        one or the other.
+    -   Nothing answers to the name at all. Only then is the whole run worth
+        printing, because the reader has no other handle on what the run made.
+    """
+    under_the_name = [(entry_typ, entry) for entry_typ, entry_name, entry in run if entry_name == name]
+    found = [entry for entry_typ, entry in under_the_name if typ in (None, entry_typ)]
+    if len(found) == 1:
+        return found[0]
+
+    types = sorted({entry_typ for entry_typ, _ in under_the_name})
+    if len(found) > 1:
+        remedy = (
+            f'name the type it means, one of {types}'
+            if typ is None
+            else f'all {len(found)} of them are {typ}, so no type tells them apart -- read `requested` instead'
+        )
+        raise AssertionError(f'{name} was {verb} {len(found)} times, not once; {remedy}')
+    if under_the_name:
+        raise AssertionError(f'{name} was never {verb} as {typ}; under that name the run has {types}')
+    whole_run = sorted((entry_typ, entry_name) for entry_typ, entry_name, _ in run if entry_typ != _ROOT_TYPE)
+    raise AssertionError(f'{name} was never {verb}; the run {verb} {whole_run}')
+
+
 @dataclass(frozen=True)
 class Declaration:
     """One resource, as the engine registered it."""
@@ -141,13 +186,7 @@ class Recorder(pulumi.runtime.Mocks):
         A logical name is unique within a type rather than within a run, so a
         suite that declares the same name under two types passes `typ` too.
         """
-        found = [
-            declaration for declaration in self.declared if declaration.name == name and typ in (None, declaration.typ)
-        ]
-        if len(found) != 1:
-            declared = sorted((declaration.typ, declaration.name) for declaration in self.declared)
-            raise AssertionError(f'{name} was declared {len(found)} times, not once; the run declared {declared}')
-        return found[0]
+        return _the_one(name, typ, [(it.typ, it.name, it) for it in self.declared], 'declared')
 
     def inputs_of(self, name: str, typ: str | None = None) -> dict[str, Any]:
         """What this resource was declared with."""
@@ -167,15 +206,18 @@ class Recorder(pulumi.runtime.Mocks):
         refused here rather than resolved to whichever registered last. That
         last-one-wins answer is what let a case asserting about a component
         pass on its child's options instead.
+
+        Type and name together are still not an identity. A URN is qualified by
+        the parent too, so one type under one name below two different parents
+        is a legal pair this pair of arguments cannot separate -- a run holding
+        one is refused rather than answered, and the case that needs it reads
+        `requested`, every request in registration order, and picks by parent
+        itself.
         """
-        found = [request for request in self.requested if request.name == name and typ in (None, request.type)]
-        if len(found) != 1:
-            registered = sorted((request.type, request.name) for request in self.requested)
-            raise AssertionError(f'{name} was registered {len(found)} times, not once; the run registered {registered}')
-        return found[0]
+        return _the_one(name, typ, [(it.type, it.name, it) for it in self.requested], 'registered')
 
     def depends_on(self, name: str, typ: str | None = None) -> list[str]:
-        """The URNs this resource was declared to depend on."""
+        """The URNs this resource was declared to depend on, under the name `options_of` takes."""
         return list(self.options_of(name, typ).dependencies)
 
 

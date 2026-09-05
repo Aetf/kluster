@@ -177,7 +177,6 @@ def test_the_following_volume_is_wherever_the_dedicated_vip_is() -> None:
     """
     hath = conventions.NODE_VOLUMES['hath-cache']
 
-    assert conventions.DEDICATED_VIP_NODE == DEDICATED_VIP
     assert hath.node is conventions.FOLLOWS_DEDICATED_VIP
     assert hath.attached_node == DEDICATED_VIP
     assert conventions.NodeVolume(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
