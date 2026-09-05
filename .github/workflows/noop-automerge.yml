@@ -9,30 +9,51 @@ name: noop-automerge
 # and only reports: "this may merge without a human" deserves its own trigger,
 # its own log and its own red X.
 #
-# Two routes reach the merge, and the path classification tells them apart:
+# Two routes reach the merge. The path classification decides candidacy for
+# both, and it is most of what tells them apart:
 #
 #   * **Proven.** A change that can still reach a stack — a lockfile, a
-#     dependency, a workflow — merges only behind a **zero-diff preview** on
-#     every stack. That proof is the gate, and it is what catches a bump which
-#     silently changes rendering.
+#     dependency, a workflow — merges only behind a **zero-diff preview** of
+#     the stacks a pull request can preview at all: `dns`, `k8s-base` and
+#     `apps`, which is `prove`'s matrix below. That proof is the gate, and it
+#     is what catches a bump which silently changes rendering. It covers
+#     neither `physical` nor `github`, and each is read somewhere else
+#     instead. `physical`'s credentials are main-only, so no pull request
+#     previews it (ci.md §3): a bump that moves physical rendering surfaces as
+#     a diff in deploy.yml's `plan-physical` and stalls the chain in front of
+#     `up-physical`'s reviewer gate — after this merge rather than before it,
+#     and on the next run of the chain rather than on this one, because the
+#     merge below starts no workflow at all (last paragraph). `github` is
+#     previewed and applied by no workflow: the forge is declared here and
+#     applied by hand from a workstation (ci.md §3), so its diff is read by
+#     whoever runs that apply.
 #   * **Unproven.** A change to documentation, editor configuration or
 #     `.gitignore` reaches no stack at all: no `pulumi` program reads those
 #     paths, so there is no rendering for a preview to compare and the proof
 #     would be a ceremony over an empty diff. Such a PR skips the matrix and
 #     merges on the required checks alone.
 #
-# **The proven route classifies by path and not by author; the unproven one
-# tests both.** Skipping the proof also skips the only thing that was holding a
-# documentation change until somebody read it, and dispatch.md §3 says no PR
-# here merges reviewed by nobody but its author — a rule whose subject is
-# `AGENTS.md` and `docs/` more than anything else. So the unproven route is
-# open to renovate's own pull requests and to nothing else. An operator
-# opt-in belongs here too, but it would be a label, and a label a workflow
-# branches on has to be in the census `conventions/forge.py` carries before it
-# can be applied at all — a label nobody declares makes the condition silently
-# dead, which is the failure that census exists to prevent. Whether this
-# repository should have a review-free merge at all, and for which changes, is
-# kluster-ops#244; this narrow class holds until that is ruled on.
+# **The proven route asks the path; the unproven one asks who as well. Both are
+# refused outright by a fork or an `expect-changes` label first.** Skipping the
+# proof also skips the only thing that was holding a documentation change until
+# somebody read it, and dispatch.md §3 says no PR here merges reviewed by
+# nobody but its author — a rule whose subject is `AGENTS.md` and `docs/` more
+# than anything else. So the unproven route is open to renovate's own pull
+# requests and to nothing else.
+#
+# **An operator opt-in by label is ruled out rather than unbuilt** (kluster-ops
+# #244, #247). A label carries no record of who put it there: the event names
+# no labeller, and on a later `synchronize` the actor is the author regardless.
+# So a label that *removes* a gate is one an author can apply to their own pull
+# request and merge behind, which is the case dispatch.md §3 forbids by name.
+# `expect-changes` is safe against the same hole only because it runs the other
+# way — it can stand the merge down and can never let one through.
+#
+# **The login is in the census `conventions/forge.py` carries, and a test holds
+# this file to it.** A login a workflow branches on and nothing declares makes
+# the condition silently dead: the comparison is never true, the route is never
+# taken, and nothing anywhere reports that. The same census carries every label
+# a workflow reads, for the same reason.
 #
 # A fork's pull request is refused outright, by name in `classify`. Until the
 # unproven route existed the refusal was implicit — the proof needs Environment
@@ -40,8 +61,11 @@ name: noop-automerge
 # does not survive a route that runs no job needing a secret.
 #
 # The merge does not start deploy.yml — pushes made with GITHUB_TOKEN start no
-# workflow runs. That is correct by construction: a proven PR merged because
-# its preview was empty, and an unproven one changes nothing an apply reads.
+# workflow runs. That is correct by construction for what the proof covers: a
+# proven PR merged because the previewable stacks rendered identically, and an
+# unproven one changes nothing an apply reads. For `physical` it defers rather
+# than settles, which is the reading `plan-physical` does on the next run of
+# the chain (see **Proven** above).
 
 on:
   pull_request:

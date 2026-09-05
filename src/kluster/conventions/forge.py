@@ -9,10 +9,21 @@ import contract), so `conventions` is the only home the two share.
 **The row is the unit, and it carries what defines the entry in the design.**
 ci.md §3 defines the credential partition in exactly the terms below — which
 branches may deploy into a cell, and whether a reviewer stands in front of it —
-and the labels a workflow branches on are the same kind of fact about what a
-repository *is* here. What stays in the `github` stack is the upstream object's
-own settings, which are no part of any entry: the required check names, the
-repository descriptions, the merge-strategy flags (framework/github.md §3).
+and the switches a workflow branches on are the same kind of fact about what a
+repository *is* here: the labels it reads, and the identities it tests the
+author of a pull request against. What stays in the `github` stack is the
+upstream object's own settings, which are no part of any entry: the required
+check names, the repository descriptions, the merge-strategy flags
+(framework/github.md §3).
+
+**`authors` creates nothing, and that is not what decides where it lives.**
+style/pulumi.md places a census by counting the programs that read it,
+"regardless of whether each declares a resource from the table" — "which
+program turns the table into resources does not enter into it". This table has
+the readers the first paragraph names, so the row belongs in `conventions`, and
+a field of the row travels with it. What holds that field honest is elsewhere:
+a workflow spells the login as a literal, and a test holds that literal to this
+file. Without the entry the two drift with nothing to notice.
 
 Read qualified — `conventions.forge.DEPLOYMENT` — because the names below are
 common nouns that mean one particular thing only while the forge stands beside
@@ -99,11 +110,34 @@ class Label:
 
 @final
 @dataclass(frozen=True)
+class Author:
+    """One account a workflow of this repository tests the author of a pull request against.
+
+    **A login and no user id, which is the opposite of `Account` above, and the
+    difference is what each is for.** `Account` is named to GitHub — its
+    reviewer and assignee lists take the id — so holding one spelling without
+    the other is how the two come to disagree. An author here is named to
+    nothing: no call in this tree passes it, and the only thing that reads it
+    is a workflow comparing `…user.login` to a string. Recording an id beside
+    it would add a second spelling that nothing checks and nothing uses, and on
+    this installation it could not even be read off a pull request, because the
+    account it describes has never opened one.
+
+    So the entry covers the login form, and the census test refuses the id form
+    by name rather than pretending to cover it: a workflow that switches to
+    `…user.id` gets a red check telling it this file has to grow first.
+    """
+
+    login: str
+
+
+@final
+@dataclass(frozen=True)
 class Repository:
     """One repository as this installation defines it, rather than as GitHub stores it.
 
     What it is, the cells of the credential partition it carries, and the
-    labels its workflows branch on. Its settings are not here: they define no
+    switches its workflows branch on. Its settings are not here: they define no
     entry and only the `github` stack reads them.
     """
 
@@ -119,6 +153,12 @@ class Repository:
     #: never true — so the set is written down here rather than made by hand in
     #: a console.
     labels: tuple[Label, ...] = ()
+    #: The accounts a workflow tests the author of a pull request against. Held
+    #: beside the labels because it fails the same way and is caught the same
+    #: way — a workflow comparing against a login nothing here names is a
+    #: comparison that is never true — and on the row rather than in a table of
+    #: its own, because these are this repository's workflows and no other's.
+    authors: tuple[Author, ...] = ()
 
     @property
     def full_name(self) -> str:
@@ -138,10 +178,21 @@ class Repository:
         return self.public
 
 
-#: The escape hatch that opts a pull request out of the zero-diff proof
-#: (ci.md §3): `noop-automerge.yml` branches on it, and it is the only label
-#: any workflow of this installation reads.
+#: The escape hatch that opts a pull request out of the unattended merge
+#: altogether (ci.md §3): a bump that is *supposed* to move resources wants a
+#: human on the diff, so `noop-automerge.yml` stands down on this label rather
+#: than proving anything.
 EXPECT_CHANGES = Label('expect-changes', 'Opts a PR out of the noop-automerge zero-diff path (ci.md §3)')
+
+#: Renovate as the API reports it: the hosted app's own login is what arrives
+#: as the author of a pull request it opened, and a self-hosted instance, a
+#: different app slug or a personal-access-token user would arrive as something
+#: else. What branching on it buys is the proof-skipping route of
+#: `noop-automerge.yml` (ci.md §3) and nothing else. The literal is recorded
+#: here rather than left in the workflow alone because a workflow cannot notice
+#: that it guessed wrong: the comparison is simply never true, and the route it
+#: guards is never taken.
+RENOVATE = Author('renovate[bot]')
 
 #: The ops repository's only Environment, which carries the unattended drills'
 #: credentials. Ungated because its scope is the gate (credentials.md §4).
@@ -169,6 +220,7 @@ DEPLOYMENT = Repository(
         Environment('apps', BranchPolicy.ANY_BRANCH),
     ),
     labels=(EXPECT_CHANGES,),
+    authors=(RENOVATE,),
 )
 
 #: The notification and drill repository. Private on purpose — it holds the

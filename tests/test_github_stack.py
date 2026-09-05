@@ -30,9 +30,37 @@ from kluster.stacks import github as program
 
 WORKFLOWS = Path(__file__).parent.parent / '.github' / 'workflows'
 
+
+def _workflows() -> list[Path]:
+    """Every workflow file GitHub would run, which is both spellings of the suffix.
+
+    GitHub reads `.yml` and `.yaml` out of this directory identically, so a
+    census that globs one of them is one a file named the other way is invisible
+    to -- and invisible is the state every case that uses it exists to prevent.
+    """
+    return sorted(WORKFLOWS.glob('*.yml')) + sorted(WORKFLOWS.glob('*.yaml'))
+
+
 #: How a workflow condition names a label on the pull request it is running
 #: for, which is the only way any of them reads a label.
 LABEL_IN_A_CONDITION = re.compile(r"pull_request\.labels\.\*\.name,\s*'([^']+)'")
+
+#: How a workflow compares who is behind the event against a login: one of the
+#: contexts that carries one -- `github.actor`, `github.triggering_actor`, a
+#: `user.login`, a `sender.login` -- either way round the comparison is
+#: written. `!=` is matched as well as `==`, because a login misspelt in a
+#: negative test fails *open*, which is the worse of the two directions to
+#: leave unpinned. Two groups, one per way round, so a match carries the login
+#: in whichever of them is not empty.
+AUTHOR_IN_A_CONDITION = re.compile(
+    r"\.(?:\w+_)?(?:actor|login)\s*[=!]=\s*'([^']+)'|'([^']+)'\s*[=!]=\s*[\w.]*(?:actor|login)\b"
+)
+
+#: The other way GitHub spells the same identity. `conventions.forge.Author`
+#: carries a login and no id and says why, so a workflow reaching for the id
+#: form is outside what the census covers -- and this is what makes that a red
+#: check rather than a workflow that slipped past the scan above.
+AUTHOR_BY_ID = re.compile(r'\.(?:user|sender)\.id\b|\.actor_id\b')
 
 REPOSITORY = 'github:index/repository:Repository'
 BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'
@@ -158,17 +186,64 @@ def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
     than what they depend on.
     """
     declared = {label.name for repository in conventions.forge.REPOSITORIES for label in repository.labels}
-    read = {
-        label
-        for workflow in sorted(WORKFLOWS.glob('*.yml'))
-        for label in LABEL_IN_A_CONDITION.findall(workflow.read_text())
-    }
+    read = {label for workflow in _workflows() for label in LABEL_IN_A_CONDITION.findall(workflow.read_text())}
 
-    # `expect-changes` opts a pull request out of the zero-diff proof
-    # (ci.md §3); it is the only one any workflow reads today, and a census
-    # that lost it would take the escape hatch with it.
+    # `expect-changes` stands noop-automerge down altogether (ci.md §3). A
+    # census that lost it would leave a live condition pointing at a label no
+    # pull request can carry, and that one fails open: the escape hatch is what
+    # stops a deliberate change from merging on a proof it was never going to
+    # pass.
     assert 'expect-changes' in read
     assert read <= declared, f'read by a workflow and declared nowhere: {sorted(read - declared)}'
+
+
+def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> None:
+    """A login a workflow compares against and nothing names is a route that never fires.
+
+    Which is indistinguishable from a route nobody has needed yet, so nothing
+    reports it. `renovate[bot]` is the hosted app's own login; a self-hosted
+    instance, a different app slug or a personal-access-token user arrives
+    under another one, and the difference is invisible until a pull request
+    that should have taken the route quietly does not. Naming the login is what
+    makes a wrong literal a red check instead.
+
+    **What this reaches is a login written as a literal beside a comparison**,
+    which is how every workflow here spells it and what the case below holds
+    still. It is not a proof that no workflow can consult an identity any other
+    way: a `startsWith`, a login inside a `fromJSON` list, and a literal parked
+    in `env:` and compared in the shell all read as ordinary text to it. The id
+    spelling is the one exception, refused by name in the case after this,
+    because that is the substitution a workflow is most likely to make on
+    purpose.
+    """
+    named = {author.login for repository in conventions.forge.REPOSITORIES for author in repository.authors}
+    read = {
+        login
+        for workflow in _workflows()
+        for match in AUTHOR_IN_A_CONDITION.findall(workflow.read_text())
+        for login in match
+        if login
+    }
+
+    # noop-automerge's unproven route is renovate's and nobody else's (ci.md
+    # §3), so a workflow that stopped naming the login, or a census that
+    # stopped carrying it, is what this holds still.
+    assert 'renovate[bot]' in read
+    assert read <= named, f'compared against by a workflow and named nowhere: {sorted(read - named)}'
+
+
+def test_no_workflow_identifies_an_account_by_id() -> None:
+    """`conventions.forge.Author` carries a login and no id, and says why.
+
+    A workflow that switches to the id form is reaching for a spelling the
+    census does not carry -- and one the case above cannot see, since it reads
+    logins written as literals. Refusing it by name is what keeps that a red
+    check with a reason on it, instead of a census that silently stopped
+    covering the condition it exists for.
+    """
+    reached = {workflow.name for workflow in _workflows() if AUTHOR_BY_ID.search(workflow.read_text())}
+
+    assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
 
 
 def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
@@ -419,25 +494,33 @@ def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
     return below
 
 
-def test_the_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) -> None:
+def test_each_label_a_workflow_branches_on_is_a_declared_resource(stack: Forge) -> None:
     """A label made by hand is one the next rebuild does not have.
 
     The workflow that reads it then fails in the quietest way there is -- the
-    condition is never true and nothing reports it -- so the label is declared
-    from the census like everything else here.
+    condition is never true and nothing reports it -- so every label is
+    declared from the census like everything else here, name and description
+    both: the description is what the operator reaching for one reads.
     """
     labels = stack.by_name(LABEL)
 
+    # Written out, because everything below this line is derived from the
+    # census on both sides: a census that lost its labels would leave the
+    # comparison `set() == set()` and the loop body unentered, and the whole
+    # case would pass having asserted nothing (ops#184).
+    assert set(labels) == {'kluster-expect-changes'}
     assert set(labels) == {
         f'{repository.name}-{label.name}'
         for repository in conventions.forge.REPOSITORIES
         for label in repository.labels
     }
-    declared = labels[f'{conventions.forge.DEPLOYMENT.name}-{conventions.forge.EXPECT_CHANGES.name}']
-    assert declared['name'] == conventions.forge.EXPECT_CHANGES.name
-    assert declared['description'] == conventions.forge.EXPECT_CHANGES.description
-    assert declared['color'] == LABEL_COLOR
-    assert declared['repository'] == conventions.forge.DEPLOYMENT.name
+    for repository in conventions.forge.REPOSITORIES:
+        for label in repository.labels:
+            declared = labels[f'{repository.name}-{label.name}']
+            assert declared['name'] == label.name
+            assert declared['description'] == label.description
+            assert declared['color'] == LABEL_COLOR
+            assert declared['repository'] == repository.name
 
 
 def test_only_the_repository_that_merges_unattended_offers_auto_merge(stack: Forge) -> None:
