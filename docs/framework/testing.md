@@ -338,6 +338,24 @@ alone; run against a `@` that holds the real change as well, it takes
 both and exits 0. It is the recoverable failure, though — the working
 copy is a commit, so `jj undo` puts back what the restore took.
 
+**What makes that bare form a revert is the source it defaults to** —
+the working copy's *parent* — and naming a source can negate it.
+`jj restore --from @ <file>`, run inside the workspace whose working
+copy *is* `@`, restores the file from itself: it prints
+`Nothing changed.`, exits 0, and leaves the mutation exactly where it
+was. That output reads as "the file already matched" rather than as
+"the revert did nothing", which is the whole difficulty. It is the trap
+below with the sign reversed — `git checkout HEAD -- <file>` destroys
+silently, this changes nothing silently, and either way the operator
+believes a revert happened and reads the next run as evidence about the
+real change. So the source has to be a commit other than the one holding
+the mutation, and **after any revert, verify the file rather than the
+exit status**: the next variant will be spelled differently, and an exit
+status is the one thing both failures share with success. In a mutation
+round the run itself carries the tell — a failure list that still names
+the test which should have gone green is the no-op showing through — and
+a round read as pass/fail counts alone has nothing that disagrees.
+
 **`git checkout HEAD -- <file>` is the trap, and it does not spring
 where a builder here would expect.** In a checkout git can see — the
 colocated primary, or a plain clone — it exits 0 and discards the real

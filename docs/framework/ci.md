@@ -303,11 +303,16 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     under this account's plan, and an Environment's reviewer gate is
     a public-repository feature too (framework/github.md §2), so the
     visibility flip was a security milestone rather than a packaging
-    one: it is what lets the zero-diff proof be a required check and
+    one: it is what lets `main` have required checks at all and
     `up-physical`'s approval door exist. The gates below are declared
     by the `github` stack and applied 2026-08-25: `main` requires
     `checks` and `changes` and an up-to-date branch, with
-    `enforce_admins` on, and `physical` is reviewer-gated.
+    `enforce_admins` on, and `physical` is reviewer-gated. **The
+    zero-diff proof is not among them.** It is a condition
+    `noop-automerge` enforces on itself before it calls the merge API,
+    not a context branch protection knows about (§5) — what the flip
+    buys the unattended merge is the two required contexts that merge
+    waits on.
 -   **Credential partitioning (2026-08-23, from the security audit;
     physical split amended 2026-08-24)**: secrets live in **per-stack
     GitHub Environments** — the `dns` jobs see only the Cloudflare
@@ -331,12 +336,12 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     (`pull_request`; fork PRs get no secrets, `pull_request_target` is
     never used): a preview **executes the PR's Python with provider
     credentials**, so who can trigger one is a security boundary, not
-    a convenience setting. **noop-automerge classifies by path, not by
-    author**: any pull request touching neither `src/` nor `Pulumi.*`
-    is a candidate, which is renovate's lockfile and pin traffic in
-    practice but is not restricted to it — the gate that matters is the
-    zero-diff proof, and an `expect-changes` label opts a pull request
-    out of the whole path. A candidate that touches nothing but
+    a convenience setting. **noop-automerge's *candidacy* is by path,
+    not by author**: any pull request touching neither `src/` nor
+    `Pulumi.*` is a candidate, which is renovate's lockfile and pin
+    traffic in practice but is not restricted to it — the gate that
+    matters is the zero-diff proof, and an `expect-changes` label opts a
+    pull request out of the whole path. A candidate that touches nothing but
     documentation, `.vscode/` or `.gitignore` — the same deny-list the
     preview filter uses — **may skip the proof and merge on the
     required checks alone**: no stack program reads those paths, so an
