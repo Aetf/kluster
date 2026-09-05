@@ -381,10 +381,15 @@ identical on every resource, and unchanged by a rotation. The values a
 session needs are read in **`configure`**, which runs inside the
 resource-provider process, once per process, before any operation, and
 receives the stack's configuration with **secrets already decrypted**.
-The consequence worth stating plainly: a credential that only opens the
-provider's own session lives in stack configuration and nowhere else —
-not on a resource, not in a pickle, not in any component's signature.
-Rotating it is an edit to configuration.
+What follows from that is a rule this repository holds itself to
+rather than one the runtime imposes — the resource-provider process
+inherits the environment as well, so the mechanism forbids no second
+store. The rule: a credential that only opens the provider's own
+session lives in stack configuration and nowhere else — not on a
+resource, not in a pickle, not in any component's signature — unless
+the credential's own design puts it in the environment instead
+([style/pulumi.md](../style/pulumi.md)). Rotating a configured one is
+an edit to configuration.
 
 What `configure` may *not* do is decide anything the caller decides. A
 provider is generic code for a class of system and imports no

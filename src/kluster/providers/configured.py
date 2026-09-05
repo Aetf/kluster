@@ -13,10 +13,13 @@ module is that shape with the parts that differ left abstract:
 -   **The credential is read in `configure`**, which runs inside the
     resource-provider process, once, before any operation, and receives the
     stack's configuration project-namespaced and with secrets already
-    decrypted (rfc-002 §7.5 E2). A credential that only opens the provider's
-    own session therefore lives in stack configuration and nowhere else: not on
-    a resource, not in a pickle, not in any component's signature, and read by
-    no program.
+    decrypted (rfc-002 §7.5 E2). The process inherits the environment too, so
+    exclusivity is this repository's rule rather than the runtime's: a
+    credential that only opens the provider's own session lives in stack
+    configuration and nowhere else -- not on a resource, not in a pickle, not
+    in any component's signature, and read by no program -- unless the
+    credential's own design puts it in the environment instead
+    (style/pulumi.md).
 -   **`check` stamps what the pickle no longer shows.** With an inert pickle
     nothing would render a rotation or a change to the provider's own code as a
     diff, so `check` adds two properties no caller declared: `session`, the
