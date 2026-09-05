@@ -314,15 +314,16 @@ plane names:
 2.  **Service plane — public-zone names, resolved via AdGuard**:
     every LAN-reachable service uses its *public* hostname
     (`<app>.<zone>`); AdGuard rewrites (§3) steer LAN/ZT clients to the
-    `lan` VIP. **LAN-only services are rewrite-only**: the helper emits
-    the AdGuard rewrite and the `lan-gw` route but *no* Cloudflare
-    record — public resolvers see NXDOMAIN, while cert-manager DNS-01
-    still issues real certificates for the name (challenge records
-    don't require the name itself to be published). Issuance for
-    these names is **per-zone wildcard certificates**, not per-name:
-    every issued certificate lands in public Certificate Transparency
-    logs, and per-name issuance would republish exactly the LAN-only
-    service census that rewrite-only just hid.
+    `lan` VIP. **LAN-only services are rewrite-only**: the row yields
+    the AdGuard rewrite (from `dns`, §3) and the `lan-gw` route (from
+    `apps`, §5) but *no* Cloudflare record — public resolvers see
+    NXDOMAIN, while cert-manager DNS-01 still issues real certificates
+    for the name (challenge records don't require the name itself to be
+    published). Issuance for these names is **per-zone wildcard
+    certificates**, not per-name: every issued certificate lands in
+    public Certificate Transparency logs, and per-name issuance would
+    republish exactly the LAN-only service census that rewrite-only just
+    hid.
 3.  **`lan.ucw.phd` retires.** Its two historical roles are both
     superseded: split-horizon duplicates collapse into the rewrites on
     the public names, and LAN-only names become rewrite-only names in
@@ -365,12 +366,14 @@ the application's census row**, not a host string a reader would have
 to match against the census by eye — so an application publishing a
 name `dns` never rewrites cannot be written. From that row it emits the
 coherent set: the HTTPRoute, attached to the gateways the row's
-`Exposure` selects per the §3.6 matrix — `internet-gw`, `lan-gw`,
-`media-gw`, or both public and LAN — and the CNAMEs across the zone set
-the row names, which for a LAN-only row is no public record at all
-(§4). It is the same row `dns` writes the AdGuard rewrite from, read by
-both stacks rather than emitted by either; the helper never writes a
-rewrite itself, which is the split §3 describes.
+`Exposure` selects per the routing matrix (cluster/architecture.md
+§3.6) — `internet-gw`, `lan-gw`, `media-gw`, or both public and LAN —
+and the CNAMEs across the zone set the row names, for the rows that
+publish a public record at all, which is what `Route.public` says and
+which no LAN-side exposure does (§4). It is the same row `dns` writes
+the AdGuard rewrite from, read by both stacks rather than emitted by
+either; the helper never writes a rewrite itself, which is the split §3
+describes.
 
 **There is one route helper, because the row already states the
 exposure.** Splitting it into a public one and a LAN-only one would
@@ -379,14 +382,12 @@ disagree with its row forces the helper to rule on which of the two
 wins. Nothing else would distinguish the two: they emit the same kinds
 of resource, and each would differ only in which subset of `Exposure`
 values it accepts, which is a check rather than a difference in what is
-emitted. So the row decides whether a public record is published, which
-gateways serve the name, and that `Exposure.IOT` attaches `media-gw`
-with the rewrite answering at the media VIP — "IoT devices may reach
-this app" is decided once, on the census row a reviewer reads, and the
+emitted. `Exposure.IOT` is a LAN-side value like `LAN_ONLY`, differing
+only in attaching `media-gw` so that the rewrite answers at the media
+VIP and the IoT VLAN reaches the app; "IoT devices may reach this app"
+is therefore decided once, on the census row a reviewer reads, and the
 helper has no say in it (cluster-infra.md §2, physical/gateway.md
-§4.2). It is the argument that retired the `iot_reachable` parameter
-(rfc-003 §6.3), applied one step out: a helper name is a parameter
-wearing a verb.
+§4.2).
 
 `public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
 its own because it emits something no HTTP route does: it is the
