@@ -51,11 +51,14 @@ business of that command:
 **A target has to be an address, not an intention.** Where §3 names a channel
 that nothing has given a name yet -- an Environment secret no workflow reads, a
 SealedSecret whose manifest does not exist -- the row records that in `pending`
-rather than inventing a name a future workflow would have to guess right.
-`derived ls` prints it, `derived sync` skips the row saying so, and `derived
-sync --only <row>` refuses by name. That is the discipline the seed layer already
-uses: a register row with no implementation is a command that refuses, not a
-command that is missing.
+rather than inventing a name a future workflow would have to guess right. A
+reason is filed **under the channel it is about**, in the same vocabulary §3's
+Slot column is written in, so a cell that marks one channel `pending` is held
+against the reason for *that* channel rather than against any reason the row
+happens to carry. `derived ls` prints them, `derived sync` skips the row saying
+so, and `derived sync --only <row>` refuses by name. That is the discipline the
+seed layer already uses: a register row with no implementation is a command
+that refuses, not a command that is missing.
 
 Pushing is resolve, push, verify, every run, and it retires nothing. One row
 issues rather than copies -- the client bundle, whose leaf key exists only in
@@ -72,10 +75,11 @@ from __future__ import annotations
 
 import getpass
 import logging
-from collections.abc import Callable, Iterator, Mapping
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, Protocol
+from typing import ClassVar
 from urllib.parse import urlsplit
 
 from ... import conventions
@@ -87,16 +91,6 @@ from .github_secrets import Forge, Slot
 from .pulumi_config import SlotRefused
 
 log = logging.getLogger(__name__)
-
-#: The two repositories, `owner/name` as the API spells them, the deployment
-#: Environments in the order the merge chain runs them (ci.md §3), and the ops
-#: repository's own. All four are read from `conventions.forge`, the one home
-#: this command and the `github` stack share: a script may import `conventions`
-#: and nothing a stack declares from.
-REPOSITORY = conventions.forge.DEPLOYMENT.full_name
-OPS_REPOSITORY = conventions.forge.OPS.full_name
-ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments)
-DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 
 #: The Environments whose jobs join ZeroTier, one identity domain each
 #: (physical/gateway.md §2.1). `k8s-base` and `apps` join nothing: the
@@ -127,18 +121,21 @@ DNS_STACK = derived.ZONES_STACK
 
 @dataclass(frozen=True)
 class PulumiConfig:
-    """A key in `Pulumi.<stack>.yaml`, committed -- the provider-credential channel."""
+    """A key in `Pulumi.<stack>.yaml`, committed -- the provider-credential channel.
+
+    The encrypted half of that file and nothing else. Rule 6's closed set has
+    one Pulumi config channel and it is the secret one, so a value the file may
+    carry in the clear is not a delivery this map records: an identifier that
+    names an account rather than authenticating to it is a constant in
+    `conventions`, which is where the two that used to sit here went
+    (`RETIRED`).
+    """
 
     stack: str
     key: str
-    #: Plain keys are identifiers the committed file may carry in the clear
-    #: (§4) rather than values that have to be encrypted into it. A device row
-    #: declares which of its fields are which (`devices.py`); no row carries
-    #: one today.
-    secret: bool = True
 
     def __str__(self) -> str:
-        return f'Pulumi config {"secret" if self.secret else "value"} {self.stack}: {self.key}'
+        return f'Pulumi config secret {self.stack}: {self.key}'
 
 
 @dataclass(frozen=True)
@@ -240,10 +237,10 @@ _TERMS: Mapping[type[Channel], str] = {
 #: ops-repository secret and a `kluster` repository secret as separate channels,
 #: and this module carries all of them as one dataclass (`github_secrets.py`).
 _GITHUB_TERMS: Mapping[tuple[str, bool], str] = {
-    (REPOSITORY, True): 'CI env',
-    (REPOSITORY, False): '`kluster` repository secret',
-    (OPS_REPOSITORY, True): 'ops-repo Environment',
-    (OPS_REPOSITORY, False): 'ops-repo secret',
+    (conventions.forge.DEPLOYMENT.full_name, True): 'CI env',
+    (conventions.forge.DEPLOYMENT.full_name, False): '`kluster` repository secret',
+    (conventions.forge.OPS.full_name, True): 'ops-repo Environment',
+    (conventions.forge.OPS.full_name, False): 'ops-repo secret',
 }
 
 #: The whole vocabulary, which is what a cell may be written in. No term is a
@@ -319,23 +316,53 @@ class Context:
         return pulumi_config.Stack(name=name, directory=self.project, env=self.environment.variables(), run=self.runner)
 
 
-class Source(Protocol):
-    """Where one row's value comes from, and what to call that in a listing."""
+class Source(ABC):
+    """Where one row's value comes from, and what to call that in a listing.
+
+    A source answers in **parts**, keyed by the name of the secret each part
+    fills, because a row is not always one value: the client bundle is a
+    certificate, the key that opens it and the string that names them, and all
+    three come out of a single issuance (`Issued`). Every other source is one
+    value in every slot, which `SingleValue` says once instead of in each class
+    -- and saying it there is what keeps the two kinds one type, so a row's
+    source is a `Source` rather than a union a caller has to take apart.
+    """
 
     #: One word for `derived ls`: derived, minted, state-read, manual, decided.
     kind: ClassVar[str]
 
+    @abstractmethod
     def describe(self) -> str:
         """The origin in the operator's words, printed beside the row."""
-        ...
 
+    @abstractmethod
+    def parts(self, context: Context, into: Collection[str]) -> Mapping[str, str]:
+        """What the named secrets receive, or `SlotRefused` naming what stands in the way.
+
+        A source may answer with more than it was asked for; what it may not do
+        is answer with less, which `Row.resolve` refuses by name -- there, where
+        the sink that asked is known.
+        """
+
+
+class SingleValue(Source):
+    """A source that is one credential, fanned out into every slot that needs a copy.
+
+    All but one of them. Obtaining the value once and copying it is what makes
+    a rotation one command rather than one per Environment, and it is why the
+    slots a row fills are no business of the source that produces it.
+    """
+
+    @abstractmethod
     def value(self, context: Context) -> str:
         """The value itself, or `SlotRefused` naming what stands in the way."""
-        ...
+
+    def parts(self, context: Context, into: Collection[str]) -> Mapping[str, str]:
+        return dict.fromkeys(into, self.value(context))
 
 
 @dataclass(frozen=True)
-class Derived:
+class Derived(SingleValue):
     """An escrowed secret (§2.2), recovered with the kit's recovery key.
 
     Re-running a push is not a rotation: the plaintext is whatever generation
@@ -375,7 +402,7 @@ def _appliance_address(context: Context) -> str:
 
 
 @dataclass(frozen=True)
-class Issued:
+class Issued(Source):
     """A client bundle issued under the escrowed CA: one credential, four secrets.
 
     Derived, because the CA is: `state-backend/ca` opens with the kit's
@@ -411,8 +438,12 @@ class Issued:
             f'replaces the bundle CI holds'
         )
 
-    def parts(self, context: Context) -> Mapping[str, str]:
+    def parts(self, context: Context, into: Collection[str]) -> Mapping[str, str]:
         """The bundle, keyed by the secret name each part is pushed under.
+
+        The whole of it, whatever was asked for: the four parts are one
+        issuance, and a sink naming something that is not one of them is
+        refused where the row knows which sink asked (`Row.resolve`).
 
         Each PEM goes in without its trailing newline. A secret is stored
         exactly as it is piped in (`github_secrets.py`) and the composite
@@ -420,6 +451,7 @@ class Issued:
         here is what makes the file in a runner's slot byte-identical to the
         one `state-backend bundle` writes on a workstation.
         """
+        _ = into
         address = _appliance_address(context)
         log.info(
             'issuing a fresh `%s` certificate for %s; what CI holds now is replaced, and stays valid until it expires',
@@ -438,7 +470,7 @@ class Issued:
 
 
 @dataclass(frozen=True)
-class Minted:
+class Minted(SingleValue):
     """Created by the run that delivers it, and disclosed to nothing afterwards.
 
     Nothing can push one of these later: a minted secret is returned once, to
@@ -469,7 +501,7 @@ class Minted:
 
 
 @dataclass(frozen=True)
-class StateRead:
+class StateRead(SingleValue):
     """A stack output, read back out of the state the kit's passphrase opens.
 
     The output name is this map's half of a contract: the producing program has
@@ -503,7 +535,7 @@ class StateRead:
 
 
 @dataclass(frozen=True)
-class Decided:
+class Decided(SingleValue):
     """A constant this repository holds, copied into a slot that can only take a secret.
 
     Not a credential and not a secret, which is why it is its own class rather
@@ -529,7 +561,7 @@ class Decided:
 
 
 @dataclass(frozen=True)
-class Manual:
+class Manual(SingleValue):
     """A value from outside this system; nothing here mints or derives it.
 
     Asked for when the slot is empty, and asked for again only when the operator
@@ -573,14 +605,36 @@ class Row:
     #: row may name the same cell -- one credential can be several secrets, as
     #: the ZeroTier identities are one per identity domain.
     register: str
-    #: `Issued` is spelled out beside the protocol because it is the one source
-    #: that does not resolve to a single value: its row is a bundle, and each
-    #: sink takes a different part of it (`resolve`).
-    source: Source | Issued
+    source: Source
     targets: tuple[Channel, ...] = ()
-    #: A channel §3 names for this row that has no address yet, and why. Empty
-    #: when every slot the register promises is written down above.
-    pending: str = ''
+    #: The channels §3 names for this row that have no address yet, each under
+    #: the term that column names it by (`register_column`), each with what
+    #: stands in the way. Empty when every slot the register promises is
+    #: written down above.
+    pending: Mapping[str, str] = field(default_factory=dict[str, str])
+
+    def __post_init__(self) -> None:
+        """Hold the reasons against the vocabulary and against this row's own targets.
+
+        Both mistakes are silent otherwise. A reason filed under something §3's
+        Slot column cannot say explains a cell no reader can find; a reason
+        filed under a channel this row already addresses says a slot is waiting
+        on something while the line above it names where the value lands. The
+        register interlock (`tests/test_slots.py`) compares the two sets, and it
+        can only do that while every key is a term the column uses.
+        """
+        unknown = sorted(set(self.pending) - REGISTER_COLUMNS)
+        if unknown:
+            raise SlotRefused(
+                f"{self.register}: {', '.join(unknown)} is no channel of §3's Slot column, so a reason filed "
+                f'under it explains nothing; the column says {", ".join(sorted(REGISTER_COLUMNS))}'
+            )
+        addressed = sorted(set(self.pending) & {register_column(target) for target in self.targets})
+        if addressed:
+            raise SlotRefused(
+                f'{self.register}: {", ".join(addressed)} is a channel this row addresses, so it is not '
+                'waiting on anything -- a reason there reads as work left to do on a slot that is filled'
+            )
 
     @property
     def sinks(self) -> tuple[Slot, ...]:
@@ -596,14 +650,35 @@ class Row:
         set: a certificate and the key that opens it come from a single
         issuance, so asking twice would deliver halves of two bundles.
         """
-        if isinstance(self.source, Issued):
-            parts = self.source.parts(context)
-            return {slot: parts[slot.name] for slot in self.sinks}
-        return dict.fromkeys(self.sinks, self.source.value(context))
+        parts = self.source.parts(context, tuple(slot.name for slot in self.sinks))
+        missing = sorted({slot.name for slot in self.sinks} - parts.keys())
+        if missing:
+            # A sink added without the part that fills it, which is the one way
+            # a bundle row can be wrong that the register interlock cannot see:
+            # §3 names the channel, and the secret's own name is this map's.
+            raise SlotRefused(
+                f'{self.register}: nothing here produces {", ".join(missing)}, so that slot has no value to '
+                f'be pushed; this row delivers {", ".join(sorted(parts))}'
+            )
+        return {slot: parts[slot.name] for slot in self.sinks}
 
 
-def _github(name: str, environments: tuple[str, ...], repository: str = REPOSITORY) -> tuple[Slot, ...]:
+def _github(
+    name: str, environments: tuple[str, ...], repository: str = conventions.forge.DEPLOYMENT.full_name
+) -> tuple[Slot, ...]:
     return tuple(Slot(repository=repository, name=name, environment=environment) for environment in environments)
+
+
+def _every_environment(name: str) -> tuple[Slot, ...]:
+    """That secret in every Environment the deployment repository declares.
+
+    The Environments come from the forge census (`conventions.forge`), which is
+    where the credential partition ci.md §3 defines is written down and the one
+    home this command and the `github` stack share. A row says *every* rather
+    than listing them, so an Environment added to the partition is one this map
+    fills without being edited.
+    """
+    return _github(name, tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments))
 
 
 def _device(member: str) -> Row:
@@ -620,7 +695,7 @@ def _device(member: str) -> Row:
     return Row(
         register=device.register,
         source=Manual(device.title, device.console, command=f'credentials derived {device.member} record'),
-        targets=tuple(PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields),
+        targets=tuple(PulumiConfig(device.stack, field.key) for field in device.fields),
     )
 
 
@@ -629,17 +704,20 @@ def _device(member: str) -> Row:
 #: (ci.md §3).
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
-#: Why an in-cluster row has no address: sealing needs the controller, and the
-#: controller arrives with `k8s-base`.
-_CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
-
 #: Why an App key reaches no workflow yet: each is read by a job that mints an
 #: installation token from it for the length of one run, and neither job is
 #: built. The escrow copy is therefore the whole of the row today -- the same
 #: shape the Alertmanager token is in, and for the same reason.
 _APP_KEY_UNDELIVERED = (
-    'the workflow that would read it is not built, so no repository secret names it; the job that will '
-    'read it mints an 8-hour installation token from this key per run and stores nothing'
+    'the workflow that would read it is not built, so no secret there names it; the job that will read it '
+    'mints an 8-hour installation token from this key per run and stores nothing'
+)
+
+#: Why the webhook has only its interim slot: the two copies §3 promises belong
+#: to a shape that is designed and not built.
+_HAOS_UNBUILT = (
+    'the designed shape has CI hold no Home Assistant credential at all -- a `repository_dispatch` to the ops '
+    'repository, which owns the alert (ci.md §3); this copy belongs to that shape and arrives with it'
 )
 
 #: Sinks this map used to carry, and where the fact each one delivered lives
@@ -695,7 +773,6 @@ ROWS: dict[str, Row] = {
             'credentials derived cloudflare-dns01 mint', unbuilt='cert-manager has no slot to be sealed into'
         ),
         targets=(SealedSecret("cert-manager's DNS-01 solver token"),),
-        pending=_CLUSTER_UNBUILT,
     ),
     derived.GATEWAY_ACME_ROW: Row(
         register='Cloudflare token (gateway ACME)',
@@ -721,7 +798,7 @@ ROWS: dict[str, Row] = {
             SealedSecret('the VolSync, CNPG barman and etcd-snapshot repository keys'),
             OnBox("the micro cron's key"),
         ),
-        pending=_OPS_UNBUILT,
+        pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'b2-dump': Row(
         register='B2 dump key (micro)',
@@ -732,13 +809,13 @@ ROWS: dict[str, Row] = {
         register='GitHub App key (dispatch)',
         source=Derived(escrow.DISPATCH_KEY),
         targets=(EscrowCopy(escrow.DISPATCH_KEY),),
-        pending=_APP_KEY_UNDELIVERED,
+        pending={'`kluster` repository secret': _APP_KEY_UNDELIVERED},
     ),
     'github-trigger-key': Row(
         register='GitHub App key (trigger)',
         source=Derived(escrow.TRIGGER_KEY),
         targets=(EscrowCopy(escrow.TRIGGER_KEY),),
-        pending=_APP_KEY_UNDELIVERED,
+        pending={'ops-repo secret': _APP_KEY_UNDELIVERED},
     ),
     'zerotier-identity-physical': Row(
         register='ZT CI member identities (`ci-physical`, `ci-dns`)',
@@ -766,7 +843,7 @@ ROWS: dict[str, Row] = {
         targets=(
             EscrowCopy(escrow.PASSPHRASE),
             WorkstationSlot('pulumi.passphrase'),
-            *_github('PULUMI_CONFIG_PASSPHRASE', ENVIRONMENTS),
+            *_every_environment('PULUMI_CONFIG_PASSPHRASE'),
         ),
     ),
     'state-backend-ca': Row(
@@ -783,10 +860,10 @@ ROWS: dict[str, Row] = {
         targets=(
             OnBox("the appliance's server certificate"),
             WorkstationSlot('state-backend/'),
-            *_github(BACKEND_URL, ENVIRONMENTS),
-            *_github(BACKEND_CA, ENVIRONMENTS),
-            *_github(BACKEND_CERT, ENVIRONMENTS),
-            *_github(BACKEND_KEY, ENVIRONMENTS),
+            *_every_environment(BACKEND_URL),
+            *_every_environment(BACKEND_CA),
+            *_every_environment(BACKEND_CERT),
+            *_every_environment(BACKEND_KEY),
         ),
     ),
     'backup-age-identity': Row(
@@ -801,7 +878,7 @@ ROWS: dict[str, Row] = {
         register='Drill age identity',
         source=Minted('state-backend provision'),
         targets=(OnBox('the public half, the third Butane recipient'),),
-        pending=_OPS_UNBUILT,
+        pending={'ops-repo Environment': _OPS_UNBUILT},
     ),
     'restic-passwords': Row(
         register='restic repo passwords',
@@ -809,23 +886,24 @@ ROWS: dict[str, Row] = {
             'the `backed_pvc` helper, one per volume',
             unbuilt='the helper is unwritten (declarative/workloads.md §3)',
         ),
+        # Nothing pending: `backed_pvc` generates and seals its own password, so
+        # both channels §3 names for this row are addressed by the helper rather
+        # than by a `credentials` command.
         targets=(PulumiState('apps', 'one password per backed volume'), SealedSecret("VolSync's repository secret")),
-        pending='`backed_pvc` generates and seals its own password, so no `credentials` command is involved',
     ),
     'talos': Row(
         register='Talos machine secrets + talosconfig',
         source=StateRead(PHYSICAL_STACK, 'talosconfig'),
         targets=(PulumiState(PHYSICAL_STACK, 'the cluster PKI roots'),),
-        pending=_OPS_UNBUILT,
+        pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'kubeconfig': Row(
         register='kubeconfig',
         source=StateRead(PHYSICAL_STACK, 'kubeconfig'),
+        # Nothing pending: the `k8s-base` and `apps` programs take it from the
+        # `physical` stack through a StackReference, so the register names no
+        # secret for this row to be waiting on.
         targets=(PulumiState(PHYSICAL_STACK, 'the cluster-admin credential'),),
-        pending=(
-            'the `k8s-base` and `apps` programs take it from the `physical` stack through a StackReference, '
-            'so no workflow names a secret for it'
-        ),
     ),
     'gateway-libvirt-identities': Row(
         register='UDM SSH key, libvirt SSH identity',
@@ -847,11 +925,13 @@ ROWS: dict[str, Row] = {
         register='Alertmanager read token',
         source=Derived(escrow.ALERTMANAGER),
         targets=(EscrowCopy(escrow.ALERTMANAGER),),
-        pending=(
-            'the escrow copy is the only slot this row has today: the ops-repository secret and the config '
-            'secret the HTTPRoute is rendered from wait on the issue-sync poller and on that route, neither '
-            'of which is built'
-        ),
+        pending={
+            'ops-repo secret': _OPS_UNBUILT,
+            'Pulumi config secret': (
+                'the HTTPRoute whose method, path and header match this token gates is not built, and the '
+                'config secret that match reads is rendered with it'
+            ),
+        },
     ),
     'haos-webhook': Row(
         register='HA webhook URL/ID',
@@ -865,12 +945,8 @@ ROWS: dict[str, Row] = {
         # A repository secret rather than an Environment one: the job that reads
         # it belongs to no stack, and the whole power of the value is to raise a
         # phone notification (ci.md §3).
-        targets=(Slot(repository=REPOSITORY, name='HAOS_DEPLOY_WEBHOOK_URL'),),
-        pending=(
-            'the designed shape has CI hold no Home Assistant credential at all -- a `repository_dispatch` to '
-            'the ops repository, which owns the alert (ci.md §3); the SealedSecret and ops-repo copies belong '
-            'to that shape and arrive with it'
-        ),
+        targets=(Slot(repository=conventions.forge.DEPLOYMENT.full_name, name='HAOS_DEPLOY_WEBHOOK_URL'),),
+        pending={'SealedSecret': _HAOS_UNBUILT, 'ops-repo secret': _HAOS_UNBUILT},
     ),
     'drill-credentials': Row(
         register='Drill-environment credentials',
@@ -878,7 +954,7 @@ ROWS: dict[str, Row] = {
             'credentials derived drill-credentials mint',
             unbuilt='the drill compartment and its keys are not declared',
         ),
-        pending=_OPS_UNBUILT,
+        pending={'ops-repo Environment': _OPS_UNBUILT},
     ),
 }
 
@@ -890,8 +966,21 @@ def describe(rows: Mapping[str, Row] | None = None) -> Iterator[str]:
         yield f'    from  {row.source.describe()}'
         for target in row.targets:
             yield f'    into  {target}'
-        if row.pending:
-            yield f'    open  {row.pending}'
+        for channel, why in row.pending.items():
+            yield f'    open  {channel}: {why}'
+
+
+def _waiting(row: Row) -> str:
+    """Why a row has no GitHub slot, in the terms §3's Slot column names channels by.
+
+    Every reason the row carries, because a row may be waiting on more than one
+    channel and the operator reading a skipped row wants the whole of what is
+    left. A row waiting on nothing is one the register promises no GitHub
+    secret for at all, which is a different sentence.
+    """
+    if not row.pending:
+        return 'the register names no GitHub secret for it'
+    return '; '.join(f'{channel}: {why}' for channel, why in row.pending.items())
 
 
 def _verify(forge: Forge, slot: Slot, before: str | None) -> None:
@@ -968,7 +1057,7 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
                 )
             continue
         if not row.sinks:
-            reason = row.pending or 'the register names no GitHub secret for it'
+            reason = _waiting(row)
             if only is not None:
                 raise SlotRefused(f'{name}: no GitHub secret slot - {reason}')
             log.info('%s: no GitHub secret slot - %s', name, reason)
@@ -1013,11 +1102,7 @@ __all__ = (
     'BACKEND_CERT',
     'BACKEND_KEY',
     'BACKEND_URL',
-    'DRILL_ENVIRONMENT',
-    'ENVIRONMENTS',
-    'OPS_REPOSITORY',
     'REGISTER_COLUMNS',
-    'REPOSITORY',
     'ROWS',
     'Context',
     'Decided',
@@ -1026,7 +1111,9 @@ __all__ = (
     'Manual',
     'Minted',
     'Row',
+    'SingleValue',
     'Slot',
+    'Source',
     'StateRead',
     'describe',
     'register_column',
