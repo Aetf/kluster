@@ -18,7 +18,7 @@ Every app is a `Component` subclass (putils, RFC-001) that owns:
 | Workload | Deployment/StatefulSet with **honest requests/limits** — CPU limits are mandatory on anything scheduled to the cloud pool (etcd shares those cores, nodes.md §1); memory requests sized from evidence, not idle numbers (the JuiceFS-sidecar lesson, storage.md §6) | nodes.md §§1, 4.4 |
 | Storage | by the two-axis selection in §2 (performance × persistence; fixed assets → NAS/object) | §2, storage.md §2 |
 | Backup | declared through the `backed_pvc` helper with a **retention class** — never ad-hoc schedules (§3) | §3, storage.md §3.1 |
-| Exposure | pool label + route kind per the routing matrix, via the helpers (`public_route`/`public_port`/`lan_route`); `public_port` alone also emits the NLB listener + security rule for its port (dns.md §5); `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `Exposure.IOT` on the census row attaches `media-gw` — the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
+| Exposure | pool label + route kind per the routing matrix, via the helpers (`route`/`public_port`); one `route(row)` for every HTTP exposure, because the row's `Exposure` is the single statement of reachability and the helper's name must not become a second one that can disagree with it (dns.md §5); `public_port` alone also emits the NLB listener + security rule for its port; `auth=True` adds the ExternalAuth filter → Authelia for apps without native auth (cluster-infra.md §2); `Exposure.IOT` on the census row attaches `media-gw` — the explicit "IoT may reach this" decision, recorded on the row rather than at a call site (jellyfin; physical/gateway.md §4.2) | architecture.md §3.6, dns.md §3 |
 | DNS | emitted by the same helpers (CNAME to anchor); the split-horizon rewrite the route implies is applied by the `dns` stack from the same declaration, not by this one (dns.md §3) | dns.md |
 | Secrets | SealedSecret first choice, `template.data` pattern | cluster-infra.md §1.1 |
 | Placement | scheduling constraints only: site pool (cloud/homelab), a node label for a volume or the dedicated VIP, GPU resource requests | architecture.md §3.6 |
@@ -127,10 +127,9 @@ per-app number:
     the VIP are on the same machine by construction. The cache volume
     is `protect=True` and moved-never-recreated (storage.md §3.3).
 -   **Split-horizon app (immich)**: one set of pods, two exposures
-    (`public_route` over a row whose `Exposure` is `SPLIT`, which the
-    matrix maps to both gateways) — the helper emits both routes and
-    the public CNAME, and the `dns` stack reads the same row for the
-    LAN rewrite. The immich LAN-direct rule (never via the cloud path)
+    (`route` over a row whose `Exposure` is `SPLIT`, which the matrix
+    maps to both gateways) — the helper emits both routes and the public
+    CNAME, and the `dns` stack reads the same row for the LAN rewrite. The immich LAN-direct rule (never via the cloud path)
     is thereby structural.
 -   **Bulk-egress (qbittorrent + seedwatch)**: pinned to the homelab
     pool; outbound v6 via the cluster masquerade, inbound v4 via the
@@ -172,7 +171,7 @@ per-app number:
     drilled restore is the rollback.
 -   **Static-site template (one component, two content sources)**: a
     single `StaticSite` component — stock static server, multi-vhost
-    (one instance serves several hostnames), `public_route` per zone —
+    (one instance serves several hostnames), `route` per zone —
     parameterized by where the content comes from:
     -   **Git source** (blog: the apex/www of three zones): the blog
         repo *drives* publishing — its CI pushes the generated
