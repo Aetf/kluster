@@ -452,22 +452,28 @@ empty.
 to it.** The three resources — a file, a directory, a root filesystem
 tree — answer it the same way: what is at the path is compared, not
 merely whether something is there, so anything of another kind is drift
-a preview reports, and the operation refuses it by name rather than
-acting on it. A **symbolic link** is the case that decides the rest,
-because every command is silent about one differently: `mkdir -p`
-and `chmod` go through it, `mv -f` lands a file inside a link to a
-directory and replaces a link to a file, `rm -f` deletes it, and `rmdir`
-refuses it only on the day of the delete. Following it converges a place
-nothing declared and replacing it throws away an indirection somebody
-placed deliberately, so it is refused instead. Most other wrong kinds
-the device refuses in its own words — `mkdir -p` will not take a path a
-file occupies — and the one that says nothing is a write over a
-directory, where `mv -f` moves the file inside and reports success; that
-one is refused here. What resolves either is a decision on the device:
-declare what is actually there, or take it away. It is the last
-component alone, which is why `/data` being a symbolic link on this box
-is not this case — a link higher up a path is traversal nothing here can
-see.
+a preview reports, and no operation turns one kind into another. A
+**symbolic link** is the case that decides the rest, because every
+command is silent about one differently: `mkdir -p` and `chmod` go
+through it, `mv -f` lands a file inside a link to a directory and
+replaces a link to a file, `rm -f` deletes it, and `rmdir` refuses it
+only on the day of the delete. Following it converges a place nothing
+declared and replacing it throws away an indirection somebody placed
+deliberately, so it is refused instead.
+
+Any other wrong kind is refused too, by whichever end can say so.
+Where a command refuses of its own accord the device's own words stand —
+`mkdir -p` will not take a path a file occupies, `rmdir` refuses
+anything that is not a directory. Where none does, the push asks
+first: `mv -f` moves a staged file *inside* a directory and reports
+success, `rm -f` deletes a named pipe or a socket without a word, and
+a root filesystem's `mv` renames whatever sits at its path aside for
+the next push to delete. The one kind a tree displaces is a directory,
+which is the tree it was told to replace. What resolves any of it is a
+decision on the device: declare what is actually there, or take it
+away. It is the last component alone, which is why `/data` being a
+symbolic link on this box is not this case — a link higher up a path is
+traversal nothing here can see.
 
 **New device automation is a systemd unit plus an executable in
 `bin/`**, unless the operation manipulates systemd's own configuration

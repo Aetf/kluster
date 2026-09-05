@@ -64,14 +64,20 @@ naming the path. It is the last component alone -- a link higher up is
 traversal nothing here can see, which is why a device whose `/data` is a
 symbolic link is not this case.
 
-**Any other wrong kind is answered the same way**, and by the same reasoning:
+**Any other wrong kind is answered the same way**, and by the same reasoning.
 `stat` reports the kind, so every comparison here reads a path holding
 something else as drift rather than as the file, directory or tree it was
-supposed to be, and no operation converts one kind into another. Most of that
-the device says itself -- `mkdir -p` refuses a file, `rmdir` refuses a
-non-directory -- and the one command that says nothing is a write's `mv -f`,
-which moves the staged file *into* a directory and reports success, so a write
-asks (`ssh.regular_file_test`) and stops with `ssh.WrongKindAtPath`.
+supposed to be, and no operation turns one kind into another.
+
+Where a command refuses of its own accord, the device says so in its own words:
+`mkdir -p` will not take a path a file occupies, and `rmdir` refuses anything
+that is not a directory. Where none does, this module asks first -- `mv -f`
+moves a staged file *into* a directory and reports success, `rm -f` deletes a
+named pipe or a socket without a word, and a tree's `mv` renames whatever sits
+at its path aside for the next push to delete. So a write, a remove and every
+script a tree's operations run ask (`ssh.regular_file_test`,
+`ssh.directory_test`) and stop with `ssh.WrongKindAtPath`. The one kind a tree
+displaces is a directory, because that is the tree it was told to replace.
 
 What resolves either is a decision on the device: declare what is actually
 there, or take it away.
@@ -194,6 +200,7 @@ __all__ = (
     'HookFailed',
     'MakeDirectoryFailed',
     'PullFailed',
+    'PurgeFailed',
     'RemoveDirectoryFailed',
     'UnpackFailed',
     'endpoint',
@@ -351,6 +358,17 @@ class RemoveDirectoryFailed(Exception):
 
 
 @final
+class PurgeFailed(Exception):
+    """The device could not take the tree away, so the claim about it stands."""
+
+    def __init__(self, directory: str, exit_status: int, stderr: str) -> None:
+        super().__init__(f'removing the tree at {directory} exited {exit_status}: {stderr.strip() or "(no output)"}')
+        self.directory: str = directory
+        self.exit_status: int = exit_status
+        self.stderr: str = stderr
+
+
+@final
 class DirectoryNotEmpty(Exception):
     """A directory this program stops declaring still holds somebody else's files.
 
@@ -418,12 +436,13 @@ def reference(repository: str, digest: str) -> str:
 def pull_script(image: str, directory: str) -> str:
     """The command that puts the pinned image beside `directory`, as a layout.
 
-    Its first act is `ssh.symlink_test`, so a link where the tree is declared
-    is refused before a byte is fetched. Then it clears what the last push
-    left: the tree the last swap displaced, any staging tree a failed run
-    abandoned, and any layout a failed pull abandoned. That is the moment to do
-    it -- reclaiming the space before pulling is what keeps a bumped pin from
-    needing room for three copies of one root filesystem at once.
+    Its first acts are the two questions about the declared path, so anything
+    but a tree where a tree is declared is refused before a byte is fetched.
+    Then it clears what the last push left: the tree the last swap displaced,
+    any staging tree a failed run abandoned, and any layout a failed pull
+    abandoned. That is the moment to do it -- reclaiming the space before
+    pulling is what keeps a bumped pin from needing room for three copies of
+    one root filesystem at once.
 
     `skopeo copy` is given a `docker://` source carrying the digest, so the
     registry's answer is verified against the pin before a byte is written, and
@@ -440,6 +459,7 @@ def pull_script(image: str, directory: str) -> str:
     return ' && '.join(
         (
             ssh.symlink_test(directory),
+            ssh.directory_test(directory),
             f'rm -rf {layout} {staging} {superseded}',
             # Making the layout also makes the directory holding it, which is
             # the directory the tree and the staging tree go in: `umoci` creates
@@ -461,9 +481,12 @@ def unpack_script(directory: str) -> str:
     the hook that restarts it has not run yet -- so it is cleared at the start
     of the *next* push instead.
 
-    It asks about a link first, as every script here does: `mv` displaces one
-    rather than following it, so an unpack that ran past the question would
-    take away an indirection the declaration never named.
+    It asks about the path first, as every script here does. `mv` renames
+    whatever is there aside -- a link, a regular file, a named pipe -- and the
+    next push's first act deletes that sibling, so an unpack that ran past the
+    questions would destroy something nobody declared, one deployment later and
+    with nothing to connect the two. A directory is the one kind it displaces,
+    because that is the tree it was told to replace.
 
     `umoci raw unpack` rather than `umoci unpack`, because the latter writes an
     OCI *bundle* -- a `config.json` beside a `rootfs/` directory -- and what
@@ -480,6 +503,7 @@ def unpack_script(directory: str) -> str:
     return ' && '.join(
         (
             ssh.symlink_test(directory),
+            ssh.directory_test(directory),
             f'umoci raw unpack --image {tagged} {staging}',
             f'rm -rf {layout}',
             f'if [ -e {quoted_directory} ]; then mv {quoted_directory} {superseded}; fi',
@@ -491,9 +515,9 @@ def unpack_script(directory: str) -> str:
 def purge_script(directory: str) -> str:
     """The command that removes a tree and every sibling the push uses.
 
-    Guarded like the rest: `rm -rf` deletes a link without following it, so a
-    delete that ran past the question would take away an indirection this
-    resource only ever named the path of.
+    Guarded like the rest: `rm -rf` deletes a link, a named pipe or a socket as
+    readily as the tree, so a delete that ran past the questions would take
+    away something this resource only ever named the path of.
     """
     removed = (
         directory,
@@ -501,7 +525,8 @@ def purge_script(directory: str) -> str:
         f'{directory}{SUPERSEDED_SUFFIX}',
         f'{directory}{LAYOUT_SUFFIX}',
     )
-    return ssh.symlink_test(directory) + ' && rm -rf ' + ' '.join(shlex.quote(path) for path in removed)
+    guards = f'{ssh.symlink_test(directory)} && {ssh.directory_test(directory)}'
+    return guards + ' && rm -rf ' + ' '.join(shlex.quote(path) for path in removed)
 
 
 def make_script(path: str, mode: str, owner: str | None) -> str:
@@ -552,6 +577,18 @@ def remove_script(path: str) -> str:
             f'rmdir {quoted}',
         )
     )
+
+
+def _refused(path: str, result: ssh.CommandResult) -> None:
+    """Raise what a script's guards mean, if either of them stopped it.
+
+    The scripts a tree's operations run are guarded the way the transport's own
+    verbs are, and the statuses they exit with mean the same two things.
+    """
+    if result.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+        raise ssh.SymbolicLinkAtPath(path)
+    if result.exit_status == ssh.ReservedStatus.WRONG_KIND:
+        raise ssh.WrongKindAtPath(path)
 
 
 def marker_path(directory: str) -> str:
@@ -879,13 +916,11 @@ class DeviceArtifactProvider(DeviceProvider):
         image = reference(str(props['repository']), digest)
         async with open_transport(self._device(props)) as transport:
             pull = await transport.run(pull_script(image, root))
-            if pull.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
-                raise ssh.SymbolicLinkAtPath(root)
+            _refused(root, pull)
             if not pull.ok:
                 raise PullFailed(image, pull.exit_status, pull.stderr)
             unpack = await transport.run(unpack_script(root))
-            if unpack.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
-                raise ssh.SymbolicLinkAtPath(root)
+            _refused(root, unpack)
             if not unpack.ok:
                 raise UnpackFailed(root, unpack.exit_status, unpack.stderr)
             # Before the hook: the hook reads this.
@@ -932,8 +967,13 @@ class DeviceArtifactProvider(DeviceProvider):
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
             purged = await transport.run(purge_script(root))
-            if purged.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
-                raise ssh.SymbolicLinkAtPath(root)
+            _refused(root, purged)
+            if not purged.ok:
+                # A read-only filesystem, a permission the session lost, a disk
+                # that is gone: every one of them leaves the tree where it is,
+                # and a delete that reported success would have the engine drop
+                # a resource the device still holds.
+                raise PurgeFailed(root, purged.exit_status, purged.stderr)
             await transport.remove(marker_path(root))
             await run_hook(transport, props)
 
@@ -1235,6 +1275,12 @@ async def _marker(transport: ssh.Transport, directory: str) -> bytes | None:
     file -- and the write that would replace it refuses too, so a marker read
     through one would be a claim this provider never made and can never
     correct.
+
+    What the question buys is that the resource stops reporting itself
+    converged: the apply that follows still pulls, unpacks and swaps before the
+    marker's own write refuses. A loud failure on the next run is the trade,
+    and it is the better half of it -- the alternative is a resource that
+    agrees with a record it does not own, for as long as nobody looks.
     """
     path = marker_path(directory)
     stat = await transport.stat(path)

@@ -28,13 +28,14 @@ filesystem. A write interrupted halfway therefore leaves the previous file intac
 and a stale temporary beside it, which the next write overwrites.
 
 **The two verbs that change the device refuse to act on what they were not
-given.** A write refuses a symbolic link at the path rather than replacing it
-or landing the bytes inside whatever it points at (`symlink_test`), and
-refuses anything else that is not a regular file rather than moving the staged
-file into it (`regular_file_test`); a remove refuses a link rather than taking
-away an indirection the caller did not put there. `stat` answers about the path
-itself rather than through it, which is how a caller learns what is there
-before it asks for either.
+given.** Both ask the same two questions first: a symbolic link at the path is
+refused rather than replaced or written through (`symlink_test`), and anything
+else that is not a regular file is refused rather than written into or deleted
+(`regular_file_test`). Without them a write moves its staged file *inside* a
+directory at the path and reports success, and a remove deletes a named pipe or
+a socket somebody else put there. `stat` answers about the path itself rather
+than through it, which is how a caller learns what is there before it asks for
+either.
 """
 
 from __future__ import annotations
@@ -73,10 +74,11 @@ __all__ = (
     'WrongKindAtPath',
     'client_credential',
     'connect',
+    'directory_test',
     'pinned_host_keys',
+    'regular_file_test',
     'same_mode',
     'same_owner',
-    'regular_file_test',
     'symlink_test',
 )
 
@@ -250,10 +252,6 @@ class FileStat:
         return self.kind == DIRECTORY
 
     @property
-    def is_symbolic_link(self) -> bool:
-        return self.kind == SYMBOLIC_LINK
-
-    @property
     def is_regular_file(self) -> bool:
         return self.kind in (REGULAR_FILE, REGULAR_EMPTY_FILE)
 
@@ -303,8 +301,9 @@ class Transport(Protocol):
     async def remove(self, path: str) -> None:
         """Delete `path`. Removing what is not there is not an error.
 
-        A symbolic link at `path` raises `SymbolicLinkAtPath` and stays where
-        it is.
+        A symbolic link at `path` raises `SymbolicLinkAtPath` and anything else
+        that is not a regular file raises `WrongKindAtPath`; both stay where
+        they are.
         """
         ...
 
@@ -413,15 +412,19 @@ class SshTransport:
         _check(f'write {path}', result)
 
     async def remove(self, path: str) -> None:
-        """The delete, refusing a link at the path.
+        """The delete, refusing whatever the declaration did not name.
 
-        `rm -f` takes a link away without following it, so the guard is what
-        keeps an indirection nobody here declared from being deleted by a
-        resource that only ever named the path.
+        `rm -f` takes away a link, a named pipe, a socket or a device node
+        without a word -- it complains only about a directory. So the delete
+        asks the same two questions the write asks, and a resource that
+        declared a file never removes something that is not one.
         """
-        result = await self._sh(f'{symlink_test(path)} && rm -f {shlex.quote(path)}')
+        script = f'{symlink_test(path)} && {regular_file_test(path)} && rm -f {shlex.quote(path)}'
+        result = await self._sh(script)
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
+        if result.exit_status == ReservedStatus.WRONG_KIND:
+            raise WrongKindAtPath(path)
         _check(f'remove {path}', result)
 
     async def run(self, command: str) -> CommandResult:
@@ -497,12 +500,10 @@ def symlink_test(path: str) -> str:
 def regular_file_test(path: str) -> str:
     """The test that refuses anything but a regular file at a declared path.
 
-    Only a write needs it, and it needs it because `mv -f` is the one command
-    here that is silent about a wrong kind: given a directory at the path it
-    moves the staged file *inside* and exits zero, so the apply reports success
-    and the next preview asks for the same write again, forever
-    (`WrongKindAtPath`). Where a directory is declared the device says it
-    itself -- `mkdir -p` refuses a file, `rmdir` refuses a non-directory.
+    The verbs that write and delete a file need it, because the commands they
+    end in are silent about a wrong kind: `mv -f` moves the staged file
+    *inside* a directory at the path and exits zero, and `rm -f` deletes a
+    named pipe, a socket or a device node without a word (`WrongKindAtPath`).
 
     It follows `symlink_test` rather than standing on its own: `[ -e ]` and
     `[ -f ]` both resolve a link, so at a link to a file this test would find a
@@ -510,6 +511,21 @@ def regular_file_test(path: str) -> str:
     """
     quoted = shlex.quote(path)
     return f'if [ -e {quoted} ] && [ ! -f {quoted} ]; then exit {ReservedStatus.WRONG_KIND}; fi'
+
+
+def directory_test(path: str) -> str:
+    """The test that refuses anything but a directory at a declared path.
+
+    The same question as `regular_file_test` asked by the resources whose path
+    is a directory, and for the same reason: `mv` renames a file, a named pipe
+    or a socket aside as readily as the directory it was told to displace, and
+    `rm -rf` deletes any of them.
+
+    A path that is not there passes, because making it is what the caller is
+    about to do.
+    """
+    quoted = shlex.quote(path)
+    return f'if [ -e {quoted} ] && [ ! -d {quoted} ]; then exit {ReservedStatus.WRONG_KIND}; fi'
 
 
 def same_mode(left: str, right: str) -> bool:
