@@ -25,6 +25,7 @@ No controller is contacted: the boundary is Pulumi's mock monitor, which
 answers the zone lookups and hands back the inputs each resource was given.
 """
 
+import inspect
 from collections.abc import Mapping
 from ipaddress import IPv4Address, IPv4Interface, IPv6Address
 from typing import Any, cast
@@ -66,7 +67,7 @@ def build(static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None) -
         api_url=API_URL,
         site=SITE,
         worker_gua=WORKER_GUA,
-        static_hosts=static_hosts,
+        static_hosts={} if static_hosts is None else static_hosts,
     )
 
 
@@ -526,14 +527,15 @@ async def test_the_controller_credential_is_an_api_key_on_a_bounded_provider(moc
 
 
 @pytest.mark.asyncio
-async def test_no_static_host_is_declared() -> None:
+async def test_an_empty_roll_declares_no_static_host() -> None:
     """The device name plane is DHCP-derived; a static entry is an exception.
 
     Every service is reached by its public name through the split-horizon
     rewrites, so a host entry here would be a second naming plane to keep in
-    step with the first.
+    step with the first. Which entries there are is the stack program's census
+    (`test_physical_stack`); what this pins is that an empty roll declares
+    nothing rather than falling back to one of the component's own.
     """
-    assert unifi.STATIC_HOSTS == {}
     assert build().static_hosts == {}
 
 
@@ -573,8 +575,6 @@ async def test_the_controller_key_is_read_where_the_provider_is_built() -> None:
     is the endpoint: which address the controller answers on is a site fact the
     stack derives, not a credential.
     """
-    import inspect
-
     firewall = build()
     assert await firewall.provider.api_key.future() == API_KEY
     assert 'api_key' not in inspect.signature(unifi.SiteFirewall.__init__).parameters

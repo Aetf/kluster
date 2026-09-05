@@ -32,6 +32,9 @@ one block at the end, because they are this stack's whole contract with `dns`,
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from ipaddress import IPv4Address, IPv6Address
+
 import pulumi
 import pulumi_oci as oci
 
@@ -45,9 +48,9 @@ from kluster.components.gateway import (
     Rootfs,
     RoutingSession,
 )
-from kluster.components.backup import BackupBucket
+from kluster.components.backup import BackupBucket, Scope, etcd_scope
 from kluster.components.cloud import CloudNetwork
-from kluster.components.cloud.guardrails import Guardrails
+from kluster.components.cloud.guardrails import AlertRule, Guardrails
 from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 from kluster.components.cloud.storage import NodeVolume
 from kluster.components.homelab import HomelabHost
@@ -57,7 +60,6 @@ from kluster.components.talos import TalosCluster, TalosDay1
 from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS, versions
-from putils import async_output
 
 #: Talos' own API port, and the endpoint scheme the machine config expects.
 KUBE_API_PORT = 6443
@@ -69,6 +71,15 @@ KUBE_API_PORT = 6443
 OCI_USER_OCID = 'ociUserOcid'
 OCI_FINGERPRINT = 'ociFingerprint'
 OCI_PRIVATE_KEY = 'ociPrivateKey'
+
+#: The rest of what this program reads out of stack configuration: the audience
+#: for the budget's alerts, the certificate account the gateway buys its own TLS
+#: with, the password on its BGP session, and the worker's global IPv6 address
+#: once the advertisement it is formed from has been seen.
+BUDGET_ALERT_RECIPIENTS = 'budgetAlertRecipients'
+GATEWAY_ACME_TOKEN = 'gatewayAcmeToken'
+GATEWAY_BGP_PASSWORD = 'gatewayBgpPassword'
+WORKER_GUA = 'workerGua'
 
 #: The first-bring-up knob: a LAN address for the gateway, set only while the
 #: gateway is not yet on the overlay. Absent — the steady state — every client
@@ -89,6 +100,34 @@ CI_IDENTITY_OUTPUTS = {
     'ci-physical': 'ci_zerotier_identity_physical',
     'ci-dns': 'ci_zerotier_identity_dns',
 }
+
+#: Static host entries on the gateway's own resolver. Empty, and that is the
+#: design: the device name plane is DHCP-derived and served by that resolver,
+#: while every service is named by its public hostname and steered by the
+#: split-horizon rewrites. An entry belongs here only when a name must resolve
+#: on the LAN with no lease behind it and no service plane to carry it — a
+#: fully-qualified name mapped to one literal address.
+GATEWAY_STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
+
+#: The budget's alerts, each answering a different question. Half-way through
+#: the month is "something changed"; at the budget is "it already happened";
+#: the forecast is the only one that can arrive while there is still time to
+#: act.
+BUDGET_ALERT_RULES: tuple[AlertRule, ...] = (
+    AlertRule(name='half', threshold=50, message='Half of the monthly cloud budget is spent.'),
+    AlertRule(name='full', threshold=100, message='The monthly cloud budget is spent.'),
+    AlertRule(
+        name='forecast',
+        threshold=100,
+        message='This month is forecast to end over the cloud budget.',
+        forecast=True,
+    ),
+)
+
+#: The bucket's consumers that exist whether or not any application does.
+#: Everything else is per namespace and is declared by the stack that declares
+#: the namespace, as a scope on the same bucket.
+BACKUP_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
 
 async def main() -> None:
@@ -173,7 +212,7 @@ async def main() -> None:
         ocpus=conventions.NODE_OCPUS,
         memory_gb=conventions.NODE_MEMORY_GB,
         boot_volume_gb=conventions.NODE_BOOT_VOLUME_GB,
-        placements=async_output(lambda: _placements(compartment_id, cloud)),
+        placements=await _placements(compartment_id, cloud),
         dedicated_vip_node=conventions.DEDICATED_VIP_NODE,
         load_balancer=load_balancer,
         opts=on_cloud,
@@ -222,13 +261,13 @@ async def main() -> None:
     # restated: a volume attaches only within its own availability domain, and
     # the node's domain is itself a regional fact chosen at apply time
     # (`_placements`).
-    for volume_name, volume in sorted(conventions.NODE_VOLUMES.items()):
-        NodeVolume(
+    for volume_name, entry in sorted(conventions.NODE_VOLUMES.items()):
+        _ = NodeVolume(
             f'{conventions.CLUSTER_NAME}-{volume_name}',
             compartment_id=compartment_id,
-            availability_domain=nodes.instances[volume.attached_node].availability_domain,
-            instance_id=nodes.instances[volume.attached_node].id,
-            size_gb=volume.size_gb,
+            availability_domain=nodes.instances[entry.attached_node].availability_domain,
+            instance_id=nodes.instances[entry.attached_node].id,
+            size_gb=entry.size_gb,
             opts=on_cloud,
         )
 
@@ -240,12 +279,13 @@ async def main() -> None:
     # while quota statements have no OCID form at all and name it by name —
     # which is why the name is a convention this program decides rather than
     # something read back from the tenancy.
-    Guardrails(
+    _ = Guardrails(
         conventions.CLUSTER_NAME,
         tenancy_id=tenancy_id,
         compartment_id=compartment_id,
         compartment_name=compartment.name,
-        recipients=lib_config.strings(config.require_object('budgetAlertRecipients'), 'budgetAlertRecipients'),
+        recipients=lib_config.strings(config.require_object(BUDGET_ALERT_RECIPIENTS), BUDGET_ALERT_RECIPIENTS),
+        alert_rules=BUDGET_ALERT_RULES,
         opts=on_cloud,
     )
 
@@ -261,9 +301,10 @@ async def main() -> None:
     # session is the component's own, so it builds its provider and reads the
     # key that opens it (rfc-002 §8.1). The home-automation domain on the same
     # host is declared nowhere here (rfc-002 §13).
-    HomelabHost(
+    _ = HomelabHost(
         conventions.CLUSTER_NAME,
         cluster=cluster,
+        host=str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address),
         storage_dir=conventions.HOMELAB_STORAGE_DIR,
         bridge=conventions.HOMELAB_BRIDGE,
         vcpus=conventions.HOMELAB_VCPUS,
@@ -281,6 +322,7 @@ async def main() -> None:
         conventions.CLUSTER_NAME,
         region=conventions.B2_ACCOUNT.region,
         bucket_name=conventions.BUCKET_BACKUP,
+        scopes=BACKUP_SCOPES,
     )
 
     # §4: the gateway and the overlay it is the site's member of. Two top-level
@@ -288,10 +330,12 @@ async def main() -> None:
     # and the gateway is one of them: what may join and what the rules are is
     # not the gateway's business (rfc-002 §6). The gateway's own outputs are on
     # the device, so nothing downstream reads a handle to it.
-    _gateway(config)
+    _ = _gateway(config)
     overlay = Overlay(
         conventions.CLUSTER_NAME,
         network_id=conventions.overlay.NETWORK_ID,
+        roster=conventions.overlay.ROSTER,
+        managed_routes=conventions.overlay.MANAGED_ROUTES,
         # Composed here rather than inside the component, because what a run
         # may reach is a fact about how continuous integration gets to this
         # site rather than one about the network (rfc-002 §6).
@@ -398,7 +442,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
             # The gateway buys its own certificates with this, and nothing else
             # on the device reads it: its TLS has to keep renewing while the
             # cluster — and the cluster's issuer — is down.
-            acme_token=config.require_secret('gatewayAcmeToken'),
+            acme_token=config.require_secret(GATEWAY_ACME_TOKEN),
             # What it serves: the services whose interfaces it fronts, and the
             # names it still answers for applications that have not migrated.
             # The second census empties by the end of Wave D, and the block it
@@ -415,7 +459,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
         ),
         routing=RoutingSession(
             neighbour=conventions.HOMELAB_NODE_IPV4,
-            password=config.require_secret('gatewayBgpPassword'),
+            password=config.require_secret(GATEWAY_BGP_PASSWORD),
         ),
         # The key this stack's own sessions present, and the only one this
         # program declares: the operator's own keys are on the device already
@@ -428,6 +472,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
             ),
         ),
         site=conventions.gateway.UNIFI_SITE,
+        static_hosts=GATEWAY_STATIC_HOSTS,
         # Optional, and absent on the first apply of all: the worker's global
         # address is a SLAAC address formed from the router advertisement of
         # the VLAN this same call declares, so it comes into being one boot
@@ -436,7 +481,7 @@ def _gateway(config: pulumi.Config) -> Gateway:
         # the design already accepts (physical/gateway.md §4.2) — and the
         # bring-up ceremony sets the key once the address can be read off the
         # advertisement (physical/gateway.md §2.5).
-        worker_gua=config.get('workerGua'),
+        worker_gua=config.get(WORKER_GUA),
     )
 
 
@@ -472,9 +517,10 @@ async def _placements(compartment_id: str, cloud: oci.Provider) -> list[tuple[st
     "replace at leisure" after losing a node (nodes.md §5, tier 3) assumes a
     pool that has something in it.
 
-    Both lists are regional facts read at apply time. A region offering one AD
-    degrades to plain fault-domain spread, which is what this used to do
-    unconditionally.
+    Both lists are regional facts read at apply time, and they consume no
+    resource output, so this is awaited in `main` rather than wrapped in an
+    output (framework/pulumi.md §1). A region offering one AD degrades to plain
+    fault-domain spread.
     """
     # These two calls are the stack program's own, made outside any component,
     # so there is no parent to inherit a provider from: they name it (rfc-002

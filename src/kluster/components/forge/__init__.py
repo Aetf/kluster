@@ -1,10 +1,9 @@
 """One repository and the hygiene resources that must come with it.
 
-The `github` stack program used to declare every resource itself and parent
-them by hand, which is a component drawn without one. `ManagedRepository` is
-that component: the repository, the vulnerability alerts, the branch
-protection where the plan offers it, the labels the workflows read, and one
-Environment per census entry.
+`ManagedRepository` is one repository as a component: the repository itself,
+the vulnerability alerts, the branch protection where the plan offers it, the
+labels the workflows read, and one Environment per census entry. The stack
+program is then wiring, and nothing parents a resource by hand.
 
 It is the same shape as `dns.zone.ManagedZone` and named the same way for the
 same reason: a component owning one upstream object plus the resources that

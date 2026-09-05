@@ -18,7 +18,6 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.backup import (
-    CLUSTER_SCOPES,
     FORBIDDEN_CAPABILITY,
     UNFINISHED_UPLOAD_DAYS,
     WRITER_CAPABILITIES,
@@ -58,6 +57,12 @@ async def monitor() -> B2:
 
     pulumi.runtime.set_all_config({f'kluster:{APPLICATION_KEY_ID}': KEY_ID, f'kluster:{APPLICATION_KEY}': KEY})
     return await run_with(B2(), stack='physical')
+
+
+#: What the `physical` stack hands the bucket when no application has declared
+#: a scope of its own. Stated here rather than imported, because the roll is
+#: the caller's and this suite is one of the callers.
+CLUSTER_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
 
 def build(scopes: Sequence[Scope] = CLUSTER_SCOPES) -> BackupBucket:
@@ -162,14 +167,6 @@ async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
         # Rotation is a mint and a retire; protection would make the routine
         # act require an unprotect diff and thus tempt nobody to do it.
         assert key._protect is not True  # pyright: ignore[reportPrivateUsage]
-
-
-@pytest.mark.asyncio
-async def test_the_consumers_that_exist_without_any_app() -> None:
-    bucket = build()
-    # etcd is backed up whether or not a single application is declared; every
-    # other scope is per namespace and arrives from the caller.
-    assert set(bucket.keys) == {scope.name for scope in CLUSTER_SCOPES} == {'etcd'}
 
 
 @pytest.mark.asyncio

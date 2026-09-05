@@ -36,7 +36,7 @@ __all__ = ('SSH_PORT', 'UNIFI_API_PORT', 'flow_rules', 'roles')
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the rules program travels with the code that renders
 #: it (rfc-002 §9.1).
-_PACKAGE = 'kluster.components.overlay'
+_TEMPLATE_PACKAGE = 'kluster.components.overlay'
 
 #: The gateway's own management ports, as reached over the overlay: the shell
 #: the desired-state push writes through, and the controller API the firewall
@@ -91,7 +91,7 @@ def flow_rules(
     above it matches a tagged continuous-integration endpoint and nothing else.
     """
     return templates.render(
-        _PACKAGE,
+        _TEMPLATE_PACKAGE,
         'templates/flow-rules.zt.j2',
         _FlowRulesParams(
             cluster=conventions.CLUSTER_NAME,

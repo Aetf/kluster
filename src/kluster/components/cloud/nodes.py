@@ -169,8 +169,8 @@ class CloudNodes(Component):
                 compartment_id=compartment_id,
                 # Spread by construction: one placement per node, wrapping
                 # if the region offers fewer placements than there are nodes.
-                # The list is a regional fact read at apply time (the stack's
-                # `_placements`), not a constant.
+                # The list is a regional fact read at apply time by whoever
+                # builds this component, not a constant.
                 availability_domain=async_output(lambda position=index: self._placement(position, 0)),
                 fault_domain=async_output(lambda position=index: self._placement(position, 1)),
                 display_name=f'{name}-{node}',

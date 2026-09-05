@@ -17,6 +17,7 @@ from kluster.components.cloud.guardrails import (
     A1_MEMORY_GB_PER_AD,
     BUDGET_AMOUNT,
     OBJECT_STORAGE_GB,
+    AlertRule,
     Guardrails,
     quota_statements,
 )
@@ -25,6 +26,14 @@ TENANCY_ID = 'ocid1.tenancy.oc1..test'
 COMPARTMENT_ID = 'ocid1.compartment.oc1..test'
 COMPARTMENT_NAME = 'kluster'
 RECIPIENTS = ('alerts@example.invalid', 'second@example.invalid')
+
+#: What the `physical` stack hands the component: one alert on actual spend and
+#: one on the forecast, which is the pair the assertions below are about. The
+#: roll is the caller's, so this suite states its own.
+ALERT_RULES: tuple[AlertRule, ...] = (
+    AlertRule(name='full', threshold=100, message='The monthly cloud budget is spent.'),
+    AlertRule(name='forecast', threshold=100, message='This month is forecast to end over budget.', forecast=True),
+)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -39,6 +48,7 @@ def build() -> Guardrails:
         compartment_id=COMPARTMENT_ID,
         compartment_name=COMPARTMENT_NAME,
         recipients=RECIPIENTS,
+        alert_rules=ALERT_RULES,
     )
 
 
@@ -123,4 +133,5 @@ def test_a_budget_nobody_hears_is_refused() -> None:
             compartment_id=COMPARTMENT_ID,
             compartment_name=COMPARTMENT_NAME,
             recipients=(),
+            alert_rules=ALERT_RULES,
         )

@@ -107,14 +107,14 @@ def barman_scope(namespace: str) -> Scope:
     return Scope(name=f'cnpg-{namespace}', prefix=conventions.barman_repo_path(namespace, ''))
 
 
-#: The consumers that exist whether or not any application does. Everything
-#: else is per namespace and arrives from the caller, because the census of
-#: namespaces is not this module's to know.
-CLUSTER_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
-
-
 class BackupBucket(Component):
-    """The backup bucket, its version-retention rule, and one key per consumer."""
+    """The backup bucket, its version-retention rule, and one key per consumer.
+
+    `scopes` is the roll of consumers, and it arrives from the caller: which
+    namespaces exist is not this module's to know, and the one consumer that
+    exists whether or not any application does is no more this module's than
+    the rest.
+    """
 
     def __init__(
         self,
@@ -124,7 +124,7 @@ class BackupBucket(Component):
         bucket_name: str = conventions.BUCKET_BACKUP,
         retention_days: int = conventions.BACKUP_VERSION_RETENTION_DAYS,
         unfinished_upload_days: int = UNFINISHED_UPLOAD_DAYS,
-        scopes: Sequence[Scope] = CLUSTER_SCOPES,
+        scopes: Sequence[Scope],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         _check(scopes)

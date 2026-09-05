@@ -185,7 +185,7 @@ def test_the_following_volume_is_wherever_the_dedicated_vip_is() -> None:
 
     assert hath.node is conventions.FOLLOWS_DEDICATED_VIP
     assert hath.attached_node == DEDICATED_VIP
-    assert conventions.NodeVolume(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
+    assert conventions.NodeVolumeEntry(node='cp3', size_gb=1, mount='/var/mnt/elsewhere').attached_node == 'cp3'
 
 
 def test_the_block_quota_admits_the_largest_volume_and_a_restore_beside_it() -> None:

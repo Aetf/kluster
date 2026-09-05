@@ -33,7 +33,8 @@ read it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from ipaddress import IPv4Address, IPv6Address
 
 import pulumi
 
@@ -74,6 +75,7 @@ class Gateway(Component):
         keys: Sequence[PublicKey],
         site: str,
         worker_gua: pulumi.Input[str] | None,
+        static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         """Declare the gateway.
@@ -103,6 +105,10 @@ class Gateway(Component):
         address is formed by SLAAC off the very network the firewall census
         declares — and it means the pinhole is not declared at all, leaving the
         worker's IPv6 outbound-only.
+
+        `static_hosts` is the site's roll of literal name-to-address entries on
+        the device's own resolver, passed through to the firewall component
+        that declares them.
         """
         super().__init__(name, opts=opts)
         connection = Connection(
@@ -172,6 +178,7 @@ class Gateway(Component):
             api_url=f'https://{host}',
             site=site,
             worker_gua=worker_gua,
+            static_hosts=static_hosts,
             opts=self.child_opts(),
         )
 

@@ -42,7 +42,7 @@ FOLLOWS_DEDICATED_VIP = FollowsDedicatedVip()
 
 
 @dataclass(frozen=True)
-class NodeVolume:
+class NodeVolumeEntry:
     """A block volume attached to one node, and where that node mounts it.
 
     `node` names a node of the fleet, or `FOLLOWS_DEDICATED_VIP` where the
@@ -76,9 +76,9 @@ class NodeVolume:
 #: syncs it. The invariants the type cannot carry — a node the fleet declares,
 #: a mount claimed once, at most one volume per node — are held by tests, after
 #: the sentinel resolves.
-NODE_VOLUMES: Mapping[str, NodeVolume] = {
-    'hath-cache': NodeVolume(node=FOLLOWS_DEDICATED_VIP, size_gb=50, mount='/var/mnt/hath-cache'),
-    'syncthing-replica': NodeVolume(node='cp2', size_gb=110, mount='/var/mnt/syncthing-replica'),
+NODE_VOLUMES: Mapping[str, NodeVolumeEntry] = {
+    'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=50, mount='/var/mnt/hath-cache'),
+    'syncthing-replica': NodeVolumeEntry(node='cp2', size_gb=110, mount='/var/mnt/syncthing-replica'),
 }
 
 #: Lower Cost (0 VPUs/GB) is the tier the storage budget is written against:

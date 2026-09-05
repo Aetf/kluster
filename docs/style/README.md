@@ -65,6 +65,17 @@ sentence that goes **false** as the set grows into one that goes
 it finds more than was promised instead of hunting for something that
 is no longer there.
 
+**A count in a comment is a claim about a list the reader cannot see.**
+The rule above is about prose whose members sit in the same document,
+where a reader verifies the number on the spot. A comment counts a body
+of code instead — declarations spread down a file, some of them
+conditional — and nothing brings the two together: the comment is read
+where it stands, the code changes where it stands, and a reader who
+disagrees with the number has no way to tell which of them is wrong.
+Name the members, or point at the list, and let the code be the census:
+"the pinhole is the only conditional policy", not "ten rules, one
+forward".
+
 **A count that belongs to another document is never restated**,
 wherever that document keeps it and however close its own members sit
 to it there. The two failures are not the same failure: a stale count

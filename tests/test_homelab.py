@@ -117,6 +117,7 @@ def build(**kwargs: Any) -> Any:
     from kluster.components.homelab import HomelabHost
 
     kwargs.setdefault('cluster', build_cluster())
+    kwargs.setdefault('host', str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address))
     kwargs.setdefault('storage_dir', STORAGE_DIR)
     kwargs.setdefault('bridge', BRIDGE)
     kwargs.setdefault('vcpus', VCPUS)
@@ -480,11 +481,10 @@ def test_the_paths_in_the_uri_are_relative_to_the_checkout(tmp_path: Path) -> No
 async def test_the_session_credential_is_read_where_the_provider_is_built(tmp_path: Path) -> None:
     """The key configures this provider and reaches nothing else.
 
-    It is not a parameter of the component, and neither is the endpoint: a
-    credential that exists only to open a connection is read at the line that
-    opens it (rfc-002 §8.1), and where that connection goes is derived from the
-    roster. What the stack program passes is what the host *is*, not how to
-    reach it.
+    A credential that exists only to open a connection is read at the line that
+    opens it (rfc-002 §8.1), so it is not a parameter of the component. Where
+    the connection goes is: `host` is an ordinary input, and the stack program
+    reads it off the roster.
     """
     from kluster.components import homelab
 

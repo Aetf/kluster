@@ -1,12 +1,13 @@
 """
 Pulumi/asyncio helpers.
 
-Most of this just deals with annoying boilerplate (@task, @background).
+`task` and `background` wrap the boilerplate of running a coroutine or a
+blocking call from Pulumi's event loop. `async_output` and `resolve` bridge
+native async/await with Pulumi outputs; see
+docs/rfc/rfc-001-native-async-inputs.md.
 
-`async_output` and `resolve` bridge native async/await with Pulumi outputs;
-see docs/rfc/rfc-001-native-async-inputs.md.
-
-From https://github.com/dingbots/putils/blob/master/putils/aws.py
+Derived from https://github.com/dingbots/putils/blob/master/putils/aws.py,
+which is where the shape of `task` and `background` comes from.
 """
 
 import asyncio

@@ -82,7 +82,7 @@ __all__ = ('LIBVIRT_USER', 'PRIVATE_KEY', 'HomelabHost', 'connection_uri', 'slot
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the stylesheet travels with the code that reads it
 #: (rfc-002 §9.1).
-_PACKAGE = 'kluster.components.homelab'
+_TEMPLATE_PACKAGE = 'kluster.components.homelab'
 
 #: Memory is quoted in GiB (nodes.md §4.2) and libvirt domains are sized in
 #: MiB. Disk sizes have no counterpart here: a volume created from a source
@@ -241,7 +241,7 @@ def disk_tuning_xslt() -> str:
     names is `DISK_FORMAT`, which the volume is created with, and the suite
     holds the two in step.
     """
-    return templates.load(_PACKAGE, 'templates/disk-tuning.xslt')
+    return templates.load(_TEMPLATE_PACKAGE, 'templates/disk-tuning.xslt')
 
 
 def seed_metadata(hostname: str) -> str:
@@ -265,11 +265,14 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
 
     The libvirt session is this component's own, so the credential that opens
     it — `libvirtPrivateKey` — is read here, at the line that builds the
-    provider (rfc-002 §8.1), and appears in no signature above or below. The
-    endpoint it dials is derived the same way: the host's address is the one
-    the overlay roster assigns it, and the rest of the URI is a property of the
-    machine running the program (`connection_uri`).
+    provider (rfc-002 §8.1), and appears in no signature above or below. Only
+    the credential: where the host answers is an ordinary input, and the rest
+    of the URI is a property of the machine running the program
+    (`connection_uri`).
 
+    :param host: where the libvirt session dials the host — the address the
+        overlay roster assigns it. A parameter like the other four facts about
+        the machine, because a component receives what it is declared against.
     :param cluster: the day-0 chain. The worker's configuration and the
         secrets the seed carries come out of the same place, so the component
         takes the cluster whole rather than a rendered string.
@@ -286,6 +289,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         name: str,
         *,
         cluster: TalosCluster,
+        host: str,
         storage_dir: pulumi.Input[str],
         bridge: pulumi.Input[str],
         vcpus: int,
@@ -303,7 +307,7 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
         provider = libvirt.Provider(
             f'{name}-libvirt',
             uri=connection_uri(
-                host=str(conventions.overlay.member(conventions.overlay.MEMBER_HOMELAB).address),
+                host=host,
                 private_key=pulumi.Config().require(PRIVATE_KEY),
             ),
             opts=own_provider_opts(opts),
