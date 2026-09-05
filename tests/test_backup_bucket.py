@@ -59,13 +59,14 @@ async def monitor() -> B2:
     return await run_with(B2(), stack='physical')
 
 
-#: What the `physical` stack hands the bucket when no application has declared
-#: a scope of its own. Stated here rather than imported, because the roll is
-#: the caller's and this suite is one of the callers.
-CLUSTER_SCOPES: tuple[Scope, ...] = (etcd_scope(),)
+#: One consumer, which is the shape the assertions below are written against:
+#: a bucket whose whole key set is known, so that "every key" can be checked
+#: against a set stated in the test rather than read back off the component.
+#: The roll is the caller's, and this suite is one of the callers.
+SCOPES: tuple[Scope, ...] = (etcd_scope(),)
 
 
-def build(scopes: Sequence[Scope] = CLUSTER_SCOPES) -> BackupBucket:
+def build(scopes: Sequence[Scope] = SCOPES) -> BackupBucket:
     return BackupBucket('kluster', region=REGION, scopes=scopes)
 
 
@@ -89,7 +90,7 @@ async def test_no_key_can_delete_a_file() -> None:
 @pytest.mark.asyncio
 async def test_a_writer_key_can_still_read_its_own_index() -> None:
     bucket = build()
-    assert set(bucket.keys) == {scope.name for scope in CLUSTER_SCOPES}
+    assert set(bucket.keys) == {scope.name for scope in SCOPES}
 
     for key in bucket.keys.values():
         capabilities = await key.capabilities.future()
@@ -161,7 +162,7 @@ async def test_the_bucket_is_private_and_protected() -> None:
 @pytest.mark.asyncio
 async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
     bucket = build()
-    assert set(bucket.keys) == {scope.name for scope in CLUSTER_SCOPES}
+    assert set(bucket.keys) == {scope.name for scope in SCOPES}
 
     for key in bucket.keys.values():
         # Rotation is a mint and a retire; protection would make the routine

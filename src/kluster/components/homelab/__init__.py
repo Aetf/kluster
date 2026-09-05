@@ -271,8 +271,8 @@ class HomelabHost(Component, pulumi_type='kluster:physical:HomelabHost'):
     (`connection_uri`).
 
     :param host: where the libvirt session dials the host — the address the
-        overlay roster assigns it. A parameter like the other four facts about
-        the machine, because a component receives what it is declared against.
+        overlay roster assigns it. A parameter like every other fact about the
+        machine, because a component receives what it is declared against.
     :param cluster: the day-0 chain. The worker's configuration and the
         secrets the seed carries come out of the same place, so the component
         takes the cluster whole rather than a rendered string.

@@ -237,9 +237,11 @@ async def test_the_stack_declares_every_domain_of_the_design(setup: Installation
     assert set(DOMAIN_PROVIDERS) <= families
 
 
-#: Every census this program hands down, as the component that receives it and
-#: the parameter it arrives on. Stated rather than discovered, because what
-#: makes a table a census is what it says and not how it is typed.
+#: The census parameters the rule below was written for, as the component that
+#: receives one and the parameter it arrives on. Stated rather than discovered,
+#: because what makes a table a census is what it says and not how it is typed,
+#: and added to by hand when a component gains one — this program hands down
+#: other rolls that are not listed here.
 CENSUS_PARAMETERS = (
     (SiteFirewall, 'static_hosts'),
     (Gateway, 'static_hosts'),

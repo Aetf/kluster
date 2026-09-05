@@ -72,10 +72,10 @@ OCI_USER_OCID = 'ociUserOcid'
 OCI_FINGERPRINT = 'ociFingerprint'
 OCI_PRIVATE_KEY = 'ociPrivateKey'
 
-#: The rest of what this program reads out of stack configuration: the audience
-#: for the budget's alerts, the certificate account the gateway buys its own TLS
-#: with, the password on its BGP session, and the worker's global IPv6 address
-#: once the advertisement it is formed from has been seen.
+#: Further stack configuration this program reads: the audience for the
+#: budget's alerts, the certificate account the gateway buys its own TLS with,
+#: the password on its BGP session, and the worker's global IPv6 address once
+#: the advertisement it is formed from has been seen.
 BUDGET_ALERT_RECIPIENTS = 'budgetAlertRecipients'
 GATEWAY_ACME_TOKEN = 'gatewayAcmeToken'
 GATEWAY_BGP_PASSWORD = 'gatewayBgpPassword'

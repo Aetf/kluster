@@ -111,9 +111,9 @@ class BackupBucket(Component):
     """The backup bucket, its version-retention rule, and one key per consumer.
 
     `scopes` is the roll of consumers, and it arrives from the caller: which
-    namespaces exist is not this module's to know, and the one consumer that
-    exists whether or not any application does is no more this module's than
-    the rest.
+    namespaces exist is not this module's to know, and the consumers that exist
+    whether or not any application does are no more this module's than the
+    rest.
     """
 
     def __init__(
