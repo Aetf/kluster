@@ -337,7 +337,23 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
     assert 'lifecycle.environment' in dispatch.reached
 
 
-def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own() -> None:
+def refuses_a_stack_of_its_own(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    """`argv` is refused *for naming `--stack`*, rather than merely refused.
+
+    A bare `pytest.raises(SystemExit)` accepts any parse failure at all, so a
+    required flag added anywhere in the `derived` subparser satisfies it while
+    `--stack` goes unmentioned -- the case keeps its name and stops carrying
+    its claim. The exit status separates a usage error from the clean exit a
+    `--help` would make, and the message is the only place the flag appears.
+    """
+    with pytest.raises(SystemExit) as refusal:
+        _ = cli.build_parser().parse_args(argv)
+
+    assert refusal.value.code == 2
+    assert 'unrecognized arguments: --stack' in capsys.readouterr().err
+
+
+def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
     # What these three mint is named after the row -- one IAM user, one B2 key
     # name, one Cloudflare token -- and the mint retires every other credential
     # of that name, so a `--stack` would revoke the real stack's live
@@ -348,8 +364,7 @@ def test_a_row_named_after_its_consumer_takes_no_stack_of_its_own() -> None:
         ['derived', 'b2-management', 'mint', '--stack', 'elsewhere'],
         ['derived', 'cloudflare-gateway-acme', 'mint', '--stack', 'elsewhere'],
     ):
-        with pytest.raises(SystemExit):
-            _ = cli.build_parser().parse_args(argv)
+        refuses_a_stack_of_its_own(argv, capsys)
 
 
 def test_the_fixed_rows_are_pushed_into_the_stack_they_are_named_after(dispatch: Dispatch) -> None:
@@ -394,11 +409,10 @@ def test_a_device_row_is_pushed_into_the_stack_its_table_names(dispatch: Dispatc
     assert 'lifecycle.environment' in dispatch.reached
 
 
-def test_a_device_row_takes_no_stack_of_its_own() -> None:
+def test_a_device_row_takes_no_stack_of_its_own(capsys: pytest.CaptureFixture[str]) -> None:
     # The credential authenticates against one device, and one stack talks to
     # that device; a `--stack` would deliver it where nothing checks it.
-    with pytest.raises(SystemExit):
-        _ = cli.build_parser().parse_args(['derived', 'unifi', 'record', '--stack', 'elsewhere'])
+    refuses_a_stack_of_its_own(['derived', 'unifi', 'record', '--stack', 'elsewhere'], capsys)
 
 
 def test_what_a_device_run_is_handed_reaches_the_delivery(dispatch: Dispatch, tmp_path: Path) -> None:

@@ -40,6 +40,12 @@ def test_a_networks_v6_prefix_is_numbered_after_the_third_octet_of_its_v4() -> N
     last group. Deriving it is what makes "a v4 subnet moved and its v6 left
     behind" — rules that match half a network — impossible to declare.
     """
+    # Both directions. Iterating the census and indexing the table only ever
+    # visits the networks the census still has, so *adding* one fails loudly on
+    # a missing key while *deleting* one is simply never reached -- the site
+    # loses a network and nothing anywhere notices.
+    assert {network.name for network in conventions.SITE_NETWORKS} == set(KNOWN_PREFIXES)
+
     for network in conventions.SITE_NETWORKS:
         assert network.v6 == KNOWN_PREFIXES[network.name]
         assert network.v6.subnet_of(conventions.SITE_ULA)

@@ -509,6 +509,12 @@ def _mint(api: FakeApi, _kit: KdbxStore) -> None:
 
 ADOPT_CALLS = _calls_made(_adopt)
 MINT_CALLS = _calls_made(_mint)
+# An operation that measures zero calls loses its whole sweep below and takes
+# no case with it -- the parametrization collects fewer, and nothing reports the
+# operation as unswept. Measuring is what keeps the sweep from being a number
+# anyone maintains; this is what keeps a measurement of zero from reading as an
+# operation with nothing to check.
+assert ADOPT_CALLS and MINT_CALLS, (ADOPT_CALLS, MINT_CALLS)
 
 #: Both ways a run can stop at call k (see `Faulty`).
 CRASH_POINTS = 'before', 'after'

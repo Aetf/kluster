@@ -5,6 +5,7 @@ its records, that the anchors carry the physical stack's addresses rather
 than literals, and that the rewrites are emitted from the route census.
 """
 
+from collections import Counter
 from typing import Any
 
 import pulumi
@@ -59,7 +60,16 @@ def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
 
 
 def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
-    assert set(stack.by_name(ZONE)) == set(conventions.ALL_ZONES)
+    """Once each, counted rather than gathered into a set.
+
+    A second declaration of one zone is a real failure mode -- two `ManagedZone`
+    components for one name -- and it is invisible to every record keyed by the
+    logical name, the second declaration merely overwriting the first. Only the
+    declarations themselves carry it.
+    """
+    assert Counter(declaration.name for declaration in stack.of_type(ZONE)) == {
+        zone: 1 for zone in conventions.ALL_ZONES
+    }
     account = conventions.CLOUDFLARE_ACCOUNT.account_id
     assert all(inputs['account'] == {'id': account} for inputs in stack.by_name(ZONE).values())
 

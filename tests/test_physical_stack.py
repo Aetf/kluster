@@ -13,6 +13,7 @@ leave a stack that comes up looking whole.
 """
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -928,7 +929,7 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: I
     async with declaring():
         await physical.main()
 
-    checked = 0
+    checked = Counter[str]()
     for declaration in setup.declared:
         # A provider resource's own type token is `pulumi:providers:<package>`,
         # so it never matches a package prefix and never checks itself.
@@ -936,9 +937,13 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: I
             if not declaration.typ.startswith(prefix):
                 continue
             assert provider in declaration.provider, f'{declaration.name} is not signed by {provider}'
-            checked += 1
-    # A run that declared nothing would pass the loop above vacuously.
-    assert checked >= len(SIGNED_BY)
+            checked[prefix] += 1
+
+    # Per family, because a total is met by whichever family has the most
+    # resources: a stack that declared nothing at all under one package would
+    # pass a total of five on its OCI resources alone, and the family that
+    # vanished is the one nothing then says anything about.
+    assert set(checked) == set(SIGNED_BY), checked
 
 
 @pytest.mark.asyncio
