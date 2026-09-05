@@ -21,6 +21,9 @@ from kluster.scripts.credentials import pulumi_config
 
 STACK = 'dns'
 SECRET = 'a-minted-token'
+#: A qualified key, standing for any of them: what this suite exercises is the
+#: machinery every push shares, so it names no register row of its own.
+QUALIFIED_KEY = 'example:aSecret'
 #: The throwaway project the live tests write into. Its name is the namespace
 #: `pulumi` gives an unqualified config key, so the tests read it from here
 #: rather than assuming this repository's own project name.
@@ -58,12 +61,12 @@ def test_an_existing_stack_is_left_alone(recorded: tuple[pulumi_config.Stack, Re
 def test_a_secret_is_written_and_read_back(recorded: tuple[pulumi_config.Stack, RecordedPulumi]) -> None:
     stack, runner = recorded
 
-    stack.set_secret('cloudflare:apiToken', SECRET)
+    stack.set_secret(QUALIFIED_KEY, SECRET)
 
     # The file gains ciphertext whatever happens, so decrypting it again is
     # the only thing that distinguishes a delivered credential from a lost one.
-    assert runner.config['cloudflare:apiToken'] == SECRET
-    assert ['config', 'get', 'cloudflare:apiToken', '--stack', STACK] in runner.invocations
+    assert runner.config[QUALIFIED_KEY] == SECRET
+    assert ['config', 'get', QUALIFIED_KEY, '--stack', STACK] in runner.invocations
 
 
 def test_a_slot_that_does_not_keep_the_value_is_a_failure(
@@ -73,7 +76,7 @@ def test_a_slot_that_does_not_keep_the_value_is_a_failure(
     runner.corrupts = True
 
     with pytest.raises(pulumi_config.SlotRefused, match='does not decrypt'):
-        stack.set_secret('cloudflare:apiToken', SECRET)
+        stack.set_secret(QUALIFIED_KEY, SECRET)
 
 
 def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:
@@ -110,7 +113,7 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     live_stack.ensure()
     live_stack.ensure()
 
-    live_stack.set_secret('cloudflare:apiToken', SECRET)
+    live_stack.set_secret(QUALIFIED_KEY, SECRET)
     live_stack.set('anIdentifier', 'account-1')
 
     # What the operator commits: ciphertext for the token, plain text for the
@@ -121,7 +124,7 @@ def test_the_real_cli_takes_a_secret_on_standard_input(live_stack: pulumi_config
     assert 'secure:' in committed
     assert SECRET not in committed
     assert f'{PROJECT}:anIdentifier: account-1' in committed
-    assert live_stack.get('cloudflare:apiToken') == SECRET
+    assert live_stack.get(QUALIFIED_KEY) == SECRET
 
 
 def test_a_failing_invocation_names_the_command(tmp_path: Path) -> None:

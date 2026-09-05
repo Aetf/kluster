@@ -2,9 +2,8 @@ encryptionsalt: v1:WkIr5Qn+4pI=:v1:dUgXYsKsTuXvjRq1:yO4cFptPIhkqZeN8JxYnACmCddVq
 config:
   pulumi:disable-default-providers:
     - cloudflare
-  cloudflare:apiToken:
+  kluster-py:cloudflareApiToken:
     secure: v1:Mvco7yk+WciKtog3:DmEnmE1QbwTyTIqJUiuD/KWJeMXrE04C2yry4yX1DIhyO1KdzDIaqP1kAmECRkiynGlDUkkeM+RESthdcY5GdRYrBKhQ
-  kluster-py:cloudflareAccountId: c452df7ed633d2335c980bd7cc46a550
   kluster-py:adguardUsername:
     secure: v1:v0S9CXrtbCmD6lIz:j+FA3gz2oL6QK+C+/AA5+2yBpUI=
   kluster-py:adguardPassword:

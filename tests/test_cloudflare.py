@@ -237,9 +237,8 @@ def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
 
     # Read as an empty string it would satisfy "the zones are all in one
-    # account" and then be written into a stack's committed configuration as
-    # the account id, where nothing ever refuses it. The listing refuses it
-    # instead, before a token is minted against it.
+    # account" and be handed to the caller as the account the token was minted
+    # in. The listing refuses it instead, before a token is minted against it.
     with pytest.raises(CredentialRejected, match='account: the answer carries no id'):
         _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
     assert not _named(api, STACK_TOKEN)
@@ -330,8 +329,8 @@ def test_a_zone_without_an_account_is_refused_naming_the_entry() -> None:
         {'id': 'zone-2', 'name': 'other.test', 'account': {'name': 'installation'}},
     ]
 
-    # Which call, which row, which field: the account id reaches a stack's
-    # committed configuration, so the entry that lacks one is named.
+    # Which call, which row, which field: the account id is what the mint is
+    # held to, so the entry that lacks one is named.
     with pytest.raises(payload.ResponseRejected, match=r'GET /zones\[1\]\.account: the answer carries no id'):
         _ = cloudflare._listed_zones(answer)  # pyright: ignore[reportPrivateUsage]
 

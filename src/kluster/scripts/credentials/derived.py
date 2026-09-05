@@ -26,6 +26,7 @@ from pathlib import Path
 from ... import conventions
 from . import b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
 from .kdbx import KdbxStore
+from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
 
@@ -62,24 +63,30 @@ GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
 #: instead, so a vhost moved to another zone fails there.
 GATEWAY_ACME_ZONES = (conventions.ZONE_PRIMARY, conventions.ZONE_SHORT)
 
-#: Where the Cloudflare provider reads its credential, and where the program
-#: reads the account that owns the zones. The provider's key is a secret; the
-#: account id is an identifier the committed file may carry in plain text.
+#: Where the `dns` stack reads the Cloudflare provider's credential. Bare, and
+#: therefore in this project's own namespace: `pulumi config set` prefixes an
+#: unqualified key with the project's name, which is the same name
+#: `pulumi.Config()` resolves against inside the program. Spelling that prefix
+#: out here would be a second place for the project name to live, and the place
+#: it could be wrong.
 #:
-#: The provider key is namespaced to the provider, as the provider requires.
-#: The account id belongs to this project's own namespace, and is therefore
-#: written bare: `pulumi config set` prefixes an unqualified key with the
-#: project's name, which is the same name `pulumi.Config()` resolves against
-#: inside the program. Spelling that prefix out here would be a second place
-#: for the project name to live, and the place it could be wrong.
-API_TOKEN_KEY = 'cloudflare:apiToken'
-ACCOUNT_KEY = 'cloudflareAccountId'
+#: The provider package's own `cloudflare:` namespace holds nothing. The stack
+#: builds its provider from this value rather than being handed one by ambient
+#: configuration (rfc-002 §8.1), so the key belongs to the program that reads
+#: it and to no provider — and a key that did sit in the provider's namespace
+#: would be indistinguishable from the ambient configuration this repository
+#: has removed everywhere else.
+#:
+#: The account those zones live in is not delivered beside it: it names the
+#: account rather than opening it, so it is `conventions.CLOUDFLARE_ACCOUNT`
+#: and the mint proves the token it issues was minted there.
+API_TOKEN_KEY = 'cloudflareApiToken'
 
 #: Where the `physical` stack reads the gateway's ACME token before writing it
 #: onto the device beside the nspawn unit it belongs to
 #: (`components/gateway/container.py`).
-#: Bare, and therefore in this project's namespace, for the reason the account
-#: id above is: nothing but this repository's own programs read it, and the
+#: Bare, and therefore in this project's namespace, for the reason the zones
+#: token above is: nothing but this repository's own programs read it, and the
 #: prefix `pulumi config set` applies is the one `pulumi.Config()` resolves
 #: against.
 GATEWAY_ACME_KEY = 'gatewayAcmeToken'
@@ -97,7 +104,7 @@ GATEWAY_ACME_KEY = 'gatewayAcmeToken'
 PHYSICAL_STACK = conventions.PHYSICAL
 
 #: Where the `physical` stack reads the OCI signing configuration. Bare, and
-#: therefore in this project's namespace, for the reason the account id above
+#: therefore in this project's namespace, for the reason the zones token above
 #: is: the provider is built by the stack program from these values rather than
 #: configured by an ambient namespace (rfc-002 §8.1), so the keys belong to the
 #: program that reads them and to no provider.
@@ -133,24 +140,49 @@ OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 
 
-def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> str:
+def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> None:
     """Mint the zones token from the seed and install it in a stack's config.
 
     The scope is the installation's zones as `conventions` lists them, so adding
-    a zone there and re-running is the whole procedure for widening it. Returns
-    the account id it discovered, which the same push writes beside the token.
+    a zone there and re-running is the whole procedure for widening it.
+
+    The token is the whole of the delivery. Which account those zones live in
+    is a fact this program already holds (`conventions.CLOUDFLARE_ACCOUNT`),
+    and a fact with one home is not copied into a second — so what is left for
+    the mint is to prove the token it just issued was minted in that account,
+    and to refuse if it was not.
     """
     zones = conventions.ALL_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
     minted = cloudflare.mint_zone_token(session, name=ZONES_TOKEN_NAME, zones=zones)
+    _verify_account(minted.account_id)
 
     stack.fill(
         secret={API_TOKEN_KEY: minted.value},
-        plain={ACCOUNT_KEY: minted.account_id},
+        plain={},
         holds=f'a token scoped to {", ".join(zones)}',
     )
-    return minted.account_id
+
+
+def _verify_account(account_id: str) -> None:
+    """Hold a minted token's account against the one `conventions` records.
+
+    The two ways the recorded fact goes stale are a kit re-seeded from another
+    Cloudflare account and an identifier written down wrong, and both would
+    deliver a token for zones the stack does not declare into while the stack
+    keeps naming the account it does. Both are worth stopping over, and neither
+    is visible once the token is in the slot.
+    """
+    intended = conventions.CLOUDFLARE_ACCOUNT.account_id
+    if account_id != intended:
+        raise CredentialRejected(
+            f'the seed minted this token in the Cloudflare account {account_id}, but '
+            f'`conventions.CLOUDFLARE_ACCOUNT` records {intended} as the account this installation declares '
+            'into: one of the two is stale, and delivering the token would point the stack at zones it does '
+            'not manage'
+        )
+    log.info('the minted token is scoped inside %s, which is the account `conventions` records', account_id)
 
 
 def cloudflare_gateway_acme(
@@ -165,9 +197,10 @@ def cloudflare_gateway_acme(
     this is a second token from the same seed, scoped to `GATEWAY_ACME_ZONES`
     and to nothing else.
 
-    Only the token is delivered. The account id the mint discovers on the way
-    is the zones row's business — the consumer here is caddy, which signs with
-    the token and never names an account.
+    Only the token is delivered, and the account id the mint discovers on the
+    way is not even checked here: the consumer is caddy, which signs with the
+    token and never names an account. The zones row is where that identifier is
+    held against the recorded one.
 
     Which stack takes it is not a choice, for the reason `PHYSICAL_STACK`
     states: the token is named after this row and the mint retires every other

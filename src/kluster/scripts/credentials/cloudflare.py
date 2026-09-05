@@ -212,8 +212,8 @@ def _listed_zones(answer: object) -> tuple[Zone, ...]:
 
     The account is required of every zone rather than of the one a policy ends
     up naming: read as an empty string it would satisfy "the zones are all in
-    one account" and then be written into a stack's committed configuration as
-    the account id, where nothing ever refuses it.
+    one account" and be handed to the caller as the account the token was
+    minted in.
     """
     return tuple(
         Zone(zone_id=entry.text('id'), name=entry.text('name'), account_id=entry.nested('account').text('id'))
@@ -434,10 +434,9 @@ def mint_token(
 class ZoneToken:
     """A minted zones token and the two facts its consumer needs beside it.
 
-    The account id travels with the token because it is discovered on the way:
-    a stack that manages records in these zones is configured with the account
-    that owns them, and asking Cloudflare a second time could only produce a
-    second answer.
+    The account id is carried because `derived.cloudflare_zones` holds it
+    against `conventions.CLOUDFLARE_ACCOUNT`, and asking Cloudflare a second
+    time could only produce a second answer.
     """
 
     token_id: str
