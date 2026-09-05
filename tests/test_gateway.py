@@ -75,6 +75,7 @@ async def gateway(monitor: Controller) -> Gateway:
             keys=(CI_KEY,),
             site=SITE,
             worker_gua=None,
+            static_hosts={},
         )
     return device
 

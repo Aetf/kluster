@@ -1,11 +1,10 @@
 """The `github` stack: the forge itself — repositories, environments, gates.
 
-Everything CI runs inside is configuration too, and until now it existed only
-as console state: two repositories (`kluster`, `kluster-ops`), the per-stack
-Environments that partition the credentials (ci.md §3), which of them a
-reviewer gates, the branch protection that makes the zero-diff proof
-load-bearing, and the two single-purpose GitHub Apps. None of it was written
-down, so none of it could drift-check, review, or be rebuilt.
+Everything CI runs inside is configuration too, and it is declared here rather
+than left as console state: two repositories (`kluster`, `kluster-ops`), the
+per-stack Environments that partition the credentials (ci.md §3), which of them
+a reviewer gates, and the branch protection that makes the zero-diff proof
+load-bearing. Declared, it can be drift-checked, reviewed and rebuilt.
 
 **Applied from the operator's machine, never from CI.** The credential this
 stack needs can change branch protection and environment gates -- that is,

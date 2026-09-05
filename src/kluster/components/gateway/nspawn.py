@@ -65,6 +65,7 @@ the work to do.
 
 from __future__ import annotations
 
+import fnmatch
 import shlex
 import string
 from collections.abc import Sequence
@@ -90,6 +91,7 @@ __all__ = (
     'NSPAWN_SUFFIX',
     'NSPAWN_UNITS_SCRIPT',
     'REJECTED_SUFFIX',
+    'RESERVED_NAMES',
     'RESTART_DELAY',
     'RESTART_POLICY',
     'ROLLBACK_PROGRAM',
@@ -198,6 +200,13 @@ STATE = 'state'
 STAMP = 'stamp'
 NSPAWN_SUFFIX = '.nspawn'
 
+#: Those same names as the glob patterns a machine's own file is refused by.
+#: One list, so what `machine_file` refuses and what its refusal names cannot
+#: disagree. `rootfs*` covers the tree and the digest beside it; `*.nspawn` is
+#: every settings name and not only this machine's, because the mirror keys the
+#: live directory by machine name.
+RESERVED_NAMES = (STATE, STAMP, f'{ROOTFS}*', f'*{NSPAWN_SUFFIX}')
+
 #: What the push appends to a tree's path for the marker naming the pin that
 #: tree came from. Taken from the provider that writes it rather than restated,
 #: because a rollback takes the marker away with the swap and a suffix that
@@ -263,11 +272,10 @@ def machine_file(machine: str, name: str) -> str:
     installed under a name that names another machine, or removed as stale in
     the same run that installed it.
     """
-    reserved = (STATE, STAMP, f'*{NSPAWN_SUFFIX}')
-    if name in (STATE, STAMP) or name.startswith(ROOTFS) or name.endswith(NSPAWN_SUFFIX):
+    if any(fnmatch.fnmatchcase(name, pattern) for pattern in RESERVED_NAMES):
         raise ValueError(
             f'{name!r} is a name the nspawn runtime keeps under {machine_path(machine)}: '
-            f'{", ".join((*reserved, f"{ROOTFS}*"))} are the machine itself, not files it reads'
+            f'{", ".join(RESERVED_NAMES)} are the machine itself, not files it reads'
         )
     return f'{machine_path(machine)}/{name}'
 

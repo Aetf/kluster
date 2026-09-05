@@ -55,7 +55,13 @@ async def stack() -> Central:
     pulumi.runtime.set_all_config({f'kluster:{overlay_module.API_TOKEN}': API_TOKEN})
     monitor = await run_with(Central(), stack='physical')
     async with declaring():
-        overlay_module.Overlay(NAME, network_id=NETWORK_ID, flow_rules=RULES)
+        _ = overlay_module.Overlay(
+            NAME,
+            network_id=NETWORK_ID,
+            flow_rules=RULES,
+            roster=conventions.overlay.ROSTER,
+            managed_routes=conventions.overlay.MANAGED_ROUTES,
+        )
     return monitor
 
 

@@ -146,6 +146,24 @@ def test_each_artefact_keeps_its_own_type_token() -> None:
     assert image.TalosImage.__pulumi_type__ != image.TalosArtefact.__pulumi_type__
 
 
+def test_the_shared_base_cannot_be_built_on_its_own() -> None:
+    """The base opens the parent backstop's scope and declares no artefact.
+
+    Closing that scope is `register_outputs`, which the base runs after the
+    subclass has declared its artefact. A base built directly would therefore
+    leave the scope open, and the next resource declared without a parent —
+    including a sibling component the stack program builds afterwards — would
+    be refused in this component's name rather than its own.
+    """
+    with pytest.raises(TypeError, match='abstract'):
+        _ = image.TalosArtefact(  # pyright: ignore[reportAbstractUsage]
+            'kluster-artefact',
+            talos_version=TALOS_VERSION,
+            architecture='arm64',
+            platform='oracle',
+        )
+
+
 # -- where the artefact lands ------------------------------------------------
 
 

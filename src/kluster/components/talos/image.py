@@ -27,6 +27,7 @@ provider uploads into the pool over its own connection.
 
 from __future__ import annotations
 
+import abc
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +44,7 @@ from putils import Component, async_output, resolve
 #: The package `importlib.resources` resolves this module's `templates/`
 #: directory against, so the schematic document travels with the code that
 #: renders it (rfc-002 §9.1).
-_PACKAGE = 'kluster.components.talos'
+_TEMPLATE_PACKAGE = 'kluster.components.talos'
 
 #: The cloud nodes are ARM; the homelab worker is x86.
 CLOUD_ARCHITECTURE = 'arm64'
@@ -69,12 +70,18 @@ HOMELAB_EXTENSIONS = ('siderolabs/i915',)
 IMAGE_CACHE = Path('/var/tmp/kluster-talos-images')
 
 
-class TalosArtefact(Component):
+class TalosArtefact(Component, abc.ABC):
     """A pinned Image Factory schematic, and where the factory serves it.
 
-    The half both artefacts share. A subclass adds what is done with the URL:
-    imported into a cloud catalogue, or fetched onto the machine running the
-    program.
+    The half both artefacts share. A subclass supplies `_declare_artefact`,
+    which is what is done with the URL: imported into a cloud catalogue, or
+    fetched onto the machine running the program.
+
+    Abstract, and that is load-bearing rather than documentation. This class
+    opens the parent backstop's scope and the closing `register_outputs` is
+    here, after the subclass has declared its artefact, so the scope is closed
+    exactly once however the hierarchy grows — and a base built directly would
+    open a scope nothing closes.
     """
 
     def __init__(
@@ -97,6 +104,16 @@ class TalosArtefact(Component):
             schematic=_schematic_document(extensions),
             opts=self.child_opts(),
         )
+        self._declare_artefact(name)
+        self.register_outputs({})
+
+    @abc.abstractmethod
+    def _declare_artefact(self, name: str) -> None:
+        """Declare what this schematic's disk image becomes.
+
+        Called with the schematic already declared and the component still
+        open, so the resources it declares are this component's children.
+        """
 
     async def _disk_url(self) -> str:
         """The factory's disk image for this schematic, architecture and platform."""
@@ -134,6 +151,7 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
         platform: str = CLOUD_PLATFORM,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
+        self._compartment_id = compartment_id
         super().__init__(
             name,
             talos_version=talos_version,
@@ -143,9 +161,10 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
             opts=opts,
         )
 
+    def _declare_artefact(self, name: str) -> None:
         self.image = oci.core.Image(
             f'{name}-image',
-            compartment_id=compartment_id,
+            compartment_id=self._compartment_id,
             display_name=async_output(self._image_name),
             launch_mode='PARAVIRTUALIZED',
             image_source_details=oci.core.ImageImageSourceDetailsArgs(
@@ -158,8 +177,6 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
             # before anything stops using the old one.
             opts=self.child_opts(delete_before_replace=False),
         )
-
-        self.register_outputs({})
 
     async def _image_name(self) -> str:
         schematic_id = await resolve(self.schematic.id)
@@ -193,6 +210,7 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
             opts=opts,
         )
 
+    def _declare_artefact(self, name: str) -> None:
         self.artefact = FactoryImage(
             f'{name}-nocloud',
             url=async_output(self._disk_url),
@@ -201,8 +219,6 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
         )
         #: The decompressed image, where a libvirt volume can be created from it.
         self.path: pulumi.Output[str] = self.artefact.path
-
-        self.register_outputs({})
 
     async def _local_path(self) -> str:
         """Where this artefact lives locally, named by what it contains.
@@ -232,4 +248,4 @@ def _schematic_document(extensions: Sequence[str]) -> str:
     id and the id names every image built from it: re-spelling the document
     would rebuild artefacts that have not changed.
     """
-    return templates.render(_PACKAGE, 'templates/schematic.yaml.j2', _SchematicParams(extensions=extensions))
+    return templates.render(_TEMPLATE_PACKAGE, 'templates/schematic.yaml.j2', _SchematicParams(extensions=extensions))

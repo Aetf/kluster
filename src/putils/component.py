@@ -1,7 +1,6 @@
 """
-Base class dealing with the very annoying and grossly incomplete
-ComponentResource boilerplate, and the backstop that keeps a component's
-sub-resources attached to it.
+The base class that carries `ComponentResource`'s boilerplate, and the backstop
+that keeps a component's sub-resources attached to it.
 
 Sub-resources are created synchronously in ``__init__`` like plain Pulumi
 code; inputs that need async preparation are wrapped with `putils.async_output`.

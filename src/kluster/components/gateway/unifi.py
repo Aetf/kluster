@@ -92,7 +92,7 @@ import pulumi_unifi as unifi
 from kluster import conventions
 from putils import Component, own_provider_opts, with_provider
 
-__all__ = ('STATIC_HOSTS', 'SiteFirewall')
+__all__ = ('SiteFirewall',)
 
 #: The predefined zones of a UniFi OS 9 controller, looked up by name rather
 #: than by id: an id is per-site state, a name is stock. `Internal` holds
@@ -126,14 +126,6 @@ CLUSTER_SUBNET = f'{conventions.CLUSTER_VLAN.require_gateway()}/{conventions.CLU
 #: anything past that is a fault to report, not to grind against.
 HTTP_MAX_RETRIES = 2
 
-#: Static host entries on the device's own resolver. Empty, and that is the
-#: design: the device name plane is DHCP-derived and served by the gateway's
-#: resolver, while every service is named by its public hostname and steered
-#: by the split-horizon rewrites. An entry belongs here only when a name must
-#: resolve on the LAN with no lease behind it and no service plane to carry
-#: it — a fully-qualified name mapped to one literal address.
-STATIC_HOSTS: Mapping[str, IPv4Address | IPv6Address] = {}
-
 #: Where the controller's API key is read. A key belonging to a dedicated local
 #: administrator on the device, never the SSH credential, and read at the one
 #: line that uses it.
@@ -141,15 +133,20 @@ API_KEY = 'unifiApiKey'
 
 
 class SiteFirewall(Component):
-    """The cluster's network and zone, two address groups, ten rules, one forward.
+    """The cluster's network and zone, its address groups, its policies, one forward.
 
-    Nine rules while `worker_gua` is absent: the pinhole is one of the ten and
-    the only conditional one, naming an address nothing here declares, so it is
-    declared only once there is one.
+    The pinhole for the worker's global IPv6 address is the one conditional
+    policy: it names an address nothing here declares, so it exists only while
+    `worker_gua` does. Every other policy is unconditional, and the whole set
+    is the run of `unifi.FirewallPolicy` declarations below.
 
     Every policy carries the cluster's name in the name the controller shows,
     because the audience for that string is a person looking at the console
     rather than anything in this program.
+
+    `static_hosts` is the roll of names the device's own resolver answers for
+    literally, and it arrives from the caller: which names have no lease behind
+    them is a fact about the site rather than about the firewall.
     """
 
     def __init__(
@@ -159,7 +156,7 @@ class SiteFirewall(Component):
         api_url: str,
         site: str,
         worker_gua: pulumi.Input[str] | None,
-        static_hosts: Mapping[str, IPv4Address | IPv6Address] | None = None,
+        static_hosts: Mapping[str, IPv4Address | IPv6Address],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         # A provider of its own, rather than ambient configuration: this key
@@ -180,7 +177,6 @@ class SiteFirewall(Component):
         super().__init__(name, opts=with_provider(opts, provider))
         self.provider = provider
         self.site = site
-        hosts = STATIC_HOSTS if static_hosts is None else static_hosts
 
         child = self.child_opts()
         # An invoke inherits a provider only through a parent: given one it
@@ -525,7 +521,7 @@ class SiteFirewall(Component):
                 site=site,
                 opts=child,
             )
-            for host, address in hosts.items()
+            for host, address in static_hosts.items()
         }
 
         self.register_outputs({})

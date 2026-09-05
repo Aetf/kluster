@@ -12,6 +12,7 @@ what the run registered, because a domain that quietly declared nothing would
 leave a stack that comes up looking whole.
 """
 
+import inspect
 import json
 from collections import Counter
 from pathlib import Path
@@ -26,9 +27,12 @@ from mock_monitor import Recorder, declaring, run_with
 from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.components import homelab
+from kluster.components.backup import BackupBucket
 from kluster.components.cloud import nodes
-from kluster.components.gateway import access, nspawn, persistence
-from kluster.components.overlay import flow_rules
+from kluster.components.cloud.guardrails import Guardrails
+from kluster.components.gateway import Gateway, access, nspawn, persistence
+from kluster.components.gateway.unifi import SiteFirewall
+from kluster.components.overlay import Overlay, flow_rules
 from kluster.lib import workstation
 from kluster.stacks import physical
 
@@ -233,6 +237,36 @@ async def test_the_stack_declares_every_domain_of_the_design(setup: Installation
     assert set(DOMAIN_PROVIDERS) <= families
 
 
+#: Every census this program hands down, as the component that receives it and
+#: the parameter it arrives on. Stated rather than discovered, because what
+#: makes a table a census is what it says and not how it is typed.
+CENSUS_PARAMETERS = (
+    (SiteFirewall, 'static_hosts'),
+    (Gateway, 'static_hosts'),
+    (BackupBucket, 'scopes'),
+    (Guardrails, 'alert_rules'),
+    (Overlay, 'roster'),
+    (Overlay, 'managed_routes'),
+)
+
+
+def test_no_census_parameter_carries_a_default() -> None:
+    """A census lives beside the component that receives it, never inside it.
+
+    A default is the loophole that lets it live in both places at once: the
+    signature reads as though the caller decides, while a caller that passes
+    nothing gets the roll the component chose. So the parameter is required,
+    and a component with nothing to declare is handed an empty roll explicitly.
+    """
+    for component, parameter in CENSUS_PARAMETERS:
+        default = inspect.signature(component.__init__).parameters[parameter].default
+        assert default is inspect.Parameter.empty, (
+            f'{component.__name__}.{parameter} defaults to {default!r}: a census parameter has no default '
+            f'(style/pulumi.md), because a default is a roll the component owns behind a signature that says '
+            f'it does not'
+        )
+
+
 @pytest.mark.asyncio
 async def test_the_controller_is_dialled_where_the_roster_placed_the_gateway(setup: Installation) -> None:
     """The controller's address is derived, not recorded beside its key.
@@ -302,6 +336,23 @@ async def test_the_cluster_zone_is_opened_to_the_home_with_the_iot_vlan_carved_o
         f'{name}-internal-cluster_id',
     ]
     assert setup.inputs_of(f'{name}-cluster-internal-order')['beforePredefinedIds'] == [f'{name}-cluster-internal_id']
+
+
+@pytest.mark.asyncio
+async def test_the_site_resolver_is_given_no_static_host(setup: Installation) -> None:
+    """The device name plane is DHCP-derived, so the roll of literal names is empty.
+
+    Empty and passed anyway: the component has no roll of its own to fall back
+    to, so a run declares a controller DNS record only for an entry this
+    program states. A name belongs in it when it must resolve on the LAN with
+    no lease behind it and no service plane to carry it.
+    """
+    assert physical.GATEWAY_STATIC_HOSTS == {}
+
+    async with declaring():
+        await physical.main()
+
+    assert [typ for typ in setup.types if 'dnsRecord' in typ] == []
 
 
 @pytest.mark.asyncio

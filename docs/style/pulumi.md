@@ -95,6 +95,18 @@ requires specific entries, the requirement is in its parameter types or
 validated loudly at its boundary — not implied by which keys it happens
 to look up.
 
+**A census parameter has no default.** Making the roll the default value
+of the parameter that receives it satisfies the rule above to the letter
+and defeats it: the signature reads as though the caller decides, while
+a caller that passes nothing gets the table the component chose, and the
+review question "is this table beside the component that receives it" is
+answered yes by a component that behaves no. So the parameter is
+required. A component with nothing to declare is handed an empty roll
+explicitly; one whose roll no caller would ever vary keeps neither the
+parameter nor the mechanism behind it, because an unused mechanism
+driven by a table nobody can change is dead code rather than an
+extension point.
+
 **A census is declared in the terms of this installation, not of the
 provider it is pushed to.** Where a table's natural statement is "these
 things, in these places", the unit is that statement — the group and the
@@ -150,7 +162,8 @@ The architecture reviewer's standing questions, for the review stage
 -   Is every new config key read at the right layer, and is every new
     constant a decision in the right home?
 -   Is every new table written in this installation's terms, with the
-    provider's per-member form derived rather than written out?
+    provider's per-member form derived rather than written out, and does
+    every census parameter arrive without a default?
 -   Does every new resource hang off the right component, with
     providers inherited rather than re-plumbed?
 -   Would the diff's names survive the "no metaphor, one term per

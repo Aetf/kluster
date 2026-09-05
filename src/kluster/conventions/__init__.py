@@ -16,12 +16,11 @@ not parse (rfc-002 §10.1). Most of the surface is re-exported here, so a reader
 says `conventions.X` and does not have to know which domain owns `X`.
 
 **Four domains are read qualified instead**: `conventions.gateway`,
-`conventions.overlay`, `conventions.forge` and `conventions.routes`. The first
-two's names used to carry a `GW_`/`ZT_` prefix so that a flat namespace could
-hold them, and the prefix is what the module path now says (rfc-002 §3.1) —
-`conventions.overlay.ROSTER`, `conventions.gateway.SERVICES`. It is also the
-distinction the naming rules care about most: which network a name belongs to
-is never a thing to guess. `forge` and `routes` are qualified from the other
+`conventions.overlay`, `conventions.forge` and `conventions.routes`. For the
+first two the module path carries what a prefix otherwise would (rfc-002
+§3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES` — and it
+is the distinction the naming rules care about most: which network a name
+belongs to is never a thing to guess. `forge` and `routes` are qualified from the other
 side: their names are common nouns — `Repository`, `Environment`, `Account`;
 `Route`, `Extra`, `SELF` — that mean one particular thing only while the forge
 or the census stands beside them.
@@ -56,7 +55,7 @@ from kluster.conventions.cloud import (
     VCN_CIDR,
     VCN_SUBNET_CIDR,
     FollowsDedicatedVip,
-    NodeVolume,
+    NodeVolumeEntry,
 )
 from kluster.conventions.cluster import (
     CLUSTER_ASN,
@@ -207,7 +206,7 @@ __all__ = (
     'Compartment',
     'CompartmentMissing',
     'FollowsDedicatedVip',
-    'NodeVolume',
+    'NodeVolumeEntry',
     'OciTenancy',
     'RetentionClass',
     'SiteNetwork',

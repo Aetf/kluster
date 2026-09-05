@@ -65,7 +65,8 @@ OBJECT_STORAGE_GB = 250
 #: A month's spend the design already accepts: the A1 fleet under the
 #: conservative half of the free allowance, plus the block storage past 200 GB
 #: (nodes.md §3.2). Alerts fire against this, in whole units of the tenancy's
-#: currency.
+#: currency. Not a parameter: there is one tenancy and no caller has a second
+#: opinion about what its month costs.
 BUDGET_AMOUNT = 25
 
 
@@ -85,21 +86,6 @@ class AlertRule:
         return 'FORECAST' if self.forecast else 'ACTUAL'
 
 
-#: Three rules, each answering a different question. Half-way through the
-#: month is "something changed"; at the budget is "it already happened"; the
-#: forecast is the only one that can arrive while there is still time to act.
-ALERT_RULES: tuple[AlertRule, ...] = (
-    AlertRule(name='half', threshold=50, message='Half of the monthly cloud budget is spent.'),
-    AlertRule(name='full', threshold=100, message='The monthly cloud budget is spent.'),
-    AlertRule(
-        name='forecast',
-        threshold=100,
-        message='This month is forecast to end over the cloud budget.',
-        forecast=True,
-    ),
-)
-
-
 class Guardrails(Component):
     """The compartment's quota policy, its budget, and the budget's alerts.
 
@@ -108,6 +94,10 @@ class Guardrails(Component):
     *name* the compartment they act on rather than living inside it. The
     compartment is therefore needed twice — by OCID for the budget's target,
     and by name for the quota statements, whose language has no OCIDs.
+
+    `alert_rules` is the roll of alerts the budget carries, and it arrives from
+    the caller: what is worth being told about spending is a decision of the
+    installation rather than of the mechanism that reports it.
     """
 
     def __init__(
@@ -118,8 +108,7 @@ class Guardrails(Component):
         compartment_id: pulumi.Input[str],
         compartment_name: str,
         recipients: Sequence[str],
-        budget_amount: int = BUDGET_AMOUNT,
-        alert_rules: Sequence[AlertRule] = ALERT_RULES,
+        alert_rules: Sequence[AlertRule],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -142,7 +131,7 @@ class Guardrails(Component):
             compartment_id=tenancy_id,
             display_name=f'{name}-budget',
             description='Monthly spend on the cluster compartment',
-            amount=budget_amount,
+            amount=BUDGET_AMOUNT,
             reset_period='MONTHLY',
             target_type='COMPARTMENT',
             targets=[compartment_id],

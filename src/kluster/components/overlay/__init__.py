@@ -14,15 +14,16 @@ Three things are declared here, and each answers a different question
 -   **Membership** — who is authorized, at what address, carrying which role
     tag. Membership is the authentication boundary for traffic the gateway's
     own firewall never classifies, so it is not bookkeeping: it is the
-    admission decision. *Who* may be on the network is not decided here — the
-    roster is `conventions.overlay.ROSTER`, because the `dns` stack publishes the
-    `*.zt` host block from the same table — and this module is what turns that
-    decision into authorized members.
+    admission decision. *Who* may be on the network is not decided here: the
+    roster arrives as a parameter, and it lives in `conventions.overlay.ROSTER`
+    because the `dns` stack publishes the `*.zt` host block from the same table.
+    This module is what turns that decision into authorized members.
 -   **The managed routes** — which of the home's subnets the overlay carries,
     all of them through the gateway's own member, which is the one machine that
-    was already routing them. A route is `{target, via}` on the network and
-    nothing more: `via` names a member, and that member forwards only because
-    forwarding is configured on the device itself. That is why the gateway's
+    was already routing them. Which subnets those are arrives as a parameter
+    too, from the address plan in `conventions`. A route is `{target, via}` on
+    the network and nothing more: `via` names a member, and that member forwards
+    only because forwarding is configured on the device itself. That is why the gateway's
     routing configuration is `SiteRouting`'s file on the box and only the
     route table is here — two systems being told two different things
     (gateway.md §2.2).
@@ -57,6 +58,9 @@ over v6 that it cannot reach over v4.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from ipaddress import IPv4Network
+
 import pulumi
 import pulumi_zerotier as zerotier
 
@@ -84,6 +88,12 @@ class Overlay(Component):
     `flow_rules` is the rule program the network carries, composed by the
     caller: what a member may do once admitted is not this component's
     decision (rfc-002 §6).
+
+    `roster` and `managed_routes` are the censuses this component turns into
+    resources, and both arrive from the caller: a component receives the census
+    it acts on rather than reading one for itself. They live in `conventions`
+    rather than in the stack program because the `dns` stack publishes the
+    `*.zt` host block from the same roster.
     """
 
     def __init__(
@@ -92,21 +102,23 @@ class Overlay(Component):
         *,
         network_id: str,
         flow_rules: str,
+        roster: Sequence[conventions.overlay.RosterEntry],
+        managed_routes: Sequence[IPv4Network],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         # A provider of its own: this token administers the whole ZeroTier
         # account, Central minting nothing smaller, so the resources it may
         # reach are exactly the ones below — and it is read here, at the line
-        # that builds the provider, rather than threaded in from above. It is
-        # marked secret here rather than left to the bridged SDK, which --
-        # unlike the controller's -- does not classify its own credential, and
-        # an unclassified provider setting is written to state in plain text.
+        # that builds the provider, rather than threaded in from above. What
+        # keeps it out of state in the clear is `require_secret`, which returns
+        # a secret output; a second wrapping here would read as the mechanism
+        # without being it.
         #
         # Built before the component registers, because a provider reaches a
         # subtree through the options the component is registered with.
         provider = zerotier.Provider(
             f'{name}-zerotier',
-            zerotier_central_token=pulumi.Output.secret(pulumi.Config().require_secret(API_TOKEN)),
+            zerotier_central_token=pulumi.Config().require_secret(API_TOKEN),
             opts=own_provider_opts(opts),
         )
         super().__init__(name, opts=with_provider(opts, provider))
@@ -135,7 +147,7 @@ class Overlay(Component):
             # whole network learns, not what any one member asked for.
             routes=[
                 zerotier.NetworkRouteArgs(target=str(route), via=str(conventions.overlay.UDM))
-                for route in conventions.overlay.MANAGED_ROUTES
+                for route in managed_routes
             ],
             flow_rules=flow_rules,
             opts=pulumi.ResourceOptions.merge(child, pulumi.ResourceOptions(import_=network_id)),
@@ -145,14 +157,14 @@ class Overlay(Component):
         # node it authorizes has an identifier.
         self.identities = {
             entry.name: zerotier.Identity(f'{name}-identity-{entry.name}', opts=child)
-            for entry in conventions.overlay.ROSTER
+            for entry in roster
             if isinstance(entry, conventions.overlay.GeneratedMember)
         }
 
         # One member per entry, and no entry is skipped: a device with no
         # identity to authorize has no entry either, which is the state the
         # gateway is in until the ceremony records the id its daemon minted.
-        self.members = {entry.name: self._declare(name, entry, child) for entry in conventions.overlay.ROSTER}
+        self.members = {entry.name: self._declare(name, entry, child) for entry in roster}
 
         self.register_outputs({})
 
