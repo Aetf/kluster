@@ -191,10 +191,10 @@ Cloudflare set; jiahui.id takes none.
     program loops over — can be written as a union of named sets. A zone
     set only one block names is declared beside that block instead:
     `MAIL_ZONES`, the two Google Workspace domains, is in `base.py`. An
-    app hands its census row to `public_route` and gets the primary;
-    naming another zone in the row is what says that zone serves the
-    application too, and the helper fans the records across whatever
-    the row names.
+    app hands its census row to `route` and gets the primary; naming
+    another zone in the row is what says that zone serves the
+    application too, and the helper fans the records across whatever the
+    row names.
 -   **A parked zone is held and not served.** peifeng.phd and ucw.phd
     hold nothing of this installation's: what resolves in either is a
     copy of one of the primary's names addressed at the legacy VPS,
@@ -360,22 +360,36 @@ plane names:
 > repository emits a route today — which is also why the route census
 > §3 reads from is empty.
 
-`public_route(conventions.routes.PHOTOS)` on the app component base
-**takes the application's census row**, not a host string a reader
-would have to match against the census by eye — so an application
-publishing a name `dns` never rewrites cannot be written. From that
-row it emits the coherent set: the HTTPRoute (to `internet-gw`,
-`lan-gw`, or both per the §3.6 matrix) and the CNAMEs across the zone
-set the row names. It is the same row `dns` writes the AdGuard rewrite
-from, read by both stacks rather than emitted by either; the helper
-never writes a rewrite itself, which is the split §3 describes.
-`lan_route(conventions.routes.GOLINKS)` is the LAN-only variant (a
-`lan-gw` route, no public record, §4). Which LAN gateway it attaches to
-is the row's own `Exposure`: `Exposure.IOT` attaches `media-gw`, and
-the rewrite answers with the media VIP — so "IoT devices may reach this
-app" is decided once, on the census row a reviewer reads, and the
+`route(conventions.routes.PHOTOS)` on the app component base **takes
+the application's census row**, not a host string a reader would have
+to match against the census by eye — so an application publishing a
+name `dns` never rewrites cannot be written. From that row it emits the
+coherent set: the HTTPRoute, attached to the gateways the row's
+`Exposure` selects per the §3.6 matrix — `internet-gw`, `lan-gw`,
+`media-gw`, or both public and LAN — and the CNAMEs across the zone set
+the row names, which for a LAN-only row is no public record at all
+(§4). It is the same row `dns` writes the AdGuard rewrite from, read by
+both stacks rather than emitted by either; the helper never writes a
+rewrite itself, which is the split §3 describes.
+
+**There is one route helper, because the row already states the
+exposure.** Splitting it into a public one and a LAN-only one would
+make the call a second statement of the same thing, and a call that can
+disagree with its row forces the helper to rule on which of the two
+wins. Nothing else would distinguish the two: they emit the same kinds
+of resource, and each would differ only in which subset of `Exposure`
+values it accepts, which is a check rather than a difference in what is
+emitted. So the row decides whether a public record is published, which
+gateways serve the name, and that `Exposure.IOT` attaches `media-gw`
+with the rewrite answering at the media VIP — "IoT devices may reach
+this app" is decided once, on the census row a reviewer reads, and the
 helper has no say in it (cluster-infra.md §2, physical/gateway.md
-§4.2). `public_port(…)` is the raw TCP/UDP analog, and it is the
+§4.2). It is the argument that retired the `iot_reachable` parameter
+(rfc-003 §6.3), applied one step out: a helper name is a parameter
+wearing a verb.
+
+`public_port(…)` is the raw TCP/UDP analog, and it stays a helper of
+its own because it emits something no HTTP route does: it is the
 **only** helper that emits an NLB listener and its security rule
 (physical.md §1's derived-not-enumerated principle) — an HTTP route
 rides listeners the cluster already has.
@@ -392,7 +406,7 @@ remaining edit to it is a migration: each block is deleted whole when the
 application named in its header migrates, and the module empties block
 by block through Wave F. A migration is therefore three files in one
 pull request — the block deleted from `legacy.py`, the row added to
-`conventions/routes.py`, and the `public_route` call added to the app's
+`conventions/routes.py`, and the `route` call added to the app's
 component — with no row of a shared tuple to pick out. A block whose
 header names no application is a block no migration will ever delete,
 publishing a name no component will ever claim, so it is dropped rather
