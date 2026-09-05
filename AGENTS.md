@@ -119,8 +119,9 @@ documentation the change makes true ships with it rather than after it.
     file.** A materialized conflict is prose to this checker: change ids
     come back as misspellings and grammar findings land on lines that
     have no grammar problem, and none of it survives resolving the
-    conflict. Folding a commit into the one below it is what leaves such
-    a conflict behind — [dispatch.md](docs/framework/dispatch.md) §1.2.
+    conflict. Rewriting a commit that another commit sits on — a fold,
+    or a `jj squash --into @-` — is what can leave one behind:
+    [dispatch.md](docs/framework/dispatch.md) §1.2.
   - **A dictionary entry is for a term this repository owns.** Anything
     else gets the prose reworded instead. The word lists are **not** in
     the serialized set below; what keeps them out of contention is that a
@@ -149,14 +150,19 @@ documentation the change makes true ships with it rather than after it.
 ## Working beside other agents
 
 * **An agent owns only the paths its brief names.** Needing one outside
-  that list is a reason to stop and report, never to widen scope.
+  that list is a reason to stop and report, never to widen scope. The
+  one thing that list already permits is a new file the gate demands and
+  no owned path can hold, disclosed in the pull request —
+  [dispatch.md](docs/framework/dispatch.md) §1.1.
 * Shared files — `AGENTS.md`, `docs/framework/ci.md`, `pyproject.toml` —
   are **serialized**: at most one open pull request may touch each of
   them, whoever opened it.
 * Work happens in a `jj` workspace of its own (`jj workspace add -r main
-  .claude/workspaces/<name>`), and **a workspace dies with the dispatch
-  that created it** — the agent removes its own when it reports with no
-  pull request, the merging dispatcher removes it after the merge.
+  .claude/workspaces/<name>`, then `mise trust` inside it, which every
+  `mise x uv` command otherwise refuses), and **a workspace dies with the
+  dispatch that created it** — the agent removes its own when it reports
+  with no pull request, the merging dispatcher removes it after the
+  merge.
   **Scratch goes under the workspace's own `.claude/`**, which
   `.gitignore` covers: a workspace root is a checkout, so a file written
   anywhere else in it is a repository path that the next `jj` command
@@ -169,11 +175,16 @@ documentation the change makes true ships with it rather than after it.
   the work. So describe the work, then `jj new`, and only then push, in
   two commands with `jj log` first — confirming the work is at `@-` is
   part of the form: `jj bookmark set <branch> -r @-`, then
-  `jj git push --bookmark <branch>`. Both halves exit zero without
-  pushing the work if that precondition does not hold — work left in
-  `@` puts `main` on the branch instead, and a bookmark nobody moved
-  reports `Nothing changed` and sends nothing at all. Read the head SHA
-  back with `jj log -r <branch> --no-graph -T commit_id`, not with
+  `jj git push --bookmark <branch>`. The ways that precondition breaks
+  silently are the dangerous ones — both halves exit zero and the branch
+  carries none of the work: work left in `@` sets the bookmark on
+  whatever `@-` held before it, `main`'s tip on a first round, and a
+  bookmark nobody moved reports `Nothing changed` and sends nothing at
+  all. The stacked second empty change above is guarded instead: the
+  `set` warns `Target revision is empty` and exits zero, and the push
+  then refuses with `Won't push commit … since it has no description`
+  and a non-zero exit. Read the head SHA back with
+  `jj log -r <branch> --no-graph -T commit_id`, not with
   `git rev-parse HEAD`. That trap is one instance of a rule: inside a
   workspace, git answers about the primary checkout wherever the answer
   depends on a working copy, on `HEAD`, or on a path resolved relative
