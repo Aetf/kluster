@@ -68,23 +68,32 @@
       groupSlug: 'toolchain',
     },
     {
-      // The toolchain again, by dependency rather than by manager: mise itself
-      // is pinned where the workflows call its action, so the pin belongs to
-      // the `github-actions` manager and would otherwise ride in the group
-      // above it. It is the program that installs every other pinned tool, so
-      // its bump changes how every other check runs — exactly the reason the
-      // toolchain travels alone, and exactly what a batch of unrelated action
-      // bumps would bury.
+      // The toolchain again, by dependency rather than by manager: mise is
+      // pinned where the workflows call its action, so the pin belongs to the
+      // `github-actions` manager and would otherwise ride in the `github
+      // actions` group two rules above. It is the program that installs every
+      // other pinned tool, so its bump changes how every other check runs —
+      // exactly the reason the toolchain travels alone, and exactly what a
+      // batch of unrelated action bumps would bury.
       //
       // Position is load-bearing: `packageRules` apply in order and the last
       // match wins a field, so this has to sit *after* the `github actions`
       // rule, which matches the same dependency by manager. Above it, the
       // group name would be silently overwritten back — a rule that looks
-      // exactly like one that works. Nothing after it re-groups this
-      // dependency: those rules match by file name (paths a workflow is not
-      // on) or by other dependency names.
+      // exactly like one that works, and one no check here would catch, since
+      // renovate reads its configuration from the default branch and not from
+      // a pull request. A test holds the order instead. Nothing after this
+      // rule re-groups the dependency: those rules match by file name (paths a
+      // workflow is not on) or by other dependency names.
+      //
+      // Both names, because the action and the program it fetches are separate
+      // dependencies: `jdx/mise` is what a `version:` input on the action would
+      // be, and it belongs in this group for the same reason. No workflow
+      // passes that input today, so that half matches nothing and costs
+      // nothing.
       matchDepNames: [
         'jdx/mise-action',
+        'jdx/mise',
       ],
       groupName: 'toolchain',
       groupSlug: 'toolchain',

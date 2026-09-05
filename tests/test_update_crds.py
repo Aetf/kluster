@@ -332,12 +332,39 @@ def test_no_pin_carries_an_annotation_comment() -> None:
     """The register announces no automation it does not have.
 
     The one manager that reads this module matches the `crd2pulumi` constants
-    by name and needs no comment to find them; every other pin here is moved by
-    hand, because the bump is only finished by regenerating `packages/crds`.
-    An annotation above a chart version would therefore be inert — and inert
-    ones are worse than none, because they read as a working mechanism and stop
-    anyone from building the real one.
-    """
-    annotations = re.findall(r'^\s*# renovate:.*$', Path(pins.__file__).read_text(), re.MULTILINE)
+    by name and needs no comment to find them; every other pin here moves by
+    hand, and for the pins the render reads the bump is only finished by
+    regenerating `packages/crds`. An annotation above one of them would
+    therefore be inert — and inert ones are worse than none, because they read
+    as a working mechanism and stop anyone from building the real one.
 
-    assert annotations == []
+    Anywhere on the line, not only at its start: an annotation trailing a
+    version is just as inert and reads just as much like automation.
+    """
+    module = Path(pins.__file__).read_text()
+
+    # An emptied or renamed register would satisfy a purely negative assertion.
+    assert f"version='{pins.CHARTS[0].version}'" in module
+
+    assert re.findall(r'# renovate:.*', module) == []
+
+
+def test_the_mise_action_rule_outranks_the_github_actions_group() -> None:
+    """Order is what puts `jdx/mise-action` in the toolchain group, so order is held here.
+
+    `packageRules` are applied in the order they are written and the last match
+    wins a given field, so the rule naming the dependency has to come after the
+    rule matching its manager. Reordered, the dependency returns to the actions
+    group and nothing goes red: renovate reads its configuration from the
+    default branch, so no check on a pull request can see it.
+
+    Held as text, the way the manager pattern above is, because there is no
+    JSON5 parser here. Each substring is written exactly once, which the test
+    states rather than assumes.
+    """
+    config = (Path(__file__).parent.parent / 'renovate.json5').read_text()
+
+    assert config.count("'github-actions'") == 1
+    assert config.count("'jdx/mise-action'") == 1
+
+    assert config.index("'jdx/mise-action'") > config.index("'github-actions'")
