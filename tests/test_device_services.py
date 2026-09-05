@@ -797,15 +797,20 @@ def test_every_machine_carries_what_its_shared_unit_cannot_say_about_it(monitor:
 
     Each of the four gets a restart policy, without which a machine that died
     would stay down until the next boot or the next push. The three on the
-    container VLAN are additionally bound to that bridge's device unit, and the
-    one in the host's network namespace has no bridge to be bound to.
+    container VLAN are additionally ordered after that bridge's device unit, and
+    the one in the host's network namespace has no bridge to be ordered after.
+    None of the four is bound to a device unit: a binding would stop a machine
+    its bridge left, and nothing on this device would start it again.
     """
     for service in SERVICES:
         content = str(monitor.inputs_of(dropin_of(service))['content'])
+        directives = [line for line in content.splitlines() if not line.startswith('#')]
         bridged = declared_for(service).bridge is not None
 
         assert f'Restart={nspawn.RESTART_POLICY}' in content, service
-        assert (f'BindsTo={nspawn.interface_device_unit(container.CONTAINER_BRIDGE)}' in content) is bridged, service
+        after = f'After={nspawn.interface_device_unit(container.CONTAINER_BRIDGE)}'
+        assert (after in directives) is bridged, service
+        assert not [line for line in directives if line.startswith(('BindsTo', 'Requires'))], service
         assert monitor.options_of(dropin_of(service)).parent.endswith(f'::{NAME}-{service}'), service
 
 
@@ -816,7 +821,7 @@ async def test_a_machine_is_started_by_a_unit_that_already_carries_its_drop_in(
     """The tree is what starts the machine, so the statements must precede it.
 
     A machine started before its drop-in landed would run under the template
-    unit's own defaults — no restart policy, and no dependency on the bridge it
+    unit's own defaults — no restart policy, and no ordering on the bridge it
     is attached to — until something restarted it. Ordering it with the files
     the container reads is what makes the first start the right one.
     """

@@ -836,10 +836,12 @@ class Container(Component):
             )
         )
         # What the machine's unit says that its settings file cannot: how the
-        # machine is kept running, and the bridge it may not run without. It is
-        # not in the stamped set, because a drop-in takes effect on the reload
-        # its own delivery does rather than on a start — what the stamp decides
-        # is when the machine is bounced, and this is not a reason to bounce one.
+        # machine is kept running, and what its start is ordered behind — the
+        # bridge is mandatory because the settings file names it, not because
+        # the unit does. It is not in the stamped set, because a drop-in takes
+        # effect on the reload its own delivery does rather than on a start —
+        # what the stamp decides is when the machine is bounced, and this is not
+        # a reason to bounce one.
         self.dropin: DeviceFile = runtime.dropin(service, bridge=declaration.bridge, opts=child)
 
         before_the_machine_starts: list[pulumi.Resource] = [

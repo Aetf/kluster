@@ -45,14 +45,14 @@ settings file rather than in a unit this program writes; `machinectl` and
 `systemctl` see the machines the same way they see any other.
 
 **What a settings file cannot say, a drop-in on that instance says.** A
-settings file describes the container; a restart policy and a dependency on the
+settings file describes the container; a restart policy and an ordering on the
 bridge describe the *unit*, and the unit is systemd's. So each machine carries
 one drop-in (`machine_dropin`), delivered through the persistence layer like any
 other unit source: it is what keeps a machine that died from staying down until
-the next boot, and what keeps a machine from running when the bridge it is
-attached to is gone. The watchdog below answers the other half of the same
-concern — an interface that fell off a bridge that is still there, which is a
-state systemd has no view of.
+the next boot, and what holds a machine's start behind the bridge it attaches
+to. Nothing there watches the bridge once the machine is up; the watchdog below
+is what does, for an interface that fell off a bridge that is still there, which
+is a state systemd has no view of.
 
 **A failed push stays failed, and the root filesystem goes back.** A machine's
 post-apply hook does not stop at converging: it asks whether the machine
@@ -162,7 +162,7 @@ UNIT_TEMPLATE = 'systemd-nspawn@'
 
 #: The one drop-in each machine carries on its instance of that template, for
 #: what a settings file has no way of saying: how the machine is kept running,
-#: and what it may not run without. The name is what places it among the
+#: and what its start is ordered behind. The name is what places it among the
 #: firmware's, and both halves of it earn their place (systemd.unit(5)).
 #: Differently named drop-ins of the instance and of the template are applied
 #: together in lexicographic order whichever directory they sit in, so the
@@ -408,9 +408,9 @@ class _MachineDropinParams:
 
     `bridge_device` is already the unit name rather than the interface, and it
     is `None` for a machine in the host's network namespace — which is the one
-    machine with no bridge to depend on. The interface itself is not among these:
-    the unit name carries it, and a second spelling of the same fact would be one
-    the file could disagree with.
+    machine with no bridge to be ordered after. The interface itself is not
+    among these: the unit name carries it, and a second spelling of the same
+    fact would be one the file could disagree with.
     """
 
     cluster: str
@@ -429,12 +429,14 @@ def machine_dropin(machine: str, *, bridge: str | None) -> str:
     -   **a restart policy**, so that a machine that died comes back instead of
         staying down until the next boot or the next push converges it — and,
         where it cannot start at all, retries until somebody stops the unit;
-    -   **a binding on the bridge's device unit**, for a machine that attaches to
-        one, so that the machine is ordered after the bridge and stopped when the
-        bridge goes away rather than left running with an interface enslaved to
-        nothing.
+    -   **an ordering on the bridge's device unit**, for a machine that attaches
+        to one, so that a start systemd queues while the bridge is coming up
+        waits for it. Ordering alone, with no binding: a binding would stop the
+        machine when its bridge went away and nothing would start it back up,
+        because a dependency stop forbids the restart policy from acting, while
+        a bridge that is absent costs a failed start the same policy retries.
 
-    A machine in the host's network namespace has no bridge and gets no binding.
+    A machine in the host's network namespace has no bridge and gets no ordering.
     """
     return templates.render(
         persistence.TEMPLATE_PACKAGE,
