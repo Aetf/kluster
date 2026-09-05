@@ -33,6 +33,11 @@ SEED_ENTRY = entries.SEEDS['cloudflare'].entry
 #: The name a per-stack token is minted under, in these tests.
 STACK_TOKEN = 'kluster-dns'
 
+#: The role those tokens are minted in: this suite's own rather than one of the
+#: two the register carries, so what is under test is the mint rather than a
+#: particular row.
+STACK_ROLE = cloudflare.Role(name=STACK_TOKEN, permissions=cloudflare.ZONE_PERMISSIONS)
+
 
 @pytest.fixture
 def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
@@ -40,6 +45,18 @@ def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
     monkeypatch.setattr(cloudflare.requests, 'get', fake.get)
     monkeypatch.setattr(cloudflare.requests, 'request', fake.request)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def recorded_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the fake platform's account the one `conventions` records.
+
+    A zones mint proves the account it is about to mint in before it creates
+    anything, so a suite driving a fake account has to be that account for the
+    ordinary path to be the one under test. The test that wants the two to
+    disagree says so for itself.
+    """
+    monkeypatch.setattr(conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id=ACCOUNT_ID))
 
 
 @pytest.fixture
@@ -219,7 +236,7 @@ def test_the_zones_token_is_scoped_to_exactly_the_installation_zones(api: FakeAp
     api.add_zone('someone-elses.example')
     session = cloudflare.Session.authorize(_seed(api))
 
-    minted = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+    minted = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
     # One policy: record edit on the installation's zones by id, the read the
     # provider needs beside it, and no token permission — the only class the
@@ -231,6 +248,28 @@ def test_the_zones_token_is_scoped_to_exactly_the_installation_zones(api: FakeAp
     assert minted.zone_ids == zone_ids
 
 
+def test_a_seed_in_another_account_mints_nothing_at_all(api: FakeApi, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ = _installation(api)
+    monkeypatch.setattr(
+        conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id='some-other-account')
+    )
+    session = cloudflare.Session.authorize(_seed(api))
+
+    # Both accounts are named, because which of the two is stale -- a kit
+    # re-seeded elsewhere, or an identifier written down wrong -- is the
+    # operator's question and neither one alone answers it.
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+
+    # The account is knowable from the zone listing, which writes nothing, so
+    # the refusal costs nothing. Held against `conventions` after the mint
+    # instead, the same run would refuse and leave a live token behind in an
+    # account this installation does not own -- recorded nowhere, and so known
+    # to nobody who could revoke it.
+    assert ('POST', '/user/tokens') not in api.calls
+    assert not _named(api, STACK_TOKEN)
+
+
 def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
     zones = _installation(api)
     api.zones[conventions.ZONE_FAMILY[0]]['account'] = {}
@@ -240,7 +279,7 @@ def test_a_zone_that_names_no_account_is_refused(api: FakeApi) -> None:
     # account" and be handed to the caller as the account the token was minted
     # in. The listing refuses it instead, before a token is minted against it.
     with pytest.raises(CredentialRejected, match='account: the answer carries no id'):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=list(zones))
     assert not _named(api, STACK_TOKEN)
 
 
@@ -252,7 +291,7 @@ def test_a_zone_the_seed_cannot_see_is_refused_before_anything_is_minted(api: Fa
     # A token scoped to five of six zones would manage records everywhere but
     # one and say nothing about it, so resolution is where the run stops.
     with pytest.raises(CredentialRejected, match=conventions.ZONE_FAMILY[0]):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=list(zones))
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=list(zones))
     assert not _named(api, STACK_TOKEN)
 
 
@@ -262,7 +301,7 @@ def test_a_seed_without_zone_read_says_so_rather_than_minting_an_empty_scope(api
     session = cloudflare.Session.authorize(_seed(api))
 
     with pytest.raises(CredentialRejected, match='no zone read permission'):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
 
 def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeApi) -> None:
@@ -273,17 +312,17 @@ def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeAp
     # The mint call reports what it created; the check asks the credential
     # itself what it can reach, which is the thing the consumer depends on.
     with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
 
 def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
     zone_ids = _installation(api)
     session = cloudflare.Session.authorize(_seed(api))
-    working = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+    working = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
     api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
 
     with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
     # Scope is confirmed before anything is retired, so a run that mints a
     # credential it cannot use costs nothing that still works. What it does
@@ -292,7 +331,7 @@ def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi
     assert working.token_id in api.tokens
     api.withholds_zone = None
 
-    replacement = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+    replacement = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
     assert _named(api, STACK_TOKEN) == [replacement.token_id]
 
@@ -306,7 +345,7 @@ def test_a_renamed_permission_group_is_named_rather_than_guessed(api: FakeApi) -
     # on the platform's side has to surface as a refusal rather than as a
     # policy missing a permission.
     with pytest.raises(CredentialRejected, match='DNS Write'):
-        _ = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+        _ = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi) -> None:
@@ -367,7 +406,7 @@ def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi
     api.groups['some-other-product'] = {'name': 'Some Other Product Write'}
     session = cloudflare.Session.authorize(_seed(api))
 
-    minted = cloudflare.mint_zone_token(session, name=STACK_TOKEN, zones=conventions.ALL_ZONES)
+    minted = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
 
     assert _named(api, STACK_TOKEN) == [minted.token_id]
 

@@ -97,7 +97,7 @@ def stack() -> tuple[pulumi_config.Stack, RecordedPulumi]:
 
 
 def _live(api: FakeApi) -> list[str]:
-    return [str(token['id']) for token in api.tokens.values() if token['name'] == derived.ZONES_TOKEN_NAME]
+    return [str(token['id']) for token in api.tokens.values() if token['name'] == cloudflare.ZONES.name]
 
 
 def test_the_token_lands_in_the_stack_config_and_nothing_else_does(
@@ -116,7 +116,7 @@ def test_the_token_lands_in_the_stack_config_and_nothing_else_does(
     assert api.values[runner.config[derived.API_TOKEN_KEY]] == token_id
 
 
-def test_a_seed_from_another_account_is_refused_before_the_token_is_delivered(
+def test_a_seed_from_another_account_is_refused_before_anything_is_minted(
     api: FakeApi, kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     slot, runner = stack
@@ -127,9 +127,12 @@ def test_a_seed_from_another_account_is_refused_before_the_token_is_delivered(
 
     # A kit re-seeded from another Cloudflare account, or an identifier written
     # down wrong: either way the token would be for zones the stack does not
-    # declare into, and the stack would keep naming the account it does. The
-    # refusal happens before anything reaches the slot.
+    # declare into, and the stack would keep naming the account it does.
     assert derived.API_TOKEN_KEY not in runner.config
+    # Nothing reaches the slot, and nothing is left at the provider either: a
+    # token minted into a foreign account by a run that then refused is a live
+    # permission this register does not record and nobody knows to revoke.
+    assert _live(api) == []
 
 
 def test_the_stack_is_created_when_the_backend_has_none(
@@ -240,7 +243,7 @@ def test_a_push_that_fails_is_healed_by_running_it_again(
 
 
 def _gateway_live(api: FakeApi) -> list[str]:
-    return [str(token['id']) for token in api.tokens.values() if token['name'] == derived.GATEWAY_ACME_TOKEN_NAME]
+    return [str(token['id']) for token in api.tokens.values() if token['name'] == cloudflare.GATEWAY_ACME.name]
 
 
 def _vhost_zone(name: str) -> str:
@@ -501,7 +504,7 @@ def test_the_mint_delivers_a_key_that_signs_for_the_account_conventions_records(
 
 
 @pytest.mark.usefixtures('recorded_compartment')
-def test_a_key_that_signs_for_another_account_is_refused_before_it_is_delivered(
+def test_a_key_that_signs_for_another_account_is_refused_before_anything_is_created(
     oci_kit: KdbxStore,
     tenancy: Tenancy,
     physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
@@ -512,10 +515,17 @@ def test_a_key_that_signs_for_another_account_is_refused_before_it_is_delivered(
 
     # Both accounts are named, because which of the two is stale is the
     # operator's question and neither one alone answers it.
+    users, compartments = dict(tenancy.identity.users), dict(tenancy.identity.compartments)
+
     with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
         _ = derived.oci_physical(oci_kit, stack=slot, connect=tenancy)
 
     assert runner.config == {}
+    # Nothing reaches the slot, and nothing is left in the tenancy either: a
+    # user, a group, a policy and a live signing key made in a foreign account
+    # by a run that then refused are permissions nobody knows to revoke.
+    assert tenancy.identity.users == users
+    assert tenancy.identity.compartments == compartments
 
 
 def test_a_drill_tenancy_is_not_held_against_the_account_conventions_records(
@@ -778,5 +788,5 @@ def test_a_re_run_rotates_the_management_key(
     # One live key of that name afterwards, and the slot names it: the seed
     # signs the retirement and survives it, so the predecessor really goes.
     assert second != first
-    assert b2_api_fake.named(b2.MANAGEMENT_KEY_NAME) == [second]
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == [second]
     assert runner.config[derived.B2_KEY_ID_KEY] == second

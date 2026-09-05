@@ -37,6 +37,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from ... import conventions
 from . import payload
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
@@ -114,6 +115,39 @@ def _result(resp: requests.Response) -> object:
     if not body.truth('success'):
         raise CredentialRejected(f'Cloudflare refused the call: {_why(body) or resp.status_code}')
     return body.value('result')
+
+
+@dataclass(frozen=True)
+class Role:
+    """What a Cloudflare token is called, and the whole of what it may do.
+
+    One of the provider roles these scripts state — `b2.Role`,
+    `cloudflare.Role` and `oci_iam.Identity` are one shape in each platform's
+    own vocabulary: the name a credential is minted under and the grant that
+    goes with it are a single value, so a name cannot travel to a mint without
+    its permissions, and a mint takes the role rather than a name plus whatever
+    constant happens to be in scope.
+
+    The fields are Cloudflare's own grant vocabulary -- permission groups, by
+    name. Which zones a token is scoped to is not among them, for the reason a
+    consumer's compartment is not part of `oci_iam.SEED`: the resources are
+    this installation's to name at the mint, while the role is the same
+    wherever it is minted.
+    """
+
+    name: str
+    permissions: tuple[str, ...]
+
+
+#: The two §3 roles minted from the seed. Both carry `ZONE_PERMISSIONS` and
+#: differ in name and in the zones they are minted for -- the provider token
+#: manages records in every zone of the installation, and the gateway's answers
+#: DNS-01 challenges in the zones its own vhosts live under.
+#:
+#: The names are stable, because they are what retirement matches on: one live
+#: token per role is the invariant a re-run restores.
+ZONES = Role(name='kluster-zones', permissions=ZONE_PERMISSIONS)
+GATEWAY_ACME = Role(name='kluster-gateway-acme', permissions=ZONE_PERMISSIONS)
 
 
 @dataclass(frozen=True)
@@ -432,11 +466,13 @@ def mint_token(
 
 @dataclass(frozen=True)
 class ZoneToken:
-    """A minted zones token and the two facts its consumer needs beside it.
+    """A minted zones token, and what the mint resolved on its way to it.
 
-    The account id is carried because `derived.cloudflare_zones` holds it
-    against `conventions.CLOUDFLARE_ACCOUNT`, and asking Cloudflare a second
-    time could only produce a second answer.
+    The token is what a row delivers; the account id and the zone ids are what
+    the mint had to learn to build the policy, reported rather than asked for a
+    second time — the account is the one `verify_account` was given before
+    anything was created, and asking Cloudflare again could only produce a
+    second answer to a question already settled.
     """
 
     token_id: str
@@ -470,6 +506,31 @@ def _resolve_zones(session: Session, names: Sequence[str]) -> tuple[str, dict[st
     return accounts.pop(), ids
 
 
+def verify_account(account_id: str) -> None:
+    """Hold an account against the one `conventions` records.
+
+    The account is a fact rather than a credential, so it has one home
+    (`conventions.CLOUDFLARE_ACCOUNT`) and a mint copies nothing: the seed
+    belongs to whichever account the operator made it in, and all that is left
+    is to prove that account is this installation's. The two ways it can fail
+    to be are the ways the fact goes stale -- a kit re-seeded from another
+    Cloudflare account, and an identifier written down wrong -- and both would
+    put a token in an account nothing here manages.
+
+    Both accounts are named, because which of the two is stale is the
+    operator's question and neither one alone answers it.
+    """
+    intended = conventions.CLOUDFLARE_ACCOUNT.account_id
+    if account_id != intended:
+        raise CredentialRejected(
+            f'the Cloudflare seed sees these zones in the account {account_id}, but '
+            f'`conventions.CLOUDFLARE_ACCOUNT` records {intended} as the account this installation declares '
+            'into: one of the two is stale, and minting here would leave a live token in an account this '
+            'installation does not own'
+        )
+    log.info('the zones are in %s, which is the account `conventions` records', account_id)
+
+
 def _confirm_scope(value: str, expected: Sequence[str]) -> None:
     """Prove the minted token sees the zones it was minted for, as itself.
 
@@ -489,25 +550,33 @@ def _confirm_scope(value: str, expected: Sequence[str]) -> None:
         log.warning('the minted token also sees %s, which nothing here asked for', ', '.join(extra))
 
 
-def mint_zone_token(session: Session, *, name: str, zones: Sequence[str]) -> ZoneToken:
-    """The §3 zones token: record edit on exactly `zones`, and nothing else.
+def mint_zone_token(session: Session, *, role: Role, zones: Sequence[str]) -> ZoneToken:
+    """A §3 zone-scoped token: `role`'s permissions on exactly `zones`, and nothing else.
 
-    One policy with one resource per zone, carrying `ZONE_PERMISSIONS` and no
-    token permission — the class the platform allows a sub-token to have. The
+    One policy with one resource per zone, carrying the role's permissions and
+    no token permission — the class the platform allows a sub-token to have. The
     result is proven against the API as the minted token before anything is
     retired, so a credential that cannot do the job never reaches a slot and
     never costs the predecessor that still could.
+
+    **The account is proven before anything is created, not after.** Resolving
+    the zones is what discovers it, and that happens without writing anything,
+    so a seed belonging to an account this installation does not own is refused
+    while a refusal still costs nothing. Checked afterward it would be a
+    refusal that leaves a live token behind in that foreign account, recorded
+    nowhere and known to nobody who could revoke it.
     """
     log.info('resolving %d zones of this installation through the Cloudflare seed', len(zones))
     account_id, zone_ids = _resolve_zones(session, zones)
+    verify_account(account_id)
     policies = [
         {
             'effect': 'allow',
             'resources': {f'{ZONE_RESOURCE}.{zone_id}': '*' for zone_id in zone_ids.values()},
-            'permission_groups': session.permission_groups(ZONE_PERMISSIONS),
+            'permission_groups': session.permission_groups(role.permissions),
         }
     ]
-    minted = mint_token(session, name, policies, confirm=lambda value: _confirm_scope(value, zones))
+    minted = mint_token(session, role.name, policies, confirm=lambda value: _confirm_scope(value, zones))
     return ZoneToken(token_id=minted.token_id, value=minted.value, account_id=account_id, zone_ids=zone_ids)
 
 
