@@ -77,8 +77,16 @@ class Recorder(pulumi.runtime.Mocks):
         self.declared: list[Declaration] = []
         #: Which provider instance each function call went through, by token.
         self.call_providers: dict[str, str] = {}
-        #: The raw registration request of each resource, by logical name --
-        #: the only place the resource *options* survive. See `_capture_request`.
+        #: Every registration request the run made, in registration order --
+        #: the only place the resource *options* survive. A list rather than an
+        #: index, because a logical name does not identify a registration: a
+        #: component, the resource inside it and that resource's own
+        #: sub-resource all carry one name. See `_capture_request`.
+        self.requested: list[Any] = []
+        #: The same requests indexed by logical name, last one wins. It cannot
+        #: tell a component from its children, so nothing here reads it; the
+        #: suites that ask only *whether* a name registered at all do.
+        #: TODO(kluster-ops#209): delete with those readers.
         self.registrations: dict[str, Any] = {}
 
     # -- what a suite overrides ---------------------------------------------
@@ -149,15 +157,26 @@ class Recorder(pulumi.runtime.Mocks):
         """The provider instance this resource was registered against."""
         return self.one(name, typ).provider
 
-    def options_of(self, name: str) -> Any:
-        """The registration request of this resource, which is where its options are."""
-        if name not in self.registrations:
-            raise AssertionError(f'{name} was never registered; the run registered {sorted(self.registrations)}')
-        return self.registrations[name]
+    def options_of(self, name: str, typ: str | None = None) -> Any:
+        """The registration request of this resource, which is where its options are.
 
-    def depends_on(self, name: str) -> list[str]:
+        Named by type as well as by name where the run needs it. A logical name
+        is unique within a type rather than within a run -- a component, the
+        resource inside it and that resource's own sub-resource share the
+        component's name -- so a name several registrations answer to is
+        refused here rather than resolved to whichever registered last. That
+        last-one-wins answer is what let a case asserting about a component
+        pass on its child's options instead.
+        """
+        found = [request for request in self.requested if request.name == name and typ in (None, request.type)]
+        if len(found) != 1:
+            registered = sorted((request.type, request.name) for request in self.requested)
+            raise AssertionError(f'{name} was registered {len(found)} times, not once; the run registered {registered}')
+        return found[0]
+
+    def depends_on(self, name: str, typ: str | None = None) -> list[str]:
         """The URNs this resource was declared to depend on."""
-        return list(self.options_of(name).dependencies)
+        return list(self.options_of(name, typ).dependencies)
 
 
 _register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
@@ -168,7 +187,8 @@ def _capture_request(self: Any, request: Any) -> Any:
 
     The request itself, because a resource's *options* -- `import_`,
     `ignore_changes`, `delete_before_replace`, `depends_on` -- reach no output
-    and are exactly what several suites are about; and the per-property
+    and are exactly what several suites are about -- every one of them, rather
+    than only the last under each logical name; and the per-property
     dependency edges, which the mock's response leaves empty although the
     request carried them (framework/testing.md §3.1).
 
@@ -177,6 +197,7 @@ def _capture_request(self: Any, request: Any) -> Any:
     whichever `Recorder` that monitor was built around rather than on a global.
     """
     if isinstance(self.mocks, Recorder):
+        self.mocks.requested.append(request)
         self.mocks.registrations[request.name] = request
     response = _register_resource(self, request)
     for name, dependencies in request.propertyDependencies.items():
