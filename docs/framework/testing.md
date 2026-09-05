@@ -27,6 +27,44 @@ futures hangs forever instead of failing):
 timeout 60 mise x uv -- uv run pytest
 ```
 
+### 1.1 A test process holds no credentials
+
+`mise.toml` materializes the operator's account-root token into
+`GITHUB_TOKEN`, the state passphrase into `PULUMI_CONFIG_PASSPHRASE` and the
+backend URL into `PULUMI_BACKEND_URL`, out of files rather than out of the
+caller — so each wins over anything set on the command line, and a `pytest`
+run started the way above carries live credentials whether the suite wants
+them or not. That matters because **Pulumi prints a resource's inputs when an
+assertion about it fails, and a provider's inputs include its credential**:
+the first failing assertion in a suite that declares a provider renders
+whatever the environment was holding into the report.
+
+`tests/root_credentials.py` is the whole mechanism, and `tests/conftest.py`
+applies it at import. Deliberately not through a fixture, not even one every
+suite gets without asking: the earliest a fixture can run is the setup of the
+first test, by which point every test module has been imported, so a suite
+that read a variable while being collected would still have seen the
+operator's value.
+
+-   **What is masked** is every variable an account root can arrive in, read
+    off `masters.ROOTS` rather than listed a second time, plus the two
+    backend secrets above. A root added to that register is masked by that
+    addition alone.
+-   **A suite that needs a value asks for a fake one by name**, with
+    `root_credentials.fake_credentials('GITHUB_TOKEN')` as a context manager,
+    or `root_credentials.fake(name)` for the value on its own. The value is
+    derived from the variable, so a value that does reach a diff identifies
+    what it stood in for and says that it opens nothing. A name that carries
+    no masked credential is refused, because setting one would be relying on
+    a protection that is not there.
+-   **A suite that needs one and does not ask** meets whatever the code under
+    test raises for an unset variable. `kluster.stacks.github` is the worked
+    example: it refuses by name rather than authenticating as nobody, so the
+    failure says which credential was missing.
+
+The masking covers the live tier too (§5). A drill reads its credentials from
+the kit, never from the ambient environment.
+
 ## 2. Writing Tests
 
 A suite that declares resources starts from `tests/mock_monitor.py`, which
@@ -205,10 +243,12 @@ it declines to collect the directory, so an ordinary `pytest` run neither
 executes a drill nor reports one as skipped. There is no marker and no
 `addopts` entry to keep in sync.
 
-A drill reads its credentials through the same environment and store the
-command-line entry point uses — for the credential drills, `KdbxStore.from_env`
-on `$KLUSTER_KDBX`, unlocked from the desktop secret store. Run `credentials
-kit password remember` first, or pass `-s`, so the prompt reaches a terminal.
+A drill reads its credentials from the same store the command-line entry point
+uses — for the credential drills, `KdbxStore.from_env` on `$KLUSTER_KDBX`,
+unlocked from the desktop secret store. It cannot read them from the ambient
+environment: §1.1 masks those for the whole process, the live tier included.
+Run `credentials kit password remember` first, or pass `-s`, so the prompt
+reaches a terminal.
 `--log-cli-level=INFO` is what makes the run a transcript worth pasting.
 
 Two properties are required of every drill, because an operator has to be

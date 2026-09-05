@@ -1,8 +1,12 @@
-"""Fixtures shared across the credential suites.
+"""What every suite in this process shares: no credentials, and a cheap KDF.
 
-The kit they share is `memory_kit.MemoryKit`, a kit that is not a file; it
-lives in its own module because test modules import the class directly, and
-`conftest` is not a name an import can aim at.
+The first is `root_credentials.strip`, called below rather than offered as a
+fixture, so that no suite can be the one that forgot to ask. What it takes and
+why is that module.
+
+The kit several suites share is `memory_kit.MemoryKit`, a kit that is not a
+file; it lives in its own module because test modules import the class
+directly, and `conftest` is not a name an import can aim at.
 
 The other thing shared here is the cost of a key derivation. Several suites do
 want a real KeePass file rather than the in-memory stand-in -- the row shape is
@@ -18,10 +22,12 @@ for the whole session.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import pykeepass.pykeepass as pykeepass_module
 import pytest
+import root_credentials
 from memory_kit import MemoryKit
 from pykeepass import PyKeePass
 
@@ -29,6 +35,14 @@ from kluster.scripts.credentials.kdbx import KdbxStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+# At import rather than in a fixture, even a session-scoped autouse one: the
+# root `conftest` is imported before any test module, whereas the first
+# fixture runs after all of them have been imported, so a suite that read a
+# variable while being collected would still have seen the operator's value.
+# Nothing is put back afterwards, because the process this strips is the test
+# run itself.
+root_credentials.strip(os.environ)
 
 #: Argon2 at its cheapest, in the names KDBX gives the parameters: one pass
 #: (`I`), one lane (`P`), and the least memory the algorithm accepts for one
