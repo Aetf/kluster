@@ -21,21 +21,38 @@ from collections.abc import Iterable
 
 from kluster import conventions
 
-#: A DNS label: letters, digits and interior hyphens, and no dot at all.
+#: A DNS label's shape: letters, digits and interior hyphens, and no dot at all.
 LABEL = re.compile(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z')
+
+#: A DNS label's other half: its length in octets, which the shape does not
+#: bound (RFC 1035 §2.3.4).
+LABEL_OCTETS = 63
 
 
 def _unknown_zones(routes: Iterable[conventions.routes.Route]) -> set[str]:
     return {zone for route in routes for zone in route.zones} - set(conventions.ALL_ZONES)
 
 
+def _published_names(route: conventions.routes.Route) -> tuple[str, ...]:
+    """Every zone-relative name the row publishes: its own, and its extras'.
+
+    An `Srv` label is a name in the zone rather than under the host, so it
+    collides with another row's the same way two hosts do.
+    """
+    return (route.host, *(extra.label for extra in route.extras))
+
+
 def _duplicated_names(routes: Iterable[conventions.routes.Route]) -> list[tuple[str, str]]:
-    published = [(route.host, zone) for route in routes for zone in route.zones]
+    published = [(name, zone) for route in routes for name in _published_names(route) for zone in route.zones]
     return sorted({name for name in published if published.count(name) > 1})
 
 
 def _hosts_that_are_not_labels(routes: Iterable[conventions.routes.Route]) -> set[str]:
     return {route.host for route in routes if not LABEL.fullmatch(route.host)}
+
+
+def _hosts_longer_than_a_label(routes: Iterable[conventions.routes.Route]) -> set[str]:
+    return {route.host for route in routes if len(route.host.encode()) > LABEL_OCTETS}
 
 
 def test_every_zone_a_row_names_is_one_the_installation_declares() -> None:
@@ -63,6 +80,38 @@ def test_no_two_rows_publish_the_same_host_in_the_same_zone() -> None:
 
     assert _duplicated_names(conventions.routes.ROUTES) == []
     assert _duplicated_names(duplicated) == [('photos', 'ucw.phd')]
+
+
+def test_no_two_rows_publish_the_same_service_record_in_the_same_zone() -> None:
+    """An extra is a name the row publishes, so it collides like a host does.
+
+    An `Srv` label sits in the zone rather than under the row's host, so two
+    applications that both claim `_matrix-identity._tcp` are two records on one
+    name -- a collision `_duplicated_names` sees only because it walks every
+    name a row publishes rather than the host alone.
+    """
+    identity = conventions.routes.Srv('_matrix-identity._tcp', priority=10, weight=0, port=443)
+    duplicated = [
+        conventions.routes.Route(host='matrix', zones=('ucw.phd',), extras=(identity,)),
+        conventions.routes.Route(host='chat', zones=('ucw.phd',), extras=(identity,)),
+    ]
+
+    assert _duplicated_names(conventions.routes.ROUTES) == []
+    assert _duplicated_names(duplicated) == [('_matrix-identity._tcp', 'ucw.phd')]
+
+
+def test_a_rows_host_fits_in_a_dns_label() -> None:
+    """The shape check bounds the characters, not how many of them there are.
+
+    DNS caps a label at 63 octets, so a longer host matches the pattern and is
+    refused by Cloudflare at apply time instead -- past the gate, in the one
+    place the census exists to keep a name out of.
+    """
+    too_long = 'a' * 64
+
+    assert _hosts_longer_than_a_label(conventions.routes.ROUTES) == set()
+    assert _hosts_that_are_not_labels([conventions.routes.Route(host=too_long)]) == set()
+    assert _hosts_longer_than_a_label([conventions.routes.Route(host=too_long)]) == {too_long}
 
 
 def test_a_rows_host_is_a_label_and_not_a_fully_qualified_name() -> None:
