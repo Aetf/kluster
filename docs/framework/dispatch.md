@@ -116,9 +116,13 @@ forget` clears it.
 **A builder never fetches; the dispatcher fetches and rebases.** A
 branch that opens behind `main` is the expected case, because bringing
 it up to date is the merging dispatcher's step (§2 rule 4) and that is
-where `jj git fetch` and `jj rebase -d main` live. The hazard that a
-fetch abandons commits whose bookmark the forge has deleted is that
-dispatcher's precondition, not a general caution against fetching.
+where `jj git fetch` and `jj rebase -d main` live. The one rebase that
+is not the dispatcher's is the one that conflicts, which rule 4 sends
+back: workspaces share a single store, so the builder rebases onto the
+`main` the fetch already brought in, still without fetching itself. The
+hazard that a fetch abandons commits whose bookmark the forge has
+deleted is that dispatcher's precondition, not a general caution
+against fetching.
 
 **A workspace goes stale when another workspace rewrites the commits it
 is sitting on**, which a dispatcher's `jj git fetch` does routinely
@@ -136,31 +140,35 @@ snapshots edits into `@` as they are made, so `@` carries the work until
 `jj new` leaves it behind at `@-`. Run against an `@` that is already
 empty — after a push, say — `jj new` stacks a second empty change, `@-`
 is empty too, and the bookmark below is set on an empty change instead
-of on the work. That one mode is guarded: `jj bookmark set` warns
-`Target revision is empty` and exits zero, and the push then refuses
-with `Won't push commit … since it has no description` and exits
-non-zero. So: describe the work, then `jj new`, and only then:
+of on the work. That mode shows in `jj log` as `(empty) (no description
+set)` against `@-` as well as against `@`, and it is guarded besides:
+`jj bookmark set` warns `Target revision is empty` and exits zero, and
+the push then refuses with `Won't push commit … since it has no
+description` and exits non-zero. So: describe the work, then `jj new`,
+and only then:
 
     jj bookmark set <branch> -r @-
     jj git push --bookmark <branch>
 
 `--bookmark` tracks a bookmark the remote has never seen, so a first
 push needs no extra flag. **The failures below carry no such guard**:
-both halves exit zero when the precondition is broken, which is why
-`jj log` before every push is part of the form. What it must show is
-`(empty) (no description set)` against `@` and the described work
-against `@-`; that marker against `@-` is the violation, whichever of
-these put it there:
+neither command returns non-zero when the precondition is broken, which
+is why `jj log` before every push is part of the form. The healthy state
+it shows is `(empty) (no description set)` against `@` and the described
+work against `@-`. Each failure has its own tell instead:
 
 -   Work still sitting in `@` — the ordinary `jj` habit of edit,
     describe, push, with no `jj new` — makes `@-` the tip of `main`.
     The bookmark is then created pointing at `main`, the push reports
     `bookmark: <branch> [add to <sha>]` and exits zero, and the branch
     on the forge carries none of the work. A confident-looking push and
-    an empty pull request.
+    an empty pull request. **Its tell is the described work sitting at
+    `@`**, with `main`'s own description against `@-`.
 -   A bookmark left where it was on a second round of work, because a
     bookmark does not follow commits made after it was set, makes
-    `jj git push` report `Nothing changed`, exit zero, and push nothing.
+    `jj git push` report `Nothing changed`, exit zero, and push
+    nothing. **Its tell is the bookmark name sitting on a commit below
+    `@-`** rather than on `@-` itself.
 
 A *rewrite* is the exception that proves the rule: `jj squash --into @-`
 and `jj describe` carry the bookmark to the rewritten commit, so on a
@@ -181,26 +189,32 @@ spends the round fixing sentences that are fine. `jj st` names a
 conflicted file, and the prose step does not run while one exists.
 
 What replaces git's "forgot to commit" as the way work is lost here is a
-push that exits zero carrying none of the work; the failures listed
-above are each of that kind. What catches one is the head SHA the report
-names (§4), **read with `jj` after the push**:
+push that exits zero carrying none of the work; the two failures listed
+before the paragraph above are each of that kind. What catches one is
+the head SHA the report names (§4), **read with `jj` after the push**:
 
     jj log -r <branch> --no-graph -T commit_id
 
 **Not `git rev-parse HEAD`, and the reason generalizes: inside a
 workspace, git answers about the primary checkout wherever the answer
-depends on a working copy or on `HEAD`.** An added workspace has no git
-repository of its own and sits inside the colocated primary, so git
-walks up — the `jj` form, or a tool that consults no git repository, is
-what to use instead. Each instance answers confidently about the wrong
-directory and none of them complains: `git rev-parse HEAD` returns
-`main` rather than the workspace's head; `git status --porcelain`
-describes the primary's tree; `git apply -p1` resolves a diff's paths
-against the primary's root, drops everything outside the current
-directory, and exits zero having applied nothing, where `patch -p1`
-applies it. What depends on neither is safe — `git show <sha>` and
-`git diff <a>..<b>` answer correctly, because every workspace shares
-the one object store.
+depends on a working copy, on `HEAD`, or on a path resolved relative to
+the current directory.** An added workspace has no git repository of its
+own and sits inside the colocated primary, so git walks up — the `jj`
+form, or a tool that consults no git repository, is what to use instead.
+Each instance answers confidently about the wrong directory and none of
+them complains: `git rev-parse HEAD` returns `main` rather than the
+workspace's head; `git status --porcelain` describes the primary's tree;
+`git apply -p1` resolves a diff's paths against the primary's root,
+drops everything outside the current directory, and exits zero having
+applied nothing, where `patch -p1` applies it. What depends on none of
+those is safe: `git show <sha>` and `git diff <a>..<b>` answer correctly
+**when no path is named**, because every workspace shares the one object
+store. With one named, they fail the same silent way: adding
+`-- <path>` makes `git diff <a>..<b>` print nothing and exit zero, and
+`git show <sha>` print its header and no diff, because the path is read
+relative to the workspace directory as git sees it. `-- ':(top)<path>'`
+is what answers from in there. A reviewer is the most exposed to this
+(§3.2), since an empty diff reads as an unchanged file.
 
 **Whether a change merged is the forge's answer, not the repository's.**
 This repository rebase-merges, so a merged change's commits keep their
@@ -209,8 +223,10 @@ distinguishes them from unmerged ones. The proof is that the pull
 request is `MERGED` and that the head it merged is the head the
 dispatcher last pushed — the head the builder's report named where
 nothing moved it, and otherwise what the dispatcher's own rebase made of
-it (§2 rule 8). That rebase is sequenced after rule 8's comparison,
-which is why the report's SHA has to be right:
+it (§2 rule 8). The ledger carries only the first of those, so where a
+rebase moved the branch the proof is `MERGED` plus the timeline rule 8
+names. The comparison rule 8 makes before that rebase is why the
+report's SHA has to be right:
 
     gh pr view <n> --json state,headRefOid
 
@@ -303,17 +319,19 @@ milestone). The rules that keep them out of each other's way:
 7.  **Sessions talk.** Local sessions can message each other; a
     planned touch on anything ambiguous is announced to the affected
     dispatcher before it happens, not discovered in a conflict.
-8.  **The head of the builder's latest report is the head that
-    merges, and the comparison happens before the rebase.** Compare
+8.  **The head the builder's latest report names is what the forge's
+    head is compared against, and the comparison comes before the
+    dispatcher rebases.** Compare
     `gh pr view <n> --json headRefOid` against the head SHA that report
     names (§4) while the branch is still exactly what the builder
-    pushed; only then bring it up to date (rule 4), and read the head
-    that actually merges back with
-    `jj log -r <branch> --no-graph -T commit_id`. The legitimate movers
-    are a fix cycle (§3), which ends in a fresh report, and the
-    dispatcher's own rebase, which is sequenced after the comparison
-    for exactly this reason — so a mismatch at the comparison means
-    someone else moved it.
+    pushed; only then bring it up to date (rule 4) and push it —
+    `jj git push --bookmark <branch>`, because the forge merges what it
+    holds and not what is local. The head that actually merges is what
+    `jj log -r <branch> --no-graph -T commit_id` reads back after that
+    push. The legitimate movers are a fix cycle (§3), which ends in a
+    fresh report, and the dispatcher's own rebase, which is sequenced
+    after the comparison for exactly this reason — so a mismatch at the
+    comparison means someone else moved it.
     Reconstructing who is timestamp work —
     `gh api repos/<o>/<r>/issues/<n>/timeline` carries the
     `head_ref_force_pushed` and `merged` events — because every agent
