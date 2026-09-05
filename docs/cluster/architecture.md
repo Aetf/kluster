@@ -4,17 +4,15 @@ Objective: Deploy a high-performance hybrid Kubernetes cluster spanning an
 OCI cloud site and a Homelab LAN. Ensure low stack complexity, minimal vendor
 lock-in, and declarative management using Pulumi.
 
-> **Status**: This is the canonical architecture document, describing the
-> design **as decided 2026-08-22** (control plane in the cloud on 3× OCI
-> A1 nodes; two-pool LoadBalancer ingress; UDM automated via a
+> **Status**: This is the canonical architecture document, describing
+> the design **as decided 2026-08-22** (control plane in the cloud on 3×
+> OCI A1 nodes; two-pool LoadBalancer ingress; UDM automated via a
 > device-files provider; home automation deliberately left outside it).
 > Superseded approaches and their reasoning live in §6; sizing, provider
-> pricing, and
-> HA tiers live in [nodes.md](nodes.md); storage in
-> [storage.md](storage.md). The
-> code that declares this layer is the `cloud`, `talos`, `homelab`,
-> `gateway`, `overlay` and `backup` areas of
-> `src/kluster/components/`, wired into a stack by
+> pricing, and HA tiers live in [nodes.md](nodes.md); storage in
+> [storage.md](storage.md). The code that declares this layer is the
+> `cloud`, `talos`, `homelab`, `gateway`, `overlay` and `backup` areas
+> of `src/kluster/components/`, wired into a stack by
 > `src/kluster/stacks/physical.py`.
 
 ## 1. Architecture Overview
@@ -626,11 +624,11 @@ The entire stack is deployed via Pulumi using multiple providers:
 
 ### 5.1 Infrastructure Provisioning
 
-1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab
-    physical server (bridged to the LAN). Its address is a constant in
-    `conventions` rather than a lease, so the component exports none.
-    The **existing HAOS VM** shares that host and is declared nowhere
-    in this program — a host-level libvirt domain,
+1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the
+    Homelab physical server (bridged to the LAN). Its address is a
+    constant in `conventions` rather than a lease, so the component
+    exports none. The **existing HAOS VM** shares that host and is
+    declared nowhere in this program — a host-level libvirt domain,
     deliberately outside both the cluster (§6.8) and this repository
     (declarative/physical.md §3).
 2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
@@ -736,14 +734,15 @@ pushes those files itself**:
     pinned host key are public by design.
 -   **FRR/BGP**: the FRR config (neighbor = the libvirt VM's IP, both
     address families, with an inbound prefix-list and a prefix cap) is
-    rendered from the physical layer's outputs and delivered as a
-    `DeviceFile` under `/data`. An executable of this program's own — the
-    file's post-apply hook, and a `Type=oneshot` unit at boot — installs
-    it into `/etc/frr`, switches the BGP daemon on in the firmware's own
-    daemon list, and restarts the daemon. **The UniFi BGP feature is
-    never configured**: it drives the same binaries from a blob of its
-    own, and the two managers cannot coexist, so a BGP object on the
-    controller is drift (physical/gateway.md §1.3).
+    rendered from `conventions.HOMELAB_NODE_IPV4` — a constant,
+    deliberately not an output of the libvirt resource — and delivered
+    as a `DeviceFile` under `/data`. An executable of this program's
+    own — the file's post-apply hook, and a `Type=oneshot` unit at boot
+    — installs it into `/etc/frr`, switches the BGP daemon on in the
+    firmware's own daemon list, and restarts the daemon. **The UniFi
+    BGP feature is never configured**: it drives the same binaries from
+    a blob of its own, and the two managers cannot coexist, so a BGP
+    object on the controller is drift (physical/gateway.md §1.3).
 -   **Scope — full absorption of the push direction (2026-08-22)**:
     the provider manages *all* desired-state files on the device —
     FRR/BGP, the nspawn container services (unit files, rootfs

@@ -11,13 +11,14 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > dnsconfig.js (6 zones; roughly half the records are not
 > cluster-related). Declared since 2026-08-25:
 > `src/kluster/components/dns/` holds the record model and the block
-> (`record.py`), the base records (`base.py`), the app records the legacy
-> VPS still serves (`legacy.py`, transitional — §6), and the two
-> components that turn data into resources (`zone.py`, `rewrites.py`,
-> which also derives the rewrites the routes imply, over the custom
-> provider in `src/kluster/providers/adguard_rewrites/`). The route rows
-> themselves are a convention, `src/kluster/conventions/routes.py`, because
-> `apps` and `dns` both read them (README.md §2). **The retiring DNSControl
+> (`record.py`), the base records (`base.py`), the app records the
+> legacy VPS still serves (`legacy.py`, transitional — §6), the
+> derivation from routes to rewrites (`rewrites.py`), and the two
+> components that turn data into resources (`zone.py` and `rewrites.py`
+> again, the latter over the custom provider in
+> `src/kluster/providers/adguard_rewrites/`). The route rows themselves
+> are a convention, `src/kluster/conventions/routes.py`, because `apps`
+> and `dns` both read them (README.md §2). **The retiring DNSControl
 > program is authoritative until cutover**: the zones exist at
 > Cloudflare and their state is imported rather than applied, so this
 > stack's first `up` is a cutover step and is not to be run while that
@@ -252,21 +253,23 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     `ResolverService` takes over is the static half (listeners,
     upstreams) as an **initial state**, not as live state: it declares
     one `AdGuardHome.initial.yaml` per instance, under a name the
-    instance itself never reads, and the device's `40-machines.sh` copies
-    it to the `AdGuardHome.yaml` the instance does read only when the
-    working directory is empty — after a wipe, and at no other time.
--   **An initial state, because the file is the instance's own.** AdGuard
-    Home keeps its whole configuration in one YAML file that a running
-    instance rewrites whenever it accepts a change through its API, and
-    it has no include or multi-file mechanism: `upstream_dns_file`
-    externalizes the upstream list and nothing else, while the rewrites
-    above land in `filtering.rewrites` inside that same file. Declaring
-    the live file would therefore delete this stack's rewrites on every
-    apply. The two instances start identical because both initial-state
-    files come from one template (only the listen address differs), and their
-    dynamic halves stay identical because Pulumi writes both; a change
-    made in one instance's web UI afterward is reconciled by nothing.
-    See `components/gateway/container.py` for the device's side of this.
+    instance itself never reads, and the device's `40-machines.sh`
+    copies it to the `AdGuardHome.yaml` the instance does read only
+    when the working directory is empty — after a wipe, and at no other
+    time.
+-   **An initial state, because the file is the instance's own.**
+    AdGuard Home keeps its whole configuration in one YAML file that a
+    running instance rewrites whenever it accepts a change through its
+    API, and it has no include or multi-file mechanism:
+    `upstream_dns_file` externalizes the upstream list and nothing
+    else, while the rewrites above land in `filtering.rewrites` inside
+    that same file. Declaring the live file would therefore delete this
+    stack's rewrites on every apply. The two instances start identical
+    because both initial-state files come from one template (only the
+    listen address differs), and their dynamic halves stay identical
+    because Pulumi writes both; a change made in one instance's web UI
+    afterward is reconciled by nothing. See
+    `components/gateway/container.py` for the device's side of this.
 -   **Placement**: rewrites are emitted automatically for any app
     with a LAN-side gateway attachment — split-horizon (both
     gateways), LAN-only (`lan-gw`), or IoT-reachable (`media-gw`,
