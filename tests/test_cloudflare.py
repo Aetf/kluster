@@ -26,6 +26,7 @@ from kluster import conventions
 from kluster.scripts.credentials import cloudflare, entries, lifecycle, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
+from kluster.scripts.credentials.delivery import Delivery
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['cloudflare'].entry
@@ -47,16 +48,33 @@ def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
     return fake
 
 
-@pytest.fixture(autouse=True)
-def recorded_account(monkeypatch: pytest.MonkeyPatch) -> None:
+def _record_account(patch: pytest.MonkeyPatch) -> None:
     """Make the fake platform's account the one `conventions` records.
 
-    A zones mint proves the account it is about to mint in before it creates
-    anything, so a suite driving a fake account has to be that account for the
-    ordinary path to be the one under test. The test that wants the two to
-    disagree says so for itself.
+    Both adoption and every zones mint prove the account before they write, so
+    a suite driving a fake account has to be that account for the ordinary path
+    to be the one under test. A function as well as a fixture because the call
+    measurement below runs at import, where no fixture has run yet.
     """
-    monkeypatch.setattr(conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id=ACCOUNT_ID))
+    patch.setattr(conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id=ACCOUNT_ID))
+
+
+@pytest.fixture(autouse=True)
+def recorded_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recorded account, for every test but the ones that say otherwise."""
+    _record_account(monkeypatch)
+
+
+def _delivered[T](pending: Delivery[T]) -> T:
+    """The credential a register row is left holding once its push has returned.
+
+    A row cannot read the credential directly (`delivery.py`), so this is how
+    a test comes by one at all — and it is the route that retires, which is
+    what these cases are about. The push is the identity function:
+    what is under test is the order, and every slot this suite would push into
+    belongs to another module.
+    """
+    return pending.deliver(lambda credential: credential)[0]
 
 
 @pytest.fixture
@@ -109,6 +127,37 @@ def test_a_seed_that_cannot_see_zones_is_refused_at_adoption(api: FakeApi, kit: 
     with pytest.raises(CredentialRejected, match=cloudflare.ZONE_VISIBILITY_PERMISSION):
         _ = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
     assert not kit.has(SEED_ENTRY)
+
+
+def test_a_seed_that_sees_only_another_account_is_refused_before_the_kit_records_it(
+    api: FakeApi, kit: KdbxStore
+) -> None:
+    _ = api.add_zone('someone-elses.example', account_id='some-other-account')
+    value = console_seed(api)
+
+    # Both accounts are named, because which of the two is stale -- a token
+    # made in the wrong account, or an identifier written down wrong -- is the
+    # operator's question and neither one alone answers it.
+    with pytest.raises(CredentialRejected, match=f'some-other-account.*{ACCOUNT_ID}'):
+        _ = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
+
+    # And the kit does not record it. A seed adopted from an account
+    # `conventions` does not name would mint every later credential there,
+    # while the operator is no longer on the dashboard page that fixes it.
+    assert not kit.has(SEED_ENTRY)
+
+
+def test_a_seed_that_sees_this_account_among_others_is_adopted(api: FakeApi, kit: KdbxStore) -> None:
+    value = _seed(api)
+    _ = api.add_zone('someone-elses.example', account_id='some-other-account')
+
+    token_id = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
+
+    # A person's Cloudflare login may reach accounts this installation never
+    # mints in, and seeing one of them says nothing about the seed: what
+    # adoption requires is that the recorded account is among what it can see,
+    # because a mint resolves the installation's zones by name from there.
+    assert kit.get(SEED_ENTRY, attribute='UserName') == token_id
 
 
 def test_an_unknown_token_is_reported_as_rejected(kit: KdbxStore, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,7 +226,7 @@ def test_the_seed_may_not_mint_a_successor_to_itself(api: FakeApi, memory_kit: K
 def test_a_minted_token_carries_the_policies_it_was_given(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
 
-    minted = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+    minted = _delivered(cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]))
     token_id, value = minted.token_id, minted.value
 
     # The caller states the policies; nothing is copied from the minter,
@@ -193,18 +242,19 @@ def test_the_minted_token_is_verified_before_it_is_returned(api: FakeApi) -> Non
     _ = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
 
     # The call after the mint is the new token verifying itself: a token that
-    # cannot authenticate must not reach a consumer's slot. What follows is
-    # retirement, which runs as that same verified token.
+    # cannot authenticate must not reach a consumer's slot. Nothing follows it
+    # here: retirement waits for the caller's push, and when it comes it runs
+    # as the minter, because a minted token may not manage tokens at all.
     minted = api.calls.index(('POST', '/user/tokens'))
     assert api.calls[minted + 1] == ('GET', '/user/tokens/verify')
 
 
 def test_minting_retires_the_predecessor_as_the_minting_token(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
-    previous = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).token_id
+    previous = _delivered(cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])).token_id
     orphan = api.values[api.add(STACK_TOKEN, [ZONE_POLICY])]
 
-    current = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).token_id
+    current = _delivered(cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])).token_id
 
     # Two tokens to delete, and only the seed can delete either: listing and
     # deleting tokens are token permissions, which a minted §3 token may not
@@ -215,9 +265,30 @@ def test_minting_retires_the_predecessor_as_the_minting_token(api: FakeApi) -> N
     assert orphan not in api.tokens
 
 
+def test_a_mint_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi) -> None:
+    session = cloudflare.Session.authorize(_seed(api))
+    previous = _delivered(cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])).token_id
+
+    pending = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])
+
+    # Cloudflare discloses a token's value once, at creation, so between here
+    # and the caller's push the new value exists in this process alone. A
+    # predecessor retired inside the mint would leave a run whose push then
+    # failed with no working token anywhere -- the slot naming a revoked one.
+    # Asserted against the account rather than against the new token's id,
+    # because reading that id is delivering it.
+    standing = _named(api, STACK_TOKEN)
+    assert previous in standing
+    assert len(standing) == 2
+
+    current = _delivered(pending)
+
+    assert _named(api, STACK_TOKEN) == [current.token_id]
+
+
 def test_a_minted_token_may_not_manage_tokens_at_all(api: FakeApi) -> None:
     session = cloudflare.Session.authorize(_seed(api))
-    value = cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY]).value
+    value = _delivered(cloudflare.mint_token(session, STACK_TOKEN, [ZONE_POLICY])).value
 
     # The platform rule this module is shaped around, seen from the other side:
     # the class of token the seed is allowed to mint cannot even enumerate
@@ -236,7 +307,7 @@ def test_the_zones_token_is_scoped_to_exactly_the_installation_zones(api: FakeAp
     api.add_zone('someone-elses.example')
     session = cloudflare.Session.authorize(_seed(api))
 
-    minted = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    minted = _delivered(cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES))
 
     # One policy: record edit on the installation's zones by id, the read the
     # provider needs beside it, and no token permission — the only class the
@@ -318,7 +389,7 @@ def test_a_token_narrower_than_it_was_asked_for_never_reaches_a_slot(api: FakeAp
 def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi) -> None:
     zone_ids = _installation(api)
     session = cloudflare.Session.authorize(_seed(api))
-    working = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    working = _delivered(cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES))
     api.withholds_zone = zone_ids[conventions.ZONE_PRIMARY]
 
     with pytest.raises(CredentialRejected, match=conventions.ZONE_PRIMARY):
@@ -331,7 +402,7 @@ def test_a_wrong_scope_mint_leaves_the_working_predecessor_standing(api: FakeApi
     assert working.token_id in api.tokens
     api.withholds_zone = None
 
-    replacement = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    replacement = _delivered(cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES))
 
     assert _named(api, STACK_TOKEN) == [replacement.token_id]
 
@@ -406,7 +477,7 @@ def test_a_catalogue_entry_that_names_no_scope_does_not_stop_a_mint(api: FakeApi
     api.groups['some-other-product'] = {'name': 'Some Other Product Write'}
     session = cloudflare.Session.authorize(_seed(api))
 
-    minted = cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES)
+    minted = _delivered(cloudflare.mint_zone_token(session, role=STACK_ROLE, zones=conventions.ALL_ZONES))
 
     assert _named(api, STACK_TOKEN) == [minted.token_id]
 
@@ -492,7 +563,9 @@ def _calls_made(operation: Callable[[FakeApi, KdbxStore], None]) -> int:
     original = (cloudflare.requests.get, cloudflare.requests.request)
     faulty.attach()
     try:
-        operation(api, MemoryKit())
+        with pytest.MonkeyPatch.context() as patch:
+            _record_account(patch)
+            operation(api, MemoryKit())
         return faulty.counted
     finally:
         setattr(cloudflare.requests, 'get', original[0])  # noqa: B010
@@ -504,7 +577,14 @@ def _adopt(api: FakeApi, kit: KdbxStore) -> None:
 
 
 def _mint(api: FakeApi, _kit: KdbxStore) -> None:
-    _ = cloudflare.mint_token(cloudflare.Session.authorize(_seed(api)), STACK_TOKEN, [ZONE_POLICY])
+    """The whole of a §3 row's mint: create, verify, push, retire.
+
+    The delivery is what makes the retirement part of the operation being
+    swept. A bare `mint_token` retires nothing by design, so an operation that
+    stopped there would sweep part of the calls and read the accumulation it
+    leaves behind as healthy.
+    """
+    _ = _delivered(cloudflare.mint_token(cloudflare.Session.authorize(_seed(api)), STACK_TOKEN, [ZONE_POLICY]))
 
 
 ADOPT_CALLS = _calls_made(_adopt)
@@ -563,10 +643,12 @@ def test_minting_a_token_heals_from_a_failure_at_any_call(
     _ = faulty(failing_call, when)
 
     with pytest.raises(Interrupted):
-        _ = cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY])
+        _ = _delivered(cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY]))
 
     _ = faulty(None, when)
-    token_id = cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY]).token_id
+    token_id = _delivered(
+        cloudflare.mint_token(cloudflare.Session.authorize(value), STACK_TOKEN, [ZONE_POLICY])
+    ).token_id
 
     # One token of that name stands, and it is the one the caller was handed:
     # a token minted by the run that died is a live permission whose value

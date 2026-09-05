@@ -39,6 +39,7 @@ import requests
 
 from ... import conventions
 from . import payload
+from .delivery import Delivery
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -336,7 +337,7 @@ class Session:
                 'only that permission can mint a token through the API'
             )
 
-    def require_zone_visibility(self) -> None:
+    def require_zone_visibility(self) -> tuple[Zone, ...]:
         """Refuse a seed that authenticates and can mint but sees no zone.
 
         Behaviour rather than permission names, because the listing is what the
@@ -344,8 +345,14 @@ class Session:
         zones this account does not have. Non-empty is the whole test -- which
         zones the installation expects is `conventions`' business, and adoption
         comes before any of it.
+
+        The listing comes back rather than being thrown away, because the
+        answer carries the accounts those zones are in and adoption is held to
+        one of them (`verify_seed_account`). Asking a second time could only
+        produce a second answer to a question already settled.
         """
-        if not self.zones():
+        visible = self.zones()
+        if not visible:
             raise CredentialRejected(
                 'this Cloudflare token can mint tokens but can see no zone, so it cannot '
                 'turn a zone name into the id a minted policy names: it is missing '
@@ -354,6 +361,7 @@ class Session:
                 'already in hand -- create a fresh token carrying both permissions, record '
                 'it with `credentials seed cloudflare create`, and delete this one'
             )
+        return visible
 
     def tokens(self) -> tuple[TokenSummary, ...]:
         """Every token this credential may see, which only a minter may ask."""
@@ -424,8 +432,10 @@ def _retire_superseded(session: Session, name: str, keep: str) -> None:
     either: it is the seed, whose name is not a stack token's, and its own id
     is skipped regardless.
 
-    Only after the replacement exists, authenticates and carries the scope it
-    was asked for: every earlier stop must leave a working predecessor behind.
+    Run last of all, after the replacement exists, authenticates, carries the
+    scope it was asked for *and* has reached its slot: every earlier stop must
+    leave a working predecessor behind, which is why the mint hands this back
+    rather than calling it (`delivery.py`).
     """
     for existing in session.tokens():
         if existing.name == name and existing.token_id not in (keep, session.token_id):
@@ -438,17 +448,22 @@ def mint_token(
     name: str,
     policies: list[dict[str, Any]],
     confirm: Callable[[str], None] | None = None,
-) -> Token:
+) -> Delivery[Token]:
     """Mint one §3 token from the seed.
 
     The unit every per-stack Cloudflare credential is made of, and the reason
     the seed exists. Rotating such a token is a re-run of this: a same-named
     predecessor -- or an orphan a lost run left behind, which carries a live
     permission nobody holds the value of -- is deleted once the replacement is
-    minted, verified and accepted by `confirm`, which is handed the new value
-    and raises if the credential is not the one that was asked for. Retirement
-    comes last so that no check can fail after the predecessor is already
-    gone.
+    minted, verified, accepted by `confirm`, which is handed the new value and
+    raises if the credential is not the one that was asked for, and delivered
+    by the caller.
+
+    Retirement comes back with the token rather than happening here, so it
+    runs after the caller's push and not before it (`delivery.py`, and the
+    register's §4 for why); every check this function makes still runs before
+    either. The closure carries the *minter's* session, because a minted token
+    may not manage tokens at all and could not delete its own predecessor.
 
     `policies` are the caller's, and may not include token permissions: a
     sub-token carrying them is refused by the platform.
@@ -456,8 +471,7 @@ def mint_token(
     minted = _mint_verified(session, name, policies)
     if confirm is not None:
         confirm(minted.value)
-    _retire_superseded(session, name, keep=minted.token_id)
-    return minted
+    return Delivery.of(minted, lambda: _retire_superseded(session, name, keep=minted.token_id))
 
 
 @dataclass(frozen=True)
@@ -527,6 +541,35 @@ def verify_account(account_id: str) -> None:
     log.info('the zones are in %s, which is the account `conventions` records', account_id)
 
 
+def verify_seed_account(visible: Sequence[Zone]) -> None:
+    """Hold the accounts a seed can see against the one `conventions` records.
+
+    Adoption's form of `verify_account`, asking the weaker question its weaker
+    fact allows: no zone has been named yet, so what is in hand is every zone
+    the token can see, and a Cloudflare login may legitimately reach accounts
+    this installation never mints in. What must be true is that the recorded
+    account is among them -- a seed that cannot see it cannot resolve a single
+    zone of this installation, so every mint it is adopted for would fail one
+    console visit later, and a seed adopted from another account entirely is a
+    kit that will build this installation's credentials somewhere nobody here
+    records.
+
+    Both sides are named, because which of the two is stale -- a token made in
+    the wrong account, or an identifier written down wrong -- is the operator's
+    question and neither one alone answers it.
+    """
+    intended = conventions.CLOUDFLARE_ACCOUNT.account_id
+    accounts = sorted({zone.account_id for zone in visible})
+    if intended not in accounts:
+        raise CredentialRejected(
+            f'this Cloudflare token sees zones in {", ".join(accounts)}, and none of those is the '
+            f'{intended} that `conventions.CLOUDFLARE_ACCOUNT` records as the account this installation '
+            'declares into: one of the two is stale, and a seed adopted here would mint every later '
+            'credential in an account this repository does not name'
+        )
+    log.info("the seed sees this installation's account, %s, among the zones it can list", intended)
+
+
 def _confirm_scope(value: str, expected: Sequence[str]) -> None:
     """Prove the minted token sees the zones it was minted for, as itself.
 
@@ -546,7 +589,7 @@ def _confirm_scope(value: str, expected: Sequence[str]) -> None:
         log.warning('the minted token also sees %s, which nothing here asked for', ', '.join(extra))
 
 
-def mint_zone_token(session: Session, *, role: Role, zones: Sequence[str]) -> ZoneToken:
+def mint_zone_token(session: Session, *, role: Role, zones: Sequence[str]) -> Delivery[ZoneToken]:
     """A §3 zone-scoped token: `role`'s permissions on exactly `zones`, and nothing else.
 
     One policy with one resource per zone, carrying the role's permissions and
@@ -573,7 +616,12 @@ def mint_zone_token(session: Session, *, role: Role, zones: Sequence[str]) -> Zo
         }
     ]
     minted = mint_token(session, role.name, policies, confirm=lambda value: _confirm_scope(value, zones))
-    return ZoneToken(token_id=minted.token_id, value=minted.value, account_id=account_id, zone_ids=zone_ids)
+    # `about` rather than unwrapping: the account and the zone ids are what
+    # this layer learned and the inner mint had no way to report, and neither
+    # layer may take the value out in order to say so.
+    return minted.about(
+        lambda token: ZoneToken(token_id=token.token_id, value=token.value, account_id=account_id, zone_ids=zone_ids)
+    )
 
 
 def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
@@ -590,6 +638,13 @@ def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
     that cannot list zones into the kit, and its first symptom would be a
     failed mint one command and one console visit later.
 
+    So is the account, for the same reason and from the same listing: the zones
+    the seed can see name the accounts it can act in, and a seed adopted from
+    an account `conventions` does not record is a kit that would mint this
+    installation's credentials somewhere nothing here manages. Checked at the
+    first mint instead, that refusal would arrive after the console page is
+    closed and the console-made token is already in the kit.
+
     The superseded token is not deleted from here. Deleting it would mean
     signing with a credential the retired kit still names as current, at the
     moment §4.2 requires that kit to stay exactly as it was; the dashboard
@@ -597,7 +652,7 @@ def adopt_seed(*, token: str, seeds: KdbxStore, seed_entry: str) -> str:
     """
     session = Session.authorize(token)
     session.require_minting()
-    session.require_zone_visibility()
+    verify_seed_account(session.require_zone_visibility())
     seeds.put(seed_entry, session.token_id, token)
     log.info('stored the Cloudflare seed token (%s)', session.token_id)
     return session.token_id

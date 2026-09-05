@@ -33,6 +33,7 @@ from typing import Any
 import requests
 
 from . import masters, payload
+from .delivery import Delivery
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -409,6 +410,17 @@ def retire_others(session: Session, role: Role, *, keep: str) -> None:
     `session` must be a credential that is still valid once the deletions are
     done -- an authorization token is a token *of a key*, so a session that
     deletes its own key cannot delete the next one.
+
+    Every caller here but one runs this only once the successor is written
+    down somewhere durable: the seed rows once it is in the kit,
+    `mint_management` once the caller's push has returned (`delivery.py`).
+
+    `mint_dump_key` is the exception, and it is one. It is a §3 mint that
+    retires inline, because its only caller lives outside these scripts and
+    the signature is that caller's. It is safe where it stands rather than
+    correct by construction -- the caller reaches it only after the box that
+    held the predecessor has been terminated, so there is no live consumer to
+    strand -- and Aetf/kluster-ops#285 tracks closing the gap.
     """
     for existing in session.keys():
         if existing.name == role.name and existing.key_id != keep:
@@ -460,20 +472,21 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     return minted.app_key.key_id
 
 
-def mint_management(store: KdbxStore, *, seed_entry: str) -> AppKey:
+def mint_management(store: KdbxStore, *, seed_entry: str) -> Delivery[AppKey]:
     """Mint the management key for the bring-up pipeline to place in its slots.
 
     Deliberately returns the credential instead of storing it: the offline
     store holds seeds, never the credentials automation consumes
     (credentials.md §1 rule 2).
+
+    The retirement comes back with it rather than happening here, so it runs
+    after the caller's push and not before it (`delivery.py`, and the
+    register's §4 for why). The closure carries the *seed's* session because
+    the seed signs the deletions and is not among the keys being deleted.
     """
     session = Session.from_entry(store, seed_entry)
     minted = _mint_verified(session, MANAGEMENT)
-    # Retire predecessors only once the replacement works: a failed mint must
-    # leave the running stack's credential alone. The seed signs it, and the
-    # seed is not among the keys being deleted.
-    retire_others(session, MANAGEMENT, keep=minted.app_key.key_id)
-    return minted.app_key
+    return Delivery.of(minted.app_key, lambda: retire_others(session, MANAGEMENT, keep=minted.app_key.key_id))
 
 
 def _retention(prefix: str, retention_days: int) -> LifecycleRule:
@@ -553,6 +566,14 @@ def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -
     # Retired by the minter rather than by the new key: a write-only key
     # carries no `deleteKeys` and could not retire anything, its predecessor
     # least of all.
+    #
+    # And retired *here*, unlike every other §3 mint, which hands the
+    # retirement to its caller so that it runs after the push (`delivery.py`).
+    # The signature belongs to a caller outside these scripts. That caller
+    # reaches this only after terminating the box that held the predecessor, so
+    # nothing live is stranded and a run that dies before the new box exists
+    # leaves a key the next run retires by name; Aetf/kluster-ops#285 tracks
+    # making the shape uniform anyway.
     retire_others(session, role, keep=minted.key_id)
     log.info('minted %s (%s)', role.name, minted.key_id)
     return minted

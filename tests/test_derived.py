@@ -1,9 +1,15 @@
 """§3's rows end to end: minted from a seed, delivered into the slot the row names.
 
 Against fakes of the three platforms and a recorded `pulumi`, because what is
-under test is the shape of the procedure — mint, prove, push, prove — and its
-idempotence. Both are properties of this repository rather than of any
+under test is the shape of the procedure — mint, prove, push, prove, retire —
+and its idempotence. Both are properties of this repository rather than of any
 provider.
+
+The order of the last two is a property in its own right, and every provider
+here has a case pinning it: a push that fails leaves the predecessor live,
+because until the push returns the freshly minted credential exists in this
+process alone. The recorded `pulumi` refuses a read-back on demand, which is
+one of the ways `stack.fill` fails for real.
 
 The OCI tenancy is the fake `test_oci_iam` drives, imported rather than
 rebuilt: one fake per platform, and the module that owns the API is where it
@@ -170,7 +176,8 @@ def test_a_re_run_rotates_the_row_and_leaves_one_live_token(
     derived.cloudflare_zones(kit, stack=slot)
 
     # Rotation is a re-run, not a second procedure: the predecessor is retired
-    # once its successor is verified, and the slot names the survivor.
+    # once its successor is verified and the slot has taken it, and the slot
+    # names the survivor.
     second = runner.config[derived.API_TOKEN_KEY]
     assert second != first
     assert _live(api) == [api.values[second]]
@@ -220,6 +227,34 @@ def test_the_token_lands_where_the_program_reads_it(
     committed = (slot.directory / f'Pulumi.{STACK}.yaml').read_text()
     assert f'{project}:{derived.API_TOKEN_KEY}:' in committed
     assert 'cloudflare:' not in committed
+
+
+def test_a_push_that_fails_leaves_the_token_the_stack_already_holds_live(
+    api: FakeApi, kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = stack
+    derived.cloudflare_zones(kit, stack=slot)
+    (predecessor,) = _live(api)
+    runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        derived.cloudflare_zones(kit, stack=slot)
+
+    # Cloudflare shows a token's value once, so between the mint and the push
+    # the successor exists in this process and nowhere else. Retired first, the
+    # run would end with the `dns` stack naming a token the account has deleted
+    # and the working one gone with the process; retired last, the failure
+    # costs a re-run. Two tokens stand, and the live one is the one the stack
+    # is still holding.
+    assert predecessor in _live(api)
+    assert len(_live(api)) == 2
+
+    # The strays are reconciled by the row itself: retirement matches on the
+    # token name rather than on a recorded predecessor, so the next run that
+    # gets as far as its push deletes everything the failed ones left.
+    runner.corrupts = False
+    derived.cloudflare_zones(kit, stack=slot)
+    assert _live(api) == [api.values[runner.config[derived.API_TOKEN_KEY]]]
 
 
 def test_a_push_that_fails_is_healed_by_running_it_again(
@@ -341,7 +376,7 @@ def test_a_re_run_rotates_the_gateway_token_and_leaves_one_live(
     second = derived.cloudflare_gateway_acme(kit, stack=slot)
 
     # Rotation is a re-run: the predecessor is retired once its successor is
-    # verified, and the slot names the survivor.
+    # verified and the slot has taken it, and the slot names the survivor.
     assert second != first
     assert _gateway_live(api) == [second]
     assert api.values[runner.config[derived.GATEWAY_ACME_KEY]] == second
@@ -665,13 +700,62 @@ def test_a_re_run_rotates_the_key_and_reuses_the_identity(
     again = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
 
     # Rotating the row is re-running the command: the same principal, a new
-    # key, and the predecessor retired once the successor is verified — so the
-    # user never accumulates towards the quota of three.
+    # key, and the predecessor retired once the successor is verified and the
+    # slot has taken it — so a run that gets that far leaves the user holding
+    # one key rather than accumulating towards `oci_iam.KEY_QUOTA`.
     assert again == user
     second = runner.config[derived.OCI_PRIVATE_KEY_KEY]
     assert second != first
     assert tenancy.identity.keys[user] == [oci_iam.fingerprint(second)]
     assert len(tenancy.identity.users) == len(tenancy.identity.groups) == len(tenancy.identity.policies) == 2
+
+
+def test_an_oci_push_that_fails_leaves_the_key_the_stack_already_holds_live(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+    delivered = oci_iam.fingerprint(runner.config[derived.OCI_PRIVATE_KEY_KEY])
+    runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # The private half of an OCI key is generated here and never returned by
+    # the service, so between the mint and the push it exists in this process
+    # alone. Swept first, this run would end with the `physical` stack holding
+    # a key the tenancy has deleted; swept last, the stack's key is untouched
+    # and the stray is what the next run clears.
+    assert delivered in tenancy.identity.keys[user]
+    assert len(tenancy.identity.keys[user]) == 2
+
+    runner.corrupts = False
+    _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    assert tenancy.identity.keys[user] == [oci_iam.fingerprint(runner.config[derived.OCI_PRIVATE_KEY_KEY])]
+
+
+def test_pushes_that_keep_failing_are_refused_by_name_rather_than_filling_the_quota(
+    oci_kit: KdbxStore, tenancy: Tenancy, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    user = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+    runner.corrupts = True
+    for _ in range(oci_iam.KEY_QUOTA - 1):
+        with pytest.raises(pulumi_config.SlotRefused):
+            _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    with pytest.raises(oci_iam.CredentialRejected, match='the quota'):
+        _ = derived.oci_physical(oci_kit, stack=slot, compartment_id=COMPARTMENT, connect=tenancy)
+
+    # What a deferred retirement costs on the unhappy path is credentials of
+    # this name accumulating at the provider, and OCI is where that has an end:
+    # a user holds three API keys, so the run that would exceed it stops and
+    # lists them instead. The stranded keys are named where an operator can act
+    # on them rather than minted past in silence, and the one the stack holds
+    # is still among them.
+    assert len(tenancy.identity.keys[user]) == oci_iam.KEY_QUOTA
+    assert oci_iam.fingerprint(runner.config[derived.OCI_PRIVATE_KEY_KEY]) in tenancy.identity.keys[user]
 
 
 # -- the appliance's key, which is a workstation slot rather than a stack ----
@@ -814,6 +898,31 @@ def test_the_management_key_never_touches_the_kit(
     _ = derived.b2_management(b2_kit, stack=slot)
 
     assert b2_kit.entries() == [derived.B2_SEED_ENTRY]
+
+
+def test_a_management_push_that_fails_leaves_the_key_the_stack_already_holds_live(
+    b2_api_fake: b2_api.FakeApi, b2_kit: KdbxStore, physical_stack: tuple[pulumi_config.Stack, RecordedPulumi]
+) -> None:
+    slot, runner = physical_stack
+    delivered = derived.b2_management(b2_kit, stack=slot)
+    runner.corrupts = True
+
+    with pytest.raises(pulumi_config.SlotRefused):
+        _ = derived.b2_management(b2_kit, stack=slot)
+
+    # B2 discloses a key's secret once, at creation, so between the mint and
+    # the push the successor exists in this process alone. Retired first, this
+    # run would end with the `physical` stack naming a key the account has
+    # deleted; retired last, the pair the stack holds still authenticates.
+    assert delivered in b2_api_fake.named(b2.MANAGEMENT.name)
+    assert len(b2_api_fake.named(b2.MANAGEMENT.name)) == 2
+
+    runner.corrupts = False
+    healed = derived.b2_management(b2_kit, stack=slot)
+
+    # Retirement matches on the key's name rather than on a recorded
+    # predecessor, so one successful run clears every stray a failed one left.
+    assert b2_api_fake.named(b2.MANAGEMENT.name) == [healed]
 
 
 def test_a_re_run_rotates_the_management_key(

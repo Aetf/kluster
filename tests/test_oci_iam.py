@@ -30,6 +30,7 @@ from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
+from kluster.scripts.credentials.delivery import Delivery
 
 PASSWORD = 'kit-password'
 TENANCY = 'ocid1.tenancy.oc1..tenancy'
@@ -614,10 +615,13 @@ def tenancy() -> Tenancy:
 def recorded_tenancy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the fake tenancy the account `conventions` records.
 
-    A mint proves the seed belongs to this installation's account before it
-    creates anything, so a suite driving a fake account has to be that account
-    for the ordinary path to be the one under test. The tests that want the two
-    to disagree say so for themselves.
+    `create_seed`, `rotate_seed` and `mint_api_key` each prove the tenancy
+    before they create anything, so a suite driving a fake account has to be
+    that account for the ordinary path to be the one under test. (`adopt_domain`
+    does not, which is its own gap rather than a fact about this fixture.) The
+    tests that want the two to disagree say so for themselves; the call
+    measurement in the fault sweep, which runs at import where no fixture has,
+    says so for itself too.
     """
     with_tenancy_ocid(monkeypatch, TENANCY)
 
@@ -672,6 +676,18 @@ def root() -> masters.Credential:
             masters.OCI_PRIVATE_KEY: private_pem,
         },
     )
+
+
+def _delivered[T](pending: Delivery[T]) -> T:
+    """The credential a register row is left holding once its push has returned.
+
+    A row cannot read the credential directly (`delivery.py`), so this is how
+    a test comes by one at all — and it is the route that retires, which is
+    what these cases are about. The push is the identity function:
+    what is under test is the order, and the slot this key goes into belongs to
+    another module.
+    """
+    return pending.deliver(lambda credential: credential)[0]
 
 
 def test_the_fingerprint_is_the_one_oci_computes() -> None:
@@ -832,6 +848,48 @@ def test_rotation_replaces_the_key_and_retires_the_predecessor(
     assert oci_iam.load_seed(successor, SEED_ENTRY).user == user_id
 
 
+def test_creating_the_seed_in_an_unrecorded_tenancy_builds_nothing_at_all(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+
+    # Both accounts are named, because which of the two is stale -- a root
+    # typed for another tenancy, or an OCID recorded wrong -- is the operator's
+    # question and neither one alone answers it.
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The check is above `ensure`, which is where this path's first write is:
+    # the group, the user, the membership and the policy are made before any
+    # key, so a refusal one line lower would leave four IAM principals and a
+    # live signing key in an account nothing here records. Worse, the kit would
+    # then record that account and every later mint would refuse correctly --
+    # so nothing would ever name the orphans again.
+    assert tenancy.identity.groups == {}
+    assert tenancy.identity.users == {}
+    assert tenancy.identity.policies == {}
+    assert tenancy.identity.keys == {}
+    assert not kit.has(SEED_ENTRY)
+
+
+def test_rotating_a_seed_from_an_unrecorded_tenancy_retires_nothing(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # This path's first write is a sweep, which deletes: creating no principals
+    # makes the stakes lower than `create_seed`'s and the shape identical, and
+    # a check below it would have spent keys in an account this program has no
+    # business acting in. The kit and the user are as they were.
+    assert tenancy.identity.keys[user_id] == [oci_iam.fingerprint(before)]
+    assert oci_iam.load_seed(kit, SEED_ENTRY).private_key == before
+
+
 def test_rotation_defaults_to_the_database_it_read(kit: KdbxStore, tenancy: Tenancy, root: masters.Credential) -> None:
     _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
     before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
@@ -944,7 +1002,9 @@ def test_a_recorded_compartment_is_used_rather_than_re_created(
         conventions.Compartment(consumer=conventions.STATE_BACKEND, name=recorded.name, ocid=recorded.id),
     )
 
-    minted = oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+    minted = _delivered(
+        oci_iam.mint_api_key(seeded, consumer=conventions.STATE_BACKEND, seed_entry=SEED_ENTRY, connect=tenancy)
+    )
 
     name = f'{conventions.CLUSTER_NAME}-{conventions.STATE_BACKEND}'
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {recorded.id}']
@@ -1041,12 +1101,14 @@ def test_a_drill_tenancy_is_not_held_against_the_recorded_account(
 ) -> None:
     with_tenancy_ocid(monkeypatch, ELSEWHERE)
 
-    minted = oci_iam.mint_api_key(
-        seeded,
-        consumer=conventions.PHYSICAL,
-        compartment_id='ocid1.compartment.oc1..drill',
-        seed_entry=SEED_ENTRY,
-        connect=tenancy,
+    minted = _delivered(
+        oci_iam.mint_api_key(
+            seeded,
+            consumer=conventions.PHYSICAL,
+            compartment_id='ocid1.compartment.oc1..drill',
+            seed_entry=SEED_ENTRY,
+            connect=tenancy,
+        )
     )
 
     # A run that names its own compartment is pointed at a tenancy none of the
@@ -1054,6 +1116,33 @@ def test_a_drill_tenancy_is_not_held_against_the_recorded_account(
     # lookup already takes as given -- so the account it mints in is whatever
     # the seed's row says.
     assert minted.tenancy == TENANCY
+
+
+def test_a_mint_sweeps_nothing_until_the_key_has_been_delivered(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    drill = 'ocid1.compartment.oc1..drill'
+    previous = _delivered(
+        oci_iam.mint_api_key(
+            seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+        )
+    )
+
+    pending = oci_iam.mint_api_key(
+        seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+    )
+
+    # The private half of a freshly minted key exists in this process and
+    # nowhere else until the caller has pushed it. Swept inside the mint, a run
+    # whose push then failed would leave the slot naming a key the tenancy has
+    # deleted, and the key that works gone with the process. Asserted against
+    # the tenancy rather than against the new key, because reading that key is
+    # delivering it.
+    held = tenancy.identity.keys[previous.user]
+    assert previous.fingerprint in held
+    assert len(held) == 2
+
+    current = _delivered(pending)
+
+    assert tenancy.identity.keys[current.user] == [current.fingerprint]
 
 
 def test_a_mint_converges_the_seeds_own_policy_before_it_acts(
@@ -1515,6 +1604,34 @@ def test_rotation_makes_room_before_minting(kit: KdbxStore, tenancy: Tenancy, ro
     assert tenancy.identity.keys[user_id] == [current]
 
 
+def test_a_full_consumer_user_says_its_live_key_cannot_be_told_apart(seeded: KdbxStore, tenancy: Tenancy) -> None:
+    drill = 'ocid1.compartment.oc1..drill'
+    minted = _delivered(
+        oci_iam.mint_api_key(
+            seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+        )
+    )
+    for _ in range(oci_iam.KEY_QUOTA - 1):
+        public_pem = oci_iam.generate_key().public_pem
+        _ = tenancy.identity.upload_api_key(minted.user, oci.identity.models.CreateApiKeyDetails(key=public_pem))
+
+    with pytest.raises(oci_iam.CredentialRejected, match='the quota') as refusal:
+        _ = oci_iam.mint_api_key(
+            seeded, consumer=conventions.PHYSICAL, compartment_id=drill, seed_entry=SEED_ENTRY, connect=tenancy
+        )
+
+    # The other answer, and the reason the two are different messages: this
+    # consumer's key is in a slot this program never reads, delivered there as
+    # a secret, so it cannot say which of the three is live. Naming one to keep
+    # here would be a guess, and both moves it offers instead have to be moves
+    # the operator can act on -- so the re-run is named.
+    message = str(refusal.value)
+    assert all(held in message for held in tenancy.identity.keys[minted.user])
+    assert 'cannot tell which' in message
+    assert 'Keep ' not in message
+    assert 'run this again' in message
+
+
 def test_a_full_user_no_key_of_which_can_go_names_the_errand(
     kit: KdbxStore, root: masters.Credential, tmp_path: Path
 ) -> None:
@@ -1526,8 +1643,36 @@ def test_a_full_user_no_key_of_which_can_go_names_the_errand(
 
     # The sweep is refused wholesale, so rotation must refuse to mint -- with
     # the fingerprints in hand, not a bare quota 400.
-    with pytest.raises(oci_iam.CredentialRejected, match='delete the superseded ones in the console'):
+    with pytest.raises(oci_iam.CredentialRejected, match='the quota') as refusal:
         _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # Every held key is named, and none of them is called superseded: the
+    # strays a refused sweep leaves are not keys anything has replaced.
+    message = str(refusal.value)
+    assert all(held in message for held in tenancy.identity.keys[user_id])
+    assert 'superseded' not in message
+
+    # And on *this* path the live key is knowable -- the kit holds its private
+    # half and the session signs with it -- so the refusal names it as the one
+    # to keep. Telling a rotation that deleting all of them is safe would
+    # invite spending the seed's own key, after which the row comes back only
+    # from the account root. The errand has to end somewhere the operator can
+    # act, so it names the re-run too.
+    kept = oci_iam.fingerprint(oci_iam.load_seed(kit, SEED_ENTRY).private_key)
+    assert f'Keep {kept}' in message
+    assert 'cannot tell which' not in message
+    assert 'run this again' in message
+    # Named once, and once only. A message that says "keep X" and then lists X
+    # among the ones to delete contradicts itself on the single point this
+    # whole path turns on, and the operator resolves the contradiction at a
+    # console with no way to check. Counting is what catches that: asserting
+    # the list is complete and asserting the kept key is named both stay true
+    # while it is in both halves.
+    assert message.count(kept) == 1
+    # And the errand ends at the repair, not at the symptom: a sweep that could
+    # not make room is what a row predating its identity-domain attribute
+    # produces, so clearing the strays by hand strands another next rotation.
+    assert 'credentials seed oci domain' in message
 
 
 class Interrupted(RuntimeError):
@@ -1690,10 +1835,12 @@ def _calls_made(operation: Callable[[FaultyTenancy, KdbxStore], None], *, prepar
     """
     tenancy = FaultyTenancy()
     kit = MemoryKit()
-    if prepared:
-        _create(tenancy, kit)
-    before = tenancy.counted
-    operation(tenancy, kit)
+    with pytest.MonkeyPatch.context() as patch:
+        with_tenancy_ocid(patch, TENANCY)
+        if prepared:
+            _create(tenancy, kit)
+        before = tenancy.counted
+        operation(tenancy, kit)
     return tenancy.counted - before
 
 

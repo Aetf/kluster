@@ -631,8 +631,8 @@ name.
 | `credentials root github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
 | `credentials kit bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials kit bootstrap --only <member>` | One seed was lost. Re-creates that row alone. `--only recovery` is also the repair path for a kit that predates the escrow: creating that row writes the recovery key (§2.2) into the kit and `escrow/RECIPIENTS` into the checkout. It refuses a kit that already holds a live recovery key, because every ciphertext opens with that one and nothing else. |
-| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
-| `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
+| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. Where `conventions` records that platform's account, the create holds it against what it is about to write in, before its first write. Two rows have one: the OCI create, against the tenancy its account root names, ahead of the group, user, membership and policy it would otherwise leave standing there; and the Cloudflare adopt, against the accounts the console-made token can see, while the operator is still on the dashboard page that fixes a token made in the wrong one. The B2 create has no such fact to check, and the recovery keypair is not a provider credential at all. |
+| `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. The OCI rotation holds the row's tenancy against `conventions` before any of it, because its first act is to delete the keys that are in the successor's way. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records — this being the first place in a bring-up that check can fire. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
@@ -660,11 +660,11 @@ name.
 
 `credentials --help` carries the same ordering, because a command list
 shaped like the register answers neither "where do I start" nor "which
-of these destroys something". Every
-minting subcommand is **account check → mint → push to every slot →
-verify**, and therefore idempotent: rotation is a re-run, not a second
-procedure. The first step is a precondition rather than a courtesy: a
-seed belonging to an account this installation does not own is knowable
+of these destroys something". Every minting subcommand is **account
+check → mint → push to every slot → verify → retire the predecessor**,
+and therefore idempotent: rotation is a re-run, not a second procedure.
+The first step is a precondition rather than a courtesy: a seed
+belonging to an account this installation does not own is knowable
 before anything is created — from the seed's own row for OCI, from the
 zone listing for Cloudflare — and a run that discovered it afterward
 would refuse while leaving a live credential behind in that account,
@@ -672,13 +672,68 @@ recorded in no register and known to nobody who could revoke it. It is
 a step only where the platform's account is a fact this program records:
 `conventions` names the OCI tenancy and the Cloudflare account, and
 `conventions.B2Account` carries a region and nothing to check against, so
-`b2-management` is the one minting subcommand with no first step. The
-slot map (below) does not drive those pushes; it records where they
+the B2 rows — `b2-management`, plus the create and rotate of the B2 seed,
+whose delivery is into the kit rather than into a stack's slot — are the
+ones with no first step.
+
+**The last step is last for the mirror image of that reason**, and what
+it buys is one property: *at no point does the only copy of a working
+credential exist solely in this process.* Between the mint and the push
+the new credential exists here and nowhere else — Cloudflare and B2
+disclose a value once, at creation, and an OCI private key is generated
+on this machine and never returned by the service. A predecessor retired
+there would mean that a push which then failed — an unreachable backend,
+an absent passphrase slot, a read-back that does not match — ends with
+the slot naming a revoked credential while the one that works is gone
+with the process. Retired after the push instead, that failure costs a
+re-run and nothing else: the predecessor is still live, and one extra
+credential of its name stands at the provider. Nothing has to record
+that stray, because every retirement here deletes *everything of that
+name except the one in hand* rather than one recorded predecessor — so
+the next run of the row that reaches its push clears whatever the failed
+ones left, and re-running the row is both the repair and the rotation.
+Every platform puts some ceiling on how many credentials of a name an
+account may hold, and OCI's is the one low enough to be reached by a
+handful of failed runs: a user holds `oci_iam.KEY_QUOTA` API keys, so
+the run that would exceed it stops and lists what the user is holding
+instead of minting past it. **Which of them to keep is a question that
+refusal answers only where it can**, and the two answers are different
+messages.
+
+**For a derived row, and for a seed create, it cannot.** A derived
+credential is in a slot this program never reads, delivered there as a
+secret; a seed create has nothing in hand to compare against, because the
+row it is about to write is the first thing that would hold a private
+half. Either way nothing here picks the live key out of the strays. That
+refusal says so, and names the two moves that are safe without knowing —
+delete all but one and re-run, or delete all of them and re-run, since
+the re-run mints a fresh key and writes it down either way.
+
+For a **seed rotation** it can, and must. The key at stake is the one
+the kit holds the private half of and the one the command is signing
+with, so that refusal names it as the key to keep and lists the rest as
+the ones to delete. Offering the delete-everything move here would be
+inviting the operator to spend the seed's own key, after which the row
+comes back only from the account root — through **`credentials seed oci
+create`**, not `kit bootstrap --only oci`: the kit still holds the row
+and only its key at OCI is gone, and the walk skips what the kit already
+has, where the single-row create probes nothing and overwrites both
+halves.
+
+That refusal is also the one a sweep that could not make room produces,
+which usually means the row predates the identity-domain attribute
+retirement goes through — the state §4.3 describes. So it points at
+`credentials seed oci domain` unconditionally rather than only where the
+console refuses too: an operator whose console deletes the strays by
+hand has cleared the symptom and will strand another key on the next
+rotation.
+
+The slot map (below) does not drive those pushes; it records where they
 land, naming each config key by importing it from the code that writes
 it, so the two cannot say different things. `generate` keeps that
-shape — **generate → escrow → push → verify** — and drops the
-idempotence deliberately: a re-run produces a new generation, which is
-exactly what rotating that row means.
+shape — **generate → escrow → push → verify** — and drops the idempotence
+deliberately: a re-run produces a new generation, which is exactly what
+rotating that row means.
 
 Two global options sit in front of every subject, because both defaults
 are per-checkout rather than universal: `--kdbx` names the kit
@@ -1018,7 +1073,9 @@ time.** A seed that mints its own successor (OCI, B2) authenticates *as*
 that successor before the predecessor's key is retired, so a run
 interrupted anywhere leaves a working seed in one kit or the other; the
 console-made Cloudflare token is checked for both permissions the seed
-needs (§2) while the operator is still on the page that fixes either.
+needs (§2), and for seeing the account `conventions` records among the
+zones it can list, while the operator is still on the page that fixes
+any of it.
 No row in the walk is merely pasted in, which is what makes the run's
 success mean the successor kit works.
 
