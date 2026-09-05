@@ -579,16 +579,19 @@ def remove_script(path: str) -> str:
     )
 
 
-def _refused(path: str, result: ssh.CommandResult) -> None:
+def _refused(path: str, result: ssh.CommandResult, verb: str) -> None:
     """Raise what a script's guards mean, if either of them stopped it.
 
     The scripts a tree's operations run are guarded the way the transport's own
-    verbs are, and the statuses they exit with mean the same two things.
+    verbs are, and the statuses they exit with mean the same two things. What
+    the declaration names here is a directory, which is what the refusal has to
+    say: a person reading it decides between the declaration and what is on the
+    device, and needs to be told which kind would have satisfied it.
     """
     if result.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
         raise ssh.SymbolicLinkAtPath(path)
     if result.exit_status == ssh.ReservedStatus.WRONG_KIND:
-        raise ssh.WrongKindAtPath(path)
+        raise ssh.WrongKindAtPath(path, ssh.DIRECTORY, verb)
 
 
 def marker_path(directory: str) -> str:
@@ -916,11 +919,11 @@ class DeviceArtifactProvider(DeviceProvider):
         image = reference(str(props['repository']), digest)
         async with open_transport(self._device(props)) as transport:
             pull = await transport.run(pull_script(image, root))
-            _refused(root, pull)
+            _refused(root, pull, 'push')
             if not pull.ok:
                 raise PullFailed(image, pull.exit_status, pull.stderr)
             unpack = await transport.run(unpack_script(root))
-            _refused(root, unpack)
+            _refused(root, unpack, 'push')
             if not unpack.ok:
                 raise UnpackFailed(root, unpack.exit_status, unpack.stderr)
             # Before the hook: the hook reads this.
@@ -967,7 +970,7 @@ class DeviceArtifactProvider(DeviceProvider):
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
             purged = await transport.run(purge_script(root))
-            _refused(root, purged)
+            _refused(root, purged, 'delete')
             if not purged.ok:
                 # A read-only filesystem, a permission the session lost, a disk
                 # that is gone: every one of them leaves the tree where it is,

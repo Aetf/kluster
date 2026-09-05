@@ -203,14 +203,14 @@ class Transport:
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
         self._refuse_a_link(path)
-        self._refuse_a_wrong_kind(path)
+        self._refuse_a_wrong_kind(path, 'write')
         user, _, group = (owner or 'root:root').partition(':')
         self.device.files[path] = Entry(data=data, mode=mode, owner=user, group=group or 'root')
         self.device.log.append(f'write {path}')
 
     async def remove(self, path: str) -> None:
         self._refuse_a_link(path)
-        self._refuse_a_wrong_kind(path)
+        self._refuse_a_wrong_kind(path, 'remove')
         _ = self.device.files.pop(path, None)
         self.device.log.append(f'remove {path}')
 
@@ -225,10 +225,10 @@ class Transport:
         if entry is not None and entry.kind == ssh.SYMBOLIC_LINK:
             raise ssh.SymbolicLinkAtPath(path)
 
-    def _refuse_a_wrong_kind(self, path: str) -> None:
+    def _refuse_a_wrong_kind(self, path: str, verb: str) -> None:
         entry = self.device.files.get(path)
         if entry is not None and entry.kind not in (ssh.REGULAR_FILE, ssh.REGULAR_EMPTY_FILE):
-            raise ssh.WrongKindAtPath(path)
+            raise ssh.WrongKindAtPath(path, ssh.REGULAR_FILE, verb)
 
     async def run(self, command: str) -> ssh.CommandResult:
         self.device.log.append(f'run {command}')
@@ -810,6 +810,8 @@ def test_a_directory_where_a_file_is_declared_fails_the_apply(device: Device) ->
         _ = file_provider().create(file_props())
 
     assert CONFIG_PATH in str(raised.value)
+    assert ssh.REGULAR_FILE in str(raised.value), 'the message names the kind that would satisfy the declaration'
+    assert 'write' in str(raised.value)
     assert HOOK not in device.commands
 
 
@@ -836,6 +838,8 @@ def test_a_directory_where_a_file_is_declared_fails_the_delete(device: Device) -
         file_provider().delete('id', file_props())
 
     assert CONFIG_PATH in str(raised.value)
+    assert ssh.REGULAR_FILE in str(raised.value)
+    assert 'remove' in str(raised.value)
     assert HOOK not in device.commands
     assert CONFIG_PATH in device.files
 
@@ -1137,37 +1141,44 @@ def guards(path: str) -> str:
 
 
 def rendered_scripts() -> dict[str, tuple[str, str]]:
-    """Every script renderer this module ships, rendered, with the path it acts on."""
+    """Every script renderer this module ships, rendered, with the guards it opens with.
+
+    A directory's two scripts ask about a link and nothing else, because
+    `mkdir -p` and `rmdir` refuse every other wrong kind in the device's own
+    words. A tree's three ask about the kind as well, because `mv` renames one
+    aside and `rm -rf` deletes it without a word.
+    """
     return {
-        'make_script': (provider.make_script(DIRECTORY_PATH, '0755', 'root:root'), DIRECTORY_PATH),
-        'remove_script': (provider.remove_script(DIRECTORY_PATH), DIRECTORY_PATH),
-        'pull_script': (provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE), ROOTFS_TREE),
-        'unpack_script': (provider.unpack_script(ROOTFS_TREE), ROOTFS_TREE),
-        'purge_script': (provider.purge_script(ROOTFS_TREE), ROOTFS_TREE),
+        'make_script': (provider.make_script(DIRECTORY_PATH, '0755', 'root:root'), ssh.symlink_test(DIRECTORY_PATH)),
+        'remove_script': (provider.remove_script(DIRECTORY_PATH), ssh.symlink_test(DIRECTORY_PATH)),
+        'pull_script': (provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE), guards(ROOTFS_TREE)),
+        'unpack_script': (provider.unpack_script(ROOTFS_TREE), guards(ROOTFS_TREE)),
+        'purge_script': (provider.purge_script(ROOTFS_TREE), guards(ROOTFS_TREE)),
     }
 
 
-def test_every_script_that_acts_on_a_declared_path_asks_about_a_link_first() -> None:
-    """One rule for the three resources, and the question has to come first.
+def test_every_script_that_acts_on_a_declared_path_opens_with_its_guards() -> None:
+    """One rule for the three resources, and the questions have to come first.
 
-    Every command after it follows a link, or displaces one, or deletes one --
-    so a script that reached its work before asking would have acted on a path
-    the declaration never named.
+    Every command after them follows a link, displaces one, deletes one, or
+    does the same to something of a kind nobody declared -- so a script that
+    reached its work before asking would have acted on a path the declaration
+    never named.
 
-    The roll is read off the module rather than written out here: a sixth
-    `*_script` that shipped unguarded would otherwise leave this case green,
-    which is the one thing it exists to prevent. It is a naming convention and
-    only that -- a renderer called something else is a renderer nothing here
-    counts. The two verbs the transport renders itself are held to the same
-    order where they are asserted.
+    The roll is read off the module rather than written out here, so a sixth
+    `*_script` cannot ship without an entry above saying which guards it opens
+    with. It is a naming convention and only that: a renderer called something
+    else is a renderer nothing here counts. The two verbs the transport renders
+    itself are held to the same order where they are asserted.
     """
     rendered = rendered_scripts()
     shipped = {name for name in vars(provider) if name.endswith('_script')}
 
     assert set(rendered) == shipped, 'a script renderer with no case here is one nobody checks'
-    for name, (script, path) in rendered.items():
-        assert script.startswith(ssh.symlink_test(path)), name
+    for name, (script, opening) in rendered.items():
+        assert script.startswith(opening), name
     assert f'exit {ssh.ReservedStatus.SYMBOLIC_LINK}' in ssh.symlink_test(DIRECTORY_PATH)
+    assert f'exit {ssh.ReservedStatus.WRONG_KIND}' in ssh.directory_test(ROOTFS_TREE)
 
 
 def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
@@ -1481,6 +1492,27 @@ def test_a_write_replaces_a_file_that_is_already_there(tmp_path: Path) -> None:
     assert [entry.name for entry in tmp_path.iterdir()] == ['frr.conf']
 
 
+def test_a_link_pointing_at_nothing_is_absent_to_stat_and_still_refused_by_a_write(tmp_path: Path) -> None:
+    """The composition the provider depends on, asked of a real shell.
+
+    `stat`'s `[ -e ]` follows the link and finds nothing, so the resource reads
+    as absent and the next apply creates it; the write's `[ -L ]` does not
+    follow it, so the create refuses. Without that second question `mv -f`
+    would make the file the link points at -- a path nobody declared.
+    """
+    target = tmp_path / 'never-made'
+    link = tmp_path / 'frr.conf'
+    link.symlink_to(target)
+
+    assert asyncio.run(shell_transport().stat(str(link))) is None
+
+    with pytest.raises(ssh.SymbolicLinkAtPath):
+        asyncio.run(shell_transport().write(str(link), b'router bgp 65000\n', mode='0644', owner=None))
+
+    assert link.is_symlink()
+    assert not target.exists()
+
+
 def test_a_named_pipe_at_the_path_is_neither_written_nor_removed(tmp_path: Path) -> None:
     """The kind `rm -f` deletes without a word, and `mv -f` would block on.
 
@@ -1491,12 +1523,18 @@ def test_a_named_pipe_at_the_path_is_neither_written_nor_removed(tmp_path: Path)
     path = tmp_path / 'frr.conf'
     os.mkfifo(path)
 
-    with pytest.raises(ssh.WrongKindAtPath):
+    with pytest.raises(ssh.WrongKindAtPath) as written:
         asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0644', owner=None))
-    with pytest.raises(ssh.WrongKindAtPath):
+    with pytest.raises(ssh.WrongKindAtPath) as removed:
         asyncio.run(shell_transport().remove(str(path)))
 
     assert path.is_fifo()
+    # Each verb says which one it was and what would have satisfied it, because
+    # the person reading it decides between the declaration and the device.
+    assert 'write' in str(written.value)
+    assert 'remove' in str(removed.value)
+    assert ssh.REGULAR_FILE in str(written.value)
+    assert ssh.REGULAR_FILE in str(removed.value)
 
 
 def test_a_remove_refuses_a_link_rather_than_taking_the_indirection_away(tmp_path: Path) -> None:
@@ -1864,6 +1902,8 @@ def test_a_wrong_kind_where_a_tree_is_declared_fails_the_push(device: Device) ->
         _ = artifact_provider().create(artifact_props())
 
     assert ROOTFS_TREE in str(raised.value)
+    assert ssh.DIRECTORY in str(raised.value), 'a tree is declared here, whatever a file resource would have said'
+    assert ssh.REGULAR_FILE not in str(raised.value), 'the remedy it points at is the one that would satisfy it'
     assert device.commands == [provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE)]
 
 
@@ -1877,6 +1917,8 @@ def test_a_wrong_kind_where_a_tree_is_declared_fails_the_delete(device: Device) 
         artifact_provider().delete('id', artifact_props())
 
     assert ROOTFS_TREE in str(raised.value)
+    assert ssh.DIRECTORY in str(raised.value)
+    assert 'delete' in str(raised.value)
     assert provider.marker_path(ROOTFS_TREE) in device.files
     assert HOOK_COMMAND not in device.commands
 
@@ -2334,6 +2376,9 @@ REFUSED_PATHS = (
     '/data/frr/../frr/frr.conf',
     '//data/frr',
     paths.ROOT,
+    '//',
+    '/.',
+    '/..',
 )
 
 
@@ -2383,6 +2428,13 @@ def test_the_device_root_is_a_parent_and_never_a_declaration() -> None:
     ):
         assert len(check.failures) == 1
         assert 'device root' in check.failures[0].reason
+
+    # Every spelling of it, refused for being the root rather than told to
+    # declare the root instead: the question is asked of the canonical form, so
+    # a path that normalizes to `/` never reaches the advice about spelling.
+    for spelling in (paths.ROOT, '//', '/.', '/..'):
+        reason = paths.refusal(spelling)
+        assert reason is not None and 'device root' in reason, spelling
 
     assert paths.parent('/data') == paths.ROOT
 

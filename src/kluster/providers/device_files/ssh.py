@@ -183,19 +183,25 @@ class SymbolicLinkAtPath(DeviceError):
 
 @final
 class WrongKindAtPath(DeviceError):
-    """Something of another kind stands where a file was declared.
+    """Something of another kind stands where a declared path was.
 
     The same rule as `SymbolicLinkAtPath` and the same reason: a declaration
     names what it declares, and a path holding something else is a decision for
     whoever put it there.
+
+    `declared` is `stat`'s word for the kind that would have satisfied the
+    declaration and `verb` is what was refused, because the answer a person
+    needs is which of the two to change -- and a message that named the wrong
+    kind would send them to undo the wrong end of it.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, declared: str, verb: str) -> None:
         super().__init__(
-            f'refusing to write {path}: it holds something that is not a regular file, '
-            f'and the declaration names a file at that path'
+            f'refusing to {verb} {path}: the declaration names a {declared} at that path, and something else is there'
         )
         self.path: str = path
+        self.declared: str = declared
+        self.verb: str = verb
 
 
 @final
@@ -408,7 +414,7 @@ class SshTransport:
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
         if result.exit_status == ReservedStatus.WRONG_KIND:
-            raise WrongKindAtPath(path)
+            raise WrongKindAtPath(path, REGULAR_FILE, 'write')
         _check(f'write {path}', result)
 
     async def remove(self, path: str) -> None:
@@ -424,7 +430,7 @@ class SshTransport:
         if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
             raise SymbolicLinkAtPath(path)
         if result.exit_status == ReservedStatus.WRONG_KIND:
-            raise WrongKindAtPath(path)
+            raise WrongKindAtPath(path, REGULAR_FILE, 'remove')
         _check(f'remove {path}', result)
 
     async def run(self, command: str) -> CommandResult:
