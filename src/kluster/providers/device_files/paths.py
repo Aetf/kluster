@@ -54,9 +54,11 @@ def refusal(path: str) -> str | None:
     """
     if not path.startswith(ROOT):
         return f'must be an absolute path on the device, got {path!r}'
-    if path == ROOT:
-        return 'must name a place on the device rather than the device root itself'
     spelling = canonical(path)
+    if spelling == ROOT:
+        # Asked before the spelling is compared, so that `//` and `/.` are
+        # refused as what they name rather than told to declare `/` instead.
+        return 'must name a place on the device rather than the device root itself'
     if path != spelling:
         return f'{_departure(path)}, so declare it as {spelling!r}, not {path!r}'
     return None
