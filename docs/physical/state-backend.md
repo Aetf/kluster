@@ -46,9 +46,10 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     pin-bump PRs against it (§2), humans merge them.
 -   **The only apply path is re-provision.** No configuration agent,
     no SSH mutation: any change = PR to the Butane file → run
-    `state-backend provision`, which terminates and relaunches when the
-    running box no longer matches the commit (minutes of 5432 downtime
-    — CI retries, local ops re-run). SSH exists (operator key in
+    `state-backend provision`, which names every way the running box no
+    longer matches the commit and, once the replacement is asked for
+    (below), dumps that box, terminates it and relaunches (minutes of
+    5432 downtime — CI retries, local ops re-run). SSH exists (operator key in
     Ignition) for **diagnosis only** — `state-backend ssh` looks the
     address up and logs in, so reading a log does not start with
     finding an IP. Note the key set is
@@ -65,8 +66,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     At launch, the instance's metadata records a digest per component
     of what it was built from — the Butane file, the operator keys,
     each pin, the certificate identities, the dump key's id — and a
-    converge run recomputes them and replaces the box when any differs,
-    naming the ones that did. Certificates are compared by what they
+    converge run recomputes them and calls for the box's replacement
+    when any differs, naming the ones that did. Certificates are compared by what they
     assert rather than by bytes, because they are re-issued on every
     render and would otherwise read as permanent drift. The two
     comparisons differ, and the difference is which key is stable: the
@@ -78,6 +79,56 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     `provision --replace`, which is what that flag is for. A box with
     no such record (built before this existed) counts as drifted:
     silence is not evidence that it matches.
+-   **One component is compared against the clock rather than against
+    the repository: how much life the server certificate has left.**
+    Every digested component is re-derived from the current commit, and
+    the current commit issues a certificate that is always young, so
+    equality can never see an expiry approaching. What the box records
+    beside its digests is therefore the date its own certificate dies,
+    and a converge leaves the box alone while more than the **renewal
+    margin** remains and calls for its replacement once less does. The margin's value
+    lives in one place, `config.RENEWAL_MARGIN`, and its reason is a
+    ratio rather than a date: it is small against the certificate's
+    validity (`pki.LEAF_VALIDITY`), so a certificate spends a small
+    fraction of its life inside the margin and the box is replaced for
+    expiry at most once per certificate. It is also wider than the
+    expiry alert §3 describes, which would make that alert the backstop
+    for a box nobody has converged — or whose reports nobody acted on —
+    rather than the trigger for the rotation — but that probe does not exist yet, so today the margin
+    is the only thing watching the certificate at all, and the ratio is
+    the reason that stands on its own. A **threshold**, not a date, is what
+    keeps a time-dependent component from making the converge flap:
+    outside the margin a second run is the same no-op as the first, and
+    inside it the replacement carries a certificate with its full
+    validity ahead of it, so the run after the rebuild is a no-op
+    again. A box recording no expiry is drifted for the reason a box
+    with no digest map is.
+-   **A replacement is asked for before it happens, and dumped before
+    it happens.** Drift is a reason to replace the box, not permission
+    to: a plain `state-backend provision` reports what differs and
+    stops, and `--force` asks for exactly that replacement.
+    (`--replace` is the same request for a box with no drift to find.)
+    **Neither flag stands in front of a prompt** — the replacement
+    decision reads nothing from a terminal, so it means the same thing
+    in a playbook and under a scheduler as it does by hand. (The run as
+    a whole is not unattended: opening the kit asks for its password
+    when the desktop secret store does not hold one, which is the one
+    place a `provision` waits for a human.) Once asked for, the run
+    dumps the box it is about to destroy and verifies the dump before
+    terminating anything, which closes the window back to the last
+    nightly one. That makes the replacement depend on the dump,
+    deliberately: a dump that fails stops the run with the box still
+    standing. `--no-dump` is how an operator says the box cannot be
+    dumped at all — unreachable, or a Postgres that will not start,
+    which is the case §6 sends here as its diagnosis path — and accepts
+    losing everything since the nightly object.
+-   **A run that replaced the box does not report success.** What it
+    leaves is an appliance answering on 5432 over an empty database,
+    which is half of the operation and reads as all of it. So the run
+    ends by naming the dump it took and the `state-backend restore`
+    that puts it back, and exits non-zero until that has happened — a
+    status distinct from both the converge that changed nothing and the
+    run that failed.
 -   **The B2 dump key is one of those components, not a special case.**
     B2 returns an application key's secret once, so the box's copy
     cannot be read back and minting a replacement revokes what it is
@@ -186,11 +237,22 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     is standing rent for nothing: the compromise response is
     "regenerate the CA, reissue all three, re-provision" — playbook
     §7.1.
--   **Expiry is monitored, not remembered**: the ops repo's
-    scheduled workflow (ci.md §3) asserts ≥30 days remaining on the
-    server cert via an
+-   **An approaching expiry surfaces as drift; rotating is still an
+    operator's decision.** Once the box's recorded expiry is inside the
+    renewal margin, every `state-backend provision` names it in the
+    drift it reports — so on an installation whose stacks are deployed
+    at all, nobody has to be watching a date. What the plain run does
+    *not* do is act: replacing the box is `--force`, like every other
+    replacement (§1), so the certificate is re-issued when an operator
+    says so and not before. **Still design-only**: the ops repo's
+    scheduled workflow (ci.md
+    §3) is to assert ≥30 days remaining on the server cert via an
     `openssl s_client` probe (no credentials needed), failing into the
-    unified alert channel (architecture.md §4.3). Response: playbook §7.1.
+    unified alert channel (architecture.md §4.3). The margin opens
+    earlier than that threshold, so once the probe is built it fires
+    only for a box nobody has converged — or whose reports nobody acted
+    on — in the interval between the two. Until it is built, a box
+    nobody converges is a box whose expiry nothing reports. Response: playbook §7.1.
 
 ## 4. Network exposure
 
@@ -222,22 +284,39 @@ there is nothing for it to edit.)
 
 ## 5. Backup
 
--   A systemd timer (quadlet) runs `pg_dump -Fc`, **age-encrypts**
-    the dump — it holds every stack's ciphertext *and* salt — and
+-   A systemd timer (quadlet) runs `pg_dump -Fc`, **lists the archive
+    with `pg_restore --list` and fails the run when it names no
+    table**, **age-encrypts** the dump — it holds every stack's
+    ciphertext *and* salt — and
     uploads to B2 under the state-backend prefix with a
     **prefix-scoped key holding `writeFiles` alone** — the system's
     one genuinely write-only key: unlike restic, the uploader keeps
     no index to read (storage.md §4). Pruning is not the box's job:
     RPO ≤ 24 h is fine — state is re-derivable from reality
-    (`pulumi refresh`/import) at worst.
+    (`pulumi refresh`/import) at worst. What the listing catches is a
+    dump of a database that has no tables — which is exactly what a box
+    produces after a replacement nobody followed with a restore (§1) —
+    and it is why the dump reaches a file before it reaches `age`
+    rather than being piped into it: a stream has no table of contents
+    to read. It is **not** a truncation check: a custom-format archive
+    carries its table of contents at the head, so a file cut down to a
+    few kilobytes still lists what the whole one would have. The
+    plaintext lives in `/var/tmp`
+    beside its own ciphertext for the two steps that read it — not in
+    `/tmp`, which on this box is backed by memory rather than by the
+    50 GB disk — and is unlinked as soon as the ciphertext exists.
 -   **The same dump on demand: `state-backend dump`.** It differs from
-    the timer's in its channel and its destination and in nothing else
-    — the operator's client certificate rather than the box's local
-    socket, a named local file rather than a B2 object, the same
-    `pg_dump -Fc` under the same age recipients. That is what makes it
-    the first step of every playbook below: a dump taken by hand before
-    a destructive move is as recoverable as a nightly one, and a
-    restore cannot tell which of the two produced its input.
+    the timer's in its channel, its destination and its spool — the
+    operator's client certificate rather than the box's local socket, a
+    named local file rather than a B2 object, a temporary directory on
+    the workstation rather than `/var/tmp` on the appliance — and it
+    refuses to overwrite a file already there, which the box has no
+    equivalent of. What it does not
+    differ in is the archive: the same `pg_dump -Fc`, the same age
+    recipients, and the same listing refused on the same terms. That is
+    what makes a hand-taken dump interchangeable with a nightly one: as
+    recoverable, and a restore cannot tell which produced its input.
+    The playbooks below take theirs from the converge.
 -   **Retention, explicit: STANDARD class — daily, kept 30 days —
     enforced by a B2 lifecycle rule on the prefix** (Pulumi-managed
     with the bucket, storage.md §4), not by the uploader. That keeps
@@ -327,10 +406,15 @@ Everything observable lives **outside** the box:
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
     thing that needs it, which is the only thing that cares.
--   The ops repo's scheduled workflow (ci.md §3) asserts pg_dump
+-   The ops repo's scheduled workflow (ci.md §3) is to assert pg_dump
     freshness
     (object-age on B2) and server-cert expiry (≥30 days), alerting
-    into the unified alert channel (architecture.md §4.3). Each alert maps to a playbook: stale
+    into the unified alert channel (architecture.md §4.3). **Both
+    probes are design-only.** For the certificate the renewal margin
+    of §1 narrows the gap — any converge reports the coming expiry
+    without being asked, though the re-issue itself waits for
+    `--force` — and for the dump nothing does. Each alert maps to a
+    playbook: stale
     dump → §7.3's restore path doubles as the diagnosis start; cert
     expiry → §7.1; an unreachable box → §7.3's rebuild is also the
     diagnosis path (there is no NSG allowlist to refresh — §4).
@@ -362,15 +446,20 @@ and both hand `PGSSLROOTCERT`/`PGSSLCERT`/`PGSSLKEY` to the tool they
 run — so a `pg_dump` that is really a wrapper around a container has to
 forward those variables and mount the bundle at the paths they name.
 
+A converge that is about to replace the box takes the first of those two
+moves for itself (§1), so a playbook below names the file that run wrote
+rather than a dump the operator had to remember to take.
+
 Each **verifies rather than reports**, because the moment either is run
 is the moment nobody can afford to find out later:
 
 -   A dump is listed with `pg_restore --list` before it is called one,
-    and a listing naming no table fails the run. A truncated archive
-    has a plausible size and a plausible name; what it does not have is
-    a readable table of contents. The plaintext exists in a temporary
-    directory for the two steps that read it and is never written
-    beside the encrypted file.
+    and a listing naming no table fails the run — the shape that
+    catches an archive of a database with nothing in it, which is
+    what a replaced box holds until its restore. The appliance's own
+    timer runs the same listing before it uploads (§5). The plaintext
+    exists in a temporary directory for the two steps that read it
+    and is never written beside the encrypted file.
 -   A restore asks `pulumi stack ls` twice. Beforehand, so that a
     backend already serving stacks is refused rather than overwritten
     — `--force` is how a deliberate overwrite says so, and a box too
@@ -385,23 +474,31 @@ is the moment nobody can afford to find out later:
     dump names are certificate subjects that exist on every box (§3),
     and flattening them would hand CI's tables to the operator.
 
--   **§7.1 Certificate rotation / CA reissue.** Trigger: expiry alert
-    (<30 days) or key compromise. Outline: `state-backend dump` →
-    re-provision, which re-issues the server certificate under the same
-    CA → `state-backend restore <the dump>`. The bracket is not
+-   **§7.1 Certificate rotation / CA reissue.** Trigger: an expiry
+    inside the renewal margin, which the converge finds by itself (§1);
+    the expiry alert of §3 once it exists, which by then means no
+    converge has run since the margin opened; or key compromise.
+    Outline: `state-backend provision --force`, which dumps the running
+    box, replaces it with one holding a certificate re-issued under the
+    same CA, names the file it wrote and exits non-zero →
+    `state-backend restore <that file>`. The bracket is not
     optional: the server certificate rides in Ignition, so re-issuing it
     replaces the instance and its data directory with it — the same
-    shape as §7.2, for the same reason. On compromise of the CA itself:
-    `credentials derived state-backend-ca generate` for a new generation,
-    the same dump/re-provision/restore against it, redistribute the `ci`
-    and `operator` bundles → `verify-full` check.
+    shape as §7.2, for the same reason. Rotating the server *key* while
+    the certificate still has life left is `provision --replace`, there
+    being no drift for a converge to find. On compromise of the CA
+    itself: `credentials derived state-backend-ca generate` for a new
+    generation, the same replace-and-restore against it, redistribute
+    the `ci` and `operator` bundles → `verify-full` check.
 -   **§7.2 Postgres major upgrade.** Trigger: renovate major pin PR.
-    Outline: `state-backend dump` → merge → `state-backend provision`
-    (the new major initdb's a fresh data directory) → `state-backend
-    restore <the dump>` → clean `pulumi preview`. The dump comes first
-    because the re-provision destroys the box it came from, and it is
-    verified as it is taken rather than trusted for the minutes between
-    the two.
+    Outline: merge → `state-backend provision --force` (the run dumps the
+    old box before terminating it, and the new major initdb's a fresh
+    data directory) → `state-backend restore <the file the run named>`
+    → clean `pulumi preview`. The dump is the run's own first act
+    rather than a step the operator has to remember, because the
+    re-provision destroys the box it came from; it is verified as it is
+    taken rather than trusted for the minutes between the two, and a
+    dump that fails aborts the replacement.
 -   **§7.3 Rebuild / DR drill (quarterly, automated in the ops repo).** §7.2
     minus the pin bump: provision a scratch micro from Butane,
     restore the latest age-encrypted B2 object via the **drill key**
@@ -416,7 +513,10 @@ is the moment nobody can afford to find out later:
     backup-age-<N+1> generate` → note the rotation date and N−1's
     earliest-destroy date where the next offline day will read them
     (nothing stores either — §5) → bump the generation pin, which swaps
-    the Butane recipients `[N, N−1] → [N+1, N]` → re-provision → verify
+    the Butane recipients `[N, N−1] → [N+1, N]` →
+    `state-backend provision --force`, which replaces the box and leaves
+    it empty like every other replacement here →
+    `state-backend restore <the file that run named>` → verify
     both decrypt paths → destroy N−1 on its date by deleting its escrow
     ciphertext (compromise: drop the key from recipients now, fresh
     dump, early-delete old objects).

@@ -36,9 +36,9 @@ needs_age = pytest.mark.skipif(age_binary is None, reason='age is not on PATH (m
 pytestmark = needs_age
 
 #: A stand-in for a custom-format archive: the magic real `pg_restore` looks
-#: for, a payload that is neither text nor compressible, and a terminator the
-#: double insists on — which is what makes truncating one detectable here in
-#: the way it is detectable there.
+#: for, and a payload that is neither text nor compressible. The tail is there
+#: to give a case something to cut off; nothing reads it, because truncation
+#: is not what a listing detects.
 TERMINATOR = b'-the-end-'
 ARCHIVE = state.ARCHIVE_MAGIC + b'\x01\x0e\x00' + os.urandom(4096) + TERMINATOR
 
@@ -118,8 +118,17 @@ class Double:
         ]
 
     def _listing(self, argv: Sequence[str]) -> sp.CompletedProcess[str]:
+        """`pg_restore --list`, refusing what is not a custom-format archive.
+
+        Only the header is read, which is what the real tool does and the
+        reason it is no truncation check: the table of contents sits at the
+        front of the archive, so a file cut short still lists what the whole
+        one would have. What it does catch is a file that is not an archive —
+        a decryption that produced something else, or a plain-text dump — and,
+        through the listing itself, an archive naming no table.
+        """
         data = Path(argv[-1]).read_bytes()
-        if not (data.startswith(state.ARCHIVE_MAGIC) and data.endswith(TERMINATOR)):
+        if not data.startswith(state.ARCHIVE_MAGIC):
             return _completed(argv, code=1, stderr='pg_restore: error: did not find magic string in file header')
         return _completed(argv, stdout=LISTING)
 
@@ -256,19 +265,41 @@ def test_the_plaintext_archive_does_not_survive_the_command(
 def test_a_dump_that_cannot_list_its_tables_is_not_written(
     double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
 ) -> None:
-    """A truncated archive has a plausible size and a plausible name.
+    """A file of a plausible size and name that is not an archive at all.
 
-    What it does not have is a readable table of contents, so the command
-    that would otherwise hand the operator a file to trust fails instead —
-    and leaves nothing behind that could later be mistaken for a dump.
+    `pg_restore` refuses it at the header, so the command that would otherwise
+    hand the operator a file to trust fails instead — and leaves nothing
+    behind that could later be mistaken for a dump.
     """
-    _ = double(archive=ARCHIVE[: len(ARCHIVE) // 2])
+    _ = double(archive=b'this is not a custom-format archive')
     output = tmp_path / 'taken.dump.age'
 
     with pytest.raises(state.StateError, match='did not find magic string'):
         _ = _dump(kit, registry, bundle, output)
 
     assert not output.exists()
+
+
+def test_a_truncated_archive_is_not_what_this_check_catches(
+    double: Callable[..., Double], kit: KdbxStore, registry: escrow.Registry, bundle: Path, tmp_path: Path
+) -> None:
+    """The limitation the design document states, pinned so the double keeps it.
+
+    A custom-format archive carries its table of contents at the head, so
+    `pg_restore --list` reads a file cut short and still answers with
+    everything the whole one would have named — an archive truncated to a few
+    kilobytes lists its tables and exits zero. So the dump succeeds here, and
+    a double that refused instead would be pinning a check this artefact does
+    not have.
+
+    What the listing does catch is the two cases beside this one: a file that
+    is not an archive, and an archive naming no table.
+    """
+    _ = double(archive=ARCHIVE[: len(ARCHIVE) // 2])
+    output = tmp_path / 'taken.dump.age'
+
+    assert _dump(kit, registry, bundle, output) == 0
+    assert output.exists()
 
 
 def test_an_archive_of_nothing_is_not_a_dump(

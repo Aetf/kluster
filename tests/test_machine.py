@@ -114,7 +114,7 @@ def vault(tmp_path: Path) -> escrow.Vault:
 def test_a_bring_up_escrows_the_roots_it_is_about_to_install(vault: escrow.Vault) -> None:
     # The appliance is the first thing to escrow: a bring-up has a kit and an
     # empty registry, and provisioning mints what it needs on the way.
-    roots = config.Roots.ensure(vault)
+    roots = config.Roots.ensure(vault, appliance_exists=False)
 
     for label in config.Roots.labels():
         assert vault.registry.generations(label) == [1]
@@ -125,9 +125,9 @@ def test_a_bring_up_escrows_the_roots_it_is_about_to_install(vault: escrow.Vault
 def test_a_second_run_reuses_what_is_already_escrowed(vault: escrow.Vault) -> None:
     # Generating over a live CA would invalidate every certificate under it,
     # and over a live backup identity would orphan every dump.
-    first = config.Roots.ensure(vault)
+    first = config.Roots.ensure(vault, appliance_exists=False)
 
-    second = config.Roots.ensure(vault)
+    second = config.Roots.ensure(vault, appliance_exists=False)
 
     assert second.ca.key_pem == first.ca.key_pem
     assert second.age_recipients == first.age_recipients

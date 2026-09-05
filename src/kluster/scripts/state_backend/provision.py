@@ -619,19 +619,26 @@ def find_instance(clients: OciClients) -> Any | None:
 #: is the same fact in unreadable form.
 CONFIG_METADATA = 'kluster_config'
 DUMP_KEY_METADATA = 'kluster_dump_key_id'
+#: When the server certificate in the Ignition this box booted with stops
+#: being valid. Beside the digest map rather than inside it: every digested
+#: component is re-derived from the repository and compared for equality,
+#: while this one is compared against the clock (`config.renewal_due`).
+EXPIRY_METADATA = 'kluster_server_cert_expiry'
 
 
 @dataclass(frozen=True)
 class InstanceConfig:
     """What a running box says it was built from.
 
-    Both halves come off the same metadata and are compared together, so they
-    travel together: a box whose digests are current but whose dump key is
-    not is as stale as the other way round.
+    One record because the pieces come off the same metadata and are judged
+    together: a box whose digests are current, but whose dump key B2 no longer
+    has or whose certificate is weeks from expiring, is exactly as stale as one
+    whose Butane file changed.
     """
 
     digests: dict[str, str]
     dump_key_id: str
+    server_cert_expiry: str
 
 
 def instance_config(instance: Any) -> InstanceConfig:
@@ -647,7 +654,11 @@ def instance_config(instance: Any) -> InstanceConfig:
         digests: dict[str, str] = {str(key): str(value) for key, value in json.loads(raw).items()}
     except (json.JSONDecodeError, AttributeError):
         digests = {}
-    return InstanceConfig(digests=digests, dump_key_id=str(metadata.get(DUMP_KEY_METADATA) or ''))
+    return InstanceConfig(
+        digests=digests,
+        dump_key_id=str(metadata.get(DUMP_KEY_METADATA) or ''),
+        server_cert_expiry=str(metadata.get(EXPIRY_METADATA) or ''),
+    )
 
 
 def terminate_instance(clients: OciClients, instance_id: str) -> None:
@@ -655,7 +666,10 @@ def terminate_instance(clients: OciClients, instance_id: str) -> None:
 
     The boot volume goes with it: the appliance holds nothing a `pg_dump`
     restore cannot rebuild (state-backend.md §1), and a preserved volume
-    would be a second copy of the state to keep track of.
+    would be a second copy of the state to keep track of. That is a claim
+    about a dump that exists, so taking one is the caller's precondition
+    rather than this function's business — `cli._provision` takes and verifies
+    it before calling here, and stops when it cannot.
     """
     log.info('terminating %s', instance_id)
     _ = clients.compute.terminate_instance(instance_id, preserve_boot_volume=False)
@@ -692,6 +706,7 @@ def ensure_instance(
     ignition: str,
     digests: dict[str, str],
     dump_key_id: str,
+    server_cert_expiry: str,
 ) -> str:
     """Launch the box, or return the one already running."""
     compute = clients.compute
@@ -723,6 +738,7 @@ def ensure_instance(
                     # place that cannot drift from the box: the box.
                     CONFIG_METADATA: json.dumps(digests, sort_keys=True),
                     DUMP_KEY_METADATA: dump_key_id,
+                    EXPIRY_METADATA: server_cert_expiry,
                 },
                 # Legacy IMDS serves the machine config without authentication.
                 instance_options=oci.core.models.InstanceOptions(are_legacy_imds_endpoints_disabled=True),
