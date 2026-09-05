@@ -13,10 +13,10 @@
     [style/pulumi.md](../style/pulumi.md), which also carries a census written
     in this installation's terms, the rule that a logical name is never
     derived from a value that can move, and where a provider's credential is
-    read. The tables themselves are code: the record blocks in
-    `src/kluster/components/dns/`, the route and forge censuses in
-    `src/kluster/conventions/`. Where this text and a design document
-    disagree, the design document is right.
+    read and which store it comes from. The tables themselves are code:
+    the record blocks in `src/kluster/components/dns/`, the route and
+    forge censuses in `src/kluster/conventions/`. Where this text and a
+    design document disagree, the design document is right.
     **§6.1 is overtaken on how the census is read**: it is not re-exported
     from `conventions` but read qualified — `conventions.routes.ROUTES` —
     because `SELF` and `Extra` are common nouns that need the prefix
@@ -37,6 +37,13 @@
     slice 5 undid for the name. The three consequences it lists are the
     argument for the shape §8.2 and §8.3 specify, not a description of
     anything on `main`.
+    **§13 asks for a wrap the SDK makes redundant**: `pulumi_github`'s
+    generated `Provider` marks `token` secret itself, so the token does
+    not land in state in the clear and a second wrap in the program
+    does nothing but hide a release that stopped marking from the case
+    below (`kluster-ops#204`); framework/github.md §1 carries the
+    mechanism. A case over the declaration pins the SDK's marking, so
+    such a release fails the gate rather than a state file.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,
