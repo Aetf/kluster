@@ -1,7 +1,27 @@
 # RFC 003: The `dns` and `github` Stacks Under the Style Rules
 
-*   **Status:** Accepted, 2026-09-03. Nothing below is built; the slices of
-    §19 are cut from this text.
+*   **Status:** Implemented, 2026-09-04. All seven slices of §19 are merged,
+    and the text below is kept as the accepted proposal rather than as a
+    description of the system. What the system *is* lives in the design
+    documents: what each zone serves and which zones a record is published
+    in, the record blocks and the apex exception, the split-horizon rewrites
+    and where each resolver is reached, and the helper that takes a census
+    row, in [declarative/dns.md](../declarative/dns.md); the forge's
+    declarations, the provider and the labels a workflow reads, in
+    [framework/github.md](../framework/github.md); the census discriminator in
+    [declarative/README.md](../declarative/README.md) and
+    [style/pulumi.md](../style/pulumi.md), which also carries a census written
+    in this installation's terms, the rule that a logical name is never
+    derived from a value that can move, and where a provider's credential is
+    read. The tables themselves are code: the record blocks in
+    `src/kluster/components/dns/`, the route and forge censuses in
+    `src/kluster/conventions/`. Where this text and a design document
+    disagree, the design document is right. **§8.1 is a dated snapshot**: it
+    describes the rewrite provider as it stood when this text was written,
+    with its credential an input on every resource, which the
+    stateless-provider work undid for the credential and slice 5 undid for
+    the name. The three consequences it lists are the argument for the shape
+    §8.2 and §8.3 specify, not a description of anything on `main`.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,
