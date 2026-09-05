@@ -108,6 +108,19 @@ case: dependencies and start order between systemd units are declared
 in the units (`After=`/`Requires=`/`BindsTo=`), never in the order
 resources happen to be created or in boot scripts.
 
+**A logical name is chosen, never derived from a value that can
+move.** A resource's logical name is half of the URN its state is keyed
+by, so renaming one is a delete and a create — not a rename. A name
+built out of an address, an endpoint, a hostname or any other value the
+target can be given a new one of therefore turns relocating that target
+into a delete and a create of everything declared against it, all at
+once, for a change the target itself never noticed. Name a resource
+after the thing it is declared against as the census identifies that
+thing, and let the movable value be an ordinary input: the instance,
+not the address it currently answers on. The same holds for anything
+else a name is spliced from — a value that is configuration is a value
+someone may edit.
+
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
 owned, with `ignore_changes` shrunk to what genuinely belongs to
@@ -129,5 +142,6 @@ The architecture reviewer's standing questions, for the review stage
 -   Does every new resource hang off the right component, with
     providers inherited rather than re-plumbed?
 -   Would the diff's names survive the "no metaphor, one term per
-    concept" test?
+    concept" test, and is every logical name built only from values
+    that cannot move?
 -   Do the comments say anything the code already says?

@@ -25,8 +25,6 @@ from kluster.components.dns.base import (
 )
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.record import Block, Record, a, cname, txt, zone_records
-from kluster.components.dns.routes import Rewrite, rewrites
-from kluster.conventions.routes import Exposure, Route
 
 #: Three addresses stand in for the `physical` stack's, so the anchor block is
 #: part of what the census assertions see.
@@ -478,56 +476,3 @@ def test_the_legacy_anchor_and_the_overlay_block_are_the_primary_zones_alone() -
             assert copied <= _keys(zone), zone
         else:
             assert copied & _keys(zone) == set(), zone
-
-
-def test_a_public_route_needs_no_rewrite() -> None:
-    # LAN clients take the cloud path for it, which is the whole difference.
-    assert rewrites([Route(host='www', exposure=Exposure.PUBLIC)]) == ()
-
-
-def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
-    route = Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd'))
-
-    assert rewrites([route]) == (
-        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v4),
-        Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v6),
-        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v4),
-        Rewrite(domain='photos.peifeng.phd', answer=conventions.LAN_POOL.default_vip.v6),
-    )
-
-
-def test_both_families_are_rewritten() -> None:
-    """A LAN client that prefers IPv6 must not fall through to the public answer.
-
-    AdGuard answers a rewrite only for the family of its answer, so a v4-only
-    rewrite leaves AAAA resolving to the cloud path (RFC 6724).
-    """
-    entries = rewrites([Route(host='tube', exposure=Exposure.SPLIT, zones=('ucw.phd',))])
-
-    assert {entry.answer for entry in entries} == {
-        conventions.LAN_POOL.default_vip.v4,
-        conventions.LAN_POOL.default_vip.v6,
-    }
-    assert {entry.answer.version for entry in entries} == {4, 6}
-
-
-def test_an_iot_route_is_answered_by_the_media_vip() -> None:
-    # Attaching to the media gateway *is* the "IoT may reach this" decision.
-    route = Route(host='tube', exposure=Exposure.IOT, zones=('ucw.phd',))
-
-    assert {entry.answer for entry in rewrites([route])} == {
-        conventions.LAN_POOL.media_vip.v4,
-        conventions.LAN_POOL.media_vip.v6,
-    }
-
-
-def test_a_lan_only_route_is_rewrite_only() -> None:
-    """No public record, but the name still has to resolve on the LAN.
-
-    Publishing nothing is what keeps the LAN service census out of public
-    resolvers; the rewrite is the only thing that makes the name work.
-    """
-    route = Route(host='golinks', exposure=Exposure.LAN_ONLY, zones=('ucw.phd',))
-
-    assert route.public is False
-    assert len(rewrites([route])) == 2

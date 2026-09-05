@@ -69,11 +69,12 @@ CUSTOM_ROOT = f'{DATA_ROOT}/custom'
 #: The port a resolver's interface and API answer on. Every declaration naming
 #: that interface meets here: the caddy vhost that proxies each instance's
 #: interface, the three legacy names the census below transcribes, the initial
-#: state that tells an instance where to listen, and the overlay flow rule that
-#: admits a continuous-integration member to exactly that port so the `dns`
-#: stack can write its rewrites. It is a convention rather than a constant each
-#: of them keeps, because they are free to disagree and the failure is a
-#: resolver that answers nothing anyone asked it.
+#: state that tells an instance where to listen, the overlay flow rule that
+#: admits a continuous-integration member to exactly that port, and
+#: `resolver_api_url`, which is the address the `dns` stack writes its rewrites
+#: to through that rule. It is a convention rather than a constant each of them
+#: keeps, because they are free to disagree and the failure is a resolver that
+#: answers nothing anyone asked it.
 #:
 #: **The value is the appliance's, and the declaration follows it.** Both
 #: instances bind their interface to 80. The cutover carries each instance's
@@ -230,6 +231,24 @@ ADGUARD_BOB = BridgedService(
 
 #: The pair in the order the design lists it.
 RESOLVERS: tuple[BridgedService, ...] = (ADGUARD_ALICE, ADGUARD_BOB)
+
+
+def resolver_api_url(resolver: BridgedService) -> str:
+    """Where a program writes to one resolver's administration API.
+
+    The one spelling of that address, so a rewrite cannot be aimed somewhere
+    the port above does not describe. It is derived from the census entry
+    rather than configured, which is what leaves the `dns` stack no endpoint
+    key to set and nothing for a stale one to disagree with.
+
+    Plain HTTP to the instance's address on the container VLAN, because that is
+    exactly what the overlay flow rule admits a `dns` run to. The alternative --
+    the instance's own `vhost` on the proxy -- would have the runner resolve a
+    name that only a split-horizon rewrite answers, which is the thing the run
+    is declaring.
+    """
+    return f'http://{resolver.address}:{ADGUARD_API_PORT}'
+
 
 #: The overlay daemon: the one service in the host's own network namespace,
 #: because the interface it creates has to be visible to the router that uses
