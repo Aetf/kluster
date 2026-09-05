@@ -3,8 +3,9 @@
 It is stdlib-only and runs unattended on a box nobody logs into, so the parts
 worth pinning are the ones a silent change would break: that every B2 call
 goes through `_request`, that the upload carries the checksum and length B2
-validates against, and that a failing half of the pg_dump | age pipeline is
-raised rather than uploaded as a truncated object.
+validates against, that a failing step is raised rather than uploaded as a
+truncated object, and that an archive `pg_restore` cannot list never becomes
+an object at all.
 """
 
 from __future__ import annotations
@@ -16,9 +17,11 @@ import json
 import types
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 
 import pytest
+
+from kluster.scripts.state_backend import state
 
 _SCRIPT = Path(__file__).parent.parent / 'deploy' / 'state-backend' / 'state-dump.py'
 
@@ -135,24 +138,87 @@ def test_upload_percent_encodes_the_object_name(monkeypatch: pytest.MonkeyPatch,
     assert fake.calls[2].request.get_header('X-bz-file-name') == 'kluster%20state/2026%2008%2025.dump.age'
 
 
-class _FakeProc:
-    def __init__(self, status: int, stdout: io.BytesIO | None = None) -> None:
-        self.status: int = status
-        self.stdout: io.BytesIO | None = stdout
+#: A `pg_restore --list` output naming one table, header and all. The header
+#: alone is the shape a dump of a database that lost its state produces.
+HEADER = ';\n; Archive created at 2026-08-26 02:30:00 UTC\n;\n'
+LISTING = HEADER + '215; 1259 16388 TABLE public stacks operator\n3057; 0 16388 TABLE DATA public stacks operator\n'
 
-    def wait(self) -> int:
-        return self.status
+ARCHIVE = b'PGDMP-archive-bytes'
+
+#: One entry of each kind, so a case can build the listing it wants.
+DEFINITION = '215; 1259 16388 TABLE public stacks operator\n'
+ROWS = '3057; 0 16388 TABLE DATA public stacks operator\n'
+OTHER_DEFINITION = '216; 1259 16389 TABLE public leases operator\n'
+
+#: Listings the two copies of the grammar have to answer the same way, and
+#: with the same number. The grammar is written twice on purpose — nothing of
+#: this repository is installed on the appliance, so the box parses its own
+#: listing — and the hazard of a copy is that it drifts. The last two rows are
+#: where it did: entries whose schema or name is missing, which one parser
+#: could read as a table and the other could not. The row carrying a
+#: definition *and* its rows is what makes this a comparison of counts rather
+#: than of truthiness — a parser counting entries answers 2 there, one
+#: counting names answers 1.
+LISTINGS = [
+    ('a header and nothing else', HEADER, 0),
+    ('a table definition', HEADER + DEFINITION, 1),
+    ('table rows', HEADER + ROWS, 1),
+    ('one table, definition and rows both', HEADER + DEFINITION + ROWS, 1),
+    ('two tables', HEADER + DEFINITION + ROWS + OTHER_DEFINITION, 2),
+    ('an entry that is not a table', HEADER + '200; 1255 16390 FUNCTION public f() operator\n', 0),
+    ('a definition cut off before its name', HEADER + '215; 1259 16388 TABLE public\n', 0),
+    ('a TABLE DATA entry missing its name', HEADER + '3057; 0 16388 TABLE DATA public\n', 0),
+]
 
 
-def _pipeline(monkeypatch: pytest.MonkeyPatch, *, pg: int, age: int) -> list[list[str]]:
-    """Stand in for `pg_dump | age`, recording the argv of both halves."""
+@pytest.mark.parametrize(('what', 'listing', 'named'), LISTINGS)
+def test_the_box_and_the_operator_read_a_listing_the_same_way(what: str, listing: str, named: int) -> None:
+    """The claim that the two dumps are verified alike is worth only the parity.
+
+    The box counts the names the operator's side collects, so the two answer
+    the same number and not merely the same yes-or-no: a listing either side
+    accepted and the other refused would make a nightly object and a
+    hand-taken one different artefacts, and a count that drifts is how that
+    starts.
+    """
+    assert state_dump.tables(listing) == named, what
+    assert state.tables(listing) == sorted(set(state.tables(listing))), what
+    assert len(state.tables(listing)) == named, what
+
+
+class _Ran:
+    """What the script reads off a finished process: a status, and a listing."""
+
+    def __init__(self, returncode: int, stdout: str = '') -> None:
+        self.returncode: int = returncode
+        self.stdout: str = stdout
+
+
+def _tools(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pg: int = 0,
+    listing: str = LISTING,
+    list_status: int = 0,
+    age: int = 0,
+) -> list[list[str]]:
+    """Stand in for pg_dump, `pg_restore --list` and age, recording each argv."""
     seen: list[list[str]] = []
 
-    def popen(argv: list[str], **_: object) -> _FakeProc:
+    def run(argv: list[str], **kwargs: Any) -> _Ran:
         seen.append(argv)
-        return _FakeProc(pg, io.BytesIO(b'dump')) if len(seen) == 1 else _FakeProc(age)
+        stdout = cast('IO[bytes] | None', kwargs.get('stdout'))
+        if len(seen) == 1:
+            if stdout is not None:
+                _ = stdout.write(ARCHIVE)
+            return _Ran(pg)
+        if len(seen) == 2:
+            return _Ran(list_status, listing)
+        if stdout is not None:
+            _ = stdout.write(b'age-encrypted bytes')
+        return _Ran(age)
 
-    monkeypatch.setattr(state_dump.sp, 'Popen', popen)
+    monkeypatch.setattr(state_dump.sp, 'run', run)
     return seen
 
 
@@ -166,24 +232,63 @@ def pg_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_dump_encrypts_to_every_recipient(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
-    seen = _pipeline(monkeypatch, pg=0, age=0)
+def test_dump_lists_the_archive_and_encrypts_to_every_recipient(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    seen = _tools(monkeypatch)
 
     state_dump.dump(pg_env / 'out.age')
 
-    pg_argv, age_argv = seen
+    pg_argv, list_argv, age_argv = seen
     assert pg_argv[:3] == ['podman', 'exec', state_dump.CONTAINER]
     assert '-Fc' in pg_argv and pg_argv[-2:] == ['operator', 'pulumi_state']
+    # The listing runs in the same container, reading the archive on standard
+    # input rather than through a mount of the spool directory.
+    assert list_argv == ['podman', 'exec', '-i', state_dump.CONTAINER, 'pg_restore', '--list']
     # Blank lines are skipped and surrounding whitespace stripped, or age
     # would be handed a recipient it rejects.
     assert age_argv == ['/opt/bin/age', '--encrypt', '-r', 'age1aaa', '-r', 'age1bbb']
 
 
+def test_the_nightly_object_is_listed_before_it_is_uploaded(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    """An archive whose table of contents names no table is not a dump.
+
+    That is what a box holds after a replacement nobody followed with a
+    restore, and without this check the nightly run uploads it under a
+    plausible name — to be discovered by the restore that needed it, up to a
+    retention window later.
+    """
+    _ = _tools(monkeypatch, listing=HEADER)
+    destination = pg_env / 'out.age'
+
+    with pytest.raises(SystemExit, match='lists no tables'):
+        state_dump.dump(destination)
+
+    assert not destination.exists()
+
+
+def test_a_listing_that_cannot_be_read_stops_the_run(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    # `pg_restore` refusing the archive outright is the same finding as an
+    # empty listing, and must not be read as an unusual but passable answer.
+    _ = _tools(monkeypatch, list_status=1, listing='')
+
+    with pytest.raises(SystemExit, match='pg_restore --list failed'):
+        state_dump.dump(pg_env / 'out.age')
+
+
+def test_the_plaintext_archive_does_not_outlive_the_dump(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    # It is the whole state in the clear, and the ciphertext beside it is what
+    # the upload reads; keeping both to the end of the run buys nothing.
+    _ = _tools(monkeypatch)
+
+    state_dump.dump(pg_env / 'out.age')
+
+    assert [path.name for path in pg_env.iterdir() if path.suffix in {'.dump', '.age'}] == ['out.age']
+
+
 @pytest.mark.parametrize(('pg', 'age', 'message'), [(1, 0, 'pg_dump failed'), (0, 2, 'age failed')])
-def test_dump_raises_when_either_half_fails(
+def test_dump_raises_when_a_step_fails(
     monkeypatch: pytest.MonkeyPatch, pg_env: Path, pg: int, age: int, message: str
 ) -> None:
-    _ = _pipeline(monkeypatch, pg=pg, age=age)
+    _ = _tools(monkeypatch, pg=pg, age=age)
 
     with pytest.raises(SystemExit, match=message):
         state_dump.dump(pg_env / 'out.age')

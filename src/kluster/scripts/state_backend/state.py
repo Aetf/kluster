@@ -13,9 +13,10 @@ appliance itself encrypts to, taken from the same function (`config`). A
 restore therefore does not care which of the two produced its input, and an
 operator's dump is exactly as recoverable as a nightly one.
 
-**Verification is part of the command, not of the playbook.** A truncated
-dump has a plausible size and a plausible name; what it does not have is a
-readable table of contents, so every dump is listed before it is called one.
+**Verification is part of the command, not of the playbook.** A dump of a
+database with no tables in it has a plausible size and a plausible name; what
+it does not have is a table of contents naming anything, so every dump is
+listed before it is called one — the appliance's own timer included.
 A restore ends by asking the `pulumi` CLI what the restored backend serves,
 because a database that is full of rows but cannot be logged in to has
 restored nothing anyone needs.
@@ -248,11 +249,12 @@ def tables(listing: str) -> list[str]:
 def verify_dump(archive: Path) -> list[str]:
     """The tables the archive carries. A dump that cannot list them is not a dump.
 
-    This is the check that separates a dump from a file of the right size:
     `pg_restore --list` reads the archive's own table of contents, so a
-    transfer that stopped early, an out-of-space write, or a decryption that
-    produced something else fails here rather than at the restore that
-    needed it.
+    decryption that produced something else, a file that is not an archive at
+    all, or an archive of a database that has lost its tables fails here
+    rather than at the restore that needed it. It is not a truncation check:
+    the table of contents sits at the head of a custom-format archive, so a
+    file cut short still lists what the whole one would have.
     """
     log.info('checking the archive: asking %s to list what it contains', PG_RESTORE)
     listing = _run(

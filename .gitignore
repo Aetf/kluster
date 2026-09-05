@@ -20,3 +20,8 @@ lib/crds/build
 # TODO(kluster-ops#34): delete with that fallback.
 .pulumi.secret
 .github.token
+# Dumps of the Pulumi state. `state-backend dump` writes one into the working
+# directory by default, and a converge that replaces the box writes one before
+# it terminates anything -- both are usually run from the repository root, and
+# both hold every stack's state under `age`. This repository is public.
+*.dump.age

@@ -9,6 +9,7 @@ the age recipients whose identities the escrow holds — and hands the result to
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 import hashlib
 import json
@@ -51,6 +52,24 @@ URL_FILE = 'backend-url'
 CA_ENV = 'PGSSLROOTCERT'
 CERT_ENV = 'PGSSLCERT'
 KEY_ENV = 'PGSSLKEY'
+
+#: How much life the server certificate must have left for a converge to leave
+#: a box alone, and the only home of that number: the documents name the
+#: margin, never its value.
+#:
+#: It is small against `pki.LEAF_VALIDITY`, so a certificate spends a small
+#: fraction of its life inside the margin and the box is replaced for expiry
+#: at most once per certificate. That reason stands
+#: on its own, which matters because the second one rests on something
+#: unbuilt: an expiry probe alerting at 30 days remaining would sit 60 days
+#: after this margin opens, so an installation being deployed at all would
+#: have had the expiry reported to it well before that alert could fire. The
+#: alert would then be the backstop for a box nobody has converged, or whose
+#: reports nobody acted on -- reporting is what a converge does unaided, and
+#: the replacement itself waits for `--force`. The probe is still design-only
+#: (physical/state-backend.md §3), so today the margin is the only thing
+#: watching the certificate.
+RENEWAL_MARGIN = dt.timedelta(days=90)
 
 
 def age_recipients(vault: escrow.Vault) -> tuple[str, ...]:
@@ -101,7 +120,7 @@ class Roots:
         return cls(ca=pki.Authority.from_pem(vault.recover(escrow.CA)), age_recipients=age_recipients(vault))
 
     @classmethod
-    def ensure(cls, vault: escrow.Vault) -> Roots:
+    def ensure(cls, vault: escrow.Vault, *, appliance_exists: bool) -> Roots:
         """Recover the roots, minting first any the escrow does not hold yet.
 
         The appliance is the first thing to escrow (credentials.md §4.1): a
@@ -110,11 +129,32 @@ class Roots:
         the same run that installs them. Idempotent by probing, like the rest
         of `provision` — a label already escrowed is left exactly as it is,
         because generating over it would orphan every dump under it.
+
+        **Generation is a bring-up act, and `appliance_exists` is what says
+        this run is not one.** It has no default: whether a box is running is
+        a fact about the caller's situation that this function cannot see, and
+        the direction a default would have to pick -- generate -- is the one
+        that destroys a live appliance's recoverability. With a box already running, a label the
+        registry cannot answer for means the registry is the wrong one —
+        `--escrow` pointed at another directory, or a clone whose `escrow/`
+        was never populated — rather than a label nobody has minted yet.
+        Minting there would rebuild the box under a CA no client bundle
+        chains to, and encrypt its dumps to a recipient no object still in
+        retention was written to: both halves of the recovery story break at
+        once, and neither failure shows until it is needed. So that case
+        refuses, naming the label it could not recover.
         """
         for label in cls.labels():
-            if not vault.registry.generations(label):
-                log.info('nothing escrowed for %s yet; generating it', label)
-                _ = escrow.generate(vault.registry, label)
+            if vault.registry.generations(label):
+                continue
+            if appliance_exists:
+                raise escrow.EscrowError(
+                    f'nothing escrowed for {label}, and the appliance is already running: '
+                    'generating one now would rebuild the box under roots nothing else holds. '
+                    'Point --escrow at the registry this appliance was built from'
+                )
+            log.info('nothing escrowed for %s yet; generating it', label)
+            _ = escrow.generate(vault.registry, label)
         return cls.recover(vault)
 
 
@@ -284,8 +324,14 @@ def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, buck
     )
 
 
-def render_ignition(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> str:
+def render_ignition(values: Machine) -> str:
     """Butane in, validated Ignition out.
+
+    Takes the machine rather than building one, because two facts about the
+    box have to come from the same render: the Ignition it boots with, and
+    when the server certificate inside that Ignition expires (`expires_at`).
+    A second `machine` call would issue a second certificate, and the box
+    would record an expiry belonging to a certificate it never held.
 
     Rendered through an environment of its own rather than through
     `kluster.lib.templates`: that mechanism resolves a template relative to
@@ -300,9 +346,7 @@ def render_ignition(roots: Roots, *, address: str, dump_key_id: str, dump_key: s
         keep_trailing_newline=True,
         autoescape=False,
     )
-    butane = environment.get_template(TEMPLATE).render(
-        machine(roots, address=address, dump_key_id=dump_key_id, dump_key=dump_key, bucket_id=bucket_id).parameters()
-    )
+    butane = environment.get_template(TEMPLATE).render(values.parameters())
     log.info('handing %s to butane for validation and conversion to Ignition', TEMPLATE)
     proc = sp.run(
         ['butane', '--strict', '--pretty'],
@@ -314,6 +358,57 @@ def render_ignition(roots: Roots, *, address: str, dump_key_id: str, dump_key: s
     if proc.returncode != 0:
         raise RuntimeError(f'butane rejected the config:\n{proc.stderr}')
     return proc.stdout
+
+
+def expires_at(values: Machine) -> str:
+    """When the server certificate this machine carries stops being valid.
+
+    Recorded on the box beside its digest map, because the bill of materials
+    cannot see an expiry coming on its own: every component of it is
+    re-derived from the repository, and the repository issues a fresh
+    certificate on every render, so the intended side is always young. Only
+    the box knows how old its own certificate is.
+    """
+    return x509.load_pem_x509_certificate(values.server_cert.encode()).not_valid_after_utc.isoformat()
+
+
+def renewal_due(recorded: str, *, now: dt.datetime | None = None) -> str | None:
+    """Why a recorded expiry makes the box stale, or None while it does not.
+
+    The one time-dependent part of the comparison, and deliberately a
+    threshold rather than a digest. A digest of "days remaining" would differ
+    from the box's on every run after the day it launched, and a converge that
+    always finds drift is a converge that always rebuilds. A threshold flaps in
+    neither direction: outside `RENEWAL_MARGIN` this answers None and a second
+    run is the same no-op as the first, and inside it the replacement carries a
+    certificate with a full `pki.LEAF_VALIDITY` ahead of it, so the run after
+    the rebuild is a no-op again.
+
+    A box recording no expiry is stale for the reason a box with no digest map
+    is: silence is not evidence that it matches, and an unreadable expiry is
+    exactly the state this component exists to refuse. That costs one
+    replacement, once, for a box built before this was recorded.
+    """
+    if not recorded:
+        return 'the box does not record when its server certificate expires, so an expiry cannot be seen coming'
+    try:
+        expiry = dt.datetime.fromisoformat(recorded)
+    except ValueError:
+        return f'the box records {recorded!r} as its server certificate expiry, and that is not a date'
+    # An expiry written by an older render could be naive; UTC is what every
+    # writer of this field means, and a naive value compared against an aware
+    # `now` raises rather than answering.
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=dt.timezone.utc)
+    remaining = expiry - (now or dt.datetime.now(dt.timezone.utc))
+    if remaining > RENEWAL_MARGIN:
+        return None
+    if remaining.days < 0:
+        return f'the server certificate expired on {expiry.date().isoformat()}'
+    return (
+        f'the server certificate expires on {expiry.date().isoformat()}, '
+        f'{remaining.days} day(s) from now and inside the {RENEWAL_MARGIN.days}-day renewal margin'
+    )
 
 
 def _identity(pem: str, *, with_key: bool) -> str:

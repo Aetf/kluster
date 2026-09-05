@@ -9,7 +9,7 @@ this file is how to operate it.
 | Path | What |
 | --- | --- |
 | `butane.yaml.j2` | The machine, whole: Postgres quadlet, PKI, `pg_hba`, age recipients, the dump timer, the reboot window. |
-| `state-dump.py` | What that timer runs — `pg_dump` → age → B2, standard library only. |
+| `state-dump.py` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2, standard library only. |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 
 The code that renders and applies these is `src/kluster/scripts/state_backend/`,
@@ -40,11 +40,57 @@ slot for it (docs/credentials.md §4.4).
 
 **It applies the current commit.** A run compares the box to the repository —
 the Butane file, the operator keys, the pins, the certificate identities, the
-B2 dump key's scope — and replaces the instance when they differ, saying which
-component did. A matching box is left untouched, including its dump key, whose
-secret exists only in the Ignition it booted with. `--replace` forces the
-rebuild when there is no diff to find (rotating the dump key, or discarding a
-box that is broken in a way its metadata cannot show).
+B2 dump key's scope — and one thing to the clock: how much life the box's
+server certificate has left, which is drift once it is inside the renewal
+margin — so a coming expiry is something a run reports rather than something
+anyone has to watch a calendar for. Acting on it is still `--force`, like any
+other replacement. A matching box is left untouched, including its dump key,
+whose secret exists only in the Ignition it booted with. `--replace` forces the rebuild when there is no diff
+to find (rotating the dump key or the server key, or discarding a box that is
+broken in a way its metadata cannot show).
+
+**Finding drift is not permission to act on it.** The box holds every stack's
+state and its boot volume goes with it, so a run that finds drift says what it
+would replace and stops:
+
+```sh
+state-backend provision --force   # replace the box that is running
+```
+
+There is no prompt behind that flag: the replacement decision reads nothing
+from a terminal, so it means the same thing in a script as it does by hand.
+(The run as a whole still asks for the kit password when the desktop secret
+store does not hold one — that is the one place a `provision` waits.)
+
+Once asked for, the run dumps the running box and verifies the dump before it
+terminates anything, printing the path it wrote — that file is what
+`state-backend restore` takes afterward, and `--dump-output` puts it
+somewhere other than the working directory. The replacement therefore depends
+on the dump: a dump that fails stops the run with the box still standing, and
+`--no-dump` is how an operator says the box cannot be dumped at all (it is
+unreachable, or Postgres will not start) and accepts losing everything since
+the last nightly dump.
+
+**A run that replaced the box exits non-zero, and says why.** What it leaves
+behind is an appliance answering on 5432 over an empty database, so its last
+words are the dump's path and the `state-backend restore` that puts the state
+back. Reaching zero takes that second command.
+
+The three statuses are an interface, so a script can branch on them
+(`provision --help` says the same):
+
+| Exit | What happened | What to do |
+| --- | --- | --- |
+| `0` | The appliance is current and holds its state. | Nothing. |
+| `3` | The box was replaced; the state is not back in it. | Run the `state-backend restore` the run printed. |
+| `1` | The run failed. | Read the error, then the run's last words: they name a dump to restore if it had already replaced the box, and are silent if the old box is still serving. |
+
+`1` covers a run that stopped before touching anything **and** one that
+stopped after destroying the box, so it cannot be read as "nothing happened";
+only the run's own output distinguishes them. `3` is the one status that
+always means the same thing — the appliance is up, its database is empty, and
+the dump to feed it has been named — which is why the replacement does not
+reuse `1`. Neither non-zero status says the state is safe.
 
 Other commands:
 
@@ -96,8 +142,14 @@ The certificate's Common Name *is* the Postgres role: `operator` locally,
 
 **Re-provision is the only apply path.** Nothing on the box is mutated in
 place: a change is a PR against `butane.yaml.j2` (or the pins in
-`settings.py`), then a re-provision — minutes of downtime on 5432, which CI
-retries through and local runs re-run. SSH exists for diagnosis only.
+`settings.py`), then `state-backend provision --force` — minutes of downtime on
+5432, which CI retries through and local runs re-run. SSH exists for
+diagnosis only.
+
+Rotating the server certificate is that same command and nothing else: an
+expiry inside the renewal margin is drift, so the converge re-issues the
+certificate under the same CA, and the dump it took on the way is what the
+following `state-backend restore` feeds back.
 
 Because the OS and Postgres both follow their streams automatically, and
 because the machine carries nothing that `pg_dump` plus a re-provision cannot
@@ -106,7 +158,10 @@ to enforce it.
 
 ## Losing it
 
-The daily dump is age-encrypted to the `backup/age/<generation>` identities —
+The daily dump is listed with `pg_restore --list` on the box before it leaves
+it — an archive whose table of contents names no table is a dump of a database
+that has lost its state, which is what a replaced box holds until its restore
+— and age-encrypted to the `backup/age/<generation>` identities —
 random at creation, their only stored copies the ciphertexts under `escrow/`,
 which the kit's recovery key opens — and lands in B2 under a prefix whose
 lifecycle rule enforces retention. Recovery is
