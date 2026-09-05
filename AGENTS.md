@@ -23,6 +23,11 @@ except where a bullet says otherwise:
   where the binary is and how it reaches the repository's word lists is
   under "Writing the prose". This one runs on a workstation only; CI
   does not.
+* a claim the change made false is swept for — not the identifier that
+  moved. How to shape the patterns, and what a sweep that found nothing
+  owes the pull request, are in
+  [docs/style/README.md](docs/style/README.md) under "Comments and
+  docs". This one is a workstation step too; CI does not run it.
 * provider-facing code has one more requirement —
   [dispatch.md](docs/framework/dispatch.md) §1.1
 
@@ -110,6 +115,12 @@ documentation the change makes true ships with it rather than after it.
     as a large, plausible prose regression on a file that is clean,
     inviting the mistaken repair: rewriting correct sentences, or growing
     a word list to silence them.
+  - **The prose step does not run while `jj st` names a conflicted
+    file.** A materialized conflict is prose to this checker: change ids
+    come back as misspellings and grammar findings land on lines that
+    have no grammar problem, and none of it survives resolving the
+    conflict. Folding a commit into the one below it is what leaves such
+    a conflict behind — [dispatch.md](docs/framework/dispatch.md) §1.2.
   - **A dictionary entry is for a term this repository owns.** Anything
     else gets the prose reworded instead. The word lists are **not** in
     the serialized set below; what keeps them out of contention is that a
@@ -146,18 +157,35 @@ documentation the change makes true ships with it rather than after it.
   .claude/workspaces/<name>`), and **a workspace dies with the dispatch
   that created it** — the agent removes its own when it reports with no
   pull request, the merging dispatcher removes it after the merge.
-* **After each piece of work, `jj new`**, so that `@` is always the empty
-  change and the work sits at `@-`. Pushing is then two commands, and
-  `jj log` first, confirming the work is at `@-`, is part of the form:
-  `jj bookmark set <branch> -r @-`, then
+  **Scratch goes under the workspace's own `.claude/`**, which
+  `.gitignore` covers: a workspace root is a checkout, so a file written
+  anywhere else in it is a repository path that the next `jj` command
+  snapshots into the change.
+* **At the moment of a push, `@` is empty and `@-` is the work.**
+  That invariant is the rule, and `jj new` is how it is restored once a
+  piece of work is done rather than a command to run unconditionally:
+  run against an `@` that is already empty it stacks a second empty
+  change, and the bookmark below lands on an empty change instead of on
+  the work. So describe the work, then `jj new`, and only then push, in
+  two commands with `jj log` first — confirming the work is at `@-` is
+  part of the form: `jj bookmark set <branch> -r @-`, then
   `jj git push --bookmark <branch>`. Both halves exit zero without
   pushing the work if that precondition does not hold — work left in
   `@` puts `main` on the branch instead, and a bookmark nobody moved
   reports `Nothing changed` and sends nothing at all. Read the head SHA
-  back with `jj log -r <branch> --no-graph -T commit_id`;
-  `git rev-parse HEAD` answers about the primary checkout, not the
-  workspace. The failure modes and the rest of the protocol are
+  back with `jj log -r <branch> --no-graph -T commit_id`, not with
+  `git rev-parse HEAD`. That trap is one instance of a rule: inside a
+  workspace, git answers about the primary checkout wherever the answer
+  depends on a working copy, on `HEAD`, or on a path resolved relative
+  to the current directory. The failure modes, the rest of that rule and
+  the rest of the protocol are
   [dispatch.md](docs/framework/dispatch.md) §1.2.
+* **A builder never fetches; the dispatcher fetches and rebases.** A
+  branch that opens behind `main` is the expected case, because bringing
+  it up to date is a step of the merge rather than of the work. The one
+  exception is a rebase that conflicts: that one comes back to the
+  builder, onto the `main` the dispatcher's fetch has already brought
+  in, still without fetching.
 * Implementation-period issues live in the `kluster-ops` repo, not in this
   one and not in a checked-in list. What is unimplemented *here* announces
   itself: an unwritten stack raises from its entrypoint, and a register row
