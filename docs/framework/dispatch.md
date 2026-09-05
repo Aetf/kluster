@@ -19,9 +19,10 @@ work it dispatched (§1.3).
 **Path ownership is what makes it parallel.** Two agents may not be
 able to edit the same file, so each brief names the paths its work
 owns, and an agent that finds it needs a path outside that list stops
-and reports rather than widening its own scope. A few files every
-brief would otherwise want are **serialized** — AGENTS.md names the
-set, and the constraint is repository-wide (§2).
+and reports rather than widening its own scope; the one exception is
+§1.1 item 5. A few files every brief would otherwise want are
+**serialized** — AGENTS.md names the set, and the constraint is
+repository-wide (§2).
 
 An agent that finishes early does not pick up more work; it reports.
 Scope creep is the failure mode this structure exists to prevent.

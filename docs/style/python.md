@@ -76,11 +76,11 @@ the assert. Rules that keep it that way:
     and in view.
 
 **A claim belongs at import time when the collection itself depends on
-it** — a value that sizes a parametrization, or a property that must
-hold before any case is meaningful. Those have no case to live in: the
-collection they protect happens first, and a parametrization that
-collects short still reports green, so nothing that runs later catches
-it.
+it** — a value that sizes a parametrization, or a property the
+collection itself relies on, without which the set of cases collected
+is wrong. Those have no case to live in: the collection they protect
+happens first, and a parametrization that collects short still reports
+green, so nothing that runs later catches it.
 
 **Everything else belongs in a case, and the cost that decides it is
 blast radius.** An assertion that fails during collection names a
