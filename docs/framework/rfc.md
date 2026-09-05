@@ -446,7 +446,9 @@ edits those documents and leaves `docs/rfc/` alone
 reference, and rewriting it would falsify the record). **That holds
 from acceptance, not from first build**: an accepted RFC that nothing
 has been built from yet is still edited only for the reasons §5.2
-gives, and a rename is neither of them.
+gives, and a vocabulary sweep is none of them. The name §5.2 admits is
+one that the implementation moved, edited in the pull request that
+moves it.
 
 A decision that moved during construction is recorded **in the status
 header**, not by editing the body: the body stays the text that was
