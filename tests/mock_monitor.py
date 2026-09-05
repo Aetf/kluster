@@ -166,7 +166,12 @@ class Recorder(pulumi.runtime.Mocks):
 
     @property
     def names_declared(self) -> set[str]:
-        """Every logical name the run registered."""
+        """Every logical name the run registered; membership only.
+
+        A set collapses a name two declarations answer to, so no claim about
+        *how many* times something was declared can rest on this. That one
+        belongs on `of_type`, which keeps them apart.
+        """
         return {declaration.name for declaration in self.declared}
 
     def of_type(self, typ: str) -> list[Declaration]:
@@ -194,7 +199,7 @@ class Recorder(pulumi.runtime.Mocks):
         repeated = sorted(name for name, count in Counter(it.name for it in declarations).items() if count > 1)
         if repeated:
             raise AssertionError(
-                f'{typ} was declared more than once under each of {repeated}, '
+                f'{typ} was declared more than once under {repeated}, '
                 'so no answer keyed by name describes this run; read `of_type` and count'
             )
         return declarations

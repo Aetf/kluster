@@ -340,11 +340,10 @@ def test_the_zones_row_is_pushed_into_the_stack_it_names(dispatch: Dispatch) -> 
 def refuses_a_stack_of_its_own(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     """`argv` is refused *for naming `--stack`*, rather than merely refused.
 
-    A bare `pytest.raises(SystemExit)` accepts any parse failure at all, so a
-    required flag added anywhere in the `derived` subparser satisfies it while
-    `--stack` goes unmentioned -- the case keeps its name and stops carrying
-    its claim. The exit status separates a usage error from the clean exit a
-    `--help` would make, and the message is the only place the flag appears.
+    `SystemExit` is argparse's answer to every usage error and to a clean
+    `--help` alike, so the exception alone says only that the line did not
+    parse. The status is what separates a refusal from a successful exit, and
+    the message is the only place the flag itself appears.
     """
     with pytest.raises(SystemExit) as refusal:
         _ = cli.build_parser().parse_args(argv)

@@ -940,9 +940,9 @@ async def test_every_resource_is_signed_by_the_provider_its_owner_built(setup: I
             checked[prefix] += 1
 
     # Per family, because a total is met by whichever family has the most
-    # resources: a stack that declared nothing at all under one package would
-    # pass a total of five on its OCI resources alone, and the family that
-    # vanished is the one nothing then says anything about.
+    # resources: a stack that declared nothing at all under one package still
+    # clears a total on its OCI resources alone, and the family that vanished
+    # is the one nothing then says anything about.
     assert set(checked) == set(SIGNED_BY), checked
 
 
