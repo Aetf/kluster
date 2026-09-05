@@ -283,10 +283,10 @@ a second read.
 
 ### 3.4 Slices
 
-A slice is **one dispatch**: one agent, one worktree, one pull request,
-one set of owned paths ([dispatch.md](dispatch.md) §1). Work that does
-not fit is split until it does. The slice list is ordered so that
-nothing is moved twice.
+A slice is **one dispatch**: one agent, one `jj` workspace, one pull
+request, one set of owned paths ([dispatch.md](dispatch.md) §1). Work
+that does not fit is split until it does. The slice list is ordered so
+that nothing is moved twice.
 
 Every entry says what it contains **and what done means for it, in one
 sentence** — the same sentence [dispatch.md](dispatch.md) §1.1 already
@@ -433,7 +433,12 @@ already merged has to be re-argued.
 ### 5.3 After it is built
 
 **What is built is canon, and the RFC is history.** Where the text and a
-design document disagree, the design document is right.
+design document disagree, the design document is right. That covers
+vocabulary too: an accepted RFC's body keeps the words the decision was
+made in, so a sweep that renames a mechanism in the framework documents
+edits those documents and leaves `docs/rfc/` alone
+([style/README.md](../style/README.md) calls it history rather than
+reference, and rewriting it would falsify the record).
 
 A decision that moved during construction is recorded **in the status
 header**, not by editing the body: the body stays the text that was
