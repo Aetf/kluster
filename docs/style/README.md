@@ -52,6 +52,37 @@ what the next line does, not where an idea came from. Every artifact is
 as-built: comments, commit messages, docs describe what is, without the
 story of how it got there.
 
+**A count is written only where it introduces a closed enumeration in
+the same paragraph.** There the number is a reading aid the reader
+verifies on the spot, and anyone who grows the list is already looking
+at it. Everywhere else it is a liability: a set that later work appends
+to, and any set counted anywhere other than immediately above its own
+members, is named without a number — "a decision that moved during
+construction", not "one decision moved". Dropping the count turns a
+sentence that goes **false** as the set grows into one that goes
+**incomplete**, and incomplete fails open: a reader who follows it
+finds more than was promised instead of hunting for something that is
+no longer there. The outward-facing half of the same rule: another
+document's count is never restated at all, whatever shape it has
+there — cite the document and leave the quantifier where the members
+are.
+
+**When a change makes a claim false, sweep for the claim, not for the
+identifier that moved.** Searching for the symbol finds call sites; the
+sentence that asserted something about them is prose, and only a search
+for the claim itself finds it. **That sweep is
+newline-insensitive.** Prose here is soft-wrapped, so a multi-word
+claim is split across lines wherever the wrap happens to fall, and a
+line-oriented match for the phrase returns nothing and reports clean —
+the pattern would have to anticipate the break, which the writer of the
+pattern cannot do.
+Collapse whitespace before matching, in a few lines of Python over the
+files, or search for the rarest single word in the phrase and read the
+hits. Under-reporting is the failure mode that matters here, because it
+is silent and looks exactly like a clean sweep. **A sweep that found
+nothing names the patterns it used**, in the pull request or the commit
+message: a negative result nobody can reproduce is not a result.
+
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)
 and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own
