@@ -15,9 +15,9 @@ chart, sealing a secret, labelling a Service into a load-balancer pool — is in
 What gates the implementation is recorded rather than assumed: the chart set is
 pinned on first contact (declarative/README.md, "Deliberately not
 pre-decided"), and the pins are stack configuration so that renovate can bump
-them. The custom resources — the Cilium pools, BGP configuration and
-Gateways — are written against the bindings in `packages/crds`, which
-`uv run update_crds` regenerates from the chart set its own register pins.
+them. The custom resources — the Cilium pools, BGP configuration and Gateways —
+will be written against `packages/crds`, which `uv run update_crds` regenerates
+from the chart set its own register pins.
 """
 
 from __future__ import annotations

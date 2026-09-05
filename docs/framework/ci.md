@@ -136,7 +136,7 @@ What that buys, and what it costs:
 
 Rejected alternatives and the join-latency expectation:
 physical/gateway.md §2.6. The member roster the two identities sit in,
-with their addressing and role tag: its §2.1.
+with their addressing and role tag: physical/gateway.md §2.1.
 
 ## 3. Pipeline shape
 
@@ -390,19 +390,18 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     the constant `conventions.overlay.NETWORK_ID`,
     `HAOS_DEPLOY_WEBHOOK_URL` from whoever types it. Re-running such a
     push is a refill, never a rotation. The four `PULUMI_BACKEND_*`
-    carriers are the exception:
-    the leaf key of a client certificate is stored nowhere, so a push
-    *issues* a fresh `ci` bundle under the escrowed CA rather than
-    copying the one CI already holds — which costs nothing, because
-    the appliance authenticates the CA and this PKI revokes nothing,
-    so the predecessor keeps working until it expires. A *minted*
-    credential is pushed from nowhere at all: it is disclosed once, to
-    the run that creates it, so its own `credentials derived <row>
-    mint` fills every slot it has in the same run, and naming such a
-    row to `sync` is refused rather than quietly doing nothing. No
-    provider credential is a GitHub secret today for that reason —
-    each reaches its job through the stack's committed configuration,
-    which the program reads for itself.
+    carriers are the exception: the leaf key of a client certificate is
+    stored nowhere, so a push *issues* a fresh `ci` bundle under the
+    escrowed CA rather than copying the one CI already holds — which
+    costs nothing, because the appliance authenticates the CA and this
+    PKI revokes nothing, so the predecessor keeps working until it
+    expires. A *minted* credential is pushed from nowhere at all: it is
+    disclosed once, to the run that creates it, so its own `credentials
+    derived <row> mint` fills every slot it has in the same run, and
+    naming such a row to `sync` is refused rather than quietly doing
+    nothing. No provider credential is a GitHub secret today for that
+    reason — each reaches its job through the stack's committed
+    configuration, which the program reads for itself.
 -   **A push is verified as far as the channel allows.** The API never
     discloses a secret again — not to a later run, not to the token
     that wrote it — so what a push checks is that the name is in the
