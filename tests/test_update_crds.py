@@ -326,3 +326,18 @@ def test_renovate_moves_the_crd2pulumi_version_and_digest_together() -> None:
     assert found is not None
     assert found.group('currentValue') == pins.CRD2PULUMI_VERSION
     assert found.group('currentDigest') == pins.CRD2PULUMI_SHA256
+
+
+def test_no_pin_carries_an_annotation_comment() -> None:
+    """The register announces no automation it does not have.
+
+    The one manager that reads this module matches the `crd2pulumi` constants
+    by name and needs no comment to find them; every other pin here is moved by
+    hand, because the bump is only finished by regenerating `packages/crds`.
+    An annotation above a chart version would therefore be inert — and inert
+    ones are worse than none, because they read as a working mechanism and stop
+    anyone from building the real one.
+    """
+    annotations = re.findall(r'^\s*# renovate:.*$', Path(pins.__file__).read_text(), re.MULTILINE)
+
+    assert annotations == []
