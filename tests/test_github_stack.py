@@ -21,6 +21,7 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
+import root_credentials
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -41,12 +42,9 @@ LABEL = 'github:index/issueLabel:IssueLabel'
 MANAGED_REPOSITORY = 'kluster:components:forge:ManagedRepository'
 PROVIDER = 'pulumi:providers:github'
 
-#: Not the operator's. The variable this program reads is materialized on the
-#: operator machine by `mise.toml` out of an account-root token file
-#: (framework/github.md §1), so every run under `mise` has the real one in the
-#: environment -- and a declaration suite that let it through would print a
-#: live credential the first time an assertion failed.
-TOKEN = 'a-token-that-opens-nothing'
+#: Not the operator's: the test process holds no credential at all
+#: (`root_credentials`), so this suite asks for a fake one by name.
+TOKEN = root_credentials.fake(program.TOKEN_VARIABLE)
 
 #: How a secret arrives on the wire: Pulumi's special-signature key, carrying
 #: the signature that means "secret", beside the value itself.
@@ -103,8 +101,7 @@ class Forge(Recorder):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> AsyncGenerator[Forge]:
     """The whole program, declared once: every case below reads the same run."""
-    with pytest.MonkeyPatch.context() as patched:
-        patched.setenv(program.TOKEN_VARIABLE, TOKEN)
+    with root_credentials.fake_credentials(program.TOKEN_VARIABLE):
         monitor = await run_with(Forge(), stack='github')
         async with declaring():
             await program.main()
@@ -348,8 +345,15 @@ async def test_a_run_without_the_token_refuses_by_name() -> None:
     So it has to be a refusal that names the variable, not a run that
     authenticates as nobody and discovers it on the first write.
     """
+    # What this takes away is the fake `stack` asked for, not the operator's
+    # credential -- the process holds none of those at all
+    # (`root_credentials`), so unsetting it here restores the default rather
+    # than departing from it. Unset rather than left absent because `stack` is
+    # autouse and its block is open around this case too, and `raising` is
+    # left at its default so that a suite that stopped asking for a fake would
+    # fail here instead of passing for the wrong reason.
     with pytest.MonkeyPatch.context() as patched:
-        patched.delenv(program.TOKEN_VARIABLE, raising=False)
+        patched.delenv(program.TOKEN_VARIABLE)
         monitor = await run_with(Forge(), stack='github')
 
         with pytest.raises(ValueError, match=program.TOKEN_VARIABLE):
