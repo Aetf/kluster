@@ -144,13 +144,17 @@ Job names below are the ones the checks tab shows.
 
 ```
 PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
-                              (parallel, report-only; physical has no PR
-                               preview — its credentials are main-only,
-                               see partitioning below)
+                              (parallel, report-only; the matrix is the set
+                               the path filter selected, and it is empty for
+                               a change that reaches no stack; physical has
+                               no PR preview — its credentials are
+                               main-only, see partitioning below)
 
-        noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps)
-                              ─→ merge          (its own workflow, not a
-                                                 reader of preview's verdict)
+        noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps) ─→ merge
+                                     │                                     ↑
+                                     └───── inert: no stack to prove ──────┘
+                              (its own workflow, not a reader of
+                               preview's verdict)
 
 merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
                                    └───────── diff ────→ up-physical [gate]
@@ -187,7 +191,34 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     correctness mechanism**: docs-only or clearly single-layer changes
     skip other jobs (saving checkout/deps/ZT-join); anything touching
     shared code (`conventions/`, `putils/`, `packages/crds`) runs all
-    layers and lets the internal previews no-op.
+    layers and lets the internal previews no-op. The filter is an
+    all-negation deny-list — a file is code unless it is under `docs/`,
+    is a markdown file, is under `.vscode/` or is `.gitignore` — so a
+    path nobody thought of defaults to running the job rather than to
+    being missed. **A deny-list only reads that way under
+    `predicate-quantifier: every`**: the action's default asks whether
+    *any* pattern matches, and each negation matches every file the
+    other negations are there to exclude, so an all-negation list under
+    the default selects every file there has ever been.
+-   **The unattended merge waits for the required checks rather than
+    racing them.** `main` requires `checks` and `changes` on an
+    up-to-date branch (§5), and the merge API refuses while either is
+    outstanding — a race a skipped proof is fast enough to lose, since
+    `classify` is finished while `checks` is still installing its
+    tools. `noop-automerge`'s merge job therefore blocks on
+    `gh pr checks --required --watch` before it merges, and a required
+    check that goes red takes that job down with it.
+-   **The installer that fetches every other tool is pinned too.**
+    Every job that runs a `mise` command installs mise through
+    `jdx/mise-action`'s `version` input rather than the action's
+    floating default. mise is what resolves `mise.toml`'s templates, so
+    the state backend's URL and the config passphrase reach `pulumi`
+    through it, and a version that moves on its own moves that
+    resolution with no pull request to read or to bisect. The pin lives
+    in the workflows rather than in `mise.toml` because `[tools]`
+    declares what mise installs, not what mise is — the action fetches
+    the binary before any configuration is read. Renovate knows this
+    action's `version` input by name and bumps it where it sits.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
@@ -292,9 +323,16 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     is a candidate, which is renovate's lockfile and pin traffic in
     practice but is not restricted to it — the gate that matters is the
     zero-diff proof, and an `expect-changes` label opts a pull request
-    out of the whole path. A fork's pull request fails closed rather
-    than merging: the proof needs Environment secrets, which a fork
-    never receives. Repo secret scanning and push protection are on.
+    out of the whole path. A candidate that touches nothing but
+    documentation, `.vscode/` or `.gitignore` — the same deny-list the
+    preview filter uses — **skips the proof and merges on `checks`
+    alone**: no stack program reads those paths, so an empty preview of
+    them is a ceremony rather than evidence. That path does not retire,
+    because which files a stack program reads is not a phase. A fork's
+    pull request is refused by name in `classify`, and by name rather
+    than by consequence because the skipping path reaches the merge
+    without running any job that a missing Environment secret would
+    fail. Repo secret scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
     drill workflows run** — carries the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
@@ -444,11 +482,11 @@ The pipeline above is complete; the installation it drives is not.
 repository declares, only `dns` (whose resources were imported rather
 than created) and `github` have state behind them. The checks that
 reach past the repository therefore fail, on `main` and on every pull
-request, and that red is a property of the phase rather than a fault
-to report. What follows is how to tell it apart from a real one. The
-milestones named below are the ops repository's roadmap phases
-(dispatch.md §4); the `M1`/`M2` of cluster/security-audit.md are audit
-findings and unrelated.
+request that touches code, and that red is a property of the phase
+rather than a fault to report. What follows is how to tell it apart
+from a real one. The milestones named below are the ops repository's
+roadmap phases (dispatch.md §4); the `M1`/`M2` of
+cluster/security-audit.md are audit findings and unrelated.
 
 `drift` is left out of the job lists below. Its matrix names all four
 stacks and every entry would fail, for whichever of the two reasons
@@ -509,19 +547,15 @@ entrypoint's refusal:
 error: no stack named 'k8s-base' found
 ```
 
-Every pull request runs both entries, documentation-only ones
-included: §3 describes the `changes` filter as skipping jobs for a
-docs-only change, and it does not skip anything at all
-(`kluster-ops#195`). `prove` is `fail-fast: true`, so an entry that
-fails first can cancel the other two: which names are reported failed
-and which cancelled varies between runs and carries no information.
-One consequence is worth knowing in advance — a documentation-only
-pull request touches neither `src/` nor `Pulumi.*`, so `classify`
-calls it a noop, `prove` runs against the missing stacks, and
-`noop-automerge` goes red; such a pull request is merged by hand
-rather than unattended (`kluster-ops#193`). **Retires with the M2
-stacks** (`kluster-ops#77`), which create both and make the matrices
-honest.
+Every pull request that touches code runs both entries. `prove` is
+`fail-fast: true`, so an entry that fails first can cancel the other
+two: which names are reported failed and which cancelled varies
+between runs and carries no information. A pull request that touches
+only documentation, `.vscode/` or `.gitignore` reaches neither matrix
+— `changes` selects an empty set and `preview` stands down, and
+`classify` calls it inert and skips `prove` — so it is green on both
+counts and merges unattended (§3). **Retires with the M2 stacks**
+(`kluster-ops#77`), which create both and make the matrices honest.
 
 **Neither of those is a secret-availability problem, and the tell is
 which step fails, and then which name the message carries.** All five

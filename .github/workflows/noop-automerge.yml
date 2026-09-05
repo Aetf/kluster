@@ -2,22 +2,37 @@ name: noop-automerge
 
 # A PR that touches neither the program (`src/`) nor its stack config
 # (`Pulumi.*`) cannot legitimately change what gets deployed — lockfile
-# maintenance, dependency bumps, docs. This workflow proves that with a
-# zero-diff preview and then merges it unattended.
+# maintenance, dependency bumps, docs. This workflow merges such a PR
+# unattended.
 #
 # Its own workflow rather than a step in preview.yml, which runs for every PR
 # and only reports: "this may merge without a human" deserves its own trigger,
-# its own log and its own red X. The zero-diff proof is the gate that catches a
-# bump which silently changes rendering.
+# its own log and its own red X.
+#
+# Two classes reach the merge, and they are told apart by path:
+#
+#   * A change that can still reach a stack — a lockfile, a dependency, a
+#     workflow — is merged only behind a **zero-diff preview** on every stack.
+#     That proof is the gate, and it is what catches a bump which silently
+#     changes rendering.
+#   * A change to documentation, editor configuration or `.gitignore` reaches
+#     no stack at all: no `pulumi` program reads those paths, so there is no
+#     rendering for a preview to compare and the proof would be a ceremony
+#     over an empty diff. Such a PR skips the matrix and merges on `checks`
+#     alone. This path does not retire — it is a statement about which files a
+#     stack program reads, which no milestone changes.
 #
 # The classification is by path, not by author: renovate is the expected
 # producer, but nothing here checks who opened the pull request. A fork's pull
-# request fails closed instead — the proof needs Environment secrets, which a
-# fork never receives, so it errors and the merge job never runs.
+# request fails closed — `classify` refuses it by name, so neither the proof
+# nor the merge runs. Until the second class existed the refusal was implicit
+# (the proof needs Environment secrets, which a fork never receives, so it
+# errored), and an implicit refusal does not survive a path that skips the
+# proof.
 #
 # The merge does not start deploy.yml — pushes made with GITHUB_TOKEN start no
-# workflow runs. That is correct by construction: the merge happened because
-# the preview was empty, so the skipped apply would have been a no-op.
+# workflow runs. That is correct by construction: a proven PR merged because
+# its preview was empty, and an inert one changes nothing an apply would read.
 
 on:
   pull_request:
@@ -31,6 +46,11 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # `gh pr checks` reads the head commit's rollup, which is check runs and
+  # commit statuses. An explicit permissions block grants nothing it does not
+  # name, so without these two the wait below is a 403 rather than a wait.
+  checks: read
+  statuses: read
 
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,16 +62,40 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       noop: ${{ steps.classify.outputs.noop }}
+      inert: ${{ steps.inert.outputs.code == 'false' }}
     steps:
+      - uses: actions/checkout@v5
+
+      # Whether anything in this PR can reach a stack at all. The filter is
+      # preview.yml's own `code` deny-list, pattern for pattern and under the
+      # same `every` quantifier — the two workflows ask one question of one
+      # set of paths, so a file that stops counting as inert stops counting in
+      # both at once. `code: false` means every file in the PR is
+      # documentation, editor configuration or `.gitignore`.
+      - uses: dorny/paths-filter@v3
+        id: inert
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '!docs/**'
+              - '!**/*.md'
+              - '!.vscode/**'
+              - '!.gitignore'
+
       - name: Classify the PR
         id: classify
         env:
           # Escape hatch: label a PR `expect-changes` when a bump is *supposed*
           # to move resources. Such a PR wants human eyes on the diff.
           OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'expect-changes') }}
+          # A PR from a fork is refused here rather than downstream. Its head
+          # is untrusted code, and the inert path would merge it without any
+          # job that needs a secret to fail first.
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           set -euo pipefail
-          if [ "$OVERRIDE" = 'true' ]; then
+          if [ "$FORK" = 'true' ] || [ "$OVERRIDE" = 'true' ]; then
             echo 'noop=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -64,7 +108,10 @@ jobs:
 
   prove:
     needs: classify
-    if: needs.classify.outputs.noop == 'true'
+    # The proof is for the candidates that can still move a resource. An inert
+    # PR has nothing to prove and skips it; a fork or an `expect-changes` label
+    # leaves `noop` false, which skips this job and the merge with it.
+    if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.inert != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -80,6 +127,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       # dns is the LAN-touching stack: its AdGuard rewrites live on the UDM
@@ -102,9 +153,35 @@ jobs:
         run: mise x -- pulumi preview --stack ${{ matrix.stack }} --expect-no-changes
 
   merge:
-    needs: prove
+    needs: [classify, prove]
+    # `prove` is skipped on an inert PR, and a skipped dependency would
+    # cascade-skip an ordinary `needs`, so this reads results instead of
+    # depending on success. Every branch that is not one of the two explicit
+    # passes refuses: a `classify` that failed leaves its outputs empty, a
+    # `prove` that failed or was cancelled is not `success`, and a cancelled
+    # run merges nothing.
+    if: >-
+      !cancelled()
+      && needs.classify.outputs.noop == 'true'
+      && (needs.prove.result == 'success'
+          || (needs.prove.result == 'skipped'
+              && needs.classify.outputs.inert == 'true'))
     runs-on: ubuntu-latest
+    # A required check that never arrives ends the job rather than holding a
+    # runner for GitHub's six-hour default.
+    timeout-minutes: 60
     steps:
+      # `main` requires `checks` and `changes` on an up-to-date branch
+      # (framework/ci.md §5), and the merge API refuses while either is
+      # outstanding. On an inert PR `classify` is done in under a minute while
+      # `checks` is still installing a toolchain, so the merge would otherwise
+      # race a precondition it cannot win. This is not a delay standing in for
+      # a condition: `--required` names exactly the contexts branch protection
+      # names, `--watch` returns when they reach a terminal state, and a
+      # failure exits non-zero so the merge below never runs.
+      - name: Wait for the required checks
+        run: gh pr checks "$PR" --required --watch --fail-fast --interval 15
+
       # Rebase, never squash: squashing rewrites the committer to
       # noreply@github.com.
       - name: Merge

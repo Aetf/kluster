@@ -42,6 +42,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       - uses: ./.github/actions/zerotier
@@ -78,6 +82,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       - uses: ./.github/actions/zerotier
@@ -110,6 +118,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       # The AdGuard rewrites are DNS and live on the UDM, so this is the one
@@ -138,6 +150,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       - uses: ./.github/actions/state-backend
@@ -160,6 +176,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
       - run: mise x uv -- uv sync --locked
       - uses: ./.github/actions/state-backend
