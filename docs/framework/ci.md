@@ -387,9 +387,10 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     elsewhere, and `credentials derived sync` re-reads and re-pushes
     them: the state passphrase out of the escrow, `ZEROTIER_IDENTITY`
     out of the `physical` stack's state, `ZEROTIER_NETWORK_ID` out of
-    its committed configuration, `HAOS_DEPLOY_WEBHOOK_URL` from
-    whoever types it. Re-running such a push is a refill, never a
-    rotation. The four `PULUMI_BACKEND_*` carriers are the exception:
+    the constant `conventions.overlay.NETWORK_ID`,
+    `HAOS_DEPLOY_WEBHOOK_URL` from whoever types it. Re-running such a
+    push is a refill, never a rotation. The four `PULUMI_BACKEND_*`
+    carriers are the exception:
     the leaf key of a client certificate is stored nowhere, so a push
     *issues* a fresh `ci` bundle under the escrowed CA rather than
     copying the one CI already holds — which costs nothing, because

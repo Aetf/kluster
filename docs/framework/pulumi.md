@@ -285,15 +285,15 @@ namespace may carry a value but neither a type nor a default.
 
 Every version pin the repository holds lives in that block, in one
 `versions:` namespace with **the kind in the key** —
-`versions:talos`, `versions:chart-<name>`, `versions:image-<name>`,
-`versions:rootfs-<name>`. One namespace because they are one kind of
-fact, a build somebody else produced and this repository selects by
-version; the prefix because it is what lets one renovate manager per
-kind match its own entries and nothing else. `lib/versions.py` exposes
-one accessor per kind, each returning a parsed value rather than the
-raw string and each refusing a missing or malformed pin by naming the
-key, so a pin nobody set fails where it is read instead of somewhere
-downstream.
+`versions:talos`, `versions:chart-<name>` and `versions:image-<name>`,
+a container root filesystem being an image like any other. One
+namespace because they are one kind of fact, a build somebody else
+produced and this repository selects by version; the prefix because it
+is what lets one renovate manager per kind match its own entries and
+nothing else. `lib/versions.py` exposes one accessor per kind, each
+returning a parsed value rather than the raw string and each refusing a
+missing or malformed pin by naming the key, so a pin nobody set fails
+where it is read instead of somewhere downstream.
 
 ## 4. CRD Types Handling
 

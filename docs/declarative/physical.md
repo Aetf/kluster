@@ -116,14 +116,14 @@ machine_secrets
     (architecture.md §1.3); CP scheduling enabled
     (`allowSchedulingOnControlPlanes` — the combined CP+ingress role);
     cert SANs including the NLB IP; **etcd encryption at rest**
-    (secretbox — the §6.5 residual-risk mitigation for cluster secrets
-    in a $0-trust tenancy); kubelet system-reserved so eviction
-    actually works (the legacy CP-starvation lesson, architecture.md
-    §6.5); the **Talos ingress firewall** (`NetworkRuleConfig`,
-    default-deny) as the node-local layer beneath the derived OCI
-    rules (architecture.md §4.1) — enumeration rule (2026-08-24):
-    **only ports that terminate in the host netns** — KubeSpan
-    51820, apid 50000, kube-apiserver 6443 (a hostNetwork static
+    (secretbox — the architecture.md §6.5 residual-risk mitigation for
+    cluster secrets in a $0-trust tenancy); kubelet system-reserved so
+    eviction actually works (the legacy CP-starvation lesson,
+    architecture.md §6.5); the **Talos ingress firewall**
+    (`NetworkRuleConfig`, default-deny) as the node-local layer beneath
+    the derived OCI rules (architecture.md §4.1) — enumeration rule
+    (2026-08-24): **only ports that terminate in the host netns** —
+    KubeSpan 51820, apid 50000, kube-apiserver 6443 (a hostNetwork static
     pod, so host-side despite also being an NLB listener), kubelet
     intra-cluster, intra-VCN platform traffic; the homelab worker
     additionally BGP 179 from the UDM. **Service ports are
