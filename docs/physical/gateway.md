@@ -121,7 +121,14 @@ declarative/physical.md §4.
         `machinectl reboot` is the verb that bounces a machine: it
         sends `SIGINT`, s6 reboots on that, and `Restart=always`
         brings the machine back whatever exit status the reboot path
-        produces.
+        produces. That verb rests on s6 keeping its own `SIGINT`
+        handler, which a non-zero `S6_CMD_RECEIVE_SIGNALS` in a
+        machine's environment takes away — s6-overlay's `stage0`
+        renames the `.s6-svscan` handlers aside and installs a
+        forwarder instead. So the variable is refused where a
+        machine's settings are rendered: a declaration carrying it
+        fails to render rather than producing a machine this verb no
+        longer bounces.
     -   **`After=` the bridge's device unit**, for the three machines
         on the container VLAN. It is ordering and nothing else: a start
         systemd queues while the bridge is coming up waits for the

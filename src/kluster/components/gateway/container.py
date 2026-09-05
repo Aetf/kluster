@@ -26,7 +26,9 @@ environment**, because that is what its own startup scripts read; a drop-in
 written for a network manager the image does not run is a file nobody opens.
 And a container is stopped with **`SIGKILL`**: s6 treats a gentler signal as
 advisory, returns from it with its supervisors still running, and they hold the
-machine's control group open until the next start fails on it.
+machine's control group open until the next start fails on it. What bounces one
+is `SIGINT`, which s6 handles as a reboot, so a machine's environment may not
+carry the variable that would take that handler away (`S6_CMD_RECEIVE_SIGNALS`).
 
 **Host networking is the absence of a bridge.** Only a declaration built on a
 bridged census entry can produce a bridge, so the overlay daemon — which must
@@ -68,6 +70,7 @@ __all__ = (
     'ENV_IPV6_TOKEN',
     'KILL_SIGNAL',
     'OVERLAY_STATE',
+    'S6_CMD_RECEIVE_SIGNALS',
     'S6_KILL_GRACETIME',
     'SECRET_MODE',
     'TEMPLATE_PACKAGE',
@@ -77,6 +80,7 @@ __all__ = (
     'Container',
     'ContainerDeclaration',
     'InitialState',
+    'InterceptedSignals',
     'MountedFile',
     'OverlayDaemon',
     'ResolverService',
@@ -172,6 +176,15 @@ CAPABILITY = 'CAP_NET_ADMIN'
 #: waiting on anything on its way down.
 KILL_SIGNAL = 'SIGKILL'
 S6_KILL_GRACETIME = 0
+
+#: The one s6 variable a machine's environment may never carry, refused by
+#: `nspawn_file` rather than left to be noticed. `machinectl reboot` is the verb
+#: that bounces a machine on this device (physical/gateway.md §1.1) and it works
+#: because s6-linux-init handles `SIGINT` as a reboot. With a non-zero value
+#: here, s6-overlay's `stage0` renames the `.s6-svscan` signal handlers aside --
+#: `SIGINT` among them -- and installs its own forwarder instead, so the verb
+#: would stop bouncing anything and nothing would fail to say so.
+S6_CMD_RECEIVE_SIGNALS = 'S6_CMD_RECEIVE_SIGNALS'
 
 #: What an image's own network setup reads out of PID 1's environment: the
 #: address with its prefix, the router, and the token that fixes the interface
@@ -542,14 +555,39 @@ class _MachineParams:
     binds: tuple[str, ...]
 
 
+@final
+class InterceptedSignals(Exception):
+    """A machine's environment would take s6's signal handlers away from it.
+
+    The reboot verb this device's machines are bounced with is the only casualty
+    that would not announce itself, so the variable is refused where every
+    machine's environment is rendered rather than recorded in a comment
+    (`S6_CMD_RECEIVE_SIGNALS`).
+    """
+
+    def __init__(self, machine: str) -> None:
+        super().__init__(
+            f'refusing to render {machine}: its environment carries {S6_CMD_RECEIVE_SIGNALS}, which '
+            f"replaces s6's own SIGINT handler and so takes `machinectl reboot` away from this machine"
+        )
+        self.machine: str = machine
+
+
 def nspawn_file(declaration: ServiceDeclaration) -> str:
     """The settings that decide what one machine is when systemd starts it.
 
     There is no unit to write: `systemd-nspawn@.service` is systemd's own
     template and it reads this file, so what a machine says about itself is
     said once and in the place `machinectl` and `systemctl` already look.
+
+    `S6_KILL_GRACETIME` is the only s6 variable this program sets, and
+    `S6_CMD_RECEIVE_SIGNALS` is the one it refuses: a declaration carrying it
+    fails here rather than producing a machine the reboot verb no longer
+    bounces.
     """
     service = declaration.service.name
+    if S6_CMD_RECEIVE_SIGNALS in declaration.environment:
+        raise InterceptedSignals(service)
     bridge = declaration.bridge
     return templates.render(
         TEMPLATE_PACKAGE,
