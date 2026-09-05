@@ -340,12 +340,12 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     not by author**: any pull request touching neither `src/` nor
     `Pulumi.*` is a candidate, which is renovate's lockfile and pin
     traffic in practice but is not restricted to it — the gate that
-    matters is the zero-diff proof, and an `expect-changes` label opts a
-    pull request out of the whole path. A candidate that touches nothing but
-    documentation, `.vscode/` or `.gitignore` — the same deny-list the
-    preview filter uses — **may skip the proof and merge on the
-    required checks alone**: no stack program reads those paths, so an
-    empty preview of them is a ceremony rather than evidence. That
+    matters is the zero-diff proof, and an `expect-changes` label opts
+    a pull request out of the whole path. A candidate that touches
+    nothing but documentation, `.vscode/` or `.gitignore` — the same
+    deny-list the preview filter uses — **may skip the proof and merge
+    on the required checks alone**: no stack program reads those paths,
+    so an empty preview of them is a ceremony rather than evidence. That
     reasoning does not retire, because which files a stack program
     reads is not a phase. **That route, and only that route, also tests
     the author**: skipping the proof skips the last thing holding a

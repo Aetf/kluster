@@ -187,9 +187,13 @@ in the component. It is the same shape, and the same name, as the
     owner: a gate the only person who can open it walks around is a
     suggestion, and this one is why a merge to `main` implies a green
     `checks` and `changes` on an up-to-date branch. It implies **no**
-    preview: a preview is implied only for a change some stack program
-    reads, because a change that reaches no stack runs no preview job
-    at all and `noop-automerge` merges it on the required checks alone
+    preview, and not for a code change either: the `preview` matrix is
+    not a required check (above), so nothing in branch protection makes
+    its verdict a condition of merging, and a pull request whose two
+    required contexts are green is mergeable while the rest of the
+    matrix is red (ci.md §5). That a change no stack program reads does
+    not run the matrix at all is a second reason, and the one that lets
+    `noop-automerge` merge such a change on the required checks alone
     (ci.md §3). Force pushes and deletion are off; history is linear.
 
 ### 3.1 What is adopted rather than created
