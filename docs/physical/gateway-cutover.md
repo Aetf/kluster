@@ -124,13 +124,152 @@ not moved.
     cloudflare-gateway-acme mint` has run and the `physical` stack file
     carrying the token is committed (credentials.md §3). The proxy comes
     up with no way to renew otherwise.
--   **`gatewayBootstrapHost` is set to the device's LAN address and
-    committed** (gateway.md §2.5). This commit makes CI's `physical`
+-   **`gatewayBootstrapHost` is set to a literal LAN address of the
+    device — never a name — and committed** (gateway.md §2.5). This
+    commit makes CI's `physical`
     jobs fail until the ceremony's last step unsets it again: continuous
     integration reaches the site over the overlay and has no route to the
     LAN, and an unreachable device fails the whole `physical` preview by
     design (gateway.md §3). Nothing applies the stack unattended in the
     meantime; the operator's session is the only one that can.
+-   **The bootstrap address answers, and it is an address.** A name
+    would be unresolvable at the only moment the key is read: §4 stops
+    everything on the LAN that answers for one. Confirm the value the
+    push will dial, from the workstation, on any day before:
+
+    ```sh
+    ADDR=<the committed gatewayBootstrapHost>
+    ssh "root@$ADDR" true                                       # the shell door
+    curl -skS -o /dev/null -w '%{http_code}\n' "https://$ADDR/"  # the controller door
+    ```
+
+    The value is bound once and used twice on purpose: the knob takes
+    whichever of the device's legs the workstation reaches
+    (gateway.md §2.5), so a check that spells an address of its own
+    can pass on a box the window will never dial. Both doors are the
+    same device behind two ports, so what the window needs is one
+    address that answers on both — any status code from the second,
+    since what is being tested is that something terminates there.
+-   **The workstation running step 3 resolves through something other
+    than alice and bob.** Both are down for the whole of §4, and the
+    run dials by name: the stack program reads the account's
+    availability and fault domains off the cloud API before it
+    declares the gateway, targeted or not, and step 5 reaches ZeroTier
+    Central, Backblaze and the Talos image factory as well. What the
+    run does *not* need a resolver for is the short list of endpoints
+    this program deliberately spells as addresses — the state backend
+    (state-backend.md), the libvirt session at the homelab host's
+    overlay address, and the device itself at `gatewayBootstrapHost`.
+    Confirm before starting:
+
+    ```sh
+    resolvectl dns    # no link may name 10.0.5.3, 10.0.5.4,
+                      # fd1a:665f:8bcb:5::a00:503 or fd1a:665f:8bcb:5::a00:504
+    ```
+
+    `resolvectl dns` rather than `resolvectl status`: the latter is
+    hundreds of lines on a workstation with many links, its `Global:`
+    block names an upstream that says nothing about the per-link
+    servers below it, and the LAN's pair can sit a hundred lines down
+    where nobody reading the top of the output will see it. Both
+    families are listed because the leases hand the pair out over
+    IPv6 as well, and two IPv4 literals do not exclude those.
+
+    Then the reading that does not depend on knowing every way a
+    resolver can be configured: with both machines stopped, a lookup
+    from this workstation still answers. It is taken inside the
+    stopped span the next check opens, which is why that span covers
+    the device and the workstation together rather than each opening
+    one of its own. **The cache is flushed first**, and that is not
+    hygiene: where `/etc/resolv.conf` names a local stub at
+    `127.0.0.53`, a name already in the stub's cache is answered from
+    it regardless of whether the upstream behind it is reachable — so
+    the unflushed reading goes green on exactly the workstation this
+    check exists to catch. A workstation that took its resolver from
+    the LAN's own DHCP fails the flushed one, and fails every lookup
+    of the window from step 1 onward with no resolver left to fall
+    back on. Which workstation step 3 runs from is therefore a choice
+    made before the window, not during it.
+-   **The device still resolves with its resolvers stopped.** The
+    root filesystems `skopeo` pulls in step 3 resolve the way every
+    ordinary program on the device does — through whatever
+    `/etc/resolv.conf` names, and through the device's own forwarder
+    only if that is what it names. Two readings settle it, and the
+    second shares its stopped span with the workstation's above — a
+    sequence of pastes rather than one script, because the device and
+    the workstation have to be read while the same pair of containers
+    is down. **That span is the LAN's own DNS, stopped outside the
+    window**, so it lasts the seconds the readings take and not the
+    time it takes to find the other terminal: have both sessions open
+    before the first paste.
+
+    ```sh
+    # on the device, first and on its own
+    cat /etc/resolv.conf    # nameserver 127.0.0.1, and no other nameserver line
+
+    # on the device: open the span
+    for m in adguard-alice adguard-bob; do
+        systemctl stop "systemd-nspawn@$m.service"
+    done
+
+    # on the workstation, while they are down
+    resolvectl flush-caches && dig ghcr.io +short
+
+    # on the device, while they are down
+    COLD=ghcr.io    # or any public name, if this check has run before
+    getent hosts "$COLD"
+
+    # on the device, once both readings are in
+    for m in adguard-alice adguard-bob; do
+        systemctl start "systemd-nspawn@$m.service"
+    done
+    ```
+
+    `getent hosts` rather than a dig at a chosen server: a dig that
+    names `127.0.0.1` proves the forwarder answers, which is not the
+    question — a `resolv.conf` naming one of the machines would leave
+    that dig green and every pull in the window red. The device caches
+    answers too, so a name it has been asked for before can come back
+    from that cache while the upstream behind it is the pair that is
+    down. **The way past that is a name it has never been asked for.**
+    No cache can hold one, so nothing about what the device's cache
+    keeps, or for how long, has to be known to trust the reading.
+    `ghcr.io` is the faithful choice on a first run, because it is the
+    name the pulls themselves resolve; it stops being cold the moment
+    this check has used it, so a repeat run picks some other public name
+    — one under no domain this site answers for itself. That condition
+    is what keeps a substitute as good as the original: a cold name
+    outside the site's own domains can be answered only by a live
+    upstream, and `getent` reaches it by the path the pulls take.
+
+    An answer to a name the device has not been asked for before means
+    §4's pulls proceed with the LAN dark. No answer means the path
+    those tools take ends at the resolver pair, and the window does
+    not open until that is changed: the pulls would fail inside it,
+    after the state has already moved.
+-   **The window's targeted apply has been previewed.** Step 3 runs
+    `pulumi up` against the gateway's resources alone, named by URN.
+    Those URNs are derived from the component declarations
+    (`stacks/physical.py`, `components/gateway/`) rather than read off
+    an applied stack, because nothing has ever applied this one — so
+    they are confirmed by a preview, which costs nothing and needs no
+    window:
+
+    ```sh
+    pulumi stack select physical
+    pulumi preview \
+        -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway::kluster' \
+        -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway$**::**'
+    ```
+
+    What it must show is the gateway's own resources and nothing else:
+    the persistence layer, the nspawn runtime, the four machines, the
+    routing session, the authorized key and the controller-side
+    firewall — no cloud instance, no overlay member, no bucket, no
+    worker VM. A preview that matches nothing, or that plans the whole
+    stack, means the targets do not select what they were derived
+    from; the window then runs `pulumi up` with no targets at all and
+    takes the risk gateway.md §2.5 sets out.
 -   **The two host-side timers are stopped** — see step 0, which is
     inside the window only because it must not be forgotten.
 -   **A current UniFi autobackup is in hand** (§7): unrelated to the
@@ -141,10 +280,19 @@ not moved.
 Downtime is the whole of steps 1 to 3, not the renames alone: the moves
 are instant, but the push that follows pulls four root filesystems from
 the registry over the site's uplink and unpacks each one, which is tens
-of minutes rather than minutes. The LAN has no resolver for that entire
-span — every lease names alice and bob, and both are down — while the
-device's own resolution is unaffected, since it goes to `127.0.0.1` and
-not to the machines it hosts, so the pulls proceed regardless.
+of minutes rather than minutes. **Step 3 is also the first apply the
+`physical` stack has ever had**, which is why it is run against the
+gateway's resources alone rather than as a plain `pulumi up`; what the
+form with no targets would put inside this window, and what it costs to
+leave out, is gateway.md §2.5.
+
+The LAN has no resolver for that entire span — every lease names alice
+and bob, and both are down. The device's own resolution is expected to
+survive that, so the pulls proceed regardless — §3's reading of
+`/etc/resolv.conf`, with `getent hosts` taken while both machines are
+stopped, is what establishes it, and it is a precondition rather than a
+remark because a device that resolves through the machines it hosts
+fails every pull in this window.
 
 **Step 0 — stop the host-side timers**, on the homelab host, as the user
 that owns them:
@@ -201,15 +349,32 @@ One rename takes the old trees and their `.old` copies together. The
 overlay member gets no directory here: `40-machines.sh` creates the
 state directory, and an empty one is what mints a new identity.
 
-**Step 3 — `pulumi up` the `physical` stack** from the operator's
-workstation, over the LAN. It delivers the boot chain, the unit sources,
-the executables, the routing configuration, the authorized key, and for
-each machine its settings file, its root filesystem, its mounted
-configuration and secrets, and the digest marker naming the pin its tree
-came from. The initial states are no-ops: every state directory that
-should hold state holds it. Post-apply hooks converge and start the
-machines — writing each machine's content stamp as they do — the overlay
-member last and for the first time (gateway.md §1.1).
+**Step 3 — apply the gateway's resources** from the operator's
+workstation, over the LAN:
+
+```sh
+pulumi stack select physical
+pulumi up \
+    -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway::kluster' \
+    -t 'urn:pulumi:physical::kluster-py::kluster:components:gateway:Gateway$**::**'
+```
+
+It delivers the boot chain, the unit sources, the executables, the
+routing configuration, the authorized key, and for each machine its
+settings file, its root filesystem, its mounted configuration and
+secrets, and the digest marker naming the pin its tree came from. The
+initial states are no-ops: every state directory that should hold state
+holds it. Post-apply hooks converge and start the machines — writing
+each machine's content stamp as they do — the overlay member last and
+for the first time (gateway.md §1.1).
+
+**The targets are what keeps the rest of the stack's first apply out
+of this window.** Why that is safe, what the run without them adds and
+what targeting does not remove are one argument, and it sits with the
+ceremony it belongs to: gateway.md §2.5. What this step needs from it
+is that a red `pulumi up` says the update failed rather than which
+half of it converged, and that everything outside the gateway is
+applied at step 5 instead, with the LAN's DNS back up.
 
 **Step 4 — read the failure, if there is one.** Every file's hook asks
 systemd whether its machine reached active and fails the resource when it
@@ -279,9 +444,27 @@ object with no file behind it and goes at the next boot, or to
     order completes. What a stall looks like is a propagation timeout
     followed by the proxy's own retries, which are slow and unattended:
     read the log, and do not intervene between them.
--   **A second `pulumi up` reports no changes and restarts nothing**,
-    which is the stamp mechanism proving itself on the path every later
-    apply takes.
+-   **A second apply reports no changes and restarts nothing**, which
+    is the stamp mechanism proving itself on the path every later apply
+    takes. Inside the window that is step 3's command run again,
+    targets and all. The same command without them has plenty to
+    report here however well the push went — the whole cloud half is
+    still uncreated — so the no-change reading over the whole stack is
+    unavailable rather than failed, and it is step 5's pass condition
+    below.
+-   **The stack's exports are readable and worthless, which is worse
+    than absent.** An output whose value depends on a resource that
+    does not exist yet is written to state as Pulumi's unknown
+    sentinel, the literal string
+    `04da6b54-80e4-46f7-96ec-b56ff0331ba9`, which
+    `pulumi stack output` and a `StackReference` reader both return as
+    an ordinary value. A targeted apply against a stack that has state
+    leaves the outputs of a resource outside the target set as state
+    holds them; this one has no state, so **every export whose value
+    comes from a resource is of that kind** — the kubeconfig and the
+    talosconfig among them. Nothing may read one between step 3 and
+    step 5: `credentials derived sync` and each `StackReference`
+    reader wait, and nothing in this section reads an export at all.
 -   **The routing daemon runs this program's configuration.** The
     installed file is the smaller half of that; the daemon is the rest:
 
@@ -376,7 +559,31 @@ object with no file behind it and goes at the next boot, or to
     after it: the comparison is across the controller pass, not across
     a boot.
 
-**Nothing in §4 or §5 is irreversible.** The point of no return is §7:
+**Step 5 — apply the rest of the stack**, from the operator's
+workstation, once every reading above has been taken and every check
+with a pass condition has passed, and the resolvers are answering
+again. Outside the window, and no longer against a clock:
+
+```sh
+pulumi up
+```
+
+It completes the ceremony's step 1 (gateway.md §2.5) — the cloud
+fleet, the Talos bootstrap, the worker VM, the backup bucket, the
+overlay's network and routes — and re-walks the gateway as a no-op
+against the stamps. **It passes when a further `pulumi up` reports no
+changes**, which is the whole-stack form of the reading above and the
+one the soak's previews go on repeating. A cloud resource that fails
+here fails with the LAN's DNS up and time to spend on it: it is
+retried rather than worked around, and nothing about it is a reason to
+touch the device. Until this step has passed, step 2 of the ceremony
+is the only later one that can run — step 3 reads an address off a
+machine this step boots.
+
+**Nothing in §4 or §5 is irreversible**, step 5 included: what it
+creates is outside everything §6 undoes, and having it in place
+neither closes the rollback nor changes it. The point of no return is
+§7:
 the cleanup deletes the old trees, and the removal commit takes the
 scripts that converge the old layout out of yadm. Neither happens before
 the soak, which runs until the rest of the ceremony has (gateway.md §2.5
@@ -480,6 +687,29 @@ serving again with all of it in place:
     for it: the peer it declares is the worker VM, which does not exist,
     so the daemon dials an address that never answers and learns no
     route (§2).
+-   **One drop-in per machine**, at
+    `/etc/systemd/system/systemd-nspawn@<name>.service.d/10-kluster.conf`
+    — four of them, carrying `Restart=always` with its five-second
+    delay and, for each machine on the container VLAN, the `After=`
+    on the bridge's device unit (gateway.md §1). The retiring push
+    mirrors `on_boot.d/` and the settings files and knows nothing
+    about that directory, and the script that would otherwise remove
+    a drop-in nothing declares is itself off the device by then — so
+    these outlive the rollback, and the ones for the machines the old
+    layout starts again go on amending the very template instances it
+    starts them as. That is where "inert" needs its qualification: an
+    old machine that starts is unaffected, and one that cannot start
+    now retries every five seconds instead of settling in `failed`,
+    which is loud in the journal rather than dangerous. The one for
+    `zerotier` amends a unit nothing enables. Taking them off is part
+    of the rollback rather than of the cleanup after it:
+
+    ```sh
+    for m in adguard-alice adguard-bob caddy zerotier; do
+        rm -rf "/etc/systemd/system/systemd-nspawn@$m.service.d"
+    done
+    systemctl daemon-reload
+    ```
 -   `/data/custom/frr`, one directory holding one configuration file.
 -   `machines-new/`, which is where the overlay member's minted identity
     now lives — `machines-new/zerotier/state`. **A retry of the window
