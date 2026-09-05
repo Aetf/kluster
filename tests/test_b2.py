@@ -82,7 +82,19 @@ def test_the_row_holds_the_key_id_and_the_key(api: FakeApi, kit: KdbxStore) -> N
     # the application key, which B2 shows once.
     assert kit.get(SEED_ENTRY, attribute='UserName') == key_id
     assert kit.get(SEED_ENTRY) == api.keys[key_id].secret
-    assert api.keys[key_id].name == b2.SEED_KEY_NAME
+    assert api.keys[key_id].name == b2.SEED.name
+
+
+def test_an_account_wide_role_confines_its_key_to_neither_a_bucket_nor_a_prefix(api: FakeApi, kit: KdbxStore) -> None:
+    key_id = _seeded(api, kit)
+
+    # B2 reads a `bucketId` that is merely present as a confinement, so a role
+    # with no scope has to state none rather than state it empty -- a seed
+    # confined to one bucket could administer nothing else in the account.
+    (_, body), *_ = [call for call in api.posted if call[0] == 'b2_create_key']
+    assert 'bucketId' not in body
+    assert 'namePrefix' not in body
+    assert (api.keys[key_id].bucket_id, api.keys[key_id].name_prefix) == (None, None)
 
 
 def test_the_seed_carries_bucket_administration_and_no_file_capability(api: FakeApi, kit: KdbxStore) -> None:
@@ -119,13 +131,13 @@ def test_the_minted_seed_is_proven_to_work_before_the_kit_names_it(api: FakeApi,
 
 
 def test_creating_the_seed_retires_a_seed_key_left_behind(api: FakeApi, kit: KdbxStore) -> None:
-    orphan = api.add_key(b2.SEED_KEY_NAME)
+    orphan = api.add_key(b2.SEED.name)
 
     key_id = _seeded(api, kit)
 
     # A key nobody holds the secret of is a live permission, not a spare: the
     # run that mints the seed is the one that can see it and clear it.
-    assert api.named(b2.SEED_KEY_NAME) == [key_id]
+    assert api.named(b2.SEED.name) == [key_id]
     assert orphan.key_id not in api.keys
 
 
@@ -137,7 +149,7 @@ def test_rotation_stores_the_successor_and_retires_the_predecessor(api: FakeApi,
     assert key_id != previous
     assert previous not in api.keys
     assert kit.get(SEED_ENTRY, attribute='UserName') == key_id
-    assert api.named(b2.SEED_KEY_NAME) == [key_id]
+    assert api.named(b2.SEED.name) == [key_id]
 
 
 def test_rotation_writes_a_new_kit_and_leaves_the_retired_one_untouched(
@@ -155,7 +167,7 @@ def test_rotation_writes_a_new_kit_and_leaves_the_retired_one_untouched(
 
 def test_rotation_retires_every_superseded_seed_key(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
-    orphan = api.add_key(b2.SEED_KEY_NAME)
+    orphan = api.add_key(b2.SEED.name)
 
     key_id = b2.rotate_seed(kit, seed_entry=SEED_ENTRY)
 
@@ -163,14 +175,14 @@ def test_rotation_retires_every_superseded_seed_key(api: FakeApi, kit: KdbxStore
     # rotation started as: a retirement signed with the predecessor stops
     # working the moment it deletes the predecessor, so it runs as the
     # successor instead.
-    assert api.named(b2.SEED_KEY_NAME) == [key_id]
+    assert api.named(b2.SEED.name) == [key_id]
     assert orphan.key_id not in api.keys
 
 
 def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxStore) -> None:
     key_id = _seeded(api, kit)
     session = _session(api, kit)
-    doomed = api.add_key(b2.SEED_KEY_NAME)
+    doomed = api.add_key(b2.SEED.name)
 
     session.delete_key(key_id)
 
@@ -199,12 +211,12 @@ def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit:
 def test_minting_the_management_key_retires_its_predecessors(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     previous = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
-    orphan = api.add_key(b2.MANAGEMENT_KEY_NAME)
+    orphan = api.add_key(b2.MANAGEMENT.name)
 
     key_id = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
 
     # The seed signs this retirement and survives it, so both stale keys go.
-    assert api.named(b2.MANAGEMENT_KEY_NAME) == [key_id]
+    assert api.named(b2.MANAGEMENT.name) == [key_id]
     assert previous not in api.keys
     assert orphan.key_id not in api.keys
 
@@ -486,7 +498,7 @@ class Faulty:
 
 
 #: The names the register mints under, and the invariant below counts.
-MANAGED = (b2.SEED_KEY_NAME, b2.MANAGEMENT_KEY_NAME, DUMP_KEY_NAME)
+MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, DUMP_KEY_NAME)
 
 
 def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
@@ -502,7 +514,7 @@ def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
     held = api.keys.get(key_id)
     assert held is not None, 'the kit holds a key the account no longer has'
     assert held.secret == kit.get(SEED_ENTRY), 'the stored secret is not this key'
-    assert held.name == b2.SEED_KEY_NAME
+    assert held.name == b2.SEED.name
 
 
 def _keys_are_bounded(api: FakeApi) -> None:

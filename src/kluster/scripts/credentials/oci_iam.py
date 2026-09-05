@@ -178,6 +178,16 @@ class Identity:
     across the tenancy, which is what makes it able to mint the other kind;
     a consumer's (§3) may do anything it likes inside one compartment and
     nothing at all outside it.
+
+    One of the provider roles these scripts state — `b2.Role`,
+    `cloudflare.Role` and `oci_iam.Identity` are one shape in each platform's
+    own vocabulary: the name a credential is minted under and the grant that
+    goes with it are a single value, so a name cannot travel to a mint without
+    its permissions, and a mint takes the role rather than a name plus whatever
+    constant happens to be in scope.
+
+    Here the grant is OCI's own vocabulary, policy statements, and the name is
+    IAM's rather than a label: it is what all three objects are called.
     """
 
     #: The name all three objects carry.
@@ -1369,24 +1379,27 @@ class ApiKey:
 
 
 def verify_tenancy(tenancy: str) -> None:
-    """Hold a minted key's account against the one `conventions` records.
+    """Hold the seed's account against the one `conventions` records.
 
     The tenancy OCID is a fact rather than a credential, so it has one home
-    (`conventions.OCI_TENANCY`) and a mint copies nothing: it authenticated as
-    a seed that belongs to some account, and all that is left is to prove the
+    (`conventions.OCI_TENANCY`) and a mint copies nothing: the seed belongs to
+    whichever account it was created in, and all that is left is to prove that
     account is this installation's. The two ways it can fail to be are the ways
     the fact goes stale — a kit re-seeded from a different tenancy, and an OCID
-    recorded wrong — and both would deliver a key that signs somewhere the
-    stack does not act, so both are worth stopping over.
+    recorded wrong — and both would build IAM objects and a signing key in an
+    account nothing here manages, so both are worth stopping over.
+
+    Both accounts are named, because which of the two is stale is the
+    operator's question and neither one alone answers it.
     """
     intended = conventions.OCI_TENANCY.tenancy_ocid
     if tenancy != intended:
         raise CredentialRejected(
-            f'this key signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the account '
-            'this program declares into: one of the two is stale, and delivering the key would point the '
-            'stack at an account it does not act in'
+            f'this seed signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the account '
+            'this program declares into: one of the two is stale, and minting here would leave a live key in '
+            'an account the stack does not act in'
         )
-    log.info('the minted key signs for %s, which is the tenancy `conventions` records', tenancy)
+    log.info('the seed signs for %s, which is the tenancy `conventions` records', tenancy)
 
 
 def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) -> str:
@@ -1465,9 +1478,21 @@ def mint_api_key(
     the user, the group and the policy are converged rather than created, the
     successor is verified by being used before anything supersedes it, and the
     sweep afterwards leaves exactly the key this run minted.
+
+    **The account is proven before anything is created, not after.** The seed's
+    row names the tenancy it belongs to, so opening the kit is enough to know
+    it, and everything below writes to that tenancy — the compartment first.
+    Checked afterward it would be a refusal that leaves an IAM user, a group,
+    a policy and a live signing key behind in an account this installation does
+    not own, recorded nowhere and known to nobody who could revoke them. A run
+    given `compartment_id` is pointed at a drill tenancy and is not held to the
+    recorded account, for the reason `ensure_compartment` is not: none of the
+    names `conventions` records describe that tenancy.
     """
     log.info('opening the OCI seed from the kit')
     seed = _seed_session(kit, seed_entry, connect=connect)
+    if compartment_id is None:
+        verify_tenancy(seed.row.tenancy)
 
     # The seed's own policy first, and here rather than in a verb of its own:
     # this is the one command that needs the compartment statement, the seed

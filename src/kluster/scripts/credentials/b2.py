@@ -41,9 +41,6 @@ log = logging.getLogger(__name__)
 
 AUTHORIZE_URL = 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account'
 
-SEED_KEY_NAME = 'kluster-seed'
-MANAGEMENT_KEY_NAME = 'kluster-management'
-
 #: How many keys to ask for per `b2_list_keys` page. B2 caps a single Class C
 #: transaction at a thousand keys and pages beyond that, so this is a
 #: transaction-size choice rather than a limit on what a listing sees.
@@ -70,6 +67,82 @@ CAPABILITIES: tuple[str, ...] = (
     'writeKeys',
     'deleteKeys',
 )
+
+#: The uploader's whole permission: it cannot list, read, or delete, so a
+#: compromised appliance cannot walk the dump history (storage.md §4).
+DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
+
+
+@dataclass(frozen=True)
+class Role:
+    """What a B2 key is called, and the whole of what it may do.
+
+    One of the provider roles these scripts state — `b2.Role`,
+    `cloudflare.Role` and `oci_iam.Identity` are one shape in each platform's
+    own vocabulary: the name a credential is minted under and the grant that
+    goes with it are a single value, so a name cannot travel to a mint without
+    its permissions, and a mint takes the role rather than a name plus whatever
+    constant happens to be in scope.
+
+    The fields are B2's own grant vocabulary -- capabilities, and the bucket
+    and prefix they are confined to. Carrying them together is also what lets
+    "is the key on that box still the intended one" be a comparison against
+    the same value the mint was given (`describes`), rather than a second
+    reading of it that can drift from the first.
+    """
+
+    name: str
+    capabilities: tuple[str, ...]
+    #: `None` on an account-wide key, which is confined to neither.
+    bucket_id: str | None = None
+    name_prefix: str | None = None
+
+    @classmethod
+    def for_dumps(cls, *, name: str, bucket_id: str, prefix: str) -> Role:
+        """The uploader's role: write-only, and confined to one prefix of one bucket."""
+        return cls(name=name, capabilities=DUMP_CAPABILITIES, bucket_id=bucket_id, name_prefix=f'{prefix}/')
+
+    def body(self, account_id: str) -> dict[str, Any]:
+        """The role as `b2_create_key` takes it.
+
+        The two scope fields are sent only when the role has them: B2 reads a
+        present `bucketId` as a confinement, so an account-wide key states
+        neither rather than stating them empty.
+        """
+        asked: dict[str, Any] = {
+            'accountId': account_id,
+            'keyName': self.name,
+            'capabilities': list(self.capabilities),
+        }
+        if self.bucket_id is not None:
+            asked['bucketId'] = self.bucket_id
+        if self.name_prefix is not None:
+            asked['namePrefix'] = self.name_prefix
+        return asked
+
+    def describes(self, key: ListedKey) -> bool:
+        """Whether a listed key is one this role would mint.
+
+        Capabilities are compared as sets: what a key may do is a grant rather
+        than a sequence, and B2 answers a listing in its own order.
+        """
+        return (
+            key.name == self.name
+            and key.bucket_id == self.bucket_id
+            and key.name_prefix == self.name_prefix
+            and sorted(key.capabilities) == sorted(self.capabilities)
+        )
+
+
+#: The two account-wide roles. Seed and management carry the same
+#: capabilities -- what separates them is lifetime and reach, not permission
+#: (module docstring) -- so they differ in name alone, and saying that here is
+#: what keeps a mint from having to know it.
+#:
+#: The names are stable, because they are what retirement matches on: one live
+#: key per role is the invariant a re-run restores.
+SEED = Role(name='kluster-seed', capabilities=CAPABILITIES)
+MANAGEMENT = Role(name='kluster-management', capabilities=CAPABILITIES)
 
 
 @dataclass(frozen=True)
@@ -268,13 +341,14 @@ class Session:
         resp.raise_for_status()
         return resp.json()
 
-    def create_key(self, name: str) -> AppKey:
-        return _created_key(
-            self.post(
-                'b2_create_key',
-                {'accountId': self.account_id, 'keyName': name, 'capabilities': list(CAPABILITIES)},
-            )
-        )
+    def create_key(self, role: Role) -> AppKey:
+        """Mint one key in this role. The one call that creates a B2 credential.
+
+        A role rather than a name and an ambient capability list, so the
+        account-wide keys and the prefix-scoped uploader are the same call with
+        different roles instead of two spellings of one request.
+        """
+        return _created_key(self.post('b2_create_key', role.body(self.account_id)))
 
     def keys(self) -> tuple[ListedKey, ...]:
         """Every application key on the account, following the pages.
@@ -318,30 +392,31 @@ class MintedKey:
     app_key: AppKey
 
 
-def _mint_verified(session: Session, name: str) -> MintedKey:
-    """Create a key and prove it works before anything is told to rely on it."""
-    app_key = session.create_key(name)
+def _mint_verified(session: Session, role: Role) -> MintedKey:
+    """Create a key in this role and prove it works before anything relies on it."""
+    app_key = session.create_key(role)
     minted = Session.authorize(app_key.key_id, app_key.key)
     _ = minted.buckets()
-    log.info('minted %s (%s), verified against the API', name, app_key.key_id)
+    log.info('minted %s (%s), verified against the API', role.name, app_key.key_id)
     return MintedKey(session=minted, app_key=app_key)
 
 
-def retire_others(session: Session, name: str, *, keep: str) -> None:
-    """Delete every other key of this name, as a credential that survives it.
+def retire_others(session: Session, role: Role, *, keep: str) -> None:
+    """Delete every other key of this role's name, as a credential that survives it.
 
-    B2 key names are not unique, so what is retired is "everything called
-    this except the one in hand" rather than one known predecessor: a run that
-    died after minting left a key nobody holds the secret of, and the next run
-    is the only thing that can see it.
+    The name rather than the whole role, and B2 key names are not unique, so
+    what is retired is "everything called this except the one in hand" rather
+    than one known predecessor: a run that died after minting left a key nobody
+    holds the secret of, and a predecessor scoped differently is exactly what a
+    changed role supersedes.
 
     `session` must be a credential that is still valid once the deletions are
     done -- an authorization token is a token *of a key*, so a session that
     deletes its own key cannot delete the next one.
     """
     for existing in session.keys():
-        if existing.name == name and existing.key_id != keep:
-            log.info('deleting superseded %s %s', name, existing.key_id)
+        if existing.name == role.name and existing.key_id != keep:
+            log.info('deleting superseded %s %s', role.name, existing.key_id)
             session.delete_key(existing.key_id)
 
 
@@ -356,12 +431,12 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     rotation is `rotate_seed`, which never touches the account root.
     """
     session = Session.authorize(root[masters.B2_ACCOUNT_ID], root[masters.B2_KEY])
-    minted = _mint_verified(session, SEED_KEY_NAME)
+    minted = _mint_verified(session, SEED)
     seeds.put(seed_entry, minted.app_key.key_id, minted.app_key.key)
     # Stored first, retired second: an interrupted run leaves a key the kit does
     # not name, and this is the only thing that can clear it -- a seed key whose
     # secret nobody holds is a live permission, not a spare.
-    retire_others(minted.session, SEED_KEY_NAME, keep=minted.app_key.key_id)
+    retire_others(minted.session, SEED, keep=minted.app_key.key_id)
     return minted.app_key.key_id
 
 
@@ -379,12 +454,12 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     session = Session.from_entry(store, seed_entry)
     previous = store.get(seed_entry, attribute='UserName')
 
-    minted = _mint_verified(session, SEED_KEY_NAME)
+    minted = _mint_verified(session, SEED)
     (into or store).put(seed_entry, minted.app_key.key_id, minted.app_key.key)
 
     # As the successor, not as the predecessor: the predecessor is one of the
     # keys being deleted, and its session stops working the moment it is.
-    retire_others(minted.session, SEED_KEY_NAME, keep=minted.app_key.key_id)
+    retire_others(minted.session, SEED, keep=minted.app_key.key_id)
     log.info('seed rotated: %s -> %s', previous, minted.app_key.key_id)
     return minted.app_key.key_id
 
@@ -397,17 +472,12 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> AppKey:
     (credentials.md §1 rule 2).
     """
     session = Session.from_entry(store, seed_entry)
-    minted = _mint_verified(session, MANAGEMENT_KEY_NAME)
+    minted = _mint_verified(session, MANAGEMENT)
     # Retire predecessors only once the replacement works: a failed mint must
     # leave the running stack's credential alone. The seed signs it, and the
     # seed is not among the keys being deleted.
-    retire_others(session, MANAGEMENT_KEY_NAME, keep=minted.app_key.key_id)
+    retire_others(session, MANAGEMENT, keep=minted.app_key.key_id)
     return minted.app_key
-
-
-#: The uploader's whole permission: it cannot list, read, or delete, so a
-#: compromised appliance cannot walk the dump history (storage.md §4).
-DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 
 
 def _retention(prefix: str, retention_days: int) -> LifecycleRule:
@@ -469,38 +539,24 @@ def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix
     (deleted in the console, superseded by another mint) or one whose scope no
     longer matches the settings is not the intended key, and the only way to
     put the intended one on the box is to build a new box.
+
+    What "the intended key" means is the role the mint below is given, asked of
+    a listing rather than restated: the two cannot drift apart into a box that
+    is rebuilt every run, or one that is never rebuilt at all.
     """
     if not key_id:
         return False
-    for existing in session.keys():
-        if existing.key_id != key_id:
-            continue
-        return (
-            existing.name == name
-            and existing.bucket_id == bucket_id
-            and existing.name_prefix == f'{prefix}/'
-            and sorted(existing.capabilities) == sorted(DUMP_CAPABILITIES)
-        )
-    return False
+    role = Role.for_dumps(name=name, bucket_id=bucket_id, prefix=prefix)
+    return any(role.describes(existing) for existing in session.keys() if existing.key_id == key_id)
 
 
 def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> AppKey:
     """A write-only key confined to one prefix of one bucket."""
-    minted = _created_key(
-        session.post(
-            'b2_create_key',
-            {
-                'accountId': session.account_id,
-                'keyName': name,
-                'capabilities': list(DUMP_CAPABILITIES),
-                'bucketId': bucket_id,
-                'namePrefix': f'{prefix}/',
-            },
-        )
-    )
+    role = Role.for_dumps(name=name, bucket_id=bucket_id, prefix=prefix)
+    minted = session.create_key(role)
     # Retired by the minter rather than by the new key: a write-only key
     # carries no `deleteKeys` and could not retire anything, its predecessor
     # least of all.
-    retire_others(session, name, keep=minted.key_id)
-    log.info('minted %s (%s)', name, minted.key_id)
+    retire_others(session, role, keep=minted.key_id)
+    log.info('minted %s (%s)', role.name, minted.key_id)
     return minted

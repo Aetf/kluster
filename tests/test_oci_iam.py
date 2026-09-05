@@ -26,13 +26,16 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 
-from oci_conventions import with_compartment
+from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.scripts.credentials import entries, masters, oci_iam
 from kluster.scripts.credentials.kdbx import KdbxStore
 
 PASSWORD = 'kit-password'
 TENANCY = 'ocid1.tenancy.oc1..tenancy'
+#: An account that is not the one the fake tenancy is, for the checks that
+#: hold the seed's account against what `conventions` records.
+ELSEWHERE = 'ocid1.tenancy.oc1..elsewhere'
 ROOT_USER = 'ocid1.user.oc1..root'
 DOMAIN_URL = 'https://idcs-000.identity.oraclecloud.com:443'
 SEED_ENTRY = entries.SEEDS['oci'].entry
@@ -608,6 +611,18 @@ def tenancy() -> Tenancy:
 
 
 @pytest.fixture(autouse=True)
+def recorded_tenancy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the fake tenancy the account `conventions` records.
+
+    A mint proves the seed belongs to this installation's account before it
+    creates anything, so a suite driving a fake account has to be that account
+    for the ordinary path to be the one under test. The tests that want the two
+    to disagree say so for themselves.
+    """
+    with_tenancy_ocid(monkeypatch, TENANCY)
+
+
+@pytest.fixture(autouse=True)
 def unhurried(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every bounded wait in this module happens instantly.
 
@@ -979,6 +994,48 @@ def test_a_compartment_named_on_the_command_line_is_taken_as_given(seeded: KdbxS
     assert tenancy.identity.compartments == {}
     name = f'{conventions.CLUSTER_NAME}-{conventions.PHYSICAL}'
     assert _policy(tenancy, name) == [f'Allow group {name} to manage all-resources in compartment id {drill}']
+
+
+def test_a_seed_from_another_tenancy_creates_nothing(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    before = dict(tenancy.identity.users)
+
+    # Both accounts are named, because which of the two is stale -- a kit
+    # re-seeded from another tenancy, or an OCID recorded wrong -- is the
+    # operator's question and neither one alone answers it.
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    # The seed's row names its tenancy, so opening the kit is enough to know
+    # it and the refusal costs nothing. Held against `conventions` after the
+    # mint instead, the same run would refuse and leave a compartment, a user,
+    # a group, a policy and a live signing key behind in an account this
+    # installation does not own.
+    assert tenancy.identity.compartments == {}
+    assert tenancy.identity.users == before
+    assert sorted(policy.name for policy in tenancy.identity.policies.values()) == [oci_iam.SEED_NAME]
+
+
+def test_a_drill_tenancy_is_not_held_against_the_recorded_account(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+
+    minted = oci_iam.mint_api_key(
+        seeded,
+        consumer=conventions.PHYSICAL,
+        compartment_id='ocid1.compartment.oc1..drill',
+        seed_entry=SEED_ENTRY,
+        connect=tenancy,
+    )
+
+    # A run that names its own compartment is pointed at a tenancy none of the
+    # names `conventions` records describe -- the same escape the compartment
+    # lookup already takes as given -- so the account it mints in is whatever
+    # the seed's row says.
+    assert minted.tenancy == TENANCY
 
 
 def test_a_mint_converges_the_seeds_own_policy_before_it_acts(

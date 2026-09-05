@@ -26,23 +26,12 @@ from pathlib import Path
 from ... import conventions
 from . import b2, cloudflare, entries, oci_iam, oci_slot, pulumi_config
 from .kdbx import KdbxStore
-from .masters import CredentialRejected
 
 log = logging.getLogger(__name__)
-
-#: The name the zones token is minted under. Stable, because it is the name
-#: retirement matches on: a re-run deletes the same-named predecessor once its
-#: successor is verified, so one live token of this name is the invariant.
-ZONES_TOKEN_NAME = 'kluster-zones'
 
 #: The stack that manages the installation's DNS records, and therefore the slot
 #: the zones token is delivered into.
 ZONES_STACK = 'dns'
-
-#: The name the gateway's ACME token is minted under, on the same rule as the
-#: zones token: it is what retirement matches on, so one live token of this
-#: name is the invariant a re-run restores.
-GATEWAY_ACME_TOKEN_NAME = 'kluster-gateway-acme'
 
 #: The zones the gateway may answer a DNS-01 challenge in, and the whole of its
 #: token's scope.
@@ -148,41 +137,20 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
 
     The token is the whole of the delivery. Which account those zones live in
     is a fact this program already holds (`conventions.CLOUDFLARE_ACCOUNT`),
-    and a fact with one home is not copied into a second — so what is left for
-    the mint is to prove the token it just issued was minted in that account,
-    and to refuse if it was not.
+    and a fact with one home is not copied into a second — so the mint proves
+    the account it is about to issue into is that one, and refuses before
+    anything exists if it is not (`cloudflare.verify_account`).
     """
     zones = conventions.ALL_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
-    minted = cloudflare.mint_zone_token(session, name=ZONES_TOKEN_NAME, zones=zones)
-    _verify_account(minted.account_id)
+    minted = cloudflare.mint_zone_token(session, role=cloudflare.ZONES, zones=zones)
 
     stack.fill(
         secret={API_TOKEN_KEY: minted.value},
         plain={},
         holds=f'a token scoped to {", ".join(zones)}',
     )
-
-
-def _verify_account(account_id: str) -> None:
-    """Hold a minted token's account against the one `conventions` records.
-
-    The two ways the recorded fact goes stale are a kit re-seeded from another
-    Cloudflare account and an identifier written down wrong, and both would
-    deliver a token for zones the stack does not declare into while the stack
-    keeps naming the account it does. Both are worth stopping over, and neither
-    is visible once the token is in the slot.
-    """
-    intended = conventions.CLOUDFLARE_ACCOUNT.account_id
-    if account_id != intended:
-        raise CredentialRejected(
-            f'the seed minted this token in the Cloudflare account {account_id}, but '
-            f'`conventions.CLOUDFLARE_ACCOUNT` records {intended} as the account this installation declares '
-            'into: one of the two is stale, and delivering the token would point the stack at zones it does '
-            'not manage'
-        )
-    log.info('the minted token is scoped inside %s, which is the account `conventions` records', account_id)
 
 
 def cloudflare_gateway_acme(
@@ -197,10 +165,13 @@ def cloudflare_gateway_acme(
     this is a second token from the same seed, scoped to `GATEWAY_ACME_ZONES`
     and to nothing else.
 
-    Only the token is delivered, and the account id the mint discovers on the
-    way is not even checked here: the consumer is caddy, which signs with the
-    token and never names an account. The zones row is where that identifier is
-    held against the recorded one.
+    Only the token is delivered: the consumer is caddy, which signs with the
+    token and never names an account. The account is still proven, because
+    every mint holds the account it is about to issue into against
+    `conventions.CLOUDFLARE_ACCOUNT` before it creates anything
+    (`cloudflare.verify_account`) — a check that ran per row would be one a
+    second row could forget, and forgetting it here would put a live token in
+    a foreign account that nothing records and nobody revokes.
 
     Which stack takes it is not a choice, for the reason `PHYSICAL_STACK`
     states: the token is named after this row and the mint retires every other
@@ -210,12 +181,12 @@ def cloudflare_gateway_acme(
     zones = GATEWAY_ACME_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
-    minted = cloudflare.mint_zone_token(session, name=GATEWAY_ACME_TOKEN_NAME, zones=zones)
+    minted = cloudflare.mint_zone_token(session, role=cloudflare.GATEWAY_ACME, zones=zones)
 
     stack.fill(
         secret={GATEWAY_ACME_KEY: minted.value},
         plain={},
-        holds=f'{GATEWAY_ACME_TOKEN_NAME} ({minted.token_id}), scoped to {", ".join(zones)}',
+        holds=f'{cloudflare.GATEWAY_ACME.name} ({minted.token_id}), scoped to {", ".join(zones)}',
     )
     return minted.token_id
 
@@ -269,18 +240,16 @@ def oci_physical(
     for a drill tenancy, where none of those names mean anything.
 
     Neither is the tenancy. `conventions` names the account this program
-    declares into, so what is left for the mint is to prove that the key it
-    just issued signs for that account and to refuse if it does not — which is
-    the check that catches a seed swapped for another tenancy's before the key
-    reaches a stack that would then act in the wrong account. A run given
+    declares into, so the mint proves the seed it opened belongs to that
+    account and refuses before it creates anything if it does not
+    (`oci_iam.verify_tenancy`) — which is the check that catches a seed swapped
+    for another tenancy's, while catching it still costs nothing. A run given
     `compartment_id` is pointed at a drill tenancy and is not held to it, for
     the reason `oci_iam.ensure_compartment` is not.
     """
     minted = oci_iam.mint_api_key(
         kit, consumer=PHYSICAL_STACK, compartment_id=compartment_id, seed_entry=seed_entry, connect=connect
     )
-    if compartment_id is None:
-        oci_iam.verify_tenancy(minted.tenancy)
 
     _push_api_key(stack, minted, holds=f'a key for {oci_iam.Identity.name_for(PHYSICAL_STACK)}')
     return minted.user
@@ -299,6 +268,12 @@ def oci_state_backend(
     is workstation-only by design — bring-up and rebuild, never CI — and it
     runs before there is a Pulumi backend to hold a secret at all, so the slot
     is what a non-interactive reader can be pointed at (`oci_slot.py`).
+
+    The account is held against `conventions.OCI_TENANCY` here as it is for the
+    row above, because the mint holds it rather than the row does: this key
+    provisions the appliance the whole installation's state lives on, and one
+    minted in the wrong tenancy would build that appliance in an account
+    nothing here manages.
     """
     minted = oci_iam.mint_api_key(
         kit,
@@ -332,6 +307,6 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     stack.fill(
         secret={B2_KEY_ID_KEY: minted.key_id, B2_KEY_KEY: minted.key},
         plain={},
-        holds=f'{b2.MANAGEMENT_KEY_NAME} ({minted.key_id})',
+        holds=f'{b2.MANAGEMENT.name} ({minted.key_id})',
     )
     return minted.key_id
