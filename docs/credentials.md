@@ -432,7 +432,11 @@ entry begins with its channel's term from `register_column` in the slot
 map (`kluster/scripts/credentials/slots.py`), and an entry qualified
 `pending` is a channel this register promises that nothing addresses
 yet. A test holds the column against the map row by row, so a cell
-cannot promise a delivery the code does not make.
+cannot promise a delivery the code does not make. A `pending` qualifier
+is held against the map row's reason **for that same channel**: the row
+files each reason under the channel it is about, so a cell that defers
+one channel while the row is waiting on a different one is drift rather
+than a cell that reads well.
 
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
@@ -622,9 +626,9 @@ name.
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it delivers, it refuses a key that signs for an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
-| `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it and the controller's address beside it, into the `physical` stack's config; the stack file is then committed. Re-running it is how a replaced key is delivered. |
+| `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
-| `credentials derived zerotier record` | The same again, for the ZeroTier Central API token and the id of the network it administers, into the `physical` stack's config. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
+| `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
@@ -759,7 +763,11 @@ stack and key), Pulumi state, escrow ciphertext, SealedSecret, on-box,
 workstation slot, gw-config device secret. The CI Environment secret, the
 ops-repo secret and the `kluster` repository secret are one channel there,
 differing in which repository they name and whether they name an
-Environment.
+Environment. The Pulumi config channel is the **secret** one alone:
+rule 6 names no plain committed key, so a value that file may carry in
+the clear — an identifier naming an account rather than authenticating
+to it — is a constant in `conventions` and no row of this map, which is
+where the Cloudflare account identifier and the tenancy OCID both went.
 
 §3 stays the human-readable view and the map is the machine-readable one,
 and a test reads this document and holds the two equal — so a credential
@@ -767,7 +775,9 @@ in one and not the other fails a check rather than going unnoticed. A slot
 the register promises and nothing has given a name yet — an Environment
 secret no workflow reads, a SealedSecret with no manifest — is recorded on
 the row as what it is waiting on, rather than as an invented name a future
-workflow would have to guess right.
+workflow would have to guess right. Each reason is filed under the channel
+it is about, in the same vocabulary the Slot column is written in, so the
+qualifier there and the reason here name one slot rather than two.
 
 **The GitHub secrets are filled by a `credentials` command run from the
 workstation.** Besides the Pulumi config secret, that is the only channel

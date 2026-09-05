@@ -31,7 +31,15 @@ from kluster.scripts.credentials import devices, escrow, pki, pulumi_config, slo
 from kluster.scripts.credentials.github_secrets import Forge, Slot
 from kluster.scripts.credentials.pulumi_config import SlotRefused
 
-REPOSITORY = slots.REPOSITORY
+#: The forge census, read here as the map reads it (`conventions.forge`).
+#: Copying the repository names or ci.md §3's Environments into this file
+#: would make it one more description of the partition, and a test that holds
+#: the map against a copy says nothing about the census.
+REPOSITORY = conventions.forge.DEPLOYMENT.full_name
+OPS_REPOSITORY = conventions.forge.OPS.full_name
+DRILL_ENVIRONMENT = conventions.forge.DRILL.name
+ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments)
+
 PASSPHRASE = 'a-recovered-passphrase'
 
 #: The appliance this workstation's own bundle points at, which is where the
@@ -162,17 +170,17 @@ def sinking_into(slot: Slot) -> Mapping[str, slots.Row]:
 
 
 def test_an_environment_is_held_against_the_repository_its_sink_names() -> None:
-    drill = Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT)
-    misplaced = Slot(repository=slots.REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT)
-    foreign = Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.ENVIRONMENTS[0])
+    drill = Slot(repository=OPS_REPOSITORY, name='A_SECRET', environment=DRILL_ENVIRONMENT)
+    misplaced = Slot(repository=REPOSITORY, name='A_SECRET', environment=DRILL_ENVIRONMENT)
+    foreign = Slot(repository=OPS_REPOSITORY, name='A_SECRET', environment=ENVIRONMENTS[0])
 
     # The drills' credentials live in the ops repository's own Environment, so
     # the first sink to name it must pass rather than read as undeclared.
     assert undeclared_environments(sinking_into(drill)) == {}
     # And each of the other two is a secret no job can see: the Environment is
     # real, but not in the repository the sink names.
-    assert undeclared_environments(sinking_into(misplaced)) == {slots.REPOSITORY: {slots.DRILL_ENVIRONMENT}}
-    assert undeclared_environments(sinking_into(foreign)) == {slots.OPS_REPOSITORY: {slots.ENVIRONMENTS[0]}}
+    assert undeclared_environments(sinking_into(misplaced)) == {REPOSITORY: {DRILL_ENVIRONMENT}}
+    assert undeclared_environments(sinking_into(foreign)) == {OPS_REPOSITORY: {ENVIRONMENTS[0]}}
 
 
 #: How §3's Slot column separates the channels one credential lands in.
@@ -202,9 +210,9 @@ def channels_of_every_kind() -> tuple[slots.Channel, ...]:
     """One channel of each kind the map may deliver into, `Slot` in all four of its guises."""
     return (
         Slot(repository=REPOSITORY, name='A_SECRET'),
-        Slot(repository=REPOSITORY, name='A_SECRET', environment=slots.ENVIRONMENTS[0]),
-        Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET'),
-        Slot(repository=slots.OPS_REPOSITORY, name='A_SECRET', environment=slots.DRILL_ENVIRONMENT),
+        Slot(repository=REPOSITORY, name='A_SECRET', environment=ENVIRONMENTS[0]),
+        Slot(repository=OPS_REPOSITORY, name='A_SECRET'),
+        Slot(repository=OPS_REPOSITORY, name='A_SECRET', environment=DRILL_ENVIRONMENT),
         slots.PulumiConfig('a-stack', 'aKey'),
         slots.PulumiState('a-stack', 'a value'),
         slots.EscrowCopy('a-label'),
@@ -230,15 +238,21 @@ def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], se
 
     Three ways to disagree, and the triple separates them: a channel the cell
     hands out as delivered that no row addresses, a channel a row addresses that
-    the cell does not name, and a channel the cell calls `pending` that is in
-    fact filled -- which sends its reader looking for what stands in the way of
-    a slot nothing is waiting on.
+    the cell does not name, and a channel the two disagree about being
+    `pending` -- a cell qualifying one no row is waiting on, or a row waiting on
+    one the cell hands out as delivered.
+
+    The third is an equality between two sets of channels rather than a count,
+    because a row files each reason under the channel it is about: a cell
+    deferring a CI Environment secret while the row is waiting on an
+    ops-repository one is drift, though both sides have something pending.
     """
     promised = promised_channels(cell)
     delivered = {term for term, waiting in promised.items() if not waiting}
     waiting = promised.keys() - delivered
     addressed = {slots.register_column(target) for row in rows for target in row.targets}
-    return delivered - addressed, addressed - promised.keys(), waiting & addressed
+    unaddressed = {channel for row in rows for channel in row.pending}
+    return delivered - addressed, addressed - promised.keys(), waiting ^ unaddressed
 
 
 def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
@@ -250,11 +264,6 @@ def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
         rows = [row for row in slots.ROWS.values() if row.register == credential]
 
         assert drifted_channels(cell, rows) == (set(), set(), set()), credential
-        # A channel the register promises without an address is what a row's
-        # `pending` is for, so the cell may say `pending` only where a row says
-        # what stands in the way.
-        if any(waiting for waiting in promised_channels(cell).values()):
-            assert [row for row in rows if row.pending], credential
 
 
 def test_a_cell_promising_a_channel_no_row_delivers_is_drift() -> None:
@@ -269,17 +278,73 @@ def test_a_cell_promising_a_channel_no_row_delivers_is_drift() -> None:
             targets=(slots.PulumiState('a-stack', 'a value'),),
         )
     ]
+    waiting = [
+        slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(slots.PulumiState('a-stack', 'a value'),),
+            pending={'CI env': 'the workflow that would read it is not built'},
+        )
+    ]
 
     assert drifted_channels('Pulumi state · CI env', stated) == ({'CI env'}, set(), set())
-    # Saying it is pending is how the register promises a channel honestly: the
-    # row then has to carry the reason.
-    assert drifted_channels('Pulumi state · CI env (pending)', stated) == (set(), set(), set())
+    # Saying it is pending is how the register promises a channel honestly: a
+    # row of that credential then has to say what *that* channel waits on.
+    assert drifted_channels('Pulumi state · CI env (pending)', waiting) == (set(), set(), set())
+    assert drifted_channels('Pulumi state · CI env (pending)', stated) == (set(), set(), {'CI env'})
     # The other direction: a slot the map fills that the register does not
     # mention is a delivery its reader cannot know about.
-    assert drifted_channels('CI env (pending)', stated) == (set(), {'Pulumi state'}, set())
+    assert drifted_channels('CI env (pending)', waiting) == (set(), {'Pulumi state'}, set())
     # And a filled channel the cell calls pending, which reads as work left to
     # do on a slot that already holds the credential.
     assert drifted_channels('Pulumi state (pending)', stated) == (set(), set(), {'Pulumi state'})
+
+
+def test_a_reason_for_one_channel_does_not_excuse_a_pending_mark_on_another() -> None:
+    # The looseness the keying removes. A cell may defer any channel it likes as
+    # long as some row of that credential is waiting on something, and the two
+    # need never be the same channel -- so a register saying "CI holds this,
+    # once the workflow exists" reads as checked while the row is in fact
+    # waiting on an ops-repository secret nobody asked about.
+    elsewhere = [
+        slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(slots.PulumiState('a-stack', 'a value'),),
+            pending={'ops-repo secret': 'the ops-repository workflow that would read it is not built'},
+        )
+    ]
+
+    assert drifted_channels('Pulumi state · CI env (pending)', elsewhere) == (
+        set(),
+        set(),
+        {'CI env', 'ops-repo secret'},
+    )
+
+
+def test_a_reason_filed_under_a_channel_the_register_cannot_name_is_refused() -> None:
+    # The keys are §3's own vocabulary, so a reason filed under anything else
+    # explains a cell no reader can find -- and the interlock above would read
+    # it as a channel the row waits on that the register never promised.
+    with pytest.raises(SlotRefused, match='no channel of'):
+        _ = slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            pending={'CI Environment secret': 'the workflow that would read it is not built'},
+        )
+
+
+def test_a_reason_filed_under_a_channel_the_row_addresses_is_refused() -> None:
+    # A row cannot both name where a value lands and say that channel is
+    # waiting on something: one of the two lines is wrong, and which one is a
+    # question for whoever wrote them.
+    with pytest.raises(SlotRefused, match='a channel this row addresses'):
+        _ = slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(slots.PulumiState('a-stack', 'a value'),),
+            pending={'Pulumi state': 'the stack that would export it has never run'},
+        )
 
 
 def test_the_passphrase_reaches_every_environment() -> None:
@@ -288,7 +353,7 @@ def test_the_passphrase_reaches_every_environment() -> None:
     # merge chain that cannot start.
     passphrase = slots.ROWS['pulumi-passphrase']
 
-    assert {slot.environment for slot in passphrase.sinks} == set(slots.ENVIRONMENTS)
+    assert {slot.environment for slot in passphrase.sinks} == set(ENVIRONMENTS)
     assert {slot.name for slot in passphrase.sinks} == {'PULUMI_CONFIG_PASSPHRASE'}
 
 
@@ -318,7 +383,7 @@ def test_the_client_bundle_fills_every_carrier_the_workflows_read() -> None:
     assert {slot.name for slot in bundle.sinks} == carriers
     # Every Environment, for the same reason the passphrase reaches every
     # Environment: each one runs a `pulumi` command against the backend.
-    assert {slot.environment for slot in bundle.sinks} == set(slots.ENVIRONMENTS)
+    assert {slot.environment for slot in bundle.sinks} == set(ENVIRONMENTS)
     assert not bundle.pending
 
 
@@ -330,10 +395,24 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
         # the reason the minted rows import their key names: two descriptions
         # of one delivery are two things to keep in step.
         assert row.register == device.register
-        assert row.targets == tuple(
-            slots.PulumiConfig(device.stack, field.key, secret=field.secret) for field in device.fields
-        )
+        assert row.targets == tuple(slots.PulumiConfig(device.stack, field.key) for field in device.fields)
         assert f'credentials derived {member} record' in row.source.describe()
+
+
+def test_no_device_field_is_delivered_into_the_committed_file_in_the_clear() -> None:
+    # Rule 6's closed set has one Pulumi config channel and it is the secret
+    # one, so the map has no way to say "this key is in the clear" -- and a
+    # device field that was would be delivered under a term claiming the
+    # opposite. A plain field therefore needs a channel in rule 6 and a term in
+    # the vocabulary before it can have a row here, which is what this holds.
+    plain = {
+        (member, field.name)
+        for member, device in devices.DEVICES.items()
+        for field in device.fields
+        if not field.secret
+    }
+
+    assert plain == set()
 
 
 @pytest.mark.parametrize(
@@ -446,8 +525,8 @@ def test_a_derived_row_is_recovered_once_and_pushed_to_every_slot() -> None:
 
     # One recovery, five deliveries: the value is obtained once and fanned out,
     # so a rotation is one command rather than one per Environment.
-    assert len(pushed) == len(slots.ENVIRONMENTS)
-    for environment in slots.ENVIRONMENTS:
+    assert len(pushed) == len(ENVIRONMENTS)
+    for environment in ENVIRONMENTS:
         assert gh.values[(REPOSITORY, environment, 'PULUMI_CONFIG_PASSPHRASE')] == PASSPHRASE
 
 
@@ -464,7 +543,7 @@ def test_the_client_bundle_is_issued_once_and_split_across_its_carriers() -> Non
         only='state-backend-certificates',
     )
 
-    assert len(pushed) == 4 * len(slots.ENVIRONMENTS)
+    assert len(pushed) == 4 * len(ENVIRONMENTS)
     carriers = pushed_bundle(gh)
     # The certificate and the key that opens it come out of a single issuance,
     # so the two halves have to be a pair. Resolving the row twice would put
@@ -509,7 +588,7 @@ def test_every_environment_receives_the_same_bundle() -> None:
 
     # One issuance fanned out, not one per Environment: five certificates would
     # be five things to reason about the day a handshake is refused.
-    for environment in slots.ENVIRONMENTS:
+    for environment in ENVIRONMENTS:
         assert pushed_bundle(gh, environment) == pushed_bundle(gh)
 
 
@@ -546,6 +625,21 @@ def test_the_bundle_cannot_be_issued_on_a_workstation_that_has_none_itself() -> 
     assert not gh.values
 
 
+def test_a_sink_naming_a_part_the_bundle_does_not_carry_is_refused_by_name() -> None:
+    bundle = slots.ROWS['state-backend-certificates']
+    mistyped = slots.Row(
+        register=bundle.register,
+        source=bundle.source,
+        targets=(Slot(repository=REPOSITORY, name='PULUMI_BACKEND_CERTIFICATE', environment=ENVIRONMENTS[0]),),
+    )
+
+    # A carrier misspelled, or a fifth one added without the part that fills it.
+    # The row says which secret has no value and what it does deliver, rather
+    # than failing on a lookup whose whole message is the name that was missing.
+    with pytest.raises(SlotRefused, match='PULUMI_BACKEND_CERTIFICATE'):
+        _ = mistyped.resolve(context(RecordedGh(), open_vault=opened, backend_url=OPERATOR_URL))
+
+
 def test_a_backend_url_that_names_no_host_is_refused() -> None:
     gh = RecordedGh()
     broken = context(gh, open_vault=opened, backend_url='postgres:///pulumi_state')
@@ -562,7 +656,7 @@ def test_a_push_verifies_through_the_listing_because_the_value_never_comes_back(
     # A secret is write-only, so the check is that the name is in the listing
     # and its timestamp moved — read before the push and again after it.
     listings = [args for args in gh.invocations if args[0:2] == ['secret', 'list']]
-    assert len(listings) == 2 * len(slots.ENVIRONMENTS)
+    assert len(listings) == 2 * len(ENVIRONMENTS)
 
 
 def test_a_slot_that_does_not_show_the_secret_afterwards_is_a_failure() -> None:
@@ -717,7 +811,10 @@ def test_a_row_with_no_github_slot_is_skipped_with_its_reason(caplog: pytest.Log
     pushed = slots.sync(context(gh, open_vault=opened), rows={'talos': slots.ROWS['talos']})
 
     assert pushed == []
-    assert slots.ROWS['talos'].pending in caplog.text
+    # Under the channel it is about: the operator reads which slot is waiting,
+    # not a sentence they have to match to a cell of §3 themselves.
+    for channel, why in slots.ROWS['talos'].pending.items():
+        assert f'{channel}: {why}' in caplog.text
 
 
 def test_a_row_that_cannot_produce_its_value_does_not_stop_the_walk(caplog: pytest.LogCaptureFixture) -> None:
@@ -791,3 +888,5 @@ def test_the_listing_prints_every_row_with_its_source_and_its_slots() -> None:
         assert f'{name} ({row.source.kind})' in printed
         for target in row.targets:
             assert str(target) in printed
+        for channel, why in row.pending.items():
+            assert f'{channel}: {why}' in printed
