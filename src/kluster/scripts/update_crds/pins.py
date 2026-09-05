@@ -15,6 +15,16 @@ test holds `app_version` to `min_app_version`.
 Only the sources whose CRDs the cluster actually declares are rendered.
 Everything else in §1 is listed anyway, with `crds=False`, so this file is a
 complete register of what the stack installs rather than a partial one.
+
+**These pins move by hand, and `uv run update_crds` is the other half of the
+move**: `packages/crds` is generated from the versions below, so a bump nobody
+regenerates leaves the bindings describing a release the cluster does not run.
+Renovate reads exactly one thing in this file — the `crd2pulumi` version and
+the digest beside it, through the custom manager in `renovate.json5` that moves
+the pair together — and it does not read the rest by design rather than by
+oversight: an annotation comment on a chart version would look like automation
+without being any, because finishing that bump means running a command
+renovate has no way to run.
 """
 
 from __future__ import annotations
@@ -48,7 +58,6 @@ def version_tuple(version: str) -> tuple[int, ...]:
 #: Helm **3** SDK (cluster-infra.md §1.2), so rendering the CRD bundle with a
 #: Helm 3 binary renders it the way the cluster will. Helm 4 is a different
 #: renderer and would make this bundle a prediction about a tool nobody runs.
-# renovate: datasource=github-releases depName=helm/helm versioning=semver
 HELM_VERSION = '3.20.0'
 HELM_URL = f'https://get.helm.sh/helm-v{HELM_VERSION}-linux-amd64.tar.gz'
 
@@ -142,7 +151,6 @@ class SourceTree:
 MANIFESTS: Sequence[ReleaseManifest] = (
     ReleaseManifest(
         repo='kubernetes-sigs/gateway-api',
-        # renovate: datasource=github-releases depName=kubernetes-sigs/gateway-api
         tag='v1.6.1',
         asset='experimental-install.yaml',
         floor='cluster-infra.md §1 item 1 — experimental channel, for ExternalAuth (GEP-1494)',
@@ -155,7 +163,6 @@ MANIFESTS: Sequence[ReleaseManifest] = (
 SOURCE_TREES: Sequence[SourceTree] = (
     SourceTree(
         repo='cilium/cilium',
-        # renovate: datasource=github-releases depName=cilium/cilium
         ref='v1.20.1',
         paths=(
             'pkg/k8s/apis/cilium.io/client/crds/v2',
@@ -171,7 +178,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='cilium',
         repo='https://helm.cilium.io/',
-        # renovate: datasource=helm depName=cilium registryUrl=https://helm.cilium.io/
         version='1.20.1',
         app_version='1.20.1',
         min_app_version='1.20',
@@ -184,7 +190,6 @@ CHARTS: Sequence[Chart] = (
         name='sealed-secrets',
         # `bitnami-labs.github.io` answers 404 rather than redirecting here.
         repo='https://bitnami.github.io/sealed-secrets',
-        # renovate: datasource=helm depName=sealed-secrets registryUrl=https://bitnami.github.io/sealed-secrets
         version='2.19.3',
         app_version='0.39.1',
         floor='NO FLOOR',
@@ -192,7 +197,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='cert-manager',
         repo='https://charts.jetstack.io',
-        # renovate: datasource=helm depName=cert-manager registryUrl=https://charts.jetstack.io
         version='v1.21.1',
         app_version='v1.21.1',
         floor='NO FLOOR',
@@ -203,7 +207,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='cloudnative-pg',
         repo='https://cloudnative-pg.github.io/charts',
-        # renovate: datasource=helm depName=cloudnative-pg registryUrl=https://cloudnative-pg.github.io/charts
         version='0.29.0',
         app_version='1.30.0',
         min_app_version='1.26',
@@ -212,7 +215,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='plugin-barman-cloud',
         repo='https://cloudnative-pg.github.io/charts',
-        # renovate: datasource=helm depName=plugin-barman-cloud registryUrl=https://cloudnative-pg.github.io/charts
         version='0.7.1',
         app_version='v0.14.0',
         floor='NO FLOOR',
@@ -220,7 +222,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='volsync',
         repo='https://backube.github.io/helm-charts/',
-        # renovate: datasource=helm depName=volsync registryUrl=https://backube.github.io/helm-charts/
         version='0.16.0',
         app_version='0.16.0',
         floor='NO FLOOR',
@@ -228,7 +229,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='victoria-metrics-k8s-stack',
         repo='https://victoriametrics.github.io/helm-charts/',
-        # renovate: datasource=helm depName=victoria-metrics-k8s-stack registryUrl=https://victoriametrics.github.io/helm-charts/
         version='0.91.2',
         app_version='v1.150.0',
         floor='NO FLOOR',
@@ -236,7 +236,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='node-feature-discovery',
         repo='https://kubernetes-sigs.github.io/node-feature-discovery/charts',
-        # renovate: datasource=helm depName=node-feature-discovery registryUrl=https://kubernetes-sigs.github.io/node-feature-discovery/charts
         version='0.19.0',
         app_version='v0.19.0',
         floor='NO FLOOR',
@@ -244,7 +243,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='intel-device-plugins-operator',
         repo='https://intel.github.io/helm-charts/',
-        # renovate: datasource=helm depName=intel-device-plugins-operator registryUrl=https://intel.github.io/helm-charts/
         version='0.36.0',
         app_version='0.36.0',
         floor='NO FLOOR',
@@ -252,7 +250,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='intel-device-plugins-gpu',
         repo='https://intel.github.io/helm-charts/',
-        # renovate: datasource=helm depName=intel-device-plugins-gpu registryUrl=https://intel.github.io/helm-charts/
         version='0.36.0',
         app_version='0.36.0',
         floor='NO FLOOR',
@@ -263,7 +260,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='metrics-server',
         repo='https://kubernetes-sigs.github.io/metrics-server/',
-        # renovate: datasource=helm depName=metrics-server registryUrl=https://kubernetes-sigs.github.io/metrics-server/
         version='3.14.0',
         app_version='0.9.0',
         floor='NO FLOOR',
@@ -273,7 +269,6 @@ CHARTS: Sequence[Chart] = (
     Chart(
         name='reloader',
         repo='https://stakater.github.io/stakater-charts',
-        # renovate: datasource=helm depName=reloader registryUrl=https://stakater.github.io/stakater-charts
         version='2.2.16',
         app_version='v1.4.21',
         floor='NO FLOOR',
