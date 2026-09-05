@@ -1,8 +1,8 @@
-"""What every suite in this process shares: no credentials, and a cheap KDF.
+"""What every suite in this process shares: an empty environment, and a cheap KDF.
 
 The first is `root_credentials.strip`, called below rather than offered as a
-fixture, so that no suite can be the one that forgot to ask. What it takes and
-why is that module.
+fixture, so that no suite can be the one that forgot to ask. What it takes,
+and the two channels it leaves open, is that module.
 
 The kit several suites share is `memory_kit.MemoryKit`, a kit that is not a
 file; it lives in its own module because test modules import the class
@@ -42,6 +42,11 @@ if TYPE_CHECKING:
 # variable while being collected would still have seen the operator's value.
 # Nothing is put back afterwards, because the process this strips is the test
 # run itself.
+#
+# This file is what makes it reach a suite, so it reaches the suites under
+# `tests/` and no others. That is the whole of the suite today and there is no
+# conftest above this one; a test module added outside this tree would be
+# outside this too.
 root_credentials.strip(os.environ)
 
 #: Argon2 at its cheapest, in the names KDBX gives the parameters: one pass

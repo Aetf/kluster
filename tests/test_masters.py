@@ -62,17 +62,16 @@ def _current() -> keyring.backend.KeyringBackend:
 
 @pytest.fixture(autouse=True)
 def local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The two layers that are not the secret store, moved out of the checkout.
+    """The file layer, moved out of the checkout.
 
-    The file layer is a path inside the repository and the environment layer is
-    this process's own environment, so without this a test would read — and
-    `forget` would delete — whatever the operator running it happens to hold.
+    `workstation` resolves `.credentials/` from its own `__file__`, so without
+    this a test would read — and `forget` would delete — whatever the operator
+    running it happens to keep there. The environment layer needs nothing here:
+    `root_credentials` empties it for the whole process, which is why the cases
+    below that want a variable set it themselves.
     """
     directory = tmp_path / '.credentials'
     monkeypatch.setattr(workstation, 'directory', lambda: directory)
-    for root in masters.ROOTS.values():
-        for field in root.fields:
-            monkeypatch.delenv(field.env, raising=False)
     return directory
 
 
