@@ -9,7 +9,7 @@ ZONE_PRIMARY = 'unlimited-code.works'
 #: proxy holds under it, and the scope of the token that buys the wildcard.
 ZONE_SHORT = 'ucw.phd'
 
-#: The primary alone: every route's default, the anchor block, the overlay
+#: The primary alone: every route's default, the anchor blocks, the overlay
 #: block, and every application name the legacy VPS still serves. A public
 #: record is published in a zone only where a listener and a certificate answer
 #: for the name (declarative/dns.md §2), and the primary is the only zone where

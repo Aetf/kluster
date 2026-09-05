@@ -24,9 +24,12 @@ from kluster import conventions
 #: A DNS label's shape: letters, digits and interior hyphens, and no dot at all.
 LABEL = re.compile(r'[a-z0-9]([a-z0-9-]*[a-z0-9])?\Z')
 
-#: A DNS label's other half: its length in octets, which the shape does not
-#: bound (RFC 1035 §2.3.4).
-LABEL_OCTETS = 63
+#: A DNS label's maximum length, in octets (RFC 1035 §2.3.4), which the shape
+#: above does not bound. Counted with `.encode()` because the limit is octets
+#: and not characters; the names a row publishes are ASCII either way -- a host
+#: by the shape check, a service label by its `_service._proto` form -- so the
+#: two counts agree here.
+LABEL_MAX_OCTETS = 63
 
 
 def _unknown_zones(routes: Iterable[conventions.routes.Route]) -> set[str]:
@@ -51,8 +54,19 @@ def _hosts_that_are_not_labels(routes: Iterable[conventions.routes.Route]) -> se
     return {route.host for route in routes if not LABEL.fullmatch(route.host)}
 
 
-def _hosts_longer_than_a_label(routes: Iterable[conventions.routes.Route]) -> set[str]:
-    return {route.host for route in routes if len(route.host.encode()) > LABEL_OCTETS}
+def _oversized_labels(routes: Iterable[conventions.routes.Route]) -> set[str]:
+    """Every name a row publishes that carries a label over the limit.
+
+    The limit is per label and a published name is not always one label -- a
+    service record's is `_service._proto` -- so the name is split before each
+    piece is weighed.
+    """
+    return {
+        name
+        for route in routes
+        for name in _published_names(route)
+        if any(len(label.encode()) > LABEL_MAX_OCTETS for label in name.split('.'))
+    }
 
 
 def test_every_zone_a_row_names_is_one_the_installation_declares() -> None:
@@ -82,22 +96,31 @@ def test_no_two_rows_publish_the_same_host_in_the_same_zone() -> None:
     assert _duplicated_names(duplicated) == [('photos', 'ucw.phd')]
 
 
-def test_no_two_rows_publish_the_same_service_record_in_the_same_zone() -> None:
-    """An extra is a name the row publishes, so it collides like a host does.
+def test_no_two_rows_publish_the_same_name_in_the_same_zone() -> None:
+    """A host and an extra's label are one namespace, not two.
 
-    An `Srv` label sits in the zone rather than under the row's host, so two
-    applications that both claim `_matrix-identity._tcp` are two records on one
-    name -- a collision `_duplicated_names` sees only because it walks every
-    name a row publishes rather than the host alone.
+    An `Srv` label sits in the zone rather than under the row's host, so it
+    collides with another row's label and with another row's host alike. One
+    walk over every name a row publishes is what sees both; a walk per kind
+    would see neither the second pair nor the third.
     """
     identity = conventions.routes.Srv('_matrix-identity._tcp', priority=10, weight=0, port=443)
-    duplicated = [
+    two_extras = [
         conventions.routes.Route(host='matrix', zones=('ucw.phd',), extras=(identity,)),
         conventions.routes.Route(host='chat', zones=('ucw.phd',), extras=(identity,)),
     ]
+    a_host_and_an_extra = [
+        conventions.routes.Route(host='status', zones=('ucw.phd',)),
+        conventions.routes.Route(
+            host='chat',
+            zones=('ucw.phd',),
+            extras=(conventions.routes.Srv('status', priority=10, weight=0, port=443),),
+        ),
+    ]
 
     assert _duplicated_names(conventions.routes.ROUTES) == []
-    assert _duplicated_names(duplicated) == [('_matrix-identity._tcp', 'ucw.phd')]
+    assert _duplicated_names(two_extras) == [('_matrix-identity._tcp', 'ucw.phd')]
+    assert _duplicated_names(a_host_and_an_extra) == [('status', 'ucw.phd')]
 
 
 def test_a_rows_host_fits_in_a_dns_label() -> None:
@@ -109,9 +132,23 @@ def test_a_rows_host_fits_in_a_dns_label() -> None:
     """
     too_long = 'a' * 64
 
-    assert _hosts_longer_than_a_label(conventions.routes.ROUTES) == set()
+    assert _oversized_labels(conventions.routes.ROUTES) == set()
     assert _hosts_that_are_not_labels([conventions.routes.Route(host=too_long)]) == set()
-    assert _hosts_longer_than_a_label([conventions.routes.Route(host=too_long)]) == {too_long}
+    assert _oversized_labels([conventions.routes.Route(host=too_long)]) == {too_long}
+
+
+def test_every_label_an_extra_publishes_fits_as_well() -> None:
+    """An extra publishes a name too, and that name is several labels.
+
+    The limit applies to each of them rather than to the name, so a service
+    record whose pieces are all short is legal however long the whole reads,
+    and one oversized piece is refused however short the whole reads.
+    """
+    oversized = conventions.routes.Srv('_' + 'a' * 63 + '._tcp', priority=10, weight=0, port=443)
+    long_but_legal = conventions.routes.Srv('_' + 'a' * 60 + '._tcp', priority=10, weight=0, port=443)
+
+    assert _oversized_labels([conventions.routes.Route(host='matrix', extras=(oversized,))]) == {oversized.label}
+    assert _oversized_labels([conventions.routes.Route(host='matrix', extras=(long_but_legal,))]) == set()
 
 
 def test_a_rows_host_is_a_label_and_not_a_fully_qualified_name() -> None:
