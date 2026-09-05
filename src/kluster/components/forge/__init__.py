@@ -158,7 +158,11 @@ class ManagedRepository(Component):
                 allows_force_pushes=False,
                 # Including the account owner. A gate the one person who can
                 # open it routinely walks around is a suggestion, and this one
-                # is why a merge to `main` implies a passing preview.
+                # is why a merge to `main` implies `required_checks` were
+                # green on an up-to-date branch. That is the whole of what a
+                # merge implies: a check this list does not name is advisory
+                # however red it is, so what those names are is a decision in
+                # its own right (framework/github.md §3).
                 enforce_admins=True,
                 opts=on_repository,
             )
