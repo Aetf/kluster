@@ -234,7 +234,53 @@ one usable key stands: the key the kit holds is the key that authenticates,
 and a surviving second key is proved to be a deletion the tenancy refused
 rather than an orphan the sweep missed.
 
-## 6. Best Practices
+## 6. Proving a Test Fails Without the Change
+
+AGENTS.md requires that new behavior ship with a test that fails without
+it. That is a claim about the test, and the only thing that establishes
+it is breaking the behavior and watching the test go red. The broken
+version — the mutation — is throwaway code, and the whole of the
+discipline below is about getting rid of it again without taking the
+real change with it.
+
+**A mutation belongs in a throwaway copy of the file, not in the working
+tree that holds the change being proved.** Copy the file aside, mutate
+the copy, run the suite against it, delete it. Nothing then has to be
+reverted, and the step every loss of work turns on does not happen.
+
+**Where the mutation has to be in place, commit first — or stash the
+real work.** Describe the change and `jj new`, so that the work sits at
+`@-` and the mutation is alone in `@`. A revert can then restore only
+what the mutation changed, because there is nothing else in the file to
+restore.
+
+**`git checkout HEAD -- <file>` is the trap.** It is the obvious revert,
+and it is destructive: on a file that also carries uncommitted work it
+discards that work along with the mutation, without a prompt and without
+a non-zero exit. What makes it hard to catch is the state it leaves
+behind — the file stops appearing as modified, which reads as
+*committed* rather than *gone*. A clean `git status` is evidence of
+nothing. Inside a `jj` workspace it is worse, because the workspace has
+no git repository of its own and `HEAD` answers about the primary
+checkout ([dispatch.md](dispatch.md) §1.2): the file is restored to
+whatever `main` holds, however many commits the branch is ahead. The
+`jj` revert that means what it says is `jj restore <file>`, which
+restores from the working copy's own parent.
+
+**After any mutation round, verify the diff against the branch's own
+base:**
+
+```bash
+jj diff --from main --stat
+```
+
+The change is either still there or it is not, and this is the check
+that distinguishes the two. Nothing else does. A test proved against a
+fix that no longer exists passes for the wrong reason, so the suite
+stays green, the documentation still describes the fix, and the diff is
+the only artifact that disagrees.
+
+## 7. Best Practices
 
 1.  **Mock Early**: Always set mocks before importing or executing any Pulumi
     code that creates resources.
