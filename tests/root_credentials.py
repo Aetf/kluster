@@ -1,4 +1,4 @@
-"""What a test process may see of the operator's credentials: none of them.
+"""What a test process may see of the operator's credentials in its environment: nothing.
 
 `mise.toml` materializes the account-root token into `GITHUB_TOKEN` for every
 process it starts, and it does so from a file rather than from the caller, so
@@ -19,6 +19,18 @@ runs with the variables below absent. A suite that needs a value asks for a
 fake one by name through `fake_credentials`; a suite that needs one and does
 not ask gets whatever the code under test raises for an unset variable, which
 names the variable it wanted -- `kluster.stacks.github` is the worked example.
+
+**The environment is one of three channels, and this module closes only it.**
+`masters._find` consults the desktop secret store, then a file under the
+checkout's own `.credentials/`, and only then the variable; `workstation`
+resolves that directory from `__file__`, so on an operator workstation the
+file layer answers with live material without the environment being involved
+at all. Closing those two is not the same problem: they are read at *test*
+time and never at import, so a fixture reaches them where it could not reach
+this, and until one exists a suite that touches `masters`, `workstation` or
+`kdbx` redirects `workstation.directory` at a `tmp_path` itself, as
+`tests/test_masters.py::local` does. `docs/framework/testing.md` §1.1 is where
+that discipline is written down.
 
 This module is a named module rather than part of `conftest`, because test
 modules import from it and `conftest` is not a name an import can aim at.
@@ -42,30 +54,34 @@ if TYPE_CHECKING:
 #: cannot be forgotten by the next person to declare a provider.
 ROOT_VARIABLES = frozenset(field.env for root in masters.ROOTS.values() for field in root.fields)
 
-#: The rest of what `mise.toml` materializes: the passphrase that decrypts
-#: every stack's config, and the backend URL, which names a client key. They
-#: are not account-root fields, so the register above does not carry them, and
-#: they are secrets on exactly the same terms. `mise.toml` lists them under
-#: `redactions`; `test_root_credentials.py` holds that list and this set
-#: together.
+#: The other two variables `mise.toml` lists under `redactions`: the
+#: passphrase that decrypts every stack's config, and the backend URL, which
+#: names a client key. They are not account-root fields, so the register above
+#: does not carry them, and they are secrets on exactly the same terms.
 BACKEND_VARIABLES = frozenset({'PULUMI_CONFIG_PASSPHRASE', 'PULUMI_BACKEND_URL'})
 
 #: What `strip` removes and `fake` will stand in for.
 MASKED = ROOT_VARIABLES | BACKEND_VARIABLES
 
+#: Variables that carry a *path* to credential material rather than the
+#: material itself, and are therefore deliberately left in place: a failing
+#: assertion renders the path, and the tests that need the files behind them
+#: point the path elsewhere instead. Named rather than merely absent so that
+#: `test_root_credentials.py` can hold every key `mise.toml` sets to a
+#: deliberate verdict -- masked, or knowingly not -- rather than to silence.
+UNMASKED_PATHS = frozenset({'PGSSLROOTCERT', 'PGSSLCERT', 'PGSSLKEY', 'KLUSTER_KDBX'})
 
-def strip(environment: MutableMapping[str, str]) -> frozenset[str]:
-    """Remove every masked variable from `environment`, and name what was there.
+
+def strip(environment: MutableMapping[str, str]) -> None:
+    """Remove every masked variable from `environment`.
 
     A variable that was not set is not an error -- the operator's workstation
     holds a different set of these from CI, and a suite may not depend on
-    which. The return value exists so that a caller can say what it took;
-    nothing depends on the values, which are not returned at all.
+    which. Nothing is reported back, in either direction: a caller that asked
+    what was there would be holding the answer this exists to destroy.
     """
-    removed = frozenset(name for name in MASKED if name in environment)
-    for name in removed:
-        del environment[name]
-    return removed
+    for name in MASKED:
+        environment.pop(name, None)
 
 
 def fake(name: str) -> str:

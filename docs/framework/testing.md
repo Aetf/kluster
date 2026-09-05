@@ -27,7 +27,7 @@ futures hangs forever instead of failing):
 timeout 60 mise x uv -- uv run pytest
 ```
 
-### 1.1 A test process holds no credentials
+### 1.1 A test process holds no credentials in its environment
 
 `mise.toml` materializes the operator's account-root token into
 `GITHUB_TOKEN`, the state passphrase into `PULUMI_CONFIG_PASSPHRASE` and the
@@ -44,23 +44,53 @@ applies it at import. Deliberately not through a fixture, not even one every
 suite gets without asking: the earliest a fixture can run is the setup of the
 first test, by which point every test module has been imported, so a suite
 that read a variable while being collected would still have seen the
-operator's value.
+operator's value. It is anchored in `tests/conftest.py`, so it covers the
+suites under `tests/` — which is all of them, and no `conftest.py` sits
+above that one.
 
 -   **What is masked** is every variable an account root can arrive in, read
-    off `masters.ROOTS` rather than listed a second time, plus the two
-    backend secrets above. A root added to that register is masked by that
-    addition alone.
+    off `masters.ROOTS` rather than listed a second time, together with the
+    other variables `mise.toml` lists under `redactions`. A root added to that
+    register is masked by that addition alone.
+-   **What is deliberately not masked** is `PGSSLROOTCERT`, `PGSSLCERT`,
+    `PGSSLKEY` and `KLUSTER_KDBX`, named in `root_credentials.UNMASKED_PATHS`.
+    Each carries a *path* to credential material rather than the material, so
+    a failed assertion renders a path; a suite that needs the files behind one
+    points the path elsewhere rather than blanking it. Every key `mise.toml`
+    sets has to fall in one of the two sets, which is what makes a new one a
+    decision somebody takes rather than an omission nobody sees.
 -   **A suite that needs a value asks for a fake one by name**, with
     `root_credentials.fake_credentials('GITHUB_TOKEN')` as a context manager,
     or `root_credentials.fake(name)` for the value on its own. The value is
     derived from the variable, so a value that does reach a diff identifies
     what it stood in for and says that it opens nothing. A name that carries
     no masked credential is refused, because setting one would be relying on
-    a protection that is not there.
+    a protection that is not there. The exception is a case whose subject is
+    the literal text of a credential — what a child process was handed, which
+    layer answered — where the literal in view is the point and a derived
+    value would hide it (`style/python.md`, "Not too DRY").
 -   **A suite that needs one and does not ask** meets whatever the code under
     test raises for an unset variable. `kluster.stacks.github` is the worked
     example: it refuses by name rather than authenticating as nobody, so the
     failure says which credential was missing.
+
+**The environment is one of three channels, and only it is closed.** An
+account root is looked up in the desktop secret store, then in a file under
+the checkout's own `.credentials/`, and only then in the variable
+(`masters._find`) — and `workstation` resolves that directory from its own
+`__file__`, so on an operator workstation the file layer answers with live
+material without the environment being consulted at all. A suite that reaches
+`masters`, `workstation` or `kdbx` therefore still has to redirect the file
+layer itself, by pointing `workstation.directory` at a `tmp_path`, the way
+`tests/test_masters.py::local` does. Until that too is closed by
+construction, this remains a discipline rather than a property, and a suite
+that forgets it can print an account root that never went near a variable.
+
+The asymmetry is the reason the two are not fixed the same way. A variable can
+be read while a module is being *imported*, which is before any fixture has
+run, so nothing short of stripping at import reaches it. The file layer is
+only ever read from inside a test, so a fixture is early enough — closing it
+is ordinary work rather than a place where the mechanism has to be unusual.
 
 The masking covers the live tier too (§5). A drill reads its credentials from
 the kit, never from the ambient environment.

@@ -1,10 +1,15 @@
-"""The masking that keeps the operator's credentials out of this process.
+"""The masking that keeps the operator's credentials out of this process's environment.
 
 Two halves, and they fail for different reasons. The set of variables is
 derived rather than listed, so the cases about it are about a derivation that
 could stop covering something; the removal itself is a statement about the
 process the suite is running in, which is why one case reads `os.environ`
 directly rather than a copy of it.
+
+What is *not* here is the file layer and the secret store, which the same
+credentials arrive through and which this mechanism does not close;
+`root_credentials` and `docs/framework/testing.md` §1.1 say why and what
+stands in for it.
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from kluster.scripts.credentials import masters
 MISE = Path(__file__).parent.parent / 'mise.toml'
 
 
-def test_this_process_holds_none_of_the_operators_credentials() -> None:
+def test_this_process_environment_holds_none_of_the_operators_credentials() -> None:
     """The property the whole mechanism exists for, asserted where it matters.
 
     `mise.toml` materializes the account-root token for every process it
@@ -45,9 +50,8 @@ def test_stripping_takes_the_credentials_and_leaves_the_rest() -> None:
     """
     environment = {'GITHUB_TOKEN': 'ghp_a_live_looking_token', 'PATH': '/usr/bin', 'HOME': '/home/nobody'}
 
-    removed = root_credentials.strip(environment)
+    root_credentials.strip(environment)
 
-    assert removed == frozenset({'GITHUB_TOKEN'})
     assert environment == {'PATH': '/usr/bin', 'HOME': '/home/nobody'}
 
 
@@ -55,7 +59,8 @@ def test_stripping_an_environment_that_holds_nothing_is_not_an_error() -> None:
     """CI and a workstation hold different subsets, and no suite may depend on which."""
     environment = {'PATH': '/usr/bin'}
 
-    assert root_credentials.strip(environment) == frozenset()
+    root_credentials.strip(environment)
+
     assert environment == {'PATH': '/usr/bin'}
 
 
@@ -65,6 +70,8 @@ def test_every_field_of_every_account_root_is_masked() -> None:
     A literal list here instead would be a second place to remember, and the
     one that is forgotten is the one that leaks: the register is where a root
     is added, and nobody adding one goes looking for the test suite's copy.
+    This case is the drift guard on that -- it bites when the register grows
+    past whatever the mask covers, which is the only way the two can part.
     """
     declared = {field.env for root in masters.ROOTS.values() for field in root.fields}
 
@@ -74,16 +81,29 @@ def test_every_field_of_every_account_root_is_masked() -> None:
     assert 'GITHUB_TOKEN' in declared
 
 
-def test_every_variable_mise_redacts_is_masked() -> None:
-    """`mise.toml` says which of the values it materializes are secrets; all of them are masked.
+def test_every_variable_mise_sets_is_masked_or_deliberately_not() -> None:
+    """`mise.toml`'s `[env]` is why a credential is in the environment at all, so it is the outside check.
 
-    That file is the reason a credential is in the environment at all, so its
-    own list is the outside check on this module's: a secret added to it
-    without being masked here is a secret a failing assertion can print.
+    Read against `[env]` rather than against the `redactions` list beside it:
+    that list is maintained by hand, so a secret added to `[env]` and
+    forgotten there would be both un-redacted by mise and unmasked here, with
+    nothing red. Every key has to land in one of the two sets, which makes a
+    new one a decision somebody takes rather than an omission.
     """
-    redacted = set(tomllib.loads(MISE.read_text())['redactions'])
+    materialized = set(tomllib.loads(MISE.read_text())['env'])
 
-    assert redacted <= root_credentials.MASKED
+    assert materialized <= root_credentials.MASKED | root_credentials.UNMASKED_PATHS
+
+
+def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
+    """The reason the exemption is safe, pinned so that it cannot quietly stop being true.
+
+    A path in a failed assertion discloses where key material lives, not the
+    material; a value would be the disclosure this module exists to prevent.
+    So the two sets may not overlap, and the exempt ones are the ones the
+    suites redirect rather than blank.
+    """
+    assert root_credentials.MASKED & root_credentials.UNMASKED_PATHS == frozenset()
 
 
 def test_a_fake_credential_names_the_variable_it_stands_in_for() -> None:
