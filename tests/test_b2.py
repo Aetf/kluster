@@ -32,6 +32,7 @@ from memory_kit import MemoryKit
 from kluster.scripts.credentials import b2, entries, masters, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
+from kluster.scripts.credentials.delivery import Delivery
 
 PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry
@@ -66,6 +67,18 @@ def _root(api: FakeApi) -> masters.Credential:
 def _seeded(api: FakeApi, kit: KdbxStore) -> str:
     key_id = b2.create_seed(root=_root(api), seeds=kit, seed_entry=SEED_ENTRY)
     return key_id
+
+
+def _delivered[T](pending: Delivery[T]) -> T:
+    """The credential a register row is left holding once its push has returned.
+
+    A row cannot read the credential directly (`delivery.py`), so this is how
+    a test comes by one at all — and it is the route that retires, which is
+    what these cases are about. The push is the identity function:
+    what is under test is the order, and the slot this key goes into belongs to
+    another module.
+    """
+    return pending.deliver(lambda credential: credential)[0]
 
 
 def _session(api: FakeApi, kit: KdbxStore) -> b2.Session:
@@ -198,7 +211,7 @@ def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxSto
 def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
 
-    minted = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    minted = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY))
     key_id, key = minted.key_id, minted.key
 
     # The offline store holds seeds, never the credentials automation
@@ -210,15 +223,36 @@ def test_the_management_key_is_handed_back_rather_than_stored(api: FakeApi, kit:
 
 def test_minting_the_management_key_retires_its_predecessors(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
-    previous = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
+    previous = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY)).key_id
     orphan = api.add_key(b2.MANAGEMENT.name)
 
-    key_id = b2.mint_management(kit, seed_entry=SEED_ENTRY).key_id
+    key_id = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY)).key_id
 
     # The seed signs this retirement and survives it, so both stale keys go.
     assert api.named(b2.MANAGEMENT.name) == [key_id]
     assert previous not in api.keys
     assert orphan.key_id not in api.keys
+
+
+def test_a_mint_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    previous = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY)).key_id
+
+    pending = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+
+    # A B2 key's secret is disclosed once, at creation, so between here and the
+    # caller's push the new secret exists in this process alone. Retired inside
+    # the mint, a push that then failed would leave the stack's config naming a
+    # key the account no longer has and no working key written down anywhere.
+    # Asserted against the account rather than against the new key's id,
+    # because reading that id is delivering it.
+    standing = api.named(b2.MANAGEMENT.name)
+    assert previous in standing
+    assert len(standing) == 2
+
+    current = _delivered(pending)
+
+    assert api.named(b2.MANAGEMENT.name) == [current.key_id]
 
 
 # -- the bucket and its write-only key --------------------------------------
@@ -539,7 +573,14 @@ def _rotate(api: FakeApi, kit: KdbxStore) -> None:
 
 
 def _manage(api: FakeApi, kit: KdbxStore) -> None:
-    _ = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+    """The whole of the management row: mint, push, retire.
+
+    The delivery is what makes the retirement part of the operation being
+    swept. A bare `mint_management` retires nothing by design, so an operation
+    that stopped there would sweep part of the calls and read the accumulation
+    it leaves behind as healthy.
+    """
+    _ = _delivered(b2.mint_management(kit, seed_entry=SEED_ENTRY))
 
 
 def _provision(api: FakeApi, kit: KdbxStore) -> None:

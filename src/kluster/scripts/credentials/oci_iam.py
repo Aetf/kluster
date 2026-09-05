@@ -83,6 +83,7 @@ from ... import conventions
 from ...conventions import CLUSTER_NAME, OCI_SEED_USER_EMAIL, Compartment
 from ...lib import templates
 from . import entries, masters
+from .delivery import Delivery
 from .kdbx import KdbxStore
 from .masters import CredentialRejected
 
@@ -1073,12 +1074,36 @@ def _sweep(iam: Iam, user_id: str, keep: str) -> None:
         _retire(iam, user_id, existing)
 
 
-def _room_for_one_more(iam: Iam, user_id: str, *, name: str) -> None:
+def _room_for_one_more(iam: Iam, user_id: str, *, name: str, live: str | None) -> None:
     """Refuse to mint into a full user, naming the keys in the way.
 
-    Reached only when the sweep could not make room (create-after-loss has no
-    key to sweep with; a sweep's deletions can be refused): the quota 400 the
+    Reached when the sweep could not make room: a create-after-loss has no key
+    to sweep with, a sweep's deletions can be refused, and a run whose push
+    failed leaves the sweep undone by design (`delivery.py`). The quota 400 the
     mint would hit names neither the keys nor the fix, so this does.
+
+    **Which key to keep has two answers, and they are different refusals.**
+    `live` is the fingerprint the caller knows is in use. A seed rotation knows
+    it: the credential at stake is the one the kit holds the private half of
+    and the one this program is signing with, computed a statement earlier. So
+    that refusal names it as the key to keep and lists the rest as the ones to
+    delete. Telling a rotation that deleting all of them is safe would be the
+    destructive advice on this whole path -- the key it would spend is the
+    seed's own, after which the row is recoverable only from the account root,
+    through `credentials seed oci create`. Not `kit bootstrap --only oci`: the
+    row is still in the kit, only its key at OCI is gone, and the walk skips
+    what the kit already has (`lifecycle.bootstrap`). The single-row create
+    probes nothing and overwrites both halves, which is what a present-but-dead
+    row needs.
+
+    Everything else is the other answer, and `live` is `None`. A derived row's
+    credential lives in a slot this program never reads, delivered there as a
+    secret; a seed create has nothing in hand to compare against, because the
+    row it is about to write is the first thing that would hold a private half.
+    Either way nothing here can pick the live key out of the strays, and the
+    refusal says so, offering the two moves that are safe without knowing --
+    delete all but one and re-run, or delete all of them and re-run, because
+    the re-run mints a fresh key and writes it down either way.
     """
     try:
         held = iam.key_fingerprints(user_id)
@@ -1088,11 +1113,25 @@ def _room_for_one_more(iam: Iam, user_id: str, *, name: str) -> None:
         # and lets the mint speak for itself.
         log.debug('could not read the key count (%s); minting without the pre-check', exc.code)
         return
-    if len(held) >= KEY_QUOTA:
+    if len(held) < KEY_QUOTA:
+        return
+    spare = [fingerprint for fingerprint in held if fingerprint != live]
+    if live is not None and len(spare) < len(held):
         raise CredentialRejected(
-            f'{name} already holds {len(held)} API keys (the quota); '
-            f'delete the superseded ones in the console first: {", ".join(held)}'
+            f'{name} already holds {len(held)} API keys (the quota) and the sweep could not make room. '
+            f'Keep {live}: it is the key this kit holds the private half of and the one this command signs '
+            f'as, and deleting it would leave the row recoverable only from the account root. Delete the '
+            f'rest in the console and run this again: {", ".join(spare)}. A sweep that could not make room '
+            'usually means this row predates the identity-domain attribute retirement goes through: '
+            '`credentials seed oci domain` records it once, and until it does every rotation strands '
+            'another key here (docs/credentials.md §4.3).'
         )
+    raise CredentialRejected(
+        f'{name} already holds {len(held)} API keys (the quota), and this run cannot tell which of them is '
+        'in use: nothing it reads holds the private half of any of them. Delete all but one in the console '
+        'and run this again, or delete all of them and run this again, which is equally safe because the '
+        f're-run mints a fresh key and writes it down: {", ".join(held)}'
+    )
 
 
 def domain_url(iam: Iam) -> str:
@@ -1274,6 +1313,16 @@ def create_seed(
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
     """
+    # Above everything, because everything below it writes: the group, the
+    # user, the membership, the policy and a live signing key are all made in
+    # whatever tenancy the operator's root names, and a root naming another
+    # account is exactly what a hand-assembled kit gets wrong. Held afterwards
+    # it would be a refusal that leaves four IAM principals and a usable key in
+    # an account nothing here records -- and the kit, having stored that
+    # tenancy, would then refuse every later mint correctly, so the orphan
+    # would never be mentioned again.
+    verify_tenancy(root[masters.OCI_TENANCY])
+
     # The account root is the credential that can read the tenancy's identity
     # domains, and this is the one moment it is in hand: stored on the row,
     # rotation retires keys without ever borrowing it again. It is also read
@@ -1295,7 +1344,9 @@ def create_seed(
 
     user = ensure(iam, SEED)
 
-    _room_for_one_more(iam, user.ocid, name=SEED.name)
+    # No `live` key: this creates the seed, so there is nothing in the kit
+    # yet whose private half would tell one of the strays from the others.
+    _room_for_one_more(iam, user.ocid, name=SEED.name, live=None)
     private_pem = _mint_verified(iam, user, name=SEED.name)
     _store(seeds, seed_entry, tenancy=iam.tenancy, user_id=user.ocid, private_pem=private_pem, domain=domain)
 
@@ -1322,10 +1373,20 @@ def rotate_seed(
     """
     seed = _seed_session(store, seed_entry, connect=connect)
 
+    # Before the sweep, which is this path's first write and a destructive one:
+    # a row naming an account `conventions` does not record is a row whose keys
+    # this program has no business deleting or adding to. Lower stakes than
+    # `create_seed`, which makes principals, and the same shape.
+    verify_tenancy(seed.row.tenancy)
+
     # Everything but the signing key is dead weight, and the quota (three)
     # must have room for the successor before it can be minted.
-    _sweep(seed.iam, seed.row.user, fingerprint(seed.row.private_key))
-    _room_for_one_more(seed.iam, seed.row.user, name=SEED.name)
+    live = fingerprint(seed.row.private_key)
+    _sweep(seed.iam, seed.row.user, live)
+    # The one path where the live key is knowable: it is the key the kit holds
+    # and the one this session signs with, so a refusal here names it as the
+    # key to keep rather than telling the operator to spend it.
+    _room_for_one_more(seed.iam, seed.row.user, name=SEED.name, live=live)
     # The row stores the OCID and nothing else, which is all a rotation needs:
     # the key it registers goes on its own user, and the self-service endpoint
     # takes no subject at all.
@@ -1339,7 +1400,7 @@ def rotate_seed(
         domain=seed.domain,
     )
 
-    previous = fingerprint(seed.row.private_key)
+    previous = live
     current = fingerprint(private_pem)
     successor = Iam.authorize(seed.row.tenancy, seed.row.user, private_pem, connect=connect, domain_url=seed.domain)
     _sweep(successor, seed.row.user, current)
@@ -1458,7 +1519,7 @@ def mint_api_key(
     compartment_id: str | None = None,
     seed_entry: str,
     connect: Connect = identity_client,
-) -> ApiKey:
+) -> Delivery[ApiKey]:
     """Mint one consumer's API key from the seed, with the IAM objects under it.
 
     The whole of a §3 OCI row's *birth*, compartment included: the boundary the
@@ -1473,7 +1534,12 @@ def mint_api_key(
     Idempotent, so rotating the row is re-running its command: the compartment,
     the user, the group and the policy are converged rather than created, the
     successor is verified by being used before anything supersedes it, and the
-    sweep afterwards leaves exactly the key this run minted.
+    sweep leaves exactly the key this run minted.
+
+    **The sweep is handed back rather than run**, so it happens after the
+    caller's push and not before it (`delivery.py`, and the register's §4 for
+    why). A push that fails therefore leaves the predecessor live and this
+    run's key stranded beside it, which the next run's sweep clears.
 
     **The account is proven before anything is created, not after.** The seed's
     row names the tenancy it belongs to, so opening the kit is enough to know
@@ -1507,14 +1573,20 @@ def mint_api_key(
 
     log.info('converging the user, group and policy for %s', identity.name)
     user = ensure(seed.iam, identity)
-    _room_for_one_more(seed.iam, user.ocid, name=identity.name)
+    # No `live` key: this consumer's credential is in a slot this program
+    # never reads, delivered there as a secret.
+    _room_for_one_more(seed.iam, user.ocid, name=identity.name, live=None)
     private_pem = _mint_verified(seed.iam, user, name=identity.name)
 
     # Swept as the key just minted rather than as the seed, the way a bring-up
     # sweeps as the seed it just created: the self-service endpoints authorize
     # on authentication alone (§4.3), so retiring what this run supersedes --
     # the predecessor on a re-run, an orphan from a run that died between
-    # upload and push -- asks nothing of the seed's policy.
-    minted = Iam.authorize(seed.row.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
-    _sweep(minted, user.ocid, fingerprint(private_pem))
-    return ApiKey(tenancy=seed.row.tenancy, user=user.ocid, private_key=private_pem)
+    # upload and push -- asks nothing of the seed's policy. Which session may
+    # sweep is this module's knowledge, which is why the caller is handed a
+    # closure rather than a rule it would have to follow.
+    minted_session = Iam.authorize(seed.row.tenancy, user.ocid, private_pem, connect=connect, domain_url=seed.domain)
+    return Delivery.of(
+        ApiKey(tenancy=seed.row.tenancy, user=user.ocid, private_key=private_pem),
+        lambda: _sweep(minted_session, user.ocid, fingerprint(private_pem)),
+    )

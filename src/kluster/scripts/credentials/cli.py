@@ -15,8 +15,12 @@ what its command does and how, for a reader with no document open, and a
 pointer to the register is a trailing `See also` line rather than the
 explanation itself.
 
-Every action is mint -> push to every slot -> verify, and therefore idempotent:
-rotation is a re-run, not a second procedure.
+Every minting action is account check -> mint -> push to every slot -> verify
+-> retire the predecessor, and therefore idempotent: rotation is a re-run, not
+a second procedure. The first step is there only where this program records the
+platform's account, which is not every row; `generate` keeps the same shape
+around a value it makes rather than mints, and the reading verbs have no shape
+to keep.
 """
 
 from __future__ import annotations
@@ -244,15 +248,20 @@ def _add_oci_mint_options(command: argparse.ArgumentParser, consumer: str) -> No
 _CREATE_FROM_ROOT = 'mint it from the account root (bring-up, or seed loss)'
 _CREATE_MINTED = (
     'Mint this seed with the account root and write it into the kit. The root is looked up on this '
-    'machine and prompted for when it is not here. The entry is written whether or not the kit already '
-    'holds one, which is what makes this the repair for a single lost seed; the walk that skips what is '
-    'already there is `kit bootstrap`.'
+    "machine and prompted for when it is not here. Where `conventions` records that platform's account, "
+    'the root is held against it before anything is created, so a root naming another account is refused '
+    'rather than leaving principals and a live key behind in it. The entry is written whether or not the '
+    'kit already holds one, which is what makes this the repair for a single lost seed; the walk that '
+    'skips what is already there is `kit bootstrap`.'
 )
 _CREATE_CONSOLE = (
     'Print the steps that create this seed in a console -- its platform has no API that can -- and write '
     'what they produce into the kit: the secret itself, the public identifier that goes with it, and the '
-    'file the platform hands over once, where there is one. The entry is written whether or not the kit '
-    'already holds one; the walk that skips what is already there is `kit bootstrap`.'
+    'file the platform hands over once, where there is one. What the console made is proven before the kit '
+    "records it -- the permissions this seed needs, and, where `conventions` records that platform's "
+    'account, that the seed can see it -- while the operator is still on the page that fixes either. The '
+    'entry is written whether or not the kit already holds one; the walk that skips what is already there '
+    'is `kit bootstrap`.'
 )
 _CREATE_RECOVERY = (
     'Generate the recovery keypair: the private half into the kit, the public recipient into '
@@ -654,7 +663,8 @@ def build_parser() -> argparse.ArgumentParser:
             'the checkout. `state-backend provision` reads it from there; nothing else does, and it '
             'never leaves this machine. The compartment comes from `conventions` and is created if it is '
             'not there yet, so nothing has to be prepared in a console first. A previous key of the same '
-            'name is retired once the new one answers, so re-running this is the rotation.'
+            'name is retired once the new one answers *and* the slot holds it, so a run that fails to '
+            'write the slot leaves the working key alone; re-running this is the rotation.'
         ),
     )
     _add_oci_mint_options(appliance_mint, conventions.STATE_BACKEND)
@@ -679,7 +689,8 @@ def build_parser() -> argparse.ArgumentParser:
             'program holds in `conventions`, and the mint holds the account it minted in against it and '
             'refuses on a mismatch. The push is read back before the run succeeds, and the committed '
             'file is the delivery, so the change has to be committed afterwards. A live token of the '
-            'same name is retired once its successor is verified.'
+            'same name is retired once its successor is verified and the config has taken it, so a push '
+            'that fails leaves the working token alone.'
         ),
     )
     _ = zones_mint.add_argument(
@@ -716,8 +727,9 @@ def build_parser() -> argparse.ArgumentParser:
             'a token scoped to exactly those, and write it into the stack config as an encrypted value. '
             'The stack writes it onto the device beside the container units that read it, so the run ends '
             'at the committed file and the change has to be committed afterwards. The new token proves it '
-            'can see those zones, as itself, before a live token of the same name is retired, so '
-            're-running this is the rotation.'
+            'can see those zones, as itself, and the config takes it, before a live token of the same name '
+            'is retired -- so a push that fails costs a re-run rather than the working token. Re-running '
+            'this is the rotation.'
         ),
     )
     _ = gateway_acme_mint.add_argument(
@@ -770,7 +782,8 @@ def build_parser() -> argparse.ArgumentParser:
             'Sign as the B2 seed to create a fresh management key, and write both halves into the stack '
             'config as encrypted values -- the id names the one key of that name the account holds, and '
             'the pair is one credential. The key of that name that was live before is retired once the '
-            'successor is verified, so re-running this is the rotation. Commit the config afterwards.'
+            'successor is verified and the config has taken it, so a push that fails leaves the working '
+            'key alone and re-running this is the rotation. Commit the config afterwards.'
         ),
     )
     _ = management_mint.add_argument(

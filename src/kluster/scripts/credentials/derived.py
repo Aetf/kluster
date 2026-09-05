@@ -1,9 +1,17 @@
 """The derived credentials (docs/credentials.md §3): minted from a seed, pushed to a slot.
 
-One function per register row, each of them mint -> push -> verify inside a
-single run, and therefore idempotent: rotating a row is re-running it. Nothing
-here ever writes to the kit — a derived credential in the offline store would
-be the staging area §1 rule 2 forbids.
+One function per register row, each of them account check -> mint -> push ->
+verify -> retire inside a single run, and therefore idempotent: rotating a row
+is re-running it. The account check is there where `conventions` records that
+platform's account, which `docs/credentials.md` §4 states along with the rest
+of the shape. Nothing here ever writes to the kit — a derived credential in the
+offline store would be the staging area §1 rule 2 forbids.
+
+**No row spells the last two steps in the right order, because no row spells
+them at all.** A mint returns a `Delivery` (`delivery.py`), whose `deliver`
+pushes and only then retires, and which keeps the credential behind that call —
+so reaching for the value directly is a type error rather than a shortcut. What
+that buys, and what a failed push costs instead, is the register's to say.
 
 A row appears here when its consumer exists. The one Cloudflare row that is
 still absent — the DNS-01 token for cert-manager — has nowhere to be delivered
@@ -144,12 +152,14 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     zones = conventions.ALL_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
-    minted = cloudflare.mint_zone_token(session, role=cloudflare.ZONES, zones=zones)
+    pending = cloudflare.mint_zone_token(session, role=cloudflare.ZONES, zones=zones)
 
-    stack.fill(
-        secret={API_TOKEN_KEY: minted.value},
-        plain={},
-        holds=f'a token scoped to {", ".join(zones)}',
+    _ = pending.deliver(
+        lambda token: stack.fill(
+            secret={API_TOKEN_KEY: token.value},
+            plain={},
+            holds=f'a token scoped to {", ".join(zones)}',
+        )
     )
 
 
@@ -181,14 +191,16 @@ def cloudflare_gateway_acme(
     zones = GATEWAY_ACME_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)
-    minted = cloudflare.mint_zone_token(session, role=cloudflare.GATEWAY_ACME, zones=zones)
+    pending = cloudflare.mint_zone_token(session, role=cloudflare.GATEWAY_ACME, zones=zones)
 
-    stack.fill(
-        secret={GATEWAY_ACME_KEY: minted.value},
-        plain={},
-        holds=f'{cloudflare.GATEWAY_ACME.name} ({minted.token_id}), scoped to {", ".join(zones)}',
+    delivered, _ = pending.deliver(
+        lambda token: stack.fill(
+            secret={GATEWAY_ACME_KEY: token.value},
+            plain={},
+            holds=f'{cloudflare.GATEWAY_ACME.name} ({token.token_id}), scoped to {", ".join(zones)}',
+        )
     )
-    return minted.token_id
+    return delivered.token_id
 
 
 def _push_api_key(stack: pulumi_config.Stack, key: oci_iam.ApiKey, *, holds: str) -> None:
@@ -247,12 +259,14 @@ def oci_physical(
     `compartment_id` is pointed at a drill tenancy and is not held to it, for
     the reason `oci_iam.ensure_compartment` is not.
     """
-    minted = oci_iam.mint_api_key(
+    pending = oci_iam.mint_api_key(
         kit, consumer=PHYSICAL_STACK, compartment_id=compartment_id, seed_entry=seed_entry, connect=connect
     )
 
-    _push_api_key(stack, minted, holds=f'a key for {oci_iam.Identity.name_for(PHYSICAL_STACK)}')
-    return minted.user
+    delivered, _ = pending.deliver(
+        lambda key: _push_api_key(stack, key, holds=f'a key for {oci_iam.Identity.name_for(PHYSICAL_STACK)}')
+    )
+    return delivered.user
 
 
 def oci_state_backend(
@@ -276,7 +290,7 @@ def oci_state_backend(
     nothing here manages. A run given `compartment_id` is pointed at a drill
     tenancy and is not held to it, exactly as the row above is not.
     """
-    minted = oci_iam.mint_api_key(
+    pending = oci_iam.mint_api_key(
         kit,
         consumer=conventions.STATE_BACKEND,
         compartment_id=compartment_id,
@@ -284,7 +298,7 @@ def oci_state_backend(
         connect=connect,
     )
 
-    written = oci_slot.write(minted)
+    _, written = pending.deliver(oci_slot.write)
     log.info(
         '`state-backend provision` signs as %s from now on, reading %s',
         oci_iam.Identity.name_for(conventions.STATE_BACKEND),
@@ -303,11 +317,13 @@ def b2_management(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str
     credential.
     """
     log.info('opening the B2 seed from the kit')
-    minted = b2.mint_management(kit, seed_entry=seed_entry)
+    pending = b2.mint_management(kit, seed_entry=seed_entry)
 
-    stack.fill(
-        secret={B2_KEY_ID_KEY: minted.key_id, B2_KEY_KEY: minted.key},
-        plain={},
-        holds=f'{b2.MANAGEMENT.name} ({minted.key_id})',
+    delivered, _ = pending.deliver(
+        lambda key: stack.fill(
+            secret={B2_KEY_ID_KEY: key.key_id, B2_KEY_KEY: key.key},
+            plain={},
+            holds=f'{b2.MANAGEMENT.name} ({key.key_id})',
+        )
     )
-    return minted.key_id
+    return delivered.key_id
