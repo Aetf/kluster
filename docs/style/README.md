@@ -114,7 +114,9 @@ here, because it is silent and looks exactly like a clean sweep.
 and names no kluster design decision; `docs/declarative/`, `docs/physical/` and `docs/cluster/` own
 the design; `docs/rfc/` holds the accepted proposals those documents
 were changed by, as history rather than as reference; this directory
-owns how things are written.
+owns how things are written. What that leaves a sweep free to edit is
+[framework/rfc.md](../framework/rfc.md) §5.3: an accepted RFC keeps the
+words its decision was made in.
 
 ## Review gate
 

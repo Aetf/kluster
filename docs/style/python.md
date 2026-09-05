@@ -74,3 +74,23 @@ the assert. Rules that keep it that way:
     abstract the setup that is *not* the point into clean modules with
     clean interfaces, and keep the values that *are* the point literal
     and in view.
+
+**A claim belongs at import time when the collection itself depends on
+it** — a value that sizes a parametrization, or a property that must
+hold before any case is meaningful. Those have no case to live in: the
+collection they protect happens first, and a parametrization that
+collects short still reports green, so nothing that runs later catches
+it.
+
+**Everything else belongs in a case, and the cost that decides it is
+blast radius.** An assertion that fails during collection names a
+*module* rather than a claim, and takes down every unrelated case in the
+run — sibling modules importing the same table included — so whoever
+added one entry to a table gets no results at all instead of one run
+showing everything left to fix. A case failing beside its passing
+neighbors costs one line of output; a collection error costs the run.
+
+**An import-time assertion's message is all its author sees.** No case
+name frames it and no fixture output accompanies it, so the message
+carries the set difference — which entries are missing, which are
+unexpected — rather than a bare truth value.

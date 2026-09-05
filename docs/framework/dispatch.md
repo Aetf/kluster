@@ -48,7 +48,15 @@ them:
     stops and reports only when the file itself is outside the brief.
     Either way the pull request says which call it made and on what
     prose.
-5.  **A pull request whose description is written for a stranger** —
+5.  **A file the gate demands that no owned path can hold.** Where
+    item 3 meets item 2 — new behavior needs a test and the brief names
+    nothing able to carry one — owned paths permit a **new** file, and
+    the pull request discloses it; they never permit editing a path the
+    brief did not name. The asymmetry is the reason: a new file cannot
+    collide with another agent's edits, so it costs the
+    parallel-dispatch property nothing, while an edit to an unnamed
+    file can, which is why that half stays absolute.
+6.  **A pull request whose description is written for a stranger** —
     this repository is public. What changed and why, what a reviewer
     should check, what was deliberately left out. No internal
     shorthand, no credentials, no host names that are not already in
