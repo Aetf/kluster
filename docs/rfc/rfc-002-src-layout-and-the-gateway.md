@@ -14,20 +14,32 @@
     the component tree, the per-node capabilities, the roster, the stack's
     configuration surface — in [declarative/physical.md](../declarative/physical.md)
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
-    design document disagree, the design document is right. **One decision
-    moved during construction: the endpoint.** §7.4 composes the session from
-    values `configure` put on the provider, and §11 routes
-    `gatewayBootstrapHost` there beside the credential; what was built keeps the
-    address a declared resource input, because a provider imports no
-    `conventions` and has no way to reach a caller's decision. Only the
-    credential went into `configure`. The pinned host key is where §11's table
-    put it — a `conventions` constant, which is why a preview shows it — and it
-    reaches the provider the same way the endpoint does, as a declared input on
-    each resource rather than as provider-side state. §11.1's root filesystem
-    pins have since become the `image-` entries it anticipated, each carrying
-    the whole reference that section says a pin becomes once publication moves
-    to a registry; what a pin holds and how the bytes behind it are fetched and
-    verified is [physical/gateway.md](../physical/gateway.md) §1.
+    design document disagree, the design document is right. **Two decisions
+    moved during construction: the endpoint, and §4.3's bridge dependency.**
+    The endpoint: §7.4 composes the session from values `configure` put on the
+    provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
+    what was built keeps the address a declared resource input, because a
+    provider imports no `conventions` and has no way to reach a caller's
+    decision. Only the credential went into `configure`. The pinned host key is
+    where §11's table put it — a `conventions` constant, which is why a preview
+    shows it — and it reaches the provider the same way the endpoint does, as a
+    declared input on each resource rather than as provider-side state. §11.1's
+    root filesystem pins have since become the `image-` entries it anticipated,
+    each carrying the whole reference that section says a pin becomes once
+    publication moves to a registry; what a pin holds and how the bytes behind
+    it are fetched and verified is
+    [physical/gateway.md](../physical/gateway.md) §1. **The bridge dependency,
+    2026-09-04:** §4.3 has a service on the container VLAN bind to, and come
+    after, the bridge's device unit, and what is built carries the ordering
+    alone. `BindsTo=` stops a machine when its bridge goes away and
+    nothing on the device starts it again — a dependency stop forbids
+    `Restart=always` from acting, and the bridge watchdog wakes on `vb-*` link
+    events and skips while the target bridge is absent, so a bridge re-created
+    later wakes nothing. A bridge that disappears at runtime is not a failure
+    this design protects against: a container attached to a bridge that is gone
+    talks to nothing until the bridge is back, which is the milder state.
+    `After=` stays, because its worst case is having no effect while a bridge
+    that is absent costs a failed start the restart policy retries.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.
