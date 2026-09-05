@@ -64,11 +64,12 @@ carries `pulumi:disable-default-providers: [github]`, which is the same
 conversion for a resource that misses the explicit provider: an error
 rather than a silent fallback.
 
-Which store a provider's credential comes from is the credential's own
-design — stack configuration for most of this repository's providers,
-the environment for this one. Escrowing it would remove the property
-the paragraph above rests on, that a machine which does not already
-hold the token cannot apply this stack.
+That the token comes from the environment rather than from stack
+configuration is this credential's own design, which is the
+not-escrowed case of the credential-store rule in
+[style/pulumi.md](../style/pulumi.md). Escrowing it would remove the
+property the paragraph above rests on, that a machine which does not
+already hold the token cannot apply this stack.
 
 ## 2. What the plan permits today
 
