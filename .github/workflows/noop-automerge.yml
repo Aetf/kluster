@@ -9,30 +9,39 @@ name: noop-automerge
 # and only reports: "this may merge without a human" deserves its own trigger,
 # its own log and its own red X.
 #
-# Two classes reach the merge, and they are told apart by path:
+# Two routes reach the merge, and the path classification tells them apart:
 #
-#   * A change that can still reach a stack — a lockfile, a dependency, a
-#     workflow — is merged only behind a **zero-diff preview** on every stack.
-#     That proof is the gate, and it is what catches a bump which silently
-#     changes rendering.
-#   * A change to documentation, editor configuration or `.gitignore` reaches
-#     no stack at all: no `pulumi` program reads those paths, so there is no
-#     rendering for a preview to compare and the proof would be a ceremony
-#     over an empty diff. Such a PR skips the matrix and merges on `checks`
-#     alone. This path does not retire — it is a statement about which files a
-#     stack program reads, which no milestone changes.
+#   * **Proven.** A change that can still reach a stack — a lockfile, a
+#     dependency, a workflow — merges only behind a **zero-diff preview** on
+#     every stack. That proof is the gate, and it is what catches a bump which
+#     silently changes rendering.
+#   * **Unproven.** A change to documentation, editor configuration or
+#     `.gitignore` reaches no stack at all: no `pulumi` program reads those
+#     paths, so there is no rendering for a preview to compare and the proof
+#     would be a ceremony over an empty diff. Such a PR skips the matrix and
+#     merges on the required checks alone.
 #
-# The classification is by path, not by author: renovate is the expected
-# producer, but nothing here checks who opened the pull request. A fork's pull
-# request fails closed — `classify` refuses it by name, so neither the proof
-# nor the merge runs. Until the second class existed the refusal was implicit
-# (the proof needs Environment secrets, which a fork never receives, so it
-# errored), and an implicit refusal does not survive a path that skips the
-# proof.
+# **The proven route classifies by path and not by author; the unproven one
+# tests both.** Skipping the proof also skips the only thing that was holding a
+# documentation change until somebody read it, and dispatch.md §3 says no PR
+# here merges reviewed by nobody but its author — a rule whose subject is
+# `AGENTS.md` and `docs/` more than anything else. So the unproven route is
+# open to renovate's own pull requests and to nothing else. An operator
+# opt-in belongs here too, but it would be a label, and a label a workflow
+# branches on has to be in the census `conventions/forge.py` carries before it
+# can be applied at all — a label nobody declares makes the condition silently
+# dead, which is the failure that census exists to prevent. Whether this
+# repository should have a review-free merge at all, and for which changes, is
+# kluster-ops#244; this narrow class holds until that is ruled on.
+#
+# A fork's pull request is refused outright, by name in `classify`. Until the
+# unproven route existed the refusal was implicit — the proof needs Environment
+# secrets, which a fork never receives, so it errored — and an implicit refusal
+# does not survive a route that runs no job needing a secret.
 #
 # The merge does not start deploy.yml — pushes made with GITHUB_TOKEN start no
 # workflow runs. That is correct by construction: a proven PR merged because
-# its preview was empty, and an inert one changes nothing an apply would read.
+# its preview was empty, and an unproven one changes nothing an apply reads.
 
 on:
   pull_request:
@@ -62,18 +71,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       noop: ${{ steps.classify.outputs.noop }}
-      inert: ${{ steps.inert.outputs.code == 'false' }}
+      # Whether this PR may merge without the proof, which is the path
+      # classification and the author test together.
+      unproven: ${{ steps.classify.outputs.unproven }}
     steps:
-      - uses: actions/checkout@v5
-
-      # Whether anything in this PR can reach a stack at all. The filter is
-      # preview.yml's own `code` deny-list, pattern for pattern and under the
-      # same `every` quantifier — the two workflows ask one question of one
-      # set of paths, so a file that stops counting as inert stops counting in
-      # both at once. `code: false` means every file in the PR is
-      # documentation, editor configuration or `.gitignore`.
+      # No checkout. On a `pull_request` event paths-filter reads the file list
+      # from the API rather than from a working tree, and a job whose entire
+      # output is a verdict has no reason to put an untrusted head on disk.
       - uses: dorny/paths-filter@v3
-        id: inert
+        id: paths
         with:
           predicate-quantifier: every
           filters: |
@@ -89,10 +95,14 @@ jobs:
           # Escape hatch: label a PR `expect-changes` when a bump is *supposed*
           # to move resources. Such a PR wants human eyes on the diff.
           OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'expect-changes') }}
-          # A PR from a fork is refused here rather than downstream. Its head
-          # is untrusted code, and the inert path would merge it without any
-          # job that needs a secret to fail first.
           FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          # `code: false` means every file in the PR is documentation, editor
+          # configuration or `.gitignore`. The filter above is preview.yml's
+          # own, pattern for pattern and under the same `every` quantifier, so
+          # a file that stops being inert stops being inert in both at once.
+          INERT: ${{ steps.paths.outputs.code == 'false' }}
+          # Who may take the unproven route (see the header).
+          TRUSTED: ${{ github.event.pull_request.user.login == 'renovate[bot]' }}
         run: |
           set -euo pipefail
           if [ "$FORK" = 'true' ] || [ "$OVERRIDE" = 'true' ]; then
@@ -102,16 +112,20 @@ jobs:
           files=$(gh pr view "$PR" --json files --jq '.files[].path')
           if grep -qE '^(src/|Pulumi\.)' <<<"$files"; then
             echo 'noop=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'noop=true' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          if [ "$INERT" = 'true' ] && [ "$TRUSTED" = 'true' ]; then
+            echo 'unproven=true' >> "$GITHUB_OUTPUT"
+          fi
+          # Last, and the only line that writes it: see the merge job's `if`.
+          echo 'noop=true' >> "$GITHUB_OUTPUT"
 
   prove:
     needs: classify
-    # The proof is for the candidates that can still move a resource. An inert
-    # PR has nothing to prove and skips it; a fork or an `expect-changes` label
-    # leaves `noop` false, which skips this job and the merge with it.
-    if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.inert != 'true'
+    # The proof is for every candidate that is not on the unproven route: a
+    # fork, an `expect-changes` label and a `src/`-or-`Pulumi.*` touch all
+    # leave `noop` false, which skips this job and the merge with it.
+    if: needs.classify.outputs.noop == 'true' && needs.classify.outputs.unproven != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
@@ -154,18 +168,23 @@ jobs:
 
   merge:
     needs: [classify, prove]
-    # `prove` is skipped on an inert PR, and a skipped dependency would
+    # `prove` is skipped on the unproven route, and a skipped dependency would
     # cascade-skip an ordinary `needs`, so this reads results instead of
-    # depending on success. Every branch that is not one of the two explicit
-    # passes refuses: a `classify` that failed leaves its outputs empty, a
-    # `prove` that failed or was cancelled is not `success`, and a cancelled
-    # run merges nothing.
+    # depending on success. Both ways through are checkable rather than
+    # inferred from how a failed job behaves: `classify` writes `noop=true` as
+    # the last line of a `set -euo pipefail` script, so no path through it that
+    # ends early writes that value; and a `classify` that failed outright
+    # cascade-skips `prove`, which leaves only the `skipped` branch, which
+    # needs an `unproven` that was never written either. A draft is excluded
+    # because `pull_request`/`opened` fires for one while `gh pr merge` refuses
+    # it — without this the route would produce a red job rather than a merge.
     if: >-
       !cancelled()
+      && github.event.pull_request.draft == false
       && needs.classify.outputs.noop == 'true'
       && (needs.prove.result == 'success'
           || (needs.prove.result == 'skipped'
-              && needs.classify.outputs.inert == 'true'))
+              && needs.classify.outputs.unproven == 'true'))
     runs-on: ubuntu-latest
     # A required check that never arrives ends the job rather than holding a
     # runner for GitHub's six-hour default.
@@ -173,12 +192,12 @@ jobs:
     steps:
       # `main` requires `checks` and `changes` on an up-to-date branch
       # (framework/ci.md §5), and the merge API refuses while either is
-      # outstanding. On an inert PR `classify` is done in under a minute while
-      # `checks` is still installing a toolchain, so the merge would otherwise
-      # race a precondition it cannot win. This is not a delay standing in for
-      # a condition: `--required` names exactly the contexts branch protection
-      # names, `--watch` returns when they reach a terminal state, and a
-      # failure exits non-zero so the merge below never runs.
+      # outstanding. On the unproven route `classify` is done in under a minute
+      # while `checks` is still installing its tools, so the merge would
+      # otherwise race a precondition it cannot win. This is not a delay
+      # standing in for a condition: `--required` names exactly the contexts
+      # branch protection names, `--watch` returns when they reach a terminal
+      # state, and a failure exits non-zero so the merge below never runs.
       - name: Wait for the required checks
         run: gh pr checks "$PR" --required --watch --fail-fast --interval 15
 
