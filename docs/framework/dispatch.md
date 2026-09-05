@@ -158,17 +158,18 @@ it shows is `(empty) (no description set)` against `@` and the described
 work against `@-`. Each failure has its own tell instead:
 
 -   Work still sitting in `@` — the ordinary `jj` habit of edit,
-    describe, push, with no `jj new` — makes `@-` the tip of `main`.
-    The bookmark is then created pointing at `main`, the push reports
-    `bookmark: <branch> [add to <sha>]` and exits zero, and the branch
-    on the forge carries none of the work. A confident-looking push and
-    an empty pull request. **Its tell is the described work sitting at
-    `@`**, with `main`'s own description against `@-`.
+    describe, push, with no `jj new` — leaves `@-` where the round
+    before it left it, `main`'s tip on a first round. The bookmark is
+    set there, the push exits zero reporting `[add to <sha>]` or
+    `Nothing changed`, and the branch on the forge carries none of the
+    new work: a confident-looking push and an empty pull request. **Its
+    tell is the described work sitting at `@`**, whatever stands at
+    `@-`.
 -   A bookmark left where it was on a second round of work, because a
     bookmark does not follow commits made after it was set, makes
     `jj git push` report `Nothing changed`, exit zero, and push
-    nothing. **Its tell is the bookmark name sitting on a commit below
-    `@-`** rather than on `@-` itself.
+    nothing. **Its tell is the bookmark name still sitting on a commit
+    below `@-` after the `set`** rather than on `@-` itself.
 
 A *rewrite* is the exception that proves the rule: `jj squash --into @-`
 and `jj describe` carry the bookmark to the rewritten commit, so on a
@@ -206,15 +207,19 @@ them complains: `git rev-parse HEAD` returns `main` rather than the
 workspace's head; `git status --porcelain` describes the primary's tree;
 `git apply -p1` resolves a diff's paths against the primary's root,
 drops everything outside the current directory, and exits zero having
-applied nothing, where `patch -p1` applies it. What depends on none of
-those is safe: `git show <sha>` and `git diff <a>..<b>` answer correctly
-**when no path is named**, because every workspace shares the one object
-store. With one named, they fail the same silent way: adding
-`-- <path>` makes `git diff <a>..<b>` print nothing and exit zero, and
-`git show <sha>` print its header and no diff, because the path is read
-relative to the workspace directory as git sees it. `-- ':(top)<path>'`
-is what answers from in there. A reviewer is the most exposed to this
-(§3.2), since an empty diff reads as an unchanged file.
+applied nothing, where `patch -p1` applies it. `git show <sha>` and
+`git diff <a>..<b>` answer correctly **when no path is named**, because
+every workspace shares the one object store. With one named, they fail
+the same silent way: adding `-- <path>` makes `git diff <a>..<b>` print
+nothing and exit zero, and `git show <sha>` print its header and no
+diff, because the path is read relative to the workspace directory as
+git sees it, and `-- ':(top)<path>'` is what answers from in there.
+Depending on none of those does not by itself make a command safe:
+`git ls-tree <sha>` and `git grep <pat> <sha>` name no path and still
+answer about the current directory, because git applies the prefix
+itself, and `--full-tree` and `:(top)` are what restore them. A
+reviewer is the most exposed to all of it (§3.2), since an empty answer
+reads as an absent one.
 
 **Whether a change merged is the forge's answer, not the repository's.**
 This repository rebase-merges, so a merged change's commits keep their
