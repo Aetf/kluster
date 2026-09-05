@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 PICKLER: type[Any] = pickle._Pickler  # pyright: ignore[reportPrivateUsage]
 LEAKED_METHODS = ('_batch_setitems', 'save_dict')
 
+INSTANCE = 'adguard-test'
 ENDPOINT = 'http://adguard.test:3000'
 
 
@@ -48,7 +49,7 @@ async def monitor() -> Recorder:
 async def declare(name: str) -> None:
     """One rewrite, which is one provider serialized."""
     async with declaring():
-        _ = AdGuardRewrite(name, endpoint=ENDPOINT, domain=f'{name}.test', answer='192.0.2.1')
+        _ = AdGuardRewrite(name, instance=INSTANCE, endpoint=ENDPOINT, domain=f'{name}.test', answer='192.0.2.1')
 
 
 def methods() -> dict[str, Any]:

@@ -23,10 +23,11 @@ import requests
 from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
 
-from kluster.components.dns import rewrites
 from kluster.providers import adguard_rewrites, configured
 
-ENDPOINT = 'http://alice.lan:3000'
+INSTANCE = 'adguard-alice'
+ENDPOINT = 'http://10.0.5.3:80'
+MOVED = 'http://10.0.5.30:80'
 USERNAME = 'admin'
 PASSWORD = 'a-typed-secret'
 
@@ -36,6 +37,7 @@ PASSWORD = 'a-typed-secret'
 PROJECT = 'kluster'
 
 PROPS: dict[str, Any] = {
+    'instance': INSTANCE,
     'endpoint': ENDPOINT,
     'domain': 'photos.ucw.phd',
     'answer': '192.168.71.1',
@@ -124,12 +126,17 @@ def checked(props: dict[str, Any], password: str = PASSWORD) -> dict[str, Any]:
 
 
 def test_create_adds_the_pair_and_ids_it_by_instance(instance: Instance) -> None:
+    """The id names the instance rather than the address it was written at.
+
+    The same rewrite on alice and on bob are two resources, because they are
+    two writes; and re-addressing alice leaves this id untouched, which is what
+    makes the move an update instead of a delete and a create.
+    """
     result = provider().create(dict(PROPS))
 
     assert instance.entries == [{'domain': 'photos.ucw.phd', 'answer': '192.168.71.1'}]
-    # The id names the instance: the same rewrite on alice and on bob are two
-    # resources, because they are two writes.
-    assert result.id == f'{ENDPOINT}|photos.ucw.phd|192.168.71.1'
+    assert result.id == f'{INSTANCE}|photos.ucw.phd|192.168.71.1'
+    assert ENDPOINT not in str(result.id)
 
 
 def test_create_adopts_an_identical_entry_rather_than_duplicating_it(instance: Instance) -> None:
@@ -235,8 +242,42 @@ def test_a_re_stamp_records_the_new_login_and_calls_the_instance_not_at_all(inst
     assert instance.opened == []
 
 
-def test_the_session_stamp_names_the_instance_and_fingerprints_the_login() -> None:
-    """`http://alice.lan:3000#<12 hex>` — the door, and which login opens it.
+def test_a_moved_instance_converges_without_replacing_a_single_row(instance: Instance) -> None:
+    """Re-addressing an instance is an update: same instance, same rows.
+
+    The endpoint is where this run reaches the instance and never part of what
+    identifies a row, so nothing is deleted at the old address and nothing is
+    created at the new one. What the update does is record the door the row is
+    now written through — it calls neither address.
+    """
+    olds = checked(dict(PROPS))
+    news = checked(dict(PROPS) | {'endpoint': MOVED})
+
+    result = provider().diff('an-id', olds, news)
+
+    assert result.changes is True
+    assert result.replaces == []
+    assert provider().update('an-id', olds, news).outs == news
+    assert instance.opened == []
+
+
+def test_a_changed_instance_replaces_the_row(instance: Instance) -> None:
+    """The same name on the other resolver is a different row, not a moved one.
+
+    Which is the other half of naming the instance: it identifies the write, so
+    a row that changes instances is deleted where it was and created where it
+    now belongs.
+    """
+    changed = checked(dict(PROPS) | {'instance': 'adguard-bob'})
+
+    result = provider().diff('an-id', checked(dict(PROPS)), changed)
+
+    assert result.replaces == ['instance']
+    assert instance.opened == []
+
+
+def test_the_session_stamp_names_the_door_and_fingerprints_the_login() -> None:
+    """`http://10.0.5.3:80#<12 hex>` — the door, and which login opens it.
 
     The digest is what a preview shows on a rotation, so it is stored in the
     clear: a truncated digest of a login is not the login, and a redacted one
@@ -313,7 +354,3 @@ def test_delete_removes_exactly_the_declared_pair(instance: Instance) -> None:
 
     assert instance.entries == [{'domain': 'tube.ucw.phd', 'answer': '192.168.71.1'}]
     assert instance.posts[0][0] == 'delete'
-
-
-def test_the_instance_label_is_a_resource_name_fragment() -> None:
-    assert rewrites.instance_label('http://alice.lan:3000') == 'alice-lan'

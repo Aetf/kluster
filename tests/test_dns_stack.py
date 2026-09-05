@@ -23,6 +23,7 @@ API_TOKEN = 'a-zones-token'
 ZONE = 'cloudflare:index/zone:Zone'
 DNSSEC = 'cloudflare:index/zoneDnssec:ZoneDnssec'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
+RESOLVER_REWRITES = 'kluster:components:dns:rewrites:ResolverRewrites'
 
 
 class AppliedPhysical(Recorder):
@@ -214,11 +215,26 @@ def test_no_record_still_points_at_the_retired_host(stack: AppliedPhysical) -> N
     assert not any('141.212.111.192' in content for content in contents)
 
 
+def test_a_rewrite_component_is_declared_for_every_resolver_the_census_names(stack: AppliedPhysical) -> None:
+    """One per instance, unconditionally, and named after the instance.
+
+    Their independence is the design: an instance that is down fails its own
+    resources and leaves the other's converged, and as two sibling components
+    that is what the resource tree says. Which instances there are is the
+    gateway census's answer, so the program spells out neither.
+    """
+    declared = stack.names(RESOLVER_REWRITES)
+
+    assert declared == {f'rewrites-{resolver.name}' for resolver in conventions.gateway.RESOLVERS}
+
+
 def test_no_rewrite_is_declared_while_no_app_declares_a_route(stack: AppliedPhysical) -> None:
     """The rewrites follow the route census, and it is empty until `apps` lands.
 
-    It also means the stack deploys before the AdGuard credential exists,
-    which is the state it is in today.
+    With no row to write, the components declare no dynamic resource, so the
+    provider process never starts and the AdGuard login is never read — which
+    is what lets the stack deploy before that login exists, the state it is in
+    today.
     """
     assert not stack.by_name('pulumi-python:dynamic:Resource')
 

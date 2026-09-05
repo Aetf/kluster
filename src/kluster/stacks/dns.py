@@ -10,9 +10,10 @@ from, and they are the reason this is the one stack that joins ZeroTier.
 The records themselves are data, written as blocks — the records that appear
 together, in every zone of one set (`kluster.components.dns.base`,
 `kluster.components.dns.legacy`). This program is only the wiring: which zones
-exist, which addresses the anchors carry, and which instances the rewrites are
-written to. What each zone carries is derived from the blocks by
-`zone_records`, so no zone set is spelled out here.
+exist, and which addresses the anchors carry. What each zone carries is derived
+from the blocks by `zone_records`, so no zone set is spelled out here, and
+which instances the rewrites are written to is the gateway census's answer
+(`conventions.gateway.RESOLVERS`), so no instance is spelled out here either.
 
 The anchors, `kluster.hosts` and `vip1.hosts`, are the one thing whose
 contents are not written down: the addresses in them are machine facts the
@@ -31,8 +32,7 @@ from kluster import conventions
 from kluster.components.dns import base
 from kluster.components.dns.legacy import LEGACY
 from kluster.components.dns.record import zone_records
-from kluster.components.dns.rewrites import declare_rewrites
-from kluster.components.dns.routes import rewrites
+from kluster.components.dns.rewrites import ResolverRewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
 
 #: The `physical` outputs the anchors are made of: the load balancer's two
@@ -82,15 +82,16 @@ async def main() -> None:
         for zone in conventions.ALL_ZONES
     }
 
-    # The rewrites the routes imply, on both AdGuard instances. Reading their
-    # address only when there is something to write keeps the stack deployable
-    # before `adguardEndpoints` exists, which is the state it is in until the
-    # first app declares a LAN-side route. The login is not read here at all:
-    # it opens the rewrite provider and nothing else, so the provider reads it
-    # in `configure` (rfc-002 §7.4).
+    # The rewrites the routes imply, one component per AdGuard instance and
+    # unconditionally: with an empty route census each declares nothing, no
+    # dynamic resource exists, the provider process never starts and the login
+    # is never read. Nothing here reads it in any case -- it opens the rewrite
+    # provider and nothing else, so the provider reads it in `configure`
+    # (rfc-002 §7.4), and where each instance is reached is the census's answer
+    # rather than a key this stack carries.
     entries = rewrites(conventions.ROUTES)
-    if entries:
-        _ = declare_rewrites(entries, endpoints=config.require_object('adguardEndpoints'))
+    for resolver in conventions.gateway.RESOLVERS:
+        _ = ResolverRewrites(f'rewrites-{resolver.name}', resolver=resolver, entries=entries)
 
     # Machine facts: `apps` needs the zone ids to declare its own records.
     pulumi.export('zone_ids', {zone: managed.zone.id for zone, managed in zones.items()})

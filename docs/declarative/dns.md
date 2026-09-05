@@ -191,8 +191,8 @@ Cloudflare set; jiahui.id takes none.
     program loops over — can be written as a union of named sets. A zone
     set only one block names is declared beside that block instead:
     `MAIL_ZONES`, the two Google Workspace domains, is in `base.py`. An
-    app writes `public_route(host=…)` and gets the primary; naming
-    another zone in the row is what says that zone serves the
+    app hands its census row to `public_route` and gets the primary;
+    naming another zone in the row is what says that zone serves the
     application too, and the helper fans the records across whatever
     the row names.
 -   **A parked zone is held and not served.** peifeng.phd and ucw.phd
@@ -236,8 +236,9 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     state. It is an admin login because AdGuard has no scoped API
     token, and that residual is on record as M6
     (cluster/security-audit.md). A rotation is visible all the same —
-    every rewrite is stamped with the instance and a short digest of
-    the login, so the preview names what changed.
+    every rewrite is stamped with the door it was written through — the
+    endpoint, and a short digest of the login — so the preview names
+    what changed.
 -   **Owned by this stack, not by `apps`.** Split-horizon is DNS, and
     the AdGuard pair is on the UDM: putting the rewrites here keeps the
     LAN reachability requirement — the ZeroTier join, and its
@@ -279,15 +280,26 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     it. One edit, two stack diffs, both previewable — rather than
     one edit and a second stack to remember. LAN ULA AAAAs are
     emitted alongside (RFC 6724 caveat noted, architecture.md §1.3).
--   **The first LAN-side row is what makes the instances' address a
-    required key.** `dns` reads `adguardEndpoints` — the base URL of
-    each instance's administration API — only when the route census
-    yields a rewrite, which is what keeps the stack deployable while
-    nothing is routed and why `Pulumi.dns.yaml` carries the AdGuard
-    login but not yet the endpoints. So the config key ships with the
-    row that first needs it, in the same change; the rewrites module
-    (`kluster.components.dns.routes`) carries that contract beside the
-    derivation the key serves.
+-   **Where each instance is reached is derived, not configured.** A
+    rewrite is written over plain HTTP to the instance's address on the
+    container VLAN, at the port `conventions.gateway.ADGUARD_API_PORT`
+    names — the same constant the caddy vhost that proxies the instance,
+    the initial state that tells it where to listen, and the overlay
+    flow rule that admits a `dns` run all meet on. There is no endpoint
+    key to set, and therefore nothing for a stale one to disagree with;
+    `Pulumi.dns.yaml` carries the AdGuard login and nothing else about
+    the pair. Dialling the instance's own public name instead would have
+    the runner resolve a name that only a split-horizon rewrite answers,
+    which is the thing the run is declaring.
+-   **A rewrite is identified by its instance, not by its address.**
+    `dns` declares one `ResolverRewrites` component per entry of
+    `conventions.gateway.RESOLVERS`, and both the resource id and the
+    logical name are built from that entry's name — never from the
+    address. Re-addressing an instance is then an update that dials
+    somewhere new and writes the same rows in the same place, rather
+    than a delete of every rewrite at the old address and a create of
+    every one at the new. The general rule is
+    [style/pulumi.md](../style/pulumi.md)'s.
 
 ## 4. LAN DNS: three name planes
 
@@ -348,18 +360,21 @@ plane names:
 > repository emits a route today — which is also why the route census
 > §3 reads from is empty.
 
-`public_route(host=…, zones=…, proxied=…)` on the app component base
-emits the coherent set: HTTPRoute (to `internet-gw`, `lan-gw`, or both
-per the §3.6 matrix), the CNAMEs across the zone set, and — for
-both-gateway apps — the route row `dns` writes the AdGuard rewrite
-from. The helper never writes a rewrite itself; that is the split
-§3 describes. `lan_route(host=…)` is the LAN-only variant (route row
-plus a `lan-gw` route, no public record, §4); its
-`iot_reachable=True` parameter attaches `media-gw` instead and marks
-the row so the rewrite answers with the media VIP — the
-review-visible form of "IoT devices may reach this app"
-(cluster-infra.md §2, physical/gateway.md §4.2). `public_port(…)` is
-the raw TCP/UDP analog, and it is the **only** helper that emits an
+`public_route(conventions.routes.PHOTOS)` on the app component base
+**takes the application's census row**, not a host string a reader
+would have to match against the census by eye — so an application
+publishing a name `dns` never rewrites cannot be written. From that
+row it emits the coherent set: the HTTPRoute (to `internet-gw`,
+`lan-gw`, or both per the §3.6 matrix) and the CNAMEs across the zone
+set the row names. It is the same row `dns` writes the AdGuard rewrite
+from, read by both stacks rather than emitted by either; the helper
+never writes a rewrite itself, which is the split §3 describes.
+`lan_route(conventions.routes.GOLINKS)` is the LAN-only variant (a
+`lan-gw` route, no public record, §4); its `iot_reachable=True`
+parameter attaches `media-gw` instead, and the rewrite answers with
+the media VIP — the review-visible form of "IoT devices may reach this
+app" (cluster-infra.md §2, physical/gateway.md §4.2). `public_port(…)`
+is the raw TCP/UDP analog, and it is the **only** helper that emits an
 NLB listener and its security rule (physical.md §1's
 derived-not-enumerated principle) — an HTTP route rides listeners the
 cluster already has.
