@@ -40,7 +40,7 @@ from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportU
 from pulumi.runtime import rpc
 
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
-from kluster.providers.device_files import provider, ssh
+from kluster.providers.device_files import paths, provider, ssh
 
 
 def private_key() -> str:
@@ -184,13 +184,25 @@ class Transport:
         )
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
+        self._refuse_a_link(path)
         user, _, group = (owner or 'root:root').partition(':')
         self.device.files[path] = Entry(data=data, mode=mode, owner=user, group=group or 'root')
         self.device.log.append(f'write {path}')
 
     async def remove(self, path: str) -> None:
+        self._refuse_a_link(path)
         _ = self.device.files.pop(path, None)
         self.device.log.append(f'remove {path}')
+
+    def _refuse_a_link(self, path: str) -> None:
+        """What the shipped transport's own scripts do, in the double's terms.
+
+        Both verbs ask before they act, so a provider case about a link reaches
+        the same refusal here that a session would raise on the device.
+        """
+        entry = self.device.files.get(path)
+        if entry is not None and entry.kind == ssh.SYMBOLIC_LINK:
+            raise ssh.SymbolicLinkAtPath(path)
 
     async def run(self, command: str) -> ssh.CommandResult:
         self.device.log.append(f'run {command}')
@@ -308,6 +320,16 @@ def made(device: Device, props: Mapping[str, Any]) -> None:
     device.files[str(props['path'])] = Entry(
         data=DIRECTORY_ENTRY, mode=str(props['mode']), owner=user, group=group, kind='directory'
     )
+
+
+def linked(device: Device, path: str, data: bytes = b'') -> None:
+    """Put a symbolic link where a declaration names a path.
+
+    `data` is what the link points at, as the fake's `read` follows one: a link
+    to a file holding exactly the declared bytes is the case where every other
+    comparison agrees and only the kind does not.
+    """
+    device.files[path] = Entry(data=data, kind=ssh.SYMBOLIC_LINK)
 
 
 def landed(device: Device, props: Mapping[str, Any], digest: str | None = None) -> None:
@@ -705,6 +727,60 @@ def test_a_path_that_is_not_known_yet_is_not_refused() -> None:
     assert result.failures == []
 
 
+def test_a_link_where_a_file_is_declared_is_drift_whatever_it_points_at(device: Device) -> None:
+    """The one case every other comparison would call converged.
+
+    The link's target holds exactly the declared bytes and the link itself
+    carries the declared mode and owner, so a diff that asked only what it
+    could read would report no change -- and the resource would stand for a
+    file at a path nobody declared.
+    """
+    props = file_props()
+    linked(device, CONFIG_PATH, CONFIG.encode())
+
+    assert file_provider().diff('id', props, props).changes is True
+
+
+def test_a_link_where_a_file_is_declared_fails_the_apply(device: Device) -> None:
+    """`mv -f` lands the bytes inside a link to a directory and replaces a link
+    to a file, so neither is done: the apply stops and names the path."""
+    linked(device, CONFIG_PATH)
+
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
+        _ = file_provider().create(file_props())
+
+    assert CONFIG_PATH in str(raised.value)
+    assert HOOK not in device.commands, 'nothing was written, so nothing is told it was'
+    assert device.files[CONFIG_PATH].kind == ssh.SYMBOLIC_LINK
+
+
+def test_a_link_where_a_file_is_declared_fails_the_delete(device: Device) -> None:
+    """The halves agree, as they do for a directory: what the write will not
+    replace, the delete will not take away."""
+    linked(device, CONFIG_PATH)
+
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
+        file_provider().delete('id', file_props())
+
+    assert CONFIG_PATH in str(raised.value)
+    assert HOOK not in device.commands
+    assert CONFIG_PATH in device.files
+
+
+def test_a_refresh_reports_a_file_a_link_stands_in_for_as_gone(device: Device) -> None:
+    """Gone from the device is gone, and a link is not the file it points at.
+
+    The next up creates the file again and says by name that it cannot, which
+    is the answer that reaches a person -- rather than a refresh recording the
+    contents of somewhere else as this resource's own.
+    """
+    linked(device, CONFIG_PATH, CONFIG.encode())
+
+    result = file_provider().read('id', file_props())
+
+    assert result.id is None
+
+
 ##
 ## The directory resource
 ##
@@ -740,7 +816,7 @@ def test_a_directory_with_no_declared_owner_keeps_whatever_the_device_gave_it() 
 def test_a_directory_path_a_shell_would_mangle_is_quoted() -> None:
     assert "mkdir -p '/data/a dir; rm -rf /'" in provider.make_script('/data/a dir; rm -rf /', '0755', None)
     assert "rmdir '/data/a dir; rm -rf /'" in provider.remove_script('/data/a dir; rm -rf /')
-    assert "[ -L '/data/a dir; rm -rf /' ]" in provider.symlink_test('/data/a dir; rm -rf /')
+    assert "[ -L '/data/a dir; rm -rf /' ]" in ssh.symlink_test('/data/a dir; rm -rf /')
 
 
 def test_a_directory_someone_removed_on_the_device_is_a_change(device: Device) -> None:
@@ -851,7 +927,7 @@ def test_deleting_a_directory_somebody_filled_is_refused(device: Device) -> None
     names itself, rather than being emptied.
     """
     made(device, directory_props())
-    device.statuses = {'rmdir': ssh.NOT_EMPTY}
+    device.statuses = {'rmdir': ssh.ReservedStatus.NOT_EMPTY}
 
     with pytest.raises(provider.DirectoryNotEmpty) as raised:
         directory_provider().delete('id', directory_props())
@@ -881,7 +957,7 @@ def test_a_removal_of_a_directory_that_is_already_gone_is_a_success() -> None:
 
     assert f'if [ ! -e {DIRECTORY_PATH} ]; then exit 0; fi' in script
     assert script.index('! -e') < script.index('ls -A'), 'nothing there is answered before contents are counted'
-    assert f'exit {ssh.NOT_EMPTY}' in script
+    assert f'exit {ssh.ReservedStatus.NOT_EMPTY}' in script
     assert script.endswith(f'rmdir {DIRECTORY_PATH}')
     assert 'rm -r' not in script
 
@@ -916,9 +992,9 @@ def test_a_symlink_where_a_directory_is_declared_fails_the_apply(device: Device)
     apply that ended in a link's target would report success and leave the same
     drift for the next preview to report again.
     """
-    device.statuses = {'-L': ssh.SYMBOLIC_LINK}
+    device.statuses = {'-L': ssh.ReservedStatus.SYMBOLIC_LINK}
 
-    with pytest.raises(provider.SymbolicLinkAtPath) as raised:
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
         _ = directory_provider().create(directory_props())
 
     assert DIRECTORY_PATH in str(raised.value)
@@ -928,22 +1004,32 @@ def test_a_symlink_where_a_directory_is_declared_fails_the_apply(device: Device)
 def test_a_symlink_where_a_directory_is_declared_fails_the_delete(device: Device) -> None:
     """The halves agree: what the create will not make, the delete will not take away."""
     made(device, directory_props())
-    device.statuses = {'-L': ssh.SYMBOLIC_LINK}
+    device.statuses = {'-L': ssh.ReservedStatus.SYMBOLIC_LINK}
 
-    with pytest.raises(provider.SymbolicLinkAtPath) as raised:
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
         directory_provider().delete('id', directory_props())
 
     assert DIRECTORY_PATH in str(raised.value)
     assert DIRECTORY_HOOK not in device.commands
 
 
-def test_both_halves_ask_about_a_link_before_anything_follows_one() -> None:
-    """The question has to be first: every command after it follows a link."""
-    asked = provider.symlink_test(DIRECTORY_PATH)
+def test_every_script_that_acts_on_a_declared_path_asks_about_a_link_first() -> None:
+    """One rule for the three resources, and the question has to come first.
+
+    Every command after it follows a link, or displaces one, or deletes one --
+    so a script that reached its work before asking would have acted on a path
+    the declaration never named. The two verbs the transport renders itself are
+    held to the same order where they are asserted.
+    """
+    asked = ssh.symlink_test(DIRECTORY_PATH)
+    tree = ssh.symlink_test(ROOTFS_TREE)
 
     assert provider.make_script(DIRECTORY_PATH, '0755', 'root:root').startswith(asked)
     assert provider.remove_script(DIRECTORY_PATH).startswith(asked)
-    assert f'exit {ssh.SYMBOLIC_LINK}' in asked
+    assert provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE).startswith(tree)
+    assert provider.unpack_script(ROOTFS_TREE).startswith(tree)
+    assert provider.purge_script(ROOTFS_TREE).startswith(tree)
+    assert f'exit {ssh.ReservedStatus.SYMBOLIC_LINK}' in asked
 
 
 def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
@@ -1057,10 +1143,11 @@ def test_every_resource_of_this_module_carries_the_one_version(monkeypatch: pyte
     assert stamped == {provider.VERSION}
 
 
-## What a link at the path does to `mkdir -p`, to `chmod` and to `[ -e ]` is the
-## shell's answer rather than this repository's, so the tests below ask a shell
-## instead of restating the belief. The scripts are the shipped ones and the tree
-## is a temporary one; nothing here needs a device.
+## What a link at the path does to `mkdir -p`, to `chmod`, to `mv -f`, to
+## `rm -f` and to `[ -e ]` is the shell's answer rather than this repository's,
+## so the tests below ask a shell instead of restating the belief. The scripts
+## are the shipped ones and the tree is a temporary one; nothing here needs a
+## device.
 
 
 def sh(script: str) -> int:
@@ -1091,7 +1178,7 @@ def test_a_shell_refuses_to_remove_a_directory_somebody_filled(tmp_path: Path) -
     path.mkdir()
     _ = (path / 'kept').write_text('put there by whoever fills the directory\n')
 
-    assert sh(provider.remove_script(str(path))) == ssh.NOT_EMPTY
+    assert sh(provider.remove_script(str(path))) == ssh.ReservedStatus.NOT_EMPTY
     assert (path / 'kept').exists()
 
 
@@ -1107,7 +1194,7 @@ def test_a_link_to_a_directory_stops_the_make_before_the_target_is_touched(tmp_p
     link = tmp_path / 'machines'
     link.symlink_to(target)
 
-    assert sh(provider.make_script(str(link), '0700', None)) == ssh.SYMBOLIC_LINK
+    assert sh(provider.make_script(str(link), '0700', None)) == ssh.ReservedStatus.SYMBOLIC_LINK
     assert target.stat().st_mode & 0o777 == 0o755
     assert link.is_symlink()
 
@@ -1123,7 +1210,7 @@ def test_a_link_to_a_directory_stops_the_remove_with_the_same_status(tmp_path: P
     link = tmp_path / 'machines'
     link.symlink_to(target)
 
-    assert sh(provider.remove_script(str(link))) == ssh.SYMBOLIC_LINK
+    assert sh(provider.remove_script(str(link))) == ssh.ReservedStatus.SYMBOLIC_LINK
     assert link.is_symlink()
     assert target.is_dir()
 
@@ -1139,9 +1226,108 @@ def test_a_link_pointing_at_nothing_is_something_there_to_both_halves(tmp_path: 
     link = tmp_path / 'machines'
     link.symlink_to(tmp_path / 'never-made')
 
-    assert sh(provider.make_script(str(link), '0755', None)) == ssh.SYMBOLIC_LINK
-    assert sh(provider.remove_script(str(link))) == ssh.SYMBOLIC_LINK
+    assert sh(provider.make_script(str(link), '0755', None)) == ssh.ReservedStatus.SYMBOLIC_LINK
+    assert sh(provider.remove_script(str(link))) == ssh.ReservedStatus.SYMBOLIC_LINK
     assert link.is_symlink()
+
+
+@final
+class Shell:
+    """An `ssh.Runner` that runs the transport's own scripts in a real shell.
+
+    The transport renders its write and its remove itself, so those two are
+    reached through a runner rather than through a script this module could
+    call. What is exercised is the shipped command line, `cat` fed from the
+    session's standard input included.
+    """
+
+    async def run(
+        self,
+        command: str,
+        *,
+        input: bytes,  # noqa: A002 -- asyncssh's parameter name
+        encoding: None,
+        check: bool,
+        timeout: float,
+    ) -> asyncssh.SSHCompletedProcess:
+        assert encoding is None
+        assert check is False
+        assert timeout > 0
+        completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+            ['/bin/sh', '-c', command],  # noqa: S607 -- the shell the device's own scripts name
+            input=input,
+            capture_output=True,
+            check=False,
+        )
+        return answer(exit_status=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def shell_transport() -> ssh.SshTransport:
+    """The shipped transport, with a real shell where the session would be."""
+    return ssh.SshTransport(Shell())
+
+
+def test_a_write_through_a_real_shell_lands_the_bytes_with_the_declared_mode(tmp_path: Path) -> None:
+    """The ordinary path, guard and all: the parent is made, the bytes land,
+    the mode is the declared one and no staging file is left behind."""
+    path = tmp_path / 'frr' / 'frr.conf'
+
+    asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0640', owner=None))
+
+    assert path.read_bytes() == b'router bgp 65000\n'
+    assert path.stat().st_mode & 0o777 == 0o640
+    assert [entry.name for entry in path.parent.iterdir()] == ['frr.conf']
+
+
+def test_a_write_refuses_a_link_to_a_directory_rather_than_landing_the_bytes_inside_it(tmp_path: Path) -> None:
+    """`mv -f staged link` moves the staged file *into* what the link points at.
+
+    The file then sits in a directory nobody declared under the staging name,
+    the link is still a link, and every apply after it succeeds while every
+    preview asks for the same write again.
+    """
+    target = tmp_path / 'elsewhere'
+    target.mkdir()
+    link = tmp_path / 'frr.conf'
+    link.symlink_to(target)
+
+    with pytest.raises(ssh.SymbolicLinkAtPath):
+        asyncio.run(shell_transport().write(str(link), b'router bgp 65000\n', mode='0644', owner=None))
+
+    assert link.is_symlink()
+    assert list(target.iterdir()) == []
+
+
+def test_a_write_refuses_a_link_to_a_file_rather_than_replacing_the_indirection(tmp_path: Path) -> None:
+    """The same `mv -f` replaces a link that points at a file, which throws away
+    an indirection somebody placed deliberately."""
+    target = tmp_path / 'elsewhere'
+    _ = target.write_text('what the link points at\n')
+    link = tmp_path / 'frr.conf'
+    link.symlink_to(target)
+
+    with pytest.raises(ssh.SymbolicLinkAtPath):
+        asyncio.run(shell_transport().write(str(link), b'router bgp 65000\n', mode='0644', owner=None))
+
+    assert link.is_symlink()
+    assert target.read_text() == 'what the link points at\n'
+
+
+def test_a_remove_refuses_a_link_rather_than_taking_the_indirection_away(tmp_path: Path) -> None:
+    """`rm -f` deletes a link without following it, so the guard is the whole
+    difference between refusing one and destroying one."""
+    target = tmp_path / 'elsewhere'
+    _ = target.write_text('what the link points at\n')
+    link = tmp_path / 'frr.conf'
+    link.symlink_to(target)
+
+    with pytest.raises(ssh.SymbolicLinkAtPath):
+        asyncio.run(shell_transport().remove(str(link)))
+
+    assert link.is_symlink()
+
+    asyncio.run(shell_transport().remove(str(target)))
+    assert not target.exists(), 'the guard refuses a link and nothing else'
 
 
 ##
@@ -1431,6 +1617,56 @@ def test_a_repository_on_a_registry_with_a_port_is_accepted() -> None:
     assert result.failures == []
 
 
+@pytest.mark.parametrize('kind', [ssh.SYMBOLIC_LINK, 'regular file'])
+def test_anything_but_a_tree_where_one_is_declared_is_drift(device: Device, kind: str) -> None:
+    """The marker beside it says nothing about what a container would boot.
+
+    A marker naming the declared pin is the state a converged artifact is in,
+    so a comparison that asked only whether something is at the path would
+    report no change while the path held a link or a file.
+    """
+    props = artifact_props()
+    landed(device, props)
+    device.files[ROOTFS_TREE].kind = kind
+
+    assert artifact_provider().diff('id', props, props).changes is True
+
+
+def test_a_link_where_a_tree_is_declared_fails_the_push_before_a_byte_is_fetched(device: Device) -> None:
+    """The pull is the first command and the question is its first act, so the
+    device neither downloads an image nor displaces the link with `mv`."""
+    device.statuses = {'-L': ssh.ReservedStatus.SYMBOLIC_LINK}
+
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
+        _ = artifact_provider().create(artifact_props())
+
+    assert ROOTFS_TREE in str(raised.value)
+    assert device.commands == [provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE)]
+    assert provider.marker_path(ROOTFS_TREE) not in device.files, 'nothing claims a tree that was never unpacked'
+
+
+def test_a_link_where_a_tree_is_declared_fails_the_delete(device: Device) -> None:
+    """`rm -rf` takes a link away without following it, so the purge asks first."""
+    landed(device, artifact_props())
+    device.statuses = {'-L': ssh.ReservedStatus.SYMBOLIC_LINK}
+
+    with pytest.raises(ssh.SymbolicLinkAtPath) as raised:
+        artifact_provider().delete('id', artifact_props())
+
+    assert ROOTFS_TREE in str(raised.value)
+    assert HOOK_COMMAND not in device.commands
+
+
+def test_a_refresh_reports_a_tree_a_link_stands_in_for_as_gone(device: Device) -> None:
+    """A tree of unknown provenance and a path holding something else are one
+    answer: there is no artifact here."""
+    props = artifact_props()
+    landed(device, props)
+    device.files[ROOTFS_TREE].kind = ssh.SYMBOLIC_LINK
+
+    assert artifact_provider().read('id', props).id is None
+
+
 ##
 ## The commands the device runs
 ##
@@ -1446,7 +1682,7 @@ def test_the_pull_clears_the_last_push_before_it_asks_for_room() -> None:
     staging = f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}'
     superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
-    assert script.startswith(f'rm -rf {layout} {staging} {superseded}')
+    assert script.startswith(f'{ssh.symlink_test(ROOTFS_TREE)} && rm -rf {layout} {staging} {superseded}')
     assert f'mkdir -p {layout}' in script, 'which is also how the directory above the tree gets made'
     assert f'skopeo copy --quiet docker://{ROOTFS_REFERENCE} oci:{layout}:{provider.LAYOUT_TAG}' in script
 
@@ -1463,7 +1699,9 @@ def test_the_unpack_is_two_renames_so_a_half_unpacked_root_never_boots() -> None
     staging = f'{ROOTFS_TREE}{provider.UNPACKING_SUFFIX}'
     superseded = f'{ROOTFS_TREE}{provider.SUPERSEDED_SUFFIX}'
 
-    assert script.startswith(f'umoci raw unpack --image {layout}:{provider.LAYOUT_TAG} {staging}')
+    assert script.startswith(
+        f'{ssh.symlink_test(ROOTFS_TREE)} && umoci raw unpack --image {layout}:{provider.LAYOUT_TAG} {staging}'
+    )
     assert f'mv {ROOTFS_TREE} {superseded}' in script
     assert script.endswith(f'mv {staging} {ROOTFS_TREE}')
     assert f'rm -rf {ROOTFS_TREE} ' not in script, 'the live tree is renamed, never deleted in place'
@@ -1726,7 +1964,8 @@ def test_a_write_is_staged_and_moved_into_place() -> None:
     asyncio.run(device.write('/data/frr/frr.conf', b'hello', mode='0640', owner='root:root'))
 
     assert connection.commands == [
-        'mkdir -p /data/frr'
+        f'{ssh.symlink_test("/data/frr/frr.conf")}'
+        ' && mkdir -p /data/frr'
         ' && cat > /data/frr/frr.conf.kluster-staged'
         ' && chmod 0640 /data/frr/frr.conf.kluster-staged'
         ' && chown root:root /data/frr/frr.conf.kluster-staged'
@@ -1745,16 +1984,17 @@ def test_a_write_with_no_declared_owner_leaves_ownership_alone() -> None:
 
 def test_a_path_a_shell_would_mangle_is_quoted() -> None:
     device, connection = transport(answer())
+    mangled = '/data/a file; rm -rf /'
 
-    asyncio.run(device.remove('/data/a file; rm -rf /'))
+    asyncio.run(device.remove(mangled))
 
-    assert connection.commands == ["rm -f '/data/a file; rm -rf /'"]
+    assert connection.commands == [f"{ssh.symlink_test(mangled)} && rm -f '{mangled}'"]
 
 
 def test_an_absent_file_reads_as_absent_rather_than_as_a_fault() -> None:
     """`cat` exits 1 both for a missing file and an unreadable one; only one of
     those is a resource to create, so the shell distinguishes them itself."""
-    device, _ = transport(answer(exit_status=ssh.ABSENT))
+    device, _ = transport(answer(exit_status=ssh.ReservedStatus.ABSENT))
 
     assert asyncio.run(device.read('/data/frr/frr.conf')) is None
 
@@ -1815,3 +2055,83 @@ def test_ownership_is_compared_only_as_far_as_it_was_declared() -> None:
     assert ssh.same_owner('root', stat)
     assert not ssh.same_owner('root:root', stat)
     assert ssh.same_owner('root:staff', stat)
+
+
+##
+## What a declared path is, and the statuses the scripts speak
+##
+
+
+#: Spellings `check` admits, each the device's own single name for one place.
+DECLARED_PATHS = ('/', '/data', CONFIG_PATH, DIRECTORY_PATH, ROOTFS_TREE)
+#: Spellings it refuses, one per departure the grammar names.
+REFUSED_PATHS = ('data/frr', f'{CONFIG_PATH}/', '/data//frr/frr.conf', '/data/frr/../frr/frr.conf', '//data/frr')
+
+
+@pytest.mark.parametrize('path', DECLARED_PATHS)
+def test_a_path_the_checker_admits_is_one_the_transport_can_take_apart(path: str) -> None:
+    """One grammar, asked by both ends.
+
+    `check` decides what a declared path is and the transport builds its
+    `mkdir -p` from the parent of one, so the parent of an admitted path has to
+    be an admitted path itself -- otherwise the directory a write creates is a
+    place the declaration could not have named.
+    """
+    assert file_provider().check({}, file_props(path=path)).failures == []
+    assert paths.refusal(paths.parent(path)) is None
+    assert paths.parent(path).startswith(paths.ROOT)
+
+
+@pytest.mark.parametrize('path', REFUSED_PATHS)
+def test_a_path_the_checker_refuses_has_no_parent_for_the_transport_to_use(path: str) -> None:
+    """The two ends refuse the same spellings, because there is one of them.
+
+    A second derivation would answer anyway: `/data/frr/` names `/data/frr` to a
+    `rpartition`, so a spelling that stopped being admitted -- or started being
+    -- would reach the device as a directory nobody declared, and nothing would
+    fail.
+    """
+    assert [failure.property for failure in file_provider().check({}, file_props(path=path)).failures] == ['path']
+    with pytest.raises(ValueError, match='no declared path'):
+        _ = paths.parent(path)
+
+
+def test_a_write_to_a_path_the_checker_would_refuse_reaches_no_device() -> None:
+    """The transport asks the grammar rather than carrying a spelling of its own."""
+    device, connection = transport(answer())
+
+    with pytest.raises(ValueError, match='no declared path'):
+        asyncio.run(device.write(f'{CONFIG_PATH}/', b'hello', mode='0644', owner=None))
+
+    assert connection.commands == []
+
+
+def test_a_doubled_leading_slash_is_the_single_root_this_device_reads() -> None:
+    """POSIX leaves `//` to the implementation; Linux reads it as one slash.
+
+    So the canonical spelling has one, `//data/frr` is refused as a second
+    spelling of a place already named, and that is the line to revisit for a
+    device that reads `//` as a root of its own.
+    """
+    assert paths.canonical('//data/frr') == '/data/frr'
+    assert paths.refusal('//data/frr') is not None
+
+
+def test_every_reserved_status_is_drawn_from_the_range_the_class_states() -> None:
+    """The range is what keeps a fourth answer from colliding with a real one.
+
+    Below it are the statuses commands exit for their own failures; from 126 up
+    is the shell's own band -- a command it could not find, a file it could not
+    execute, and the 128 + signal a killed process reports. A member is a
+    number no session can produce for a reason of its own.
+    """
+    available = ssh.ReservedStatus.available()
+
+    assert [status for status in ssh.ReservedStatus if status not in available] == []
+    assert len({status.value for status in ssh.ReservedStatus}) == len(list(ssh.ReservedStatus))
+    assert [status for status in (0, 1, 2, 126, 127, 128, 137, 255) if status in available] == []
+
+
+def test_a_reserved_status_renders_as_the_number_a_script_exits() -> None:
+    """The scripts are text, and a member has to spell itself as its own value."""
+    assert f'exit {ssh.ReservedStatus.ABSENT}' == 'exit 42'

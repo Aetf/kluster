@@ -26,6 +26,13 @@ Writes are staged: the bytes land in a sibling temporary file, take their mode
 and ownership there, and are moved into place with `mv`, which is atomic within a
 filesystem. A write interrupted halfway therefore leaves the previous file intact
 and a stale temporary beside it, which the next write overwrites.
+
+**The two verbs that change the device refuse a symbolic link at the path they
+were given** (`symlink_test`): a write refuses one rather than replacing it or
+landing the bytes inside whatever it points at, and a remove refuses one rather
+than taking away an indirection the caller did not put there. `stat` answers
+about the path itself rather than through it, which is how a caller learns of a
+link before it asks for either.
 """
 
 from __future__ import annotations
@@ -35,16 +42,17 @@ import shlex
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from enum import IntEnum, unique
 from typing import Protocol, cast, final
 
 import asyncssh
 from asyncssh.known_hosts import KnownHostsArg
 
+from kluster.providers.device_files import paths
+
 __all__ = (
-    'ABSENT',
     'DEFAULT_TIMEOUT',
     'DIRECTORY',
-    'NOT_EMPTY',
     'SYMBOLIC_LINK',
     'CommandFailed',
     'CommandResult',
@@ -53,14 +61,17 @@ __all__ = (
     'FileStat',
     'HostKeyRefused',
     'PinRejected',
+    'ReservedStatus',
     'Runner',
     'SshTransport',
+    'SymbolicLinkAtPath',
     'Transport',
     'client_credential',
     'connect',
     'pinned_host_keys',
     'same_mode',
     'same_owner',
+    'symlink_test',
 )
 
 #: How long a single command or the handshake may take. Long enough for the
@@ -69,30 +80,51 @@ __all__ = (
 #: unreachable device fails its resource instead of hanging the deployment.
 DEFAULT_TIMEOUT = 600.0
 
-#: The exit statuses this module reserves, for the answers a shell has no
-#: status of its own for. They live together because they are spoken on one
-#: channel: a command that returned either meant it, and a range stated in one
-#: place is a range nothing else in a script may reuse.
-#:
-#: `ABSENT` is "there is no such path" -- `cat` and `stat` both exit 1 for an
-#: absent file *and* for one that cannot be read, and those two are not the same
-#: answer: the first is a resource to create, the second is a fault to report.
-#: `NOT_EMPTY` is "this directory has something in it", which `rmdir` reports
-#: with the same status as a directory it may not touch, in whatever language
-#: the session speaks.
-#: `SYMBOLIC_LINK` is "a link is at this path", which no command reports with a
-#: status of its own: the ones that would converge it follow it, and `rmdir`
-#: refuses it with the status it gives everything else.
-ABSENT = 42
-NOT_EMPTY = 43
-SYMBOLIC_LINK = 44
-
-#: The word `stat`'s `%F` gives a directory, which is the only kind any caller
-#: here asks about.
+#: The words `stat`'s `%F` gives for the kinds a caller here asks about. A
+#: resource compares them because existence alone does not say what is at a
+#: path.
 DIRECTORY = 'directory'
+SYMBOLIC_LINK = 'symbolic link'
 
 #: The suffix a staged write uses before it is moved into place.
 STAGING_SUFFIX = '.kluster-staged'
+
+
+@unique
+class ReservedStatus(IntEnum):
+    """The exit statuses this module speaks, for answers a shell has none for.
+
+    **Membership**: a script here exits one of these when the shell has no
+    status that means what happened, and the caller has to tell that answer
+    apart from a command's own failure. Anything a command already reports for
+    itself stays the command's, message and all.
+
+    **Range**: `available`, and every member is drawn from it. Statuses below it
+    are what commands exit for their own failures, and the band from 126 up is
+    the shell's own -- `command not found`, a file that cannot be executed, and
+    the 128 + signal a killed process reports. A member outside the range would
+    collide with an answer the session did not mean, which is why adding a
+    fourth is a change to this class rather than a new name beside it.
+    """
+
+    #: There is no such path. `cat` and `stat` both exit 1 for an absent file
+    #: *and* for one that cannot be read, and those two are not the same
+    #: answer: the first is a resource to create, the second is a fault to
+    #: report.
+    ABSENT = 42
+    #: This directory has something in it, which `rmdir` reports with the same
+    #: status as a directory it may not touch, in whatever language the session
+    #: speaks.
+    NOT_EMPTY = 43
+    #: A symbolic link is at this path, which no command reports with a status
+    #: of its own: the ones that would converge it follow it, and `rmdir`
+    #: refuses it with the status it gives everything else.
+    SYMBOLIC_LINK = 44
+
+    @classmethod
+    def available(cls) -> range:
+        """The statuses a member may be drawn from, and the whole of it."""
+        return range(42, 64)
 
 
 class DeviceError(Exception):
@@ -111,6 +143,32 @@ class HostKeyRefused(DeviceError):
     This is the interposition case, and it is fatal by construction: there is no
     prompt, no cache, and no first-contact exception to fall back on.
     """
+
+
+@final
+class SymbolicLinkAtPath(DeviceError):
+    """A symbolic link stands where a path was declared, so nothing acted on it.
+
+    **A declaration names the path it gives, not whatever a link there points
+    at.** The link cannot be treated as the thing declared, because the
+    operations disagree about it: the ones that would converge it follow it and
+    would converge something nobody named, while the ones that would take it
+    away refuse it or destroy it. Nor may the link be replaced, which would
+    throw away an indirection somebody placed deliberately.
+
+    What is left is to say so, and to let the person who made the link decide
+    whether the declaration or the link is wrong. It is the last component
+    alone: a link higher up the path is traversal that neither `stat` nor these
+    scripts can see, which is why a device whose `/data` is a symbolic link is
+    not this case.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f'refusing to act on {path}: it is a symbolic link, and the declaration names that path '
+            f'rather than whatever the link points at'
+        )
+        self.path: str = path
 
 
 @final
@@ -152,7 +210,8 @@ class FileStat:
     `kind` is `stat`'s own description of it -- `directory`, `regular file`,
     `symbolic link` -- because existence alone does not say what is there, and a
     resource that declares a directory has to be able to tell one from a file
-    somebody left at the same path.
+    somebody left at the same path. `stat` is asked about the path itself
+    rather than through it, so a link is reported as a link.
     """
 
     owner: str
@@ -164,6 +223,10 @@ class FileStat:
     @property
     def is_directory(self) -> bool:
         return self.kind == DIRECTORY
+
+    @property
+    def is_symbolic_link(self) -> bool:
+        return self.kind == SYMBOLIC_LINK
 
 
 @final
@@ -200,11 +263,19 @@ class Transport(Protocol):
         ...
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
-        """Put `data` at `path`, creating parent directories, atomically."""
+        """Put `data` at `path`, creating parent directories, atomically.
+
+        A symbolic link at `path` raises `SymbolicLinkAtPath` and nothing is
+        written.
+        """
         ...
 
     async def remove(self, path: str) -> None:
-        """Delete `path`. Removing what is not there is not an error."""
+        """Delete `path`. Removing what is not there is not an error.
+
+        A symbolic link at `path` raises `SymbolicLinkAtPath` and stays where
+        it is.
+        """
         ...
 
     async def run(self, command: str) -> CommandResult:
@@ -262,16 +333,17 @@ class SshTransport:
 
     async def read(self, path: str) -> bytes | None:
         quoted = shlex.quote(path)
-        result = await self._sh(f'if [ ! -f {quoted} ]; then exit {ABSENT}; fi; cat {quoted}')
-        if result.exit_status == ABSENT:
+        result = await self._sh(f'if [ ! -f {quoted} ]; then exit {ReservedStatus.ABSENT}; fi; cat {quoted}')
+        if result.exit_status == ReservedStatus.ABSENT:
             return None
         _check(f'read {path}', result)
         return result.stdout
 
     async def stat(self, path: str) -> FileStat | None:
         quoted = shlex.quote(path)
-        result = await self._sh(f"if [ ! -e {quoted} ]; then exit {ABSENT}; fi; stat -c '%U %G %a %s %F' {quoted}")
-        if result.exit_status == ABSENT:
+        script = f"if [ ! -e {quoted} ]; then exit {ReservedStatus.ABSENT}; fi; stat -c '%U %G %a %s %F' {quoted}"
+        result = await self._sh(script)
+        if result.exit_status == ReservedStatus.ABSENT:
             return None
         _check(f'stat {path}', result)
         # The kind is last and is the one field with spaces in it (`regular
@@ -283,9 +355,19 @@ class SshTransport:
         return FileStat(owner=owner, group=group, mode=mode, size=int(size), kind=kind.strip())
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
+        """The staged write, refusing a link at the destination.
+
+        The refusal is the script's first act, in the same shell run as the
+        `mv` it guards: `mv -f` moves the staged file *into* a link that points
+        at a directory and *over* one that points at a file, and neither is
+        what the declaration asked for. The parent it creates is the one
+        `paths` gives, so the directory made is the one the declared path sits
+        in and no other spelling of it.
+        """
         staged = shlex.quote(f'{path}{STAGING_SUFFIX}')
         script = [
-            f'mkdir -p {shlex.quote(_parent(path))}',
+            symlink_test(path),
+            f'mkdir -p {shlex.quote(paths.parent(path))}',
             f'cat > {staged}',
             f'chmod {shlex.quote(mode)} {staged}',
         ]
@@ -293,10 +375,20 @@ class SshTransport:
             script.append(f'chown {shlex.quote(owner)} {staged}')
         script.append(f'mv -f {staged} {shlex.quote(path)}')
         result = await self._sh(' && '.join(script), stdin=data)
+        if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
+            raise SymbolicLinkAtPath(path)
         _check(f'write {path}', result)
 
     async def remove(self, path: str) -> None:
-        result = await self._sh(f'rm -f {shlex.quote(path)}')
+        """The delete, refusing a link at the path.
+
+        `rm -f` takes a link away without following it, so the guard is what
+        keeps an indirection nobody here declared from being deleted by a
+        resource that only ever named the path.
+        """
+        result = await self._sh(f'{symlink_test(path)} && rm -f {shlex.quote(path)}')
+        if result.exit_status == ReservedStatus.SYMBOLIC_LINK:
+            raise SymbolicLinkAtPath(path)
         _check(f'remove {path}', result)
 
     async def run(self, command: str) -> CommandResult:
@@ -352,6 +444,23 @@ async def connect(device: Device, *, timeout: float = DEFAULT_TIMEOUT) -> AsyncG
         yield SshTransport(connection, timeout=timeout)
 
 
+def symlink_test(path: str) -> str:
+    """The test that refuses a symbolic link at a declared path.
+
+    Every script here begins with it, because every command after it follows a
+    link (`SymbolicLinkAtPath`). The test is `-L` rather than a test of the
+    kind wanted, because a link is the only thing that is silent: `mkdir -p`
+    refuses a regular file at the path and says so in the device's own words,
+    while `mv -f`, `chmod` and `rmdir` each do something to a link that nobody
+    asked for.
+
+    An `if` whose condition is false exits zero, so the fragment chains with
+    `&&` in front of the commands it guards.
+    """
+    quoted = shlex.quote(path)
+    return f'if [ -L {quoted} ]; then exit {ReservedStatus.SYMBOLIC_LINK}; fi'
+
+
 def same_mode(left: str, right: str) -> bool:
     """Whether two octal modes mean the same thing (`0644` is `644`)."""
     try:
@@ -370,11 +479,6 @@ def same_owner(declared: str | None, stat: FileStat) -> bool:
         return True
     user, _, group = declared.partition(':')
     return stat.owner == user and (not group or stat.group == group)
-
-
-def _parent(path: str) -> str:
-    head, _, _ = path.rpartition('/')
-    return head or '/'
 
 
 def _check(what: str, result: CommandResult) -> None:

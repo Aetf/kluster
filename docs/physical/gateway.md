@@ -441,6 +441,22 @@ next preview reports, while nothing about its contents is ever declared
 why a directory this program stops declaring is removed only while it is
 empty.
 
+**A declared path is that path, and never a symbolic link standing at
+it.** The three resources — a file, a directory, a root filesystem tree —
+answer it the same way: a link found at the last component is drift a
+preview reports, and the operation refuses it by name rather than acting
+on it. Neither alternative is available. Following the link converges a
+place nothing declared, and the commands disagree about which link they
+follow at all — `mkdir -p` and `chmod` go through one, `mv -f` lands a
+file inside a link to a directory and replaces a link to a file, `rmdir`
+refuses one — so a resource that accepted a link would report itself
+converged and fail on the day of the delete. Replacing the link throws
+away an indirection somebody placed deliberately. What resolves it is a
+decision on the device: declare the path the link points at, or remove
+the link. It is the last component alone, which is why `/data` being a
+symbolic link on this box is not this case — a link higher up a path is
+traversal nothing here can see.
+
 **New device automation is a systemd unit plus an executable in
 `bin/`**, unless the operation manipulates systemd's own configuration
 — installing its packages, its units, its nspawn files, its machines —

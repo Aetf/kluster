@@ -48,6 +48,20 @@ marker the device keeps records *the pin* -- the manifest's digest, not a
 checksum of the tree beside it. A marker is the device's claim about
 provenance, not a checksum of its neighbour.
 
+**A declared path is the path, and never a symbolic link at it.** All three
+resources answer the question the same way, because the alternatives are wrong
+in the same way for each of them: the commands that would converge a link
+follow it and would converge a place nobody declared, and the commands that
+would take one away either destroy an indirection somebody placed deliberately
+or refuse it in the device's own words on the day of the delete rather than on
+the day it appeared. So every script begins by asking (`ssh.symlink_test`),
+every operation stops with `ssh.SymbolicLinkAtPath` naming the path, and every
+comparison reads a link at a declared path as drift rather than as the file,
+directory or tree it points at. The answer is to declare what the link points
+at, or to remove the link. It is the last component alone -- a link higher up
+is traversal nothing here can see, which is why a device whose `/data` is a
+symbolic link is not this case.
+
 **Every resource here diffs against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
 refresh, which is what makes this convergence rather than record-keeping. The
@@ -121,7 +135,6 @@ from __future__ import annotations
 
 import abc
 import asyncio
-import posixpath
 import shlex
 from collections.abc import Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager, suppress
@@ -138,7 +151,7 @@ from kluster.providers.configured import (
     has_unknowns,
     is_unknown,
 )
-from kluster.providers.device_files import ssh
+from kluster.providers.device_files import paths, ssh
 
 __all__ = (
     'ADDRESS',
@@ -168,7 +181,6 @@ __all__ = (
     'MakeDirectoryFailed',
     'PullFailed',
     'RemoveDirectoryFailed',
-    'SymbolicLinkAtPath',
     'UnpackFailed',
     'endpoint',
     'gone',
@@ -180,7 +192,6 @@ __all__ = (
     'reference',
     'remove_script',
     'secret_outputs',
-    'symlink_test',
     'unpack_script',
 )
 
@@ -343,18 +354,6 @@ class DirectoryNotEmpty(Exception):
 
 
 @final
-class SymbolicLinkAtPath(Exception):
-    """A symbolic link stands where a directory is declared; no operation acts on one (`symlink_test`)."""
-
-    def __init__(self, path: str) -> None:
-        super().__init__(
-            f'refusing to act on {path}: it is a symbolic link, and this resource declares the '
-            f'directory at that path rather than whatever the link points at'
-        )
-        self.path: str = path
-
-
-@final
 @dataclass(frozen=True)
 class Connection:
     """Where and as whom to write, and the key the device must present.
@@ -405,11 +404,12 @@ def reference(repository: str, digest: str) -> str:
 def pull_script(image: str, directory: str) -> str:
     """The command that puts the pinned image beside `directory`, as a layout.
 
-    Its first act is to clear what the last push left: the tree the last swap
-    displaced, any staging tree a failed run abandoned, and any layout a failed
-    pull abandoned. That is the moment to do it -- reclaiming the space before
-    pulling is what keeps a bumped pin from needing room for three copies of one
-    root filesystem at once.
+    Its first act is `ssh.symlink_test`, so a link where the tree is declared
+    is refused before a byte is fetched. Then it clears what the last push
+    left: the tree the last swap displaced, any staging tree a failed run
+    abandoned, and any layout a failed pull abandoned. That is the moment to do
+    it -- reclaiming the space before pulling is what keeps a bumped pin from
+    needing room for three copies of one root filesystem at once.
 
     `skopeo copy` is given a `docker://` source carrying the digest, so the
     registry's answer is verified against the pin before a byte is written, and
@@ -425,6 +425,7 @@ def pull_script(image: str, directory: str) -> str:
     destination = shlex.quote(f'oci:{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
     return ' && '.join(
         (
+            ssh.symlink_test(directory),
             f'rm -rf {layout} {staging} {superseded}',
             # Making the layout also makes the directory holding it, which is
             # the directory the tree and the staging tree go in: `umoci` creates
@@ -446,6 +447,10 @@ def unpack_script(directory: str) -> str:
     the hook that restarts it has not run yet -- so it is cleared at the start
     of the *next* push instead.
 
+    It asks about a link first, as every script here does: `mv` displaces one
+    rather than following it, so an unpack that ran past the question would
+    take away an indirection the declaration never named.
+
     `umoci raw unpack` rather than `umoci unpack`, because the latter writes an
     OCI *bundle* -- a `config.json` beside a `rootfs/` directory -- and what
     boots here is a root filesystem, not a runtime bundle. The layout goes the
@@ -460,6 +465,7 @@ def unpack_script(directory: str) -> str:
     tagged = shlex.quote(f'{directory}{LAYOUT_SUFFIX}:{LAYOUT_TAG}')
     return ' && '.join(
         (
+            ssh.symlink_test(directory),
             f'umoci raw unpack --image {tagged} {staging}',
             f'rm -rf {layout}',
             f'if [ -e {quoted_directory} ]; then mv {quoted_directory} {superseded}; fi',
@@ -469,14 +475,19 @@ def unpack_script(directory: str) -> str:
 
 
 def purge_script(directory: str) -> str:
-    """The command that removes a tree and every sibling the push uses."""
-    paths = (
+    """The command that removes a tree and every sibling the push uses.
+
+    Guarded like the rest: `rm -rf` deletes a link without following it, so a
+    delete that ran past the question would take away an indirection this
+    resource only ever named the path of.
+    """
+    removed = (
         directory,
         f'{directory}{UNPACKING_SUFFIX}',
         f'{directory}{SUPERSEDED_SUFFIX}',
         f'{directory}{LAYOUT_SUFFIX}',
     )
-    return 'rm -rf ' + ' '.join(shlex.quote(path) for path in paths)
+    return ssh.symlink_test(directory) + ' && rm -rf ' + ' '.join(shlex.quote(path) for path in removed)
 
 
 def make_script(path: str, mode: str, owner: str | None) -> str:
@@ -488,54 +499,29 @@ def make_script(path: str, mode: str, owner: str | None) -> str:
     alone where none was declared, exactly as a write does -- a directory whose
     owner this resource has no opinion about keeps whatever the device gave it.
 
-    Its first act is `symlink_test`, because every command after it follows a
-    link.
+    Its first act is `ssh.symlink_test`, because every command after it follows
+    a link.
     """
     quoted = shlex.quote(path)
-    script = [symlink_test(path), f'mkdir -p {quoted}', f'chmod {shlex.quote(mode)} {quoted}']
+    script = [ssh.symlink_test(path), f'mkdir -p {quoted}', f'chmod {shlex.quote(mode)} {quoted}']
     if owner:
         script.append(f'chown {shlex.quote(owner)} {quoted}')
     return ' && '.join(script)
-
-
-def symlink_test(path: str) -> str:
-    """The test that refuses a symbolic link at the declared path.
-
-    **A directory resource declares the directory at its own path, not whatever
-    a link there points at.** The link cannot be treated as the directory,
-    because the operations disagree about it: `mkdir -p`, `chmod` and `chown`
-    follow one and would converge a directory this resource never named, while
-    `rmdir` refuses one outright -- so a resource that accepted a link would
-    report itself converged and then fail the day it was deleted. Nor can the
-    link be replaced by a directory, which would destroy an indirection
-    somebody else put there deliberately.
-
-    What is left is to say so: both halves stop, in the same words, and the
-    person who made the link decides whether the declaration or the link is
-    wrong. It applies to the last component alone -- a link higher up the path
-    is traversal that neither `stat` nor these scripts can even see, which is
-    why a device whose `/data` is a symlink is not this case.
-
-    The test is `-L` rather than `-d`, because a link is the only thing here
-    that is silent: `mkdir -p` refuses a regular file at the path, and says so
-    in the device's own words.
-    """
-    quoted = shlex.quote(path)
-    return f'if [ -L {quoted} ]; then exit {ssh.SYMBOLIC_LINK}; fi'
 
 
 def remove_script(path: str) -> str:
     """The command that takes `path` away, and only while nothing is in it.
 
     Four answers rather than two, because the caller has to tell them apart: a
-    symbolic link at the path exits `ssh.SYMBOLIC_LINK`, a path that was
-    already gone is a success, a directory with something in it exits
-    `ssh.NOT_EMPTY`, and anything else is the device's own failure with its own
-    message. `rmdir` would collapse the last two into one status.
+    symbolic link at the path exits `ssh.ReservedStatus.SYMBOLIC_LINK`, a path
+    that was already gone is a success, a directory with something in it exits
+    `ssh.ReservedStatus.NOT_EMPTY`, and anything else is the device's own
+    failure with its own message. `rmdir` would collapse the last two into one
+    status.
 
-    `symlink_test` comes before the absence test rather than after it, because
-    `[ -e ]` follows a link and a link pointing at nothing would otherwise read
-    as "already gone".
+    `ssh.symlink_test` comes before the absence test rather than after it,
+    because `[ -e ]` follows a link and a link pointing at nothing would
+    otherwise read as "already gone".
 
     The emptiness test asks about a directory first. `ls -A` on a regular file
     prints that file's own name, so a file left at the declared path would be
@@ -546,9 +532,9 @@ def remove_script(path: str) -> str:
     quoted = shlex.quote(path)
     return '; '.join(
         (
-            symlink_test(path),
+            ssh.symlink_test(path),
             f'if [ ! -e {quoted} ]; then exit 0; fi',
-            f'if [ -d {quoted} ] && [ -n "$(ls -A {quoted})" ]; then exit {ssh.NOT_EMPTY}; fi',
+            f'if [ -d {quoted} ] && [ -n "$(ls -A {quoted})" ]; then exit {ssh.ReservedStatus.NOT_EMPTY}; fi',
             f'rmdir {quoted}',
         )
     )
@@ -626,39 +612,16 @@ def _observed_owner(declared: Any, stat: ssh.FileStat) -> str | None:
 def _canonical_path(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
     """Refuse a path that is not the device's own single spelling of one place.
 
-    **Absolute**, because a relative path would be resolved against whatever
-    directory a session happens to start in, and no declaration here chose one.
-
-    **Canonical** -- the spelling `posixpath.normpath` leaves alone, the leading
-    `//` it preserves included -- because a place with two spellings is a place
-    the comparison and the operations can disagree about. A trailing slash is
-    the one that bites: a path ending in one is resolved through to a directory
-    by every shell test, by `stat` and by `mv`, so the spelling names the same
-    place and answers a different question about it.
+    What a declared path is, and why, is `paths`: `check` is where a caller
+    meets that grammar, and the transport is where the same grammar decides
+    which directory a write creates. Both ask it rather than each carrying a
+    spelling of their own.
     """
     value = props.get(key)
     if value is None or is_unknown(value):
         return []
-    path = str(value)
-    if not path.startswith('/'):
-        return [dynamic.CheckFailure(key, f'must be an absolute path on the device, got {path!r}')]
-    canonical = posixpath.normpath(path)
-    if canonical.startswith('//'):
-        # `normpath` keeps exactly two leading slashes, which POSIX leaves to
-        # the implementation to read as it likes. The device reads them as one.
-        canonical = canonical[1:]
-    if path != canonical:
-        return [dynamic.CheckFailure(key, f'{_misspelling(path)}, so declare it as {canonical!r}, not {path!r}')]
-    return []
-
-
-def _misspelling(path: str) -> str:
-    """Which departure from the canonical spelling this path took, in its own words."""
-    if path != '/' and path.endswith('/'):
-        # Named on its own because it is the one that reads as harmless: the
-        # place is the same one, and every test of it answers differently.
-        return 'a trailing slash is a path resolved through to a directory, not the path itself'
-    return 'a path names its place once, without a doubled slash, a "." or a ".."'
+    reason = paths.refusal(str(value))
+    return [dynamic.CheckFailure(key, reason)] if reason is not None else []
 
 
 def _registry_qualified(props: Mapping[str, Any], key: str) -> list[dynamic.CheckFailure]:
@@ -808,7 +771,11 @@ class DeviceFileProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
-            if stat is None:
+            if stat is None or stat.is_symbolic_link:
+                # A link is drift whatever it points at, and it is asked about
+                # before the content: `read` follows one, so a link to a file
+                # holding these very bytes would otherwise report the resource
+                # converged onto a path nobody declared.
                 return True
             if not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat):
                 return True
@@ -818,10 +785,13 @@ class DeviceFileProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
-            content = None if stat is None else await transport.read(path)
+            content = None if stat is None or stat.is_symbolic_link else await transport.read(path)
             if stat is None or content is None:
                 # Gone from the device is gone: the next up creates it again,
-                # which is how a file someone deleted by hand comes back.
+                # which is how a file someone deleted by hand comes back. A
+                # link at the path is the same answer -- the file is not there,
+                # and the next up says so by name rather than writing through
+                # the link.
                 return gone()
             outs = {
                 **props,
@@ -892,9 +862,13 @@ class DeviceArtifactProvider(DeviceProvider):
         image = reference(str(props['repository']), digest)
         async with open_transport(self._device(props)) as transport:
             pull = await transport.run(pull_script(image, root))
+            if pull.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+                raise ssh.SymbolicLinkAtPath(root)
             if not pull.ok:
                 raise PullFailed(image, pull.exit_status, pull.stderr)
             unpack = await transport.run(unpack_script(root))
+            if unpack.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+                raise ssh.SymbolicLinkAtPath(root)
             if not unpack.ok:
                 raise UnpackFailed(root, unpack.exit_status, unpack.stderr)
             # Before the hook: the hook reads this.
@@ -919,10 +893,12 @@ class DeviceArtifactProvider(DeviceProvider):
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(root)
-            marker = None if stat is None else await transport.read(marker_path(root))
-            if stat is None or marker is None:
+            marker = None if stat is None or not stat.is_directory else await transport.read(marker_path(root))
+            if marker is None:
                 # A tree with no marker is a tree of unknown provenance, which
-                # is the same situation as no tree at all.
+                # is the same situation as no tree at all -- and so is anything
+                # at the path that is not a tree, a symbolic link to one
+                # included.
                 return gone()
             outs = {**props, 'digest': marker.decode(errors='replace').strip()}
         return dynamic.ReadResult(id_=id_, outs=outs)
@@ -931,7 +907,9 @@ class DeviceArtifactProvider(DeviceProvider):
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
             await transport.remove(marker_path(root))
-            _ = await transport.run(purge_script(root))
+            purged = await transport.run(purge_script(root))
+            if purged.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+                raise ssh.SymbolicLinkAtPath(root)
             await run_hook(transport, props)
 
 
@@ -955,7 +933,8 @@ class DeviceDirectoryProvider(DeviceProvider):
     this resource exists to notice.
 
     A **symbolic link** at the path is drift the comparison reports and the
-    operations refuse rather than act through (`symlink_test`).
+    operations refuse rather than act through, which is the rule all three
+    resources here follow (`ssh.SymbolicLinkAtPath`).
     """
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
@@ -998,8 +977,8 @@ class DeviceDirectoryProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             made = await transport.run(make_script(path, str(props['mode']), _owner(props)))
-            if made.exit_status == ssh.SYMBOLIC_LINK:
-                raise SymbolicLinkAtPath(path)
+            if made.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+                raise ssh.SymbolicLinkAtPath(path)
             if not made.ok:
                 raise MakeDirectoryFailed(path, made.exit_status, made.stderr)
             await run_hook(transport, props)
@@ -1031,9 +1010,9 @@ class DeviceDirectoryProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             removed = await transport.run(remove_script(path))
-            if removed.exit_status == ssh.SYMBOLIC_LINK:
-                raise SymbolicLinkAtPath(path)
-            if removed.exit_status == ssh.NOT_EMPTY:
+            if removed.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
+                raise ssh.SymbolicLinkAtPath(path)
+            if removed.exit_status == ssh.ReservedStatus.NOT_EMPTY:
                 raise DirectoryNotEmpty(path)
             if not removed.ok:
                 raise RemoveDirectoryFailed(path, removed.exit_status, removed.stderr)
@@ -1071,6 +1050,11 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
         whatever the device does by default. `hook` runs after every write and
         after the delete; a non-zero exit fails the operation. `secret=True`
         marks the content a credential, for the files that carry one.
+
+        **`path` is the file, not a symbolic link to one.** A link found there
+        is drift a preview reports and an apply refuses by name, either way
+        round, and the answer is to declare the path the link points at
+        (`ssh.SymbolicLinkAtPath`).
         """
         super().__init__(
             DeviceFileProvider(),
@@ -1125,7 +1109,7 @@ class DeviceDirectory(dynamic.Resource, module='device', name='Directory'):
 
         **`path` is the directory, not a symbolic link to one.** A link found
         there fails the operation by name, either way round, and the answer is to
-        declare the path the link points at (`symlink_test`).
+        declare the path the link points at (`ssh.SymbolicLinkAtPath`).
 
         `path` is therefore the only replacement. A directory cannot be in two
         places, and one left behind at the old path would be an orphan nothing
@@ -1184,6 +1168,12 @@ class DeviceArtifact(dynamic.Resource, module='device', name='Artifact'):
         in two places, and one left at the old path would be an orphan nothing
         declares.
 
+        **`root` is the tree, not a symbolic link to one**, and what is at the
+        path is compared rather than only whether something is there: a link,
+        or anything else that is not a directory, is drift a preview reports
+        and an apply refuses by name before a byte is fetched
+        (`ssh.SymbolicLinkAtPath`).
+
         Ownership and mode are not among the inputs. What a root filesystem's
         files belong to and what they may do is the image's own statement, and
         it is `umoci` on the device that restores it.
@@ -1217,7 +1207,11 @@ async def _tree_holds(transport: ssh.Transport, directory: str, digest: str) -> 
     firmware update takes the tree and leaves nothing, and a marker naming
     another digest is a tree from a pin nobody declares any more.
     """
-    if await transport.stat(directory) is None:
+    stat = await transport.stat(directory)
+    if stat is None or not stat.is_directory:
+        # The kind is part of the question: a file or a symbolic link where the
+        # tree is declared is no tree, and a marker beside it says nothing
+        # about what a container would boot.
         return False
     marker = await transport.read(marker_path(directory))
     return marker is not None and marker.decode(errors='replace').strip() == digest
