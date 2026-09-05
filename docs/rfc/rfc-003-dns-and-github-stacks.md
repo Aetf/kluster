@@ -16,12 +16,19 @@
     read. The tables themselves are code: the record blocks in
     `src/kluster/components/dns/`, the route and forge censuses in
     `src/kluster/conventions/`. Where this text and a design document
-    disagree, the design document is right. **§8.1 is a dated snapshot**: it
-    describes the rewrite provider as it stood when this text was written,
-    with its credential an input on every resource, which the
-    stateless-provider work undid for the credential and slice 5 undid for
-    the name. The three consequences it lists are the argument for the shape
-    §8.2 and §8.3 specify, not a description of anything on `main`.
+    disagree, the design document is right.
+    **§6.1 is overtaken on how the census is read**: it is not re-exported
+    from `conventions` but read qualified — `conventions.routes.ROUTES` —
+    because `SELF` and `Extra` are common nouns that need the prefix
+    (`kluster-ops#189`). That rule is stated in `conventions/__init__.py`
+    and in no design document, so the sentence above does not reach it; §7's
+    `entries=rewrites(conventions.ROUTES)` sketch no longer imports.
+    **§8.1 is a dated snapshot**: it describes the rewrite provider as it
+    stood when this text was written, with its credential an input on every
+    resource, which the stateless-provider work undid for the credential and
+    slice 5 undid for the name. The three consequences it lists are the
+    argument for the shape §8.2 and §8.3 specify, not a description of
+    anything on `main`.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,

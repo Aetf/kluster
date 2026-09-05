@@ -33,7 +33,6 @@ from ipaddress import IPv4Address, IPv6Address
 import pulumi
 
 from kluster import conventions
-from kluster.conventions.routes import Exposure, Route
 from kluster.providers.adguard_rewrites import AdGuardRewrite
 from putils import Component
 
@@ -54,7 +53,7 @@ class Rewrite:
         return f'v{self.answer.version}'
 
 
-def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
+def rewrites(routes: Iterable[conventions.routes.Route] = ()) -> tuple[Rewrite, ...]:
     """The split-horizon rewrites the routes imply, one per name per family.
 
     A rewrite is emitted for every zone a LAN-side route is published in --
@@ -71,7 +70,11 @@ def rewrites(routes: Iterable[Route] = ()) -> tuple[Rewrite, ...]:
     for route in routes:
         if not route.lan_side:
             continue
-        vip = conventions.LAN_POOL.media_vip if route.exposure is Exposure.IOT else conventions.LAN_POOL.default_vip
+        vip = (
+            conventions.LAN_POOL.media_vip
+            if route.exposure is conventions.routes.Exposure.IOT
+            else conventions.LAN_POOL.default_vip
+        )
         for zone in route.zones:
             domain = f'{route.host}.{zone}'
             emitted.extend((Rewrite(domain=domain, answer=vip.v4), Rewrite(domain=domain, answer=vip.v6)))
