@@ -223,14 +223,16 @@ def _add_oci_mint_options(command: argparse.ArgumentParser, consumer: str) -> No
     # Optional because this repository does know it: `conventions` names one
     # compartment per consumer, and the mint creates the one that is not there
     # yet. The flag is for a tenancy that is not this installation's -- a
-    # drill -- where those names mean nothing.
+    # drill -- where those names mean nothing, which is why it also drops the
+    # check holding the seed's tenancy against the recorded one.
     _ = command.add_argument(
         '--compartment',
         default=None,
         metavar='<ocid>',
         help=(
             'mint against this compartment instead of the one `conventions` names for '
-            f'{consumer} ({conventions.OCI_TENANCY.compartments[consumer].name}), for a drill tenancy'
+            f'{consumer} ({conventions.OCI_TENANCY.compartments[consumer].name}), for a drill tenancy — '
+            'which also drops the check that the seed belongs to the account `conventions` records'
         ),
     )
 

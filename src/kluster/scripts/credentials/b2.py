@@ -77,12 +77,8 @@ DUMP_CAPABILITIES: tuple[str, ...] = ('writeFiles',)
 class Role:
     """What a B2 key is called, and the whole of what it may do.
 
-    One of the provider roles these scripts state — `b2.Role`,
-    `cloudflare.Role` and `oci_iam.Identity` are one shape in each platform's
-    own vocabulary: the name a credential is minted under and the grant that
-    goes with it are a single value, so a name cannot travel to a mint without
-    its permissions, and a mint takes the role rather than a name plus whatever
-    constant happens to be in scope.
+    One of the provider roles credentials.md §3 describes, in this platform's
+    own vocabulary.
 
     The fields are B2's own grant vocabulary -- capabilities, and the bucket
     and prefix they are confined to. Carrying them together is also what lets

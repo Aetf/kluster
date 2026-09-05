@@ -179,12 +179,8 @@ class Identity:
     a consumer's (§3) may do anything it likes inside one compartment and
     nothing at all outside it.
 
-    One of the provider roles these scripts state — `b2.Role`,
-    `cloudflare.Role` and `oci_iam.Identity` are one shape in each platform's
-    own vocabulary: the name a credential is minted under and the grant that
-    goes with it are a single value, so a name cannot travel to a mint without
-    its permissions, and a mint takes the role rather than a name plus whatever
-    constant happens to be in scope.
+    One of the provider roles credentials.md §3 describes, in this platform's
+    own vocabulary.
 
     Here the grant is OCI's own vocabulary, policy statements, and the name is
     IAM's rather than a label: it is what all three objects are called.
@@ -1481,7 +1477,8 @@ def mint_api_key(
 
     **The account is proven before anything is created, not after.** The seed's
     row names the tenancy it belongs to, so opening the kit is enough to know
-    it, and everything below writes to that tenancy — the compartment first.
+    it, and everything below writes to that tenancy — the seed's own policy
+    first, which is a create in a tenancy that has none, then the compartment.
     Checked afterward it would be a refusal that leaves an IAM user, a group,
     a policy and a live signing key behind in an account this installation does
     not own, recorded nowhere and known to nobody who could revoke them. A run
