@@ -87,6 +87,7 @@ DNATs
 dns
 DNSControl
 dnsmasq
+docstring
 Docstrings
 dport
 dst
@@ -129,6 +130,7 @@ globals
 globbing
 golinks
 grafana
+grep
 GUAs
 GwArtifact
 gw-config
