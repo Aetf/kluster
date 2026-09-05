@@ -123,11 +123,11 @@ DNS_STACK = derived.ZONES_STACK
 class PulumiConfig:
     """A key in `Pulumi.<stack>.yaml`, committed -- the provider-credential channel.
 
-    The encrypted half of that file and nothing else. Rule 6's closed set has
-    one Pulumi config channel and it is the secret one, so a value the file may
-    carry in the clear is not a delivery this map records: an identifier that
-    names an account rather than authenticating to it is a constant in
-    `conventions`, which is where the two that used to sit here went
+    The encrypted half of that file and nothing else. Rule 6's closed set names
+    the Pulumi config **secret** and no plain committed key, so a value the file
+    may carry in the clear is not a delivery this map records: an identifier
+    that names an account rather than authenticating to it is a constant in
+    `conventions`, which is where the identifiers that used to sit here went
     (`RETIRED`).
     """
 
@@ -251,12 +251,27 @@ REGISTER_COLUMNS: frozenset[str] = frozenset(_TERMS.values()) | frozenset(_GITHU
 def register_column(channel: Channel) -> str:
     """The term §3's Slot column names this channel with.
 
-    A channel type with no term raises rather than answering with something
-    unparseable: adding one to rule 6's closed set is adding a way the register
-    can describe a delivery, and the column has to be able to say it.
+    A channel the column cannot say is refused by name rather than answered
+    with something unparseable: adding one to rule 6's closed set is adding a
+    way the register can describe a delivery, and the column has to be able to
+    say it.
+
+    The two halves fail differently because they can. `Channel` is a closed
+    union a test pins against the terms, so a type with no term is caught there
+    and cannot reach a caller. A repository is data: a sink may name any string,
+    and one the forge census does not declare is a secret pushed nowhere a job
+    can see -- caught here, at the row that names it, rather than as a lookup
+    whose message is a tuple.
     """
     if isinstance(channel, Slot):
-        return _GITHUB_TERMS[(channel.repository, channel.environment is not None)]
+        term = _GITHUB_TERMS.get((channel.repository, channel.environment is not None))
+        if term is None:
+            declared = sorted({repository for repository, _ in _GITHUB_TERMS})
+            raise SlotRefused(
+                f'{channel.repository} is no repository of this installation, so §3 has no term for a secret '
+                f'in it; the forge census declares {", ".join(declared)}'
+            )
+        return term
     return _TERMS[type(channel)]
 
 
@@ -610,7 +625,8 @@ class Row:
     #: The channels §3 names for this row that have no address yet, each under
     #: the term that column names it by (`register_column`), each with what
     #: stands in the way. Empty when every slot the register promises is
-    #: written down above.
+    #: written down above. A real mapping, so a row is frozen without being
+    #: hashable -- nothing hashes one, and what a push keys by is the `Slot`.
     pending: Mapping[str, str] = field(default_factory=dict[str, str])
 
     def __post_init__(self) -> None:
@@ -704,6 +720,10 @@ def _device(member: str) -> Row:
 #: (ci.md §3).
 _OPS_UNBUILT = 'the ops-repository workflow that would read it is not built, so no secret there names it'
 
+#: Why an in-cluster row has no address: sealing needs the controller, and the
+#: controller arrives with `k8s-base`.
+_CLUSTER_UNBUILT = 'the sealed-secrets controller and its consumer arrive with `k8s-base`, so no manifest path exists'
+
 #: Why an App key reaches no workflow yet: each is read by a job that mints an
 #: installation token from it for the length of one run, and neither job is
 #: built. The escrow copy is therefore the whole of the row today -- the same
@@ -713,11 +733,13 @@ _APP_KEY_UNDELIVERED = (
     'mints an 8-hour installation token from this key per run and stores nothing'
 )
 
-#: Why the webhook has only its interim slot: the two copies §3 promises belong
-#: to a shape that is designed and not built.
+#: Why the ops repository holds no copy of the webhook: a deploy failure is an
+#: out-of-cluster alert, and the shape it is designed to travel in has the ops
+#: repository hold the credential rather than CI (cluster/architecture.md §4.3).
+#: The `kluster` repository secret beside it is the interim channel until then.
 _HAOS_UNBUILT = (
     'the designed shape has CI hold no Home Assistant credential at all -- a `repository_dispatch` to the ops '
-    'repository, which owns the alert (ci.md §3); this copy belongs to that shape and arrives with it'
+    'repository, which owns the alert (ci.md §3) -- and neither that handler nor the secret it reads is built'
 )
 
 #: Sinks this map used to carry, and where the fact each one delivered lives
@@ -946,7 +968,11 @@ ROWS: dict[str, Row] = {
         # it belongs to no stack, and the whole power of the value is to raise a
         # phone notification (ci.md §3).
         targets=(Slot(repository=conventions.forge.DEPLOYMENT.full_name, name='HAOS_DEPLOY_WEBHOOK_URL'),),
-        pending={'SealedSecret': _HAOS_UNBUILT, 'ops-repo secret': _HAOS_UNBUILT},
+        # The two are waiting on different things, which is why they are two
+        # reasons: the in-cluster copy is alertmanager's, direct by design and
+        # permanent (cluster/architecture.md §4.3), while the ops-repository
+        # copy waits on a delivery shape that replaces the interim secret above.
+        pending={'SealedSecret': _CLUSTER_UNBUILT, 'ops-repo secret': _HAOS_UNBUILT},
     ),
     'drill-credentials': Row(
         register='Drill-environment credentials',
@@ -970,16 +996,20 @@ def describe(rows: Mapping[str, Row] | None = None) -> Iterator[str]:
             yield f'    open  {channel}: {why}'
 
 
-def _waiting(row: Row) -> str:
-    """Why a row has no GitHub slot, in the terms §3's Slot column names channels by.
+def _waiting_on(row: Row) -> str:
+    """What a row is still waiting on, in the terms §3's Slot column names channels by.
 
     Every reason the row carries, because a row may be waiting on more than one
-    channel and the operator reading a skipped row wants the whole of what is
-    left. A row waiting on nothing is one the register promises no GitHub
-    secret for at all, which is a different sentence.
+    channel and not all of them are GitHub ones -- the Alertmanager token waits
+    on an ops-repository secret and on a Pulumi config secret rendered with a
+    route it does not have yet, and an operator reading a skipped row wants
+    both. Naming each channel is what keeps the second from reading as a claim
+    about the GitHub slot the line is about. A row waiting on nothing is one the
+    register promises no GitHub secret for at all, which is a different
+    sentence.
     """
     if not row.pending:
-        return 'the register names no GitHub secret for it'
+        return 'nothing: the register names no GitHub secret for it'
     return '; '.join(f'{channel}: {why}' for channel, why in row.pending.items())
 
 
@@ -1057,10 +1087,10 @@ def sync(context: Context, *, rows: Mapping[str, Row] | None = None, only: str |
                 )
             continue
         if not row.sinks:
-            reason = _waiting(row)
+            reason = _waiting_on(row)
             if only is not None:
-                raise SlotRefused(f'{name}: no GitHub secret slot - {reason}')
-            log.info('%s: no GitHub secret slot - %s', name, reason)
+                raise SlotRefused(f'{name}: no GitHub secret slot; still waiting on - {reason}')
+            log.info('%s: no GitHub secret slot; still waiting on - %s', name, reason)
             continue
 
         # One listing per collection, read before the value is obtained: it is
