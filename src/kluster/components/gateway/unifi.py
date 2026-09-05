@@ -133,7 +133,7 @@ API_KEY = 'unifiApiKey'
 
 
 class SiteFirewall(Component):
-    """The cluster's network and zone, its address groups, its policies, one forward.
+    """The cluster's network and zone, its address groups, its policies, and the peer's port forward.
 
     The pinhole for the worker's global IPv6 address is the one conditional
     policy: it names an address nothing here declares, so it exists only while

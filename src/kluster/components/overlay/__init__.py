@@ -22,11 +22,11 @@ Three things are declared here, and each answers a different question
     all of them through the gateway's own member, which is the one machine that
     was already routing them. Which subnets those are arrives as a parameter
     too, from the address plan in `conventions`. A route is `{target, via}` on
-    the network and nothing more: `via` names a member, and that member forwards
-    only because forwarding is configured on the device itself. That is why the gateway's
-    routing configuration is `SiteRouting`'s file on the box and only the
-    route table is here — two systems being told two different things
-    (gateway.md §2.2).
+    the network and nothing more: `via` names a member, and that member
+    forwards only because forwarding is configured on the device itself. That
+    is why the gateway's routing configuration is `SiteRouting`'s file on the
+    box and only the route table is here — two systems being told two different
+    things (gateway.md §2.2).
 -   **The flow rules** — what a member may do once admitted. They arrive as a
     parameter, because what confines a run is a fact about how continuous
     integration reaches this site rather than about the network, and this

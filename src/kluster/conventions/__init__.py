@@ -20,10 +20,10 @@ says `conventions.X` and does not have to know which domain owns `X`.
 first two the module path carries what a prefix otherwise would (rfc-002
 §3.1) — `conventions.overlay.ROSTER`, `conventions.gateway.SERVICES` — and it
 is the distinction the naming rules care about most: which network a name
-belongs to is never a thing to guess. `forge` and `routes` are qualified from the other
-side: their names are common nouns — `Repository`, `Environment`, `Account`;
-`Route`, `Extra`, `SELF` — that mean one particular thing only while the forge
-or the census stands beside them.
+belongs to is never a thing to guess. `forge` and `routes` are qualified from
+the other side: their names are common nouns — `Repository`, `Environment`,
+`Account`; `Route`, `Extra`, `SELF` — that mean one particular thing only
+while the forge or the census stands beside them.
 """
 
 from __future__ import annotations

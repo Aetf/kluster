@@ -186,6 +186,12 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
 class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosNocloudImage'):
     """The worker's schematic, and its disk image on the machine that runs the program.
 
+    The extension set is stated here rather than taken as a parameter, for the
+    same reason the platform is: it is what this artefact *is* — the schematic
+    the worker boots, i915 firmware included — and no caller has a second
+    opinion about it. What varies between artefacts is carried by the base's
+    `extensions`, which is how the cloud schematic differs from this one.
+
     `path` is what a libvirt volume is created from. The volume's size is then
     the image's size and cannot be declared — the provider refuses `size`
     alongside `source` — so the worker's disk reaches its working size through
@@ -197,14 +203,13 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
         name: str,
         *,
         talos_version: str,
-        extensions: Sequence[str] = HOMELAB_EXTENSIONS,
         architecture: str = HOMELAB_ARCHITECTURE,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(
             name,
             talos_version=talos_version,
-            extensions=extensions,
+            extensions=HOMELAB_EXTENSIONS,
             architecture=architecture,
             platform=HOMELAB_PLATFORM,
             opts=opts,
