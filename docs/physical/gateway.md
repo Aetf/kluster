@@ -78,7 +78,7 @@ declarative/physical.md §4.
 
     **What a settings file cannot say, a drop-in on that machine's
     instance of the template unit says.** A settings file describes the
-    container; a restart policy and a dependency on a bridge describe
+    container; a restart policy and an ordering on a bridge describe
     the *unit*, and the unit is shared by every machine on the box. So
     each machine carries one drop-in, delivered under the unit sources
     like any other piece of the unit store (§1.2), and it carries two
@@ -122,34 +122,43 @@ declarative/physical.md §4.
         sends `SIGINT`, s6 reboots on that, and `Restart=always`
         brings the machine back whatever exit status the reboot path
         produces.
-    -   **`After=` and `BindsTo=` the bridge's device unit**, for the
-        three machines on the container VLAN. The machine is therefore
-        never started against a bridge that is not up yet, and is
-        stopped rather than left running with an interface enslaved to
-        nothing when the bridge goes away. The device unit is the
-        escaped `sysfs` path of the interface,
+    -   **`After=` the bridge's device unit**, for the three machines
+        on the container VLAN. It is ordering and nothing else: a start
+        systemd queues while the bridge is coming up waits for the
+        bridge, and a bridge that is simply absent holds nothing back —
+        the machine fails to start and the restart policy above retries
+        it until the bridge is there. The device unit is the escaped
+        `sysfs` path of the interface,
         `sys-subsystem-net-devices-br5.device`; systemd has one for
         every network device `udev` tags, which it does by default, so
-        this is a dependency that resolves. A device *node* has no such
-        unit, which is why the ZeroTier member's tunnel device is a
-        bind nspawn refuses to start without rather than a dependency
-        its unit could name. The machine in the host's network
-        namespace has no bridge and no binding.
+        this is a unit that resolves. A device *node* has no such unit,
+        which is why the ZeroTier member's tunnel device is a bind
+        nspawn refuses to start without rather than a dependency its
+        unit could name. The machine in the host's network namespace
+        has no bridge and names none.
 
-    **Two mechanisms keep a machine on its bridge, and the rule is
-    that they answer different failures.** The binding above is about
-    the bridge *existing*. The **bridge watchdog** (§1.2) is about an
-    interface that fell off a bridge that is still there: on this
-    firmware a container's `vb-*` interface can come back detached
-    after a restart, and that is a state systemd has no view of — the
-    machine is active, the bridge's device unit is active, and the
-    container is talking to nothing. So the watchdog re-attaches it,
-    and neither mechanism sees the other's failure.
+        **No `BindsTo=` on that device unit, deliberately.** A binding
+        would stop the machine when its bridge went away, and nothing
+        on this device would start it again: systemd's dependency stop
+        is not a restart trigger, so `Restart=always` cannot act on it,
+        and the bridge watchdog below wakes on `vb-*` link events and
+        skips while the target bridge is absent, so a bridge that comes
+        back wakes nothing. A machine stopped that way would return
+        only on the next boot or the next push. The trade is accepted
+        in the direction that fails quietly: a container whose bridge
+        vanished is a container talking to nothing until the bridge
+        returns, and that costs less than a service that is down with
+        no route back up.
 
-    What neither of them does is bring a machine back that systemd
-    stopped because its bridge went away: a dependency stop is not a
-    restart trigger, so that machine returns on the next boot or the
-    next push.
+    **The bridge watchdog is what watches a running machine's
+    attachment** (§1.2), and the failure it answers is an interface
+    that fell off a bridge that is still there: on this firmware a
+    container's `vb-*` interface can come back detached after a
+    restart, and that is a state systemd has no view of — the machine
+    is active, the bridge's device unit is active, and the container is
+    talking to nothing. So the watchdog re-attaches it. A bridge that
+    disappears entirely is a different failure, and one nothing here
+    answers.
 
     **The images are Alpine with s6-overlay, not systemd**, which
     decides what a settings file may say. It boots what the image ships at

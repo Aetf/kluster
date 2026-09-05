@@ -170,32 +170,45 @@ def test_every_machine_is_kept_running_by_a_policy_the_template_unit_has_none_of
     assert nspawn.MACHINE_DROPIN.endswith(persistence.DROPIN_SUFFIX)
 
 
-def test_a_machine_on_a_bridge_is_bound_to_that_bridge_being_there() -> None:
-    """A dependency rather than a retry loop.
+def test_a_machine_on_a_bridge_is_ordered_after_that_bridge_and_bound_to_nothing() -> None:
+    """Ordering, and deliberately no binding on the same device unit.
 
-    Ordered after the bridge's device unit, so the machine is never started
-    against a bridge that is not up yet, and bound to it, so it is stopped
-    rather than left running with an interface enslaved to nothing.
+    The ordering holds a start systemd queues while the bridge is coming up.
+    A binding would additionally stop the machine when the bridge went away,
+    and nothing would start it back up: a dependency stop forbids the restart
+    policy from acting, so the machine would sit stopped until the next boot or
+    the next push. Its absence is the statement being pinned here.
+
+    The assertions read rendered directive lines and ignore comments. A
+    whole-file negative check is unusable — the template's comment names
+    `BindsTo=` while explaining its absence, so it is red on a correct
+    template — and a whole-file positive check on `After=` would be satisfied
+    by comment text alone. Editing either the comment or these assertions
+    touches both.
     """
     rendered = nspawn.machine_dropin('plain', bridge='br5')
     unit = nspawn.interface_device_unit('br5')
 
+    directives = [line for line in rendered.splitlines() if not line.startswith('#')]
+
     assert unit == 'sys-subsystem-net-devices-br5.device'
-    assert f'After={unit}' in rendered
-    assert f'BindsTo={unit}' in rendered
+    assert f'After={unit}' in directives
+    assert not [line for line in directives if line.startswith(('BindsTo', 'Requires'))]
 
 
-def test_a_machine_in_the_hosts_namespace_is_bound_to_no_bridge() -> None:
-    """It has no bridge to be bound to, and the file says nothing about one.
+def test_a_machine_in_the_hosts_namespace_names_no_bridge_at_all() -> None:
+    """It has no bridge to be ordered after, and the file says nothing about one.
 
-    The overlay daemon runs in the host's network namespace, so the section a
-    binding would go in is absent rather than empty — a machine that named a
-    device unit nothing creates would never start.
+    The overlay daemon runs in the host's network namespace, so the section an
+    ordering would go in is absent rather than empty — a machine that named a
+    device unit nothing creates would name an ordering against something that
+    never activates, which holds nothing back and leaves a start that fails on
+    the missing bridge.
     """
     rendered = nspawn.machine_dropin('plain', bridge=None)
 
-    assert 'BindsTo' not in rendered
     assert '[Unit]' not in rendered
+    assert not [line for line in rendered.splitlines() if line.startswith(('After', 'BindsTo', 'Requires'))]
 
 
 def test_an_interfaces_device_unit_is_its_escaped_sysfs_path() -> None:
@@ -203,7 +216,7 @@ def test_an_interfaces_device_unit_is_its_escaped_sysfs_path() -> None:
 
     A bridge whose name carries a hyphen is the case that separates the escaped
     name from the plain one: unescaped, the unit would name a device that does
-    not exist, and a machine bound to it would never start.
+    not exist, and the ordering would be against something that never activates.
     """
     assert nspawn.interface_device_unit('br-lan') == 'sys-subsystem-net-devices-br\\x2dlan.device'
 

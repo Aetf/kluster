@@ -5,14 +5,18 @@
 {%- if bridge_device %}
 
 [Unit]
-# Ordered after the bridge's device unit and bound to it, so this machine is
-# never started against a bridge that is not up yet and is stopped rather than
-# left with an interface enslaved to nothing when the bridge goes away. systemd
-# has such a unit for every network device udev tags, which it does by default;
-# a device node gets none, which is why /dev/net/tun is asserted with a bind
+# Ordered after the bridge's device unit, which holds this machine's start
+# behind a bridge systemd is bringing up in the same transaction. systemd has
+# such a unit for every network device udev tags, which it does by default; a
+# device node gets none, which is why /dev/net/tun is asserted with a bind
 # instead.
+#
+# Ordering alone, and no BindsTo= on the same unit: a binding would stop this
+# machine when its bridge went away and nothing would start it back up, because
+# a dependency stop forbids the Restart= below from acting. What a bridge that
+# is absent costs instead is a start that fails and is retried until the bridge
+# is there.
 After={{ bridge_device }}
-BindsTo={{ bridge_device }}
 {%- endif %}
 
 [Service]
