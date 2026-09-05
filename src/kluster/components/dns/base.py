@@ -263,11 +263,11 @@ def _anchor_records(anchors: AnchorAddresses) -> tuple[Record, ...]:
 #: zone set in the first column. The anchors are the one block missing: their
 #: addresses are the program's to supply, so they are added by `blocks`.
 BASE_RECORDS: tuple[Block, ...] = (
-    # The zones that answer for a website: the apex and `www`, served by a web
-    # server rather than by an application. All four carry the same pair and
-    # something answers in all four; the sets are separate because what
-    # answers differs and one of the two is retiring. The apex is an address
-    # rather than an alias because a zone apex cannot be a CNAME (dns.md §2).
+    # The apex and `www`, answered by a web server rather than by an
+    # application. Every zone of both sets below carries the pair and something
+    # answers for it; the sets stay separate because what answers differs and
+    # the parked one is retiring. The apex is an address rather than an alias
+    # because a zone apex cannot be a CNAME (dns.md §2).
     Block(
         (*conventions.WEB_ZONES, *conventions.PARKED_ZONES),
         (

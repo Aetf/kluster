@@ -9,17 +9,20 @@ ZONE_PRIMARY = 'unlimited-code.works'
 #: proxy holds under it, and the scope of the token that buys the wildcard.
 ZONE_SHORT = 'ucw.phd'
 
-#: The primary alone: every route's default, both anchor blocks, the overlay
+#: The primary alone: every route's default, the anchor block, the overlay
 #: block, and every application name the legacy VPS still serves. A public
 #: record is published in a zone only where a listener and a certificate answer
 #: for the name (declarative/dns.md §2), and the primary is the only zone where
 #: both are true of an application.
 PRIMARY_ONLY = (ZONE_PRIMARY,)
 
-#: The zones whose apex and `www` are served: the primary and the website
-#: co-host. The co-host serves that website and nothing else — it carries no
-#: application name and could not carry one, because every application here
-#: holds one SSO cookie domain, one portal URL and one registered redirect URI.
+#: The zones whose apex and `www` this installation serves: the primary and the
+#: website co-host. This is the served scope and not every zone that carries an
+#: apex record — the apex-and-`www` records reach `PARKED_ZONES` too, where the
+#: legacy VPS answers instead. The co-host serves that website and nothing else
+#: — it carries no application name and could not carry one, because every
+#: application here holds one SSO cookie domain, one portal URL and one
+#: registered redirect URI.
 WEB_ZONES = (ZONE_PRIMARY, 'unlimitedcodeworks.xyz')
 
 #: The two zones this installation holds and does not serve. What resolves in
