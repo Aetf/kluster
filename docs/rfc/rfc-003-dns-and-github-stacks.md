@@ -44,6 +44,14 @@
     below (`kluster-ops#204`); framework/github.md §1 carries the
     mechanism. A case over the declaration pins the SDK's marking, so
     such a release fails the gate rather than a state file.
+    **§19's slice 7 has the component adopting the `expect-changes`
+    label**: it does so on `pulumi-github` 6.14.0 and not from 6.15.0,
+    whose create for a label is a plain create, so a create against the
+    label — which is on `Aetf/kluster` already — is a 422. The label is
+    imported instead, before the apply that would otherwise create it,
+    and that import is still owed (`kluster-ops#208`);
+    framework/github.md §3.1 carries the command, the parent URN it has
+    to name, and what its preview should and should not contain.
 *   **Created:** 2026-08-29
 *   **Updated:** 2026-09-03, revised under review. §4 inverts the record
     tables: the unit is a block of records naming the zone set it appears in,
