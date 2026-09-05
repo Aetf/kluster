@@ -10,6 +10,10 @@ in either stack's own area (declarative/README.md §2).
 The census is empty while `apps` is unwritten. It grows one row per
 application as the migration proceeds, and each row's rewrite appears in a
 `dns` preview the same day the application's route does.
+
+Read qualified -- `conventions.routes.ROUTES` -- because the names a row is
+built from are common nouns that mean one particular thing only while the
+census stands beside them: `Route`, `Extra`, `SELF`.
 """
 
 from __future__ import annotations

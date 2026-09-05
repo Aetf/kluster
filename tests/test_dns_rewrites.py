@@ -14,10 +14,9 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.dns.rewrites import ResolverRewrites, Rewrite, rewrites
-from kluster.conventions.routes import Exposure, Route
 from kluster.providers import configured
 
-ROUTE = Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd',))
+ROUTE = conventions.routes.Route(host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))
 
 ALICE = f'rewrites-{conventions.gateway.ADGUARD_ALICE.name}'
 BOB = f'rewrites-{conventions.gateway.ADGUARD_BOB.name}'
@@ -126,11 +125,13 @@ def test_the_package_does_not_shadow_this_module_with_the_function_it_holds() ->
 
 def test_a_public_route_needs_no_rewrite() -> None:
     # LAN clients take the cloud path for it, which is the whole difference.
-    assert rewrites([Route(host='www', exposure=Exposure.PUBLIC)]) == ()
+    assert rewrites([conventions.routes.Route(host='www', exposure=conventions.routes.Exposure.PUBLIC)]) == ()
 
 
 def test_a_split_route_is_rewritten_in_every_zone_it_is_published_in() -> None:
-    route = Route(host='photos', exposure=Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd'))
+    route = conventions.routes.Route(
+        host='photos', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd', 'peifeng.phd')
+    )
 
     assert rewrites([route]) == (
         Rewrite(domain='photos.ucw.phd', answer=conventions.LAN_POOL.default_vip.v4),
@@ -146,7 +147,9 @@ def test_both_families_are_rewritten() -> None:
     AdGuard answers a rewrite only for the family of its answer, so a v4-only
     rewrite leaves AAAA resolving to the cloud path (RFC 6724).
     """
-    entries = rewrites([Route(host='tube', exposure=Exposure.SPLIT, zones=('ucw.phd',))])
+    entries = rewrites(
+        [conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.SPLIT, zones=('ucw.phd',))]
+    )
 
     assert {entry.answer for entry in entries} == {
         conventions.LAN_POOL.default_vip.v4,
@@ -157,7 +160,7 @@ def test_both_families_are_rewritten() -> None:
 
 def test_an_iot_route_is_answered_by_the_media_vip() -> None:
     # Attaching to the media gateway *is* the "IoT may reach this" decision.
-    route = Route(host='tube', exposure=Exposure.IOT, zones=('ucw.phd',))
+    route = conventions.routes.Route(host='tube', exposure=conventions.routes.Exposure.IOT, zones=('ucw.phd',))
 
     assert {entry.answer for entry in rewrites([route])} == {
         conventions.LAN_POOL.media_vip.v4,
@@ -171,7 +174,7 @@ def test_a_lan_only_route_is_rewrite_only() -> None:
     Publishing nothing is what keeps the LAN service census out of public
     resolvers; the rewrite is the only thing that makes the name work.
     """
-    route = Route(host='golinks', exposure=Exposure.LAN_ONLY, zones=('ucw.phd',))
+    route = conventions.routes.Route(host='golinks', exposure=conventions.routes.Exposure.LAN_ONLY, zones=('ucw.phd',))
 
     assert route.public is False
     assert len(rewrites([route])) == 2

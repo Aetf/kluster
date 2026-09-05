@@ -89,7 +89,7 @@ async def main() -> None:
     # provider and nothing else, so the provider reads it in `configure`
     # (rfc-002 §7.4), and where each instance is reached is the census's answer
     # rather than a key this stack carries.
-    entries = rewrites(conventions.ROUTES)
+    entries = rewrites(conventions.routes.ROUTES)
     for resolver in conventions.gateway.RESOLVERS:
         _ = ResolverRewrites(f'rewrites-{resolver.name}', resolver=resolver, entries=entries)
 
