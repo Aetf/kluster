@@ -31,9 +31,9 @@ class Compartment:
     The **name** is a convention: it is chosen here, it is what the mint
     creates or adopts, and it is the only form OCI's quota statements accept
     (`components/cloud/guardrails.py`). The **OCID** is the site fact that follows
-    from creating it — an identifier the committed file may carry in the clear,
-    for the reason `cloudflareAccountId` may: it names a container inside the
-    tenancy rather than the account that owns it, and everything it admits is
+    from creating it — an identifier this file may carry in the clear, for the
+    reason the Cloudflare account identifier below may: it names a container
+    inside the tenancy rather than a way into it, and everything it admits is
     still behind a key.
 
     A compartment that has not been created yet therefore has a name and no
@@ -99,6 +99,22 @@ class OciTenancy:
 
 
 @dataclass(frozen=True)
+class CloudflareAccount:
+    """The account the installation's zones live in.
+
+    One field, and it is the identifier every zone is declared against. It is a
+    fact rather than a credential, on the same side of that split as the
+    tenancy OCID above: it names the account rather than opening it, so it
+    lives here in the clear and the `dns` stack reads it beside the token that
+    builds the provider. `credentials derived cloudflare-zones mint` resolves
+    the same identifier from the seed on its way to a token and holds the two
+    equal, instead of writing a second copy into stack configuration.
+    """
+
+    account_id: str
+
+
+@dataclass(frozen=True)
 class B2Account:
     """The backup account.
 
@@ -137,5 +153,9 @@ OCI_TENANCY = OciTenancy(
 
 #: The seed user's primary email.
 OCI_SEED_USER_EMAIL = f'pulumi@{OCI_TENANCY.user_email_domain}'
+
+#: The Cloudflare account, which is one identifier: the zones are declared
+#: against it, and the zones token is minted inside it.
+CLOUDFLARE_ACCOUNT = CloudflareAccount(account_id='c452df7ed633d2335c980bd7cc46a550')
 
 B2_ACCOUNT = B2Account(region='us-west-002')

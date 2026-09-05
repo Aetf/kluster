@@ -618,7 +618,7 @@ name.
 | `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
-| `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, together with the account id the stack requires; the stack file is then committed. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
+| `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, under the one key the stack reads; the stack file is then committed. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it minted in against it. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it delivers, it refuses a key that signs for an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
@@ -704,19 +704,30 @@ looking at the product, never by a note saying a command ran.
 The zones token's scope is not a list in the script: it is the
 installation's zones as `conventions` names them, resolved to zone ids
 through the seed at mint time, so adding a zone there and re-running the
-command is the whole procedure for widening it. The push writes two
-keys, because a provider credential alone does not identify the account
-that owns those zones: `cloudflare:apiToken` as a config secret and the
-account id in plain text. The script writes the account id under the
-unqualified key `cloudflareAccountId`, which `pulumi config set` and
-`pulumi.Config()` both resolve against the project's own name — so the
-committed file reads `kluster-py:cloudflareAccountId`, and the project
-name lives in `Pulumi.yaml` rather than a second time in the script.
+command is the whole procedure for widening it. The push writes one key,
+`cloudflareApiToken`, as a config secret. It is unqualified, which
+`pulumi config set` and `pulumi.Config()` both resolve against the
+project's own name — so the committed file reads
+`kluster-py:cloudflareApiToken`, and the project name lives in
+`Pulumi.yaml` rather than a second time in the script. The provider
+package's own `cloudflare:` namespace holds nothing, for the reason
+`oci:` and `b2:` hold nothing: the stack builds its provider from this
+value rather than being handed one by ambient configuration, so the key
+belongs to the program that reads it.
+
+Which account those zones live in travels with neither the credential
+nor the configuration. It names the account rather than opening it, so
+it is code (`conventions.CLOUDFLARE_ACCOUNT`) and the stack declares
+every zone against it. The mint resolves that same identifier from the
+seed on its way to a token, and what it does with it is hold it against
+the recorded one and refuse on a mismatch — which is what catches a kit
+re-seeded from another Cloudflare account before the token reaches a
+stack that would then be pointed at zones it does not manage.
 
 An OCI key is pushed the same way and fills more keys, because an API key
 is several things (§2.1) and a provider recovers none of them: it writes
 `ociUserOcid`, `ociFingerprint` and `ociPrivateKey`, bare and therefore in
-the project's own namespace like the account id above. Those three are the
+the project's own namespace like the zones token above. Those three are the
 whole of the push, and all three are config secrets — the key, the
 fingerprint, and the identifier naming the user the key signs as, which is
 the class of fact the kit itself keeps as a protected attribute (§2.1). The
@@ -733,9 +744,10 @@ line that builds the cloud provider, beside the three secrets above
 (framework/rfc-002 §8.1, §10.3). A fact with one home is not copied into a
 second, so the mint proves it instead: before it delivers, it holds the
 account its key signs for against the recorded one and refuses on a
-mismatch, naming both. The provider's own `oci:` namespace holds nothing:
-with default providers disabled there is no ambient configuration left for
-it to carry, and the same is true of `b2:`, whose two keys are pushed as
+mismatch, naming both. It is the same shape the Cloudflare row has. The
+provider's own `oci:` namespace holds nothing: with default providers
+disabled there is no ambient configuration left for it to carry, and the
+same is true of `b2:`, whose two keys are pushed as
 `b2ApplicationKeyId` and `b2ApplicationKey`.
 
 **The slot map is checked in** (`slots.py`). One row per §3 credential,

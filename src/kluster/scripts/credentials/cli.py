@@ -669,14 +669,15 @@ def build_parser() -> argparse.ArgumentParser:
     zones_verbs = zones_row.add_subparsers(dest='action', required=True, metavar='<verb>')
     zones_mint = zones_verbs.add_parser(
         'mint',
-        help="mint it from the seed into the dns stack's config secret, with the account id beside it",
+        help="mint it from the seed into the dns stack's config secret",
         description=(
             'Open the Cloudflare seed in the kit, look up the ids of the zones this installation owns, '
             'mint a token scoped to exactly those, and write it into the stack config as an encrypted '
-            'value -- with the account id beside it in the clear, which the program needs and which is '
-            'no secret. The push is read back before the run succeeds, and the committed file is the '
-            'delivery, so the change has to be committed afterwards. A live token of the same name is '
-            'retired once its successor is verified.'
+            'value. The account those zones live in is not written beside it: that is a fact this '
+            'program holds in `conventions`, and the mint holds the account it minted in against it and '
+            'refuses on a mismatch. The push is read back before the run succeeds, and the committed '
+            'file is the delivery, so the change has to be committed afterwards. A live token of the '
+            'same name is retired once its successor is verified.'
         ),
     )
     _ = zones_mint.add_argument(
@@ -1180,7 +1181,7 @@ def main(argv: list[str] | None = None) -> int:
             # The minted rows, one command per row (`_stack` is the slot most
             # of them are pushed into).
             case ('derived', derived.ZONES_ROW, 'mint'):
-                _ = derived.cloudflare_zones(store, stack=_stack(args, store, args.stack), seed_entry=args.entry)
+                derived.cloudflare_zones(store, stack=_stack(args, store, args.stack), seed_entry=args.entry)
             case ('derived', derived.GATEWAY_ACME_ROW, 'mint'):
                 _ = derived.cloudflare_gateway_acme(
                     store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry

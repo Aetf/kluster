@@ -132,7 +132,9 @@ class PulumiConfig:
     stack: str
     key: str
     #: Plain keys are identifiers the committed file may carry in the clear
-    #: (§4): the account id, the ZeroTier network.
+    #: (§4) rather than values that have to be encrypted into it. A device row
+    #: declares which of its fields are which (`devices.py`); no row carries
+    #: one today.
     secret: bool = True
 
     def __str__(self) -> str:
@@ -647,6 +649,12 @@ _APP_KEY_UNDELIVERED = (
 #: Keyed by the name the sink was addressed as, which for a Pulumi config sink
 #: is its key.
 RETIRED: Mapping[str, str] = {
+    'cloudflareAccountId': (
+        'the Cloudflare account identifier is no longer delivered anywhere: it names the account the zones '
+        'live in rather than authenticating to it, so it is `conventions.CLOUDFLARE_ACCOUNT` and '
+        '`credentials derived cloudflare-zones mint` holds the account it minted in against that instead of '
+        'writing a copy beside the token'
+    ),
     'github-installation-tokens': (
         'an installation token is not a credential this register tracks: a workflow mints one from an App '
         'private key, uses it inside the run and stores it nowhere. The keys it is minted from are the rows '
@@ -679,10 +687,7 @@ ROWS: dict[str, Row] = {
     derived.ZONES_ROW: Row(
         register='Cloudflare token (zones)',
         source=Minted(f'credentials derived {derived.ZONES_ROW} mint'),
-        targets=(
-            PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY),
-            PulumiConfig(DNS_STACK, derived.ACCOUNT_KEY, secret=False),
-        ),
+        targets=(PulumiConfig(DNS_STACK, derived.API_TOKEN_KEY),),
     ),
     'cloudflare-dns01': Row(
         register='Cloudflare token (DNS-01)',

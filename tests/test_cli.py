@@ -209,7 +209,7 @@ class Dispatch:
             (cli.oci_iam, 'rotate_seed', 'fingerprint'),
             (cli.oci_iam, 'adopt_domain', 'https://domain.example'),
             (cli.b2, 'rotate_seed', 'key-id'),
-            (cli.derived, 'cloudflare_zones', 'account-id'),
+            (cli.derived, 'cloudflare_zones', None),
             (cli.derived, 'cloudflare_gateway_acme', 'token-id'),
             (cli.derived, 'oci_physical', 'ocid1.user.test'),
             (cli.derived, 'oci_state_backend', Path('placeholder')),

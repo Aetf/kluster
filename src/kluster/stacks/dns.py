@@ -42,25 +42,25 @@ OUTPUT_CLUSTER_V6 = 'cluster_endpoint_v6'
 OUTPUT_VIP1_V4 = 'vip1'
 
 #: Where the zones token is read: at the line that builds the provider it
-#: configures, and nowhere else (rfc-002 §8.1). It keeps the provider's own
-#: namespace rather than moving into this project's, because it is exactly a
-#: provider-construction input and this stack's own reorganization is a
-#: separate document's; what changes here is that the value is read explicitly
-#: instead of reaching the provider by ambient configuration.
-CLOUDFLARE_NAMESPACE = 'cloudflare'
-CLOUDFLARE_API_TOKEN = 'apiToken'
+#: configures, and nowhere else (rfc-002 §8.1). The key is this project's, not
+#: the provider package's, because a `cloudflare:` entry in a committed stack
+#: file is indistinguishable from the ambient configuration this repository has
+#: removed everywhere else, and reads as one to anybody who does not also check
+#: that default providers are disabled for that package. Every other provider
+#: credential here is a `kluster-py:` key read at the line that builds its
+#: provider, and this one is no different.
+CLOUDFLARE_API_TOKEN = 'cloudflareApiToken'
 
 
 async def main() -> None:
     config = pulumi.Config()
-    account_id = config.require('cloudflareAccountId')
 
     # One provider for every zone: the token is scoped to the installation's
     # zones as a set, so a provider built inside one zone's component would be
     # reached into by the rest (rfc-002 §8.1).
     zone_provider = cloudflare.Provider(
         f'{conventions.CLUSTER_NAME}-cloudflare',
-        api_token=pulumi.Config(CLOUDFLARE_NAMESPACE).require_secret(CLOUDFLARE_API_TOKEN),
+        api_token=config.require_secret(CLOUDFLARE_API_TOKEN),
     )
     on_cloudflare = pulumi.ResourceOptions(providers=[zone_provider])
 
@@ -75,7 +75,7 @@ async def main() -> None:
         zone: ManagedZone(
             zone,
             zone=zone,
-            account_id=account_id,
+            account_id=conventions.CLOUDFLARE_ACCOUNT.account_id,
             records=zone_records(zone, blocks),
             opts=on_cloudflare,
         )

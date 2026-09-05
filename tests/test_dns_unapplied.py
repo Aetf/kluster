@@ -18,7 +18,6 @@ from mock_monitor import Recorder, declaring, run_with
 from kluster import conventions
 from kluster.components.dns.base import overlay_label
 
-ACCOUNT_ID = 'cf-account'
 RECORD = 'cloudflare:index/dnsRecord:DnsRecord'
 
 
@@ -34,14 +33,9 @@ class EmptyPhysical(Recorder):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> EmptyPhysical:
     from kluster.stacks import dns
-    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
+    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
-    pulumi.runtime.set_all_config(
-        {
-            'kluster:cloudflareAccountId': ACCOUNT_ID,
-            f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': 'a-zones-token',
-        }
-    )
+    pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
     monitor = await run_with(EmptyPhysical(), stack='dns', preview=True)
     async with declaring():
         await dns.main()

@@ -9,6 +9,7 @@ from typing import Any
 
 import pulumi
 import pytest_asyncio
+import yaml
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -17,7 +18,6 @@ from kluster.components.dns.base import overlay_label
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
 VIP1_ADDRESS = '203.0.113.20'
-ACCOUNT_ID = 'cf-account'
 API_TOKEN = 'a-zones-token'
 
 ZONE = 'cloudflare:index/zone:Zone'
@@ -43,14 +43,9 @@ class AppliedPhysical(Recorder):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> AppliedPhysical:
     from kluster.stacks import dns
-    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN, CLOUDFLARE_NAMESPACE
+    from kluster.stacks.dns import CLOUDFLARE_API_TOKEN
 
-    pulumi.runtime.set_all_config(
-        {
-            'kluster:cloudflareAccountId': ACCOUNT_ID,
-            f'{CLOUDFLARE_NAMESPACE}:{CLOUDFLARE_API_TOKEN}': API_TOKEN,
-        }
-    )
+    pulumi.runtime.set_all_config({f'kluster:{CLOUDFLARE_API_TOKEN}': API_TOKEN})
     monitor = await run_with(AppliedPhysical(), stack='dns')
     async with declaring():
         await dns.main()
@@ -64,7 +59,8 @@ def records_of(stack: AppliedPhysical, zone: str) -> dict[str, dict[str, Any]]:
 
 def test_every_zone_is_declared_once(stack: AppliedPhysical) -> None:
     assert set(stack.by_name(ZONE)) == set(conventions.ALL_ZONES)
-    assert all(inputs['account'] == {'id': ACCOUNT_ID} for inputs in stack.by_name(ZONE).values())
+    account = conventions.CLOUDFLARE_ACCOUNT.account_id
+    assert all(inputs['account'] == {'id': account} for inputs in stack.by_name(ZONE).values())
 
 
 def test_every_zone_is_signed(stack: AppliedPhysical) -> None:
@@ -247,13 +243,71 @@ def test_every_zone_and_record_is_signed_by_one_explicit_provider(stack: Applied
 def test_the_zones_token_is_read_where_that_provider_is_built(stack: AppliedPhysical) -> None:
     """The credential and the provider it opens are one thing, at one line.
 
-    It keeps the provider's own configuration namespace rather than moving
-    into this project's: it is exactly a provider-construction input, and this
-    stack's own reorganization belongs to a document of its own. What changed
-    is that nothing reads it ambiently any more.
+    The key is this project's rather than the provider package's. A
+    `cloudflare:` entry in a committed stack file is indistinguishable from the
+    ambient configuration this repository has removed everywhere else, and an
+    unqualified key cannot be mistaken for one.
     """
     from kluster.stacks import dns
 
     built = stack.of_type('pulumi:providers:cloudflare')[0].inputs
     assert built['apiToken']['value'] == API_TOKEN
-    assert dns.CLOUDFLARE_NAMESPACE == 'cloudflare'
+    assert ':' not in dns.CLOUDFLARE_API_TOKEN
+
+
+def test_the_mint_writes_the_key_the_stack_reads() -> None:
+    """One key, named in three places, held equal here.
+
+    The value is delivered by `credentials derived cloudflare-zones mint`, so a
+    key renamed in the stack alone leaves the command filling a slot nothing
+    reads while the stack refuses by name for a value that is present under its
+    old one. Neither half has to be run to see that they agree: the mint's key,
+    the key the program asks its configuration for, and the key the committed
+    stack file carries are compared directly.
+    """
+    from kluster.scripts.credentials import derived, pulumi_config
+    from kluster.stacks import dns
+
+    assert dns.CLOUDFLARE_API_TOKEN == derived.API_TOKEN_KEY
+    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
+    assert f'\n  {_project_name()}:{derived.API_TOKEN_KEY}:\n' in committed
+
+
+def test_the_account_the_zones_are_declared_against_is_not_configuration() -> None:
+    """A fact with one home is not copied into a second.
+
+    The account names the account rather than opening it, so it is code beside
+    the tenancy OCID and the B2 region, and it is not among the committed
+    stack's configuration keys. The name it used to be addressed as answers
+    with where the fact went rather than with "no such row".
+    """
+    from kluster.scripts.credentials import derived, pulumi_config, slots
+
+    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
+    assert 'cloudflareAccountId' not in committed
+    assert 'cloudflareAccountId' in slots.RETIRED
+
+
+def test_default_providers_stay_disabled_for_the_package_this_key_left() -> None:
+    """The list names `cloudflare` and never becomes `*`.
+
+    Naming the package is what makes an explicit provider the only Cloudflare
+    provider there is, which is half of why the token no longer sits in that
+    package's namespace. It cannot widen to everything: the dynamic rewrites
+    are declared through the `pulumi-python` default provider (rfc-002 §8.1),
+    and disabling that one would leave them undeclarable.
+    """
+    from kluster.scripts.credentials import derived, pulumi_config
+
+    committed = (pulumi_config.project_dir() / f'Pulumi.{derived.ZONES_STACK}.yaml').read_text()
+    config = yaml.safe_load(committed)['config']
+
+    assert config['pulumi:disable-default-providers'] == ['cloudflare']
+
+
+def _project_name() -> str:
+    """What `pulumi config set` prefixes an unqualified key with, out of `Pulumi.yaml`."""
+    from kluster.scripts.credentials import pulumi_config
+
+    manifest = (pulumi_config.project_dir() / 'Pulumi.yaml').read_text()
+    return next(line.removeprefix('name:').strip() for line in manifest.splitlines() if line.startswith('name:'))
