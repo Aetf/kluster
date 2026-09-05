@@ -43,6 +43,14 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A deny-list is only a deny-list under `every`. The action's
+          # default quantifier is `some` -- a file matches when *any* pattern
+          # does -- and under it an all-negation list matches everything
+          # there is: `docs/framework/ci.md` fails `!docs/**` and `!**/*.md`
+          # but clears `!.vscode/**`, which is one match and therefore a hit.
+          # `every` asks the question the list is written to ask: is this
+          # file none of the four inert kinds?
+          predicate-quantifier: every
           filters: |
             dns: &code
               - '!docs/**'
@@ -81,6 +89,10 @@ jobs:
 
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
 
       - run: mise x uv -- uv sync --locked

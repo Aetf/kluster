@@ -25,6 +25,10 @@ jobs:
 
       - uses: jdx/mise-action@v3
         with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
           experimental: true
 
       - name: Install dependencies
