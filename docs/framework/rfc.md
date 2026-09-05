@@ -180,6 +180,11 @@ Alternatives weighed and rejected belong beside the decision they lose
 to, with the reason, rather than in a section of their own — that is
 where a reader is asking the question.
 
+A row naming `pkg.module.NAME`, in a table or in a decision, names that
+value's home rather than the import a caller writes
+([style/python.md](../style/python.md) has the rule and what answers the
+caller's question instead).
+
 ## 3. The lifecycle
 
 ### 3.1 Three states, and one that arrives later
@@ -438,7 +443,10 @@ vocabulary too: an accepted RFC's body keeps the words the decision was
 made in, so a sweep that renames a mechanism in the framework documents
 edits those documents and leaves `docs/rfc/` alone
 ([style/README.md](../style/README.md) calls it history rather than
-reference, and rewriting it would falsify the record).
+reference, and rewriting it would falsify the record). **That holds
+from acceptance, not from first build**: an accepted RFC that nothing
+has been built from yet is still edited only for the reasons §5.2
+gives, and a rename is neither of them.
 
 A decision that moved during construction is recorded **in the status
 header**, not by editing the body: the body stays the text that was
