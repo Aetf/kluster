@@ -83,8 +83,13 @@ the zero-diff plan job, reviewer-gated `physical` for applies (ci.md
 that can root the gateway is not the frictionless-apps layer). PRs get
 no physical preview at all. Previews run only for same-repo branches
 (`pull_request`, never `pull_request_target`; fork PRs get no
-secrets). noop-automerge scoped to renovate lockfile/pin PRs; secret
-scanning + push protection on. **Residual, accepted 2026-08-24**:
+secrets). noop-automerge merges unattended only a pull request that
+touches neither `src/` nor `Pulumi.*`, and only behind a zero-diff
+preview on every stack — the one class that skips that proof is a change
+no stack program reads (documentation, `.vscode/`, `.gitignore`) opened
+by renovate itself, which has no rendering for a preview to compare, and
+a fork's pull request is refused by name. Secret scanning + push
+protection on. **Residual, accepted 2026-08-24**:
 merged main code — noop-automerged dependency bumps included —
 executes with physical credentials in the ungated plan job; the gate
 guards *apply*, not execution. Chosen over a gated weekly drift

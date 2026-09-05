@@ -185,9 +185,12 @@ in the component. It is the same shape, and the same name, as the
     runs a zero-diff proof of its own rather than reading it
     (ci.md §3). `enforce_admins` is on, including for the account
     owner: a gate the only person who can open it walks around is a
-    suggestion, and this one is why a merge to `main` implies a
-    passing preview. Force pushes and deletion are off; history is
-    linear.
+    suggestion, and this one is why a merge to `main` implies a green
+    `checks` and `changes` on an up-to-date branch. It implies **no**
+    preview: a preview is implied only for a change some stack program
+    reads, because a change that reaches no stack runs no preview job
+    at all and `noop-automerge` merges it on the required checks alone
+    (ci.md §3). Force pushes and deletion are off; history is linear.
 
 ### 3.1 What is adopted rather than created
 
