@@ -12,12 +12,12 @@ DNS controller (architecture.md §6.4); the standalone DNSControl repo
 > cluster-related). Declared since 2026-08-25:
 > `src/kluster/components/dns/` holds the record model and the block
 > (`record.py`), the base records (`base.py`), the app records the legacy
-> VPS still serves (`legacy.py`, transitional — §6), the rewrites the
-> routes imply (`routes.py`), and the two components that turn data into
-> resources (`zone.py`, `rewrites.py`, the latter over the custom provider
-> in `src/kluster/providers/adguard_rewrites/`). The route rows themselves
-> are a convention, `src/kluster/conventions/routes.py`, because `apps`
-> and `dns` both read them (README.md §2). **The retiring DNSControl
+> VPS still serves (`legacy.py`, transitional — §6), and the two
+> components that turn data into resources (`zone.py`, `rewrites.py`,
+> which also derives the rewrites the routes imply, over the custom
+> provider in `src/kluster/providers/adguard_rewrites/`). The route rows
+> themselves are a convention, `src/kluster/conventions/routes.py`, because
+> `apps` and `dns` both read them (README.md §2). **The retiring DNSControl
 > program is authoritative until cutover**: the zones exist at
 > Cloudflare and their state is imported rather than applied, so this
 > stack's first `up` is a cutover step and is not to be run while that
@@ -248,14 +248,15 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
 -   **adguardhome-sync retires.** With Pulumi dual-writing the dynamic
     config, the sync service is redundant *and* a conflict source (it
     would overwrite bob's Pulumi-written rewrites), and one standing
-    service leaves the homelab host. What gw-config takes over is the
-    static half (listeners, upstreams) as a **seed**, not as live state:
-    it declares one `AdGuardHome.seed.yaml` per instance, under a name
-    the instance itself never reads, and the recovery script copies it to
-    the `AdGuardHome.yaml` the instance does read only when the working
-    directory holds no such file — after a wipe, and at no other time.
--   **A seed, because the file is the instance's own.** AdGuard Home
-    keeps its whole configuration in one YAML file that a running
+    service leaves the homelab host. What the `physical` stack's
+    `ResolverService` takes over is the static half (listeners,
+    upstreams) as an **initial state**, not as live state: it declares
+    one `AdGuardHome.initial.yaml` per instance, under a name the
+    instance itself never reads, and the device's `40-machines.sh` copies
+    it to the `AdGuardHome.yaml` the instance does read only when the
+    working directory is empty — after a wipe, and at no other time.
+-   **An initial state, because the file is the instance's own.** AdGuard
+    Home keeps its whole configuration in one YAML file that a running
     instance rewrites whenever it accepts a change through its API, and
     it has no include or multi-file mechanism: `upstream_dns_file`
     externalizes the upstream list and nothing else, while the rewrites

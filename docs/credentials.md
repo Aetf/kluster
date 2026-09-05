@@ -772,14 +772,14 @@ rather than authenticating to it, the region is permanent per account, and
 the compartment is a boundary this program decides, so all three are code
 (`conventions.OCI_TENANCY`) and the stack reads them there — at the one
 line that builds the cloud provider, beside the three secrets above
-(framework/rfc-002 §8.1, §10.3). A fact with one home is not copied into a
-second, so the mint proves it instead: before it creates anything — the
-compartment included — it holds the account the seed belongs to against
-the recorded one and refuses on a mismatch, naming both. A run given
-`--compartment` is pointed at a drill tenancy and is not held to it, for
-the reason the compartment lookup is not. It is the same shape the
-Cloudflare row has. The
-provider's own `oci:` namespace holds nothing: with default providers
+([rfc-002](rfc/rfc-002-src-layout-and-the-gateway.md) §8.1, §10.3). A
+fact with one home is not copied into a second, so the mint proves it
+instead: before it creates anything — the compartment included — it
+holds the account the seed belongs to against the recorded one and
+refuses on a mismatch, naming both. A run given `--compartment` is
+pointed at a drill tenancy and is not held to it, for the reason the
+compartment lookup is not. It is the same shape the Cloudflare row has.
+The provider's own `oci:` namespace holds nothing: with default providers
 disabled there is no ambient configuration left for it to carry, and the
 same is true of `b2:`, whose two keys are pushed as
 `b2ApplicationKeyId` and `b2ApplicationKey`.

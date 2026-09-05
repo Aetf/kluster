@@ -12,13 +12,12 @@ entry of the closed list. What every component shares — installing a pinned
 chart, sealing a secret, labelling a Service into a load-balancer pool — is in
 `kluster.lib.k8s`.
 
-Two things gate the implementation, both recorded rather than assumed. The
-chart set is pinned on first contact (declarative/README.md, "Deliberately not
+What gates the implementation is recorded rather than assumed: the chart set is
+pinned on first contact (declarative/README.md, "Deliberately not
 pre-decided"), and the pins are stack configuration so that renovate can bump
 them. The custom resources — the Cilium pools, BGP configuration and
-Gateways — need bindings this repository does not have yet: `packages/crds`
-still holds the legacy cluster's, and is regenerated against the new chart set
-once that set exists.
+Gateways — are written against the bindings in `packages/crds`, which
+`uv run update_crds` regenerates from the chart set its own register pins.
 """
 
 from __future__ import annotations

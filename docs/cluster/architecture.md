@@ -6,9 +6,10 @@ lock-in, and declarative management using Pulumi.
 
 > **Status**: This is the canonical architecture document, describing the
 > design **as decided 2026-08-22** (control plane in the cloud on 3× OCI
-> A1 nodes; two-pool LoadBalancer ingress; UDM automated via a gw-config
-> provider; home automation deliberately left outside it). Superseded
-> approaches and their reasoning live in §6; sizing, provider pricing, and
+> A1 nodes; two-pool LoadBalancer ingress; UDM automated via a
+> device-files provider; home automation deliberately left outside it).
+> Superseded approaches and their reasoning live in §6; sizing, provider
+> pricing, and
 > HA tiers live in [nodes.md](nodes.md); storage in
 > [storage.md](storage.md). The
 > code that declares this layer is the `cloud`, `talos`, `homelab`,
@@ -328,12 +329,13 @@ to the homelab VM (the node owning their `lan` VIPs), likewise
     (SLAAC on the cluster VLAN); inbound v6 peers need a UDM firewall
     pinhole to the VM's GUA plus the service port — a zone policy
     declared in `physical` via the unifi provider (§5.1), *not*
-    gw-config territory. Constraint on record: the zone-policy API
-    matches literal IPs only — there is no prefix-relative v6 rule —
-    so the pinhole embeds the current GUA and must be re-declared
-    when the (dynamic) home prefix rotates. "Outbound-only v6" is
-    the accepted first stage (peers are mostly reachable outbound;
-    inbound v4 continues via the existing port forward).
+    the device-files provider's territory. Constraint on record: the
+    zone-policy API matches literal IPs only — there is no
+    prefix-relative v6 rule — so the pinhole embeds the current GUA and
+    must be re-declared when the (dynamic) home prefix rotates.
+    "Outbound-only v6" is the accepted first stage (peers are mostly
+    reachable outbound; inbound v4 continues via the existing port
+    forward).
 -   **Stable-IP workloads (hath)**: served by the dedicated-VIP pattern
     (§3.2) — reserved public IP in, Egress Gateway `egressIP` out, same
     address both ways, independent of any node's lifecycle. The pattern
@@ -625,9 +627,10 @@ The entire stack is deployed via Pulumi using multiple providers:
 ### 5.1 Infrastructure Provisioning
 
 1.  **Libvirt (pulumi-libvirt)**: Provisions the Talos VM on the Homelab
-    physical server (bridged to the LAN). Outputs the dynamically
-    assigned local IP. The **existing HAOS VM** shares that host and is
-    declared nowhere in this program — a host-level libvirt domain,
+    physical server (bridged to the LAN). Its address is a constant in
+    `conventions` rather than a lease, so the component exports none.
+    The **existing HAOS VM** shares that host and is declared nowhere
+    in this program — a host-level libvirt domain,
     deliberately outside both the cluster (§6.8) and this repository
     (declarative/physical.md §3).
 2.  **OCI (pulumi-oci)**: Provisions the dual-stack VCN (v4 + /56 GUA
@@ -659,7 +662,7 @@ The entire stack is deployed via Pulumi using multiple providers:
     targets UniFi OS ≥9 — verified against the UDM's current Network
     release at bootstrap (physical.md §6); fallback if it or the
     bridge misbehaves: a `UnifiFirewallPolicy` resource on the
-    gw-config dynamic provider (§5.2) driving the v2 API directly
+    device-files dynamic provider (§5.2) driving the v2 API directly
     (the AdGuard-rewrite technique). Younger rewrites
     (alexklibisz/terrifi, BadgerOps/unifi) were passed over as
     pre-1.0 single-maintainer projects for a load-bearing gateway.
@@ -689,14 +692,14 @@ The entire stack is deployed via Pulumi using multiple providers:
 5.  **Backblaze B2 (bridged provider)**: the backup bucket + keys +
     lifecycle rules (see [storage.md](storage.md) §4).
 
-### 5.2 UDM Configuration: a `gw-config` dynamic provider
+### 5.2 UDM Configuration: a device-files dynamic provider
 
 The unifi provider has no BGP API, but the UDM already has a proven
 declarative mechanism: `~/.config/gw-config` (the retiring repo) pushed
 desired-state files idempotently over SSH (`deploy.sh`, `/data` +
 `on_boot.d` persistence model). Rather than the earlier "generate an FRR
 .conf, upload by hand" plan, Pulumi grows a small **dynamic provider that
-drives gw-config**:
+pushes those files itself**:
 
 -   **Resource model**: a `DeviceFile` (path + content + owner/mode +
     optional post-apply hook such as `vtysh reload` or a container restart).
@@ -795,7 +798,7 @@ already lives:
     — today it has none either; the routes via the UDM are net-new.
 -   **Deployment shape**: a fourth of the device's nspawn services
     (alpine rootfs image from homelab-containers CI, pinned and pulled
-    like the other three, unit + config via the gw-config provider,
+    like the other three, unit + config via the device-files provider,
     on_boot.d recovery like the others), but with
     **host networking** (`VirtualEthernet=no`) — the `zt*` interface
     must land in the main netns for the UDM to route through it — plus
