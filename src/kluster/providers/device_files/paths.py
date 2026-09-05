@@ -17,7 +17,7 @@ import posixpath
 
 __all__ = ('ROOT', 'canonical', 'parent', 'refusal')
 
-#: The one path that is its own parent.
+#: The device root: the parent of everything and a declaration of nothing.
 ROOT = '/'
 
 
@@ -41,6 +41,11 @@ def refusal(path: str) -> str | None:
     **Absolute**, because a relative path would be resolved against whatever
     directory a session happens to start in, and no declaration here chose one.
 
+    **Below the root**, because the root itself is the device rather than
+    something on it: every operation these resources have is destructive or
+    meaningless there -- a mode set on `/`, a staged file moved over it, a
+    delete of it -- and no declaration wants any of them.
+
     **Canonical**, because a place with two spellings is a place the comparison
     and the operations can disagree about. A trailing slash is the one that
     bites: a path ending in one is resolved through to a directory by every
@@ -49,6 +54,8 @@ def refusal(path: str) -> str | None:
     """
     if not path.startswith(ROOT):
         return f'must be an absolute path on the device, got {path!r}'
+    if path == ROOT:
+        return 'must name a place on the device rather than the device root itself'
     spelling = canonical(path)
     if path != spelling:
         return f'{_departure(path)}, so declare it as {spelling!r}, not {path!r}'
@@ -56,10 +63,12 @@ def refusal(path: str) -> str | None:
 
 
 def parent(path: str) -> str:
-    """The directory a declared path sits in, itself a declared path.
+    """The directory a declared path sits in.
 
-    The root is its own parent, which is what makes `mkdir -p` on it a no-op
-    rather than an error.
+    The answer is absolute and canonical, and it may be the root -- `/data` sits
+    in one, and `mkdir -p /` is a no-op rather than an error. That the root is
+    an answer here and not a declaration is the difference between a place a
+    write has to reach through and a place a resource may name.
     """
     reason = refusal(path)
     if reason is not None:

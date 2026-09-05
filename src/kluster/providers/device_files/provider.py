@@ -48,19 +48,33 @@ marker the device keeps records *the pin* -- the manifest's digest, not a
 checksum of the tree beside it. A marker is the device's claim about
 provenance, not a checksum of its neighbour.
 
-**A declared path is the path, and never a symbolic link at it.** All three
-resources answer the question the same way, because the alternatives are wrong
-in the same way for each of them: the commands that would converge a link
-follow it and would converge a place nobody declared, and the commands that
-would take one away either destroy an indirection somebody placed deliberately
-or refuse it in the device's own words on the day of the delete rather than on
-the day it appeared. So every script begins by asking (`ssh.symlink_test`),
-every operation stops with `ssh.SymbolicLinkAtPath` naming the path, and every
-comparison reads a link at a declared path as drift rather than as the file,
-directory or tree it points at. The answer is to declare what the link points
-at, or to remove the link. It is the last component alone -- a link higher up
-is traversal nothing here can see, which is why a device whose `/data` is a
+**A declared path holds what the declaration names, or nothing is done to it.**
+This is the rule the three resources share, and it is stated here rather than
+three times in their implementations.
+
+A **symbolic link** at a declared path is the case that has to be decided
+first, because every command is silent about it in a different way: the ones
+that would converge it follow it, and would converge a place nobody declared;
+the ones that would take it away either delete an indirection somebody placed
+deliberately (`rm -f`, `rm -rf`) or refuse it in the device's own words on the
+day of the delete rather than on the day it appeared (`rmdir`). Following is
+therefore wrong and replacing is wrong, so every script begins by asking
+(`ssh.symlink_test`) and every operation stops with `ssh.SymbolicLinkAtPath`
+naming the path. It is the last component alone -- a link higher up is
+traversal nothing here can see, which is why a device whose `/data` is a
 symbolic link is not this case.
+
+**Any other wrong kind is answered the same way**, and by the same reasoning:
+`stat` reports the kind, so every comparison here reads a path holding
+something else as drift rather than as the file, directory or tree it was
+supposed to be, and no operation converts one kind into another. Most of that
+the device says itself -- `mkdir -p` refuses a file, `rmdir` refuses a
+non-directory -- and the one command that says nothing is a write's `mv -f`,
+which moves the staged file *into* a directory and reports success, so a write
+asks (`ssh.regular_file_test`) and stops with `ssh.WrongKindAtPath`.
+
+What resolves either is a decision on the device: declare what is actually
+there, or take it away.
 
 **Every resource here diffs against the device, not only against state.** A file
 someone edited on the box shows up as a change in `pulumi preview` without a
@@ -771,11 +785,14 @@ class DeviceFileProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
-            if stat is None or stat.is_symbolic_link:
-                # A link is drift whatever it points at, and it is asked about
-                # before the content: `read` follows one, so a link to a file
-                # holding these very bytes would otherwise report the resource
-                # converged onto a path nobody declared.
+            if stat is None or not stat.is_regular_file:
+                # The kind is asked about before the content, because `read`
+                # resolves a link: a link to a file holding these very bytes
+                # would otherwise report the resource converged onto a path
+                # nobody declared. A directory at the path is the other half --
+                # the write would move the staged file inside it and report
+                # success, so a comparison that missed it would ask for that
+                # write on every preview.
                 return True
             if not ssh.same_mode(stat.mode, str(props['mode'])) or not ssh.same_owner(_owner(props), stat):
                 return True
@@ -785,13 +802,13 @@ class DeviceFileProvider(DeviceProvider):
         path = str(props['path'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(path)
-            content = None if stat is None or stat.is_symbolic_link else await transport.read(path)
+            content = None if stat is None or not stat.is_regular_file else await transport.read(path)
             if stat is None or content is None:
                 # Gone from the device is gone: the next up creates it again,
-                # which is how a file someone deleted by hand comes back. A
-                # link at the path is the same answer -- the file is not there,
-                # and the next up says so by name rather than writing through
-                # the link.
+                # which is how a file someone deleted by hand comes back.
+                # Anything else at the path is the same answer -- the file is
+                # not there, and the next up says so by name rather than
+                # writing through a link or inside a directory.
                 return gone()
             outs = {
                 **props,
@@ -893,7 +910,7 @@ class DeviceArtifactProvider(DeviceProvider):
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
             stat = await transport.stat(root)
-            marker = None if stat is None or not stat.is_directory else await transport.read(marker_path(root))
+            marker = None if stat is None or not stat.is_directory else await _marker(transport, root)
             if marker is None:
                 # A tree with no marker is a tree of unknown provenance, which
                 # is the same situation as no tree at all -- and so is anything
@@ -904,12 +921,20 @@ class DeviceArtifactProvider(DeviceProvider):
         return dynamic.ReadResult(id_=id_, outs=outs)
 
     async def _delete(self, props: Mapping[str, Any]) -> None:
+        """Take the tree away, then the claim about it, then say so.
+
+        The tree goes first because the marker is what makes the tree legible:
+        a delete that withdrew the claim and then failed -- at a link where the
+        tree is declared, say -- would leave a running container's root
+        filesystem with no record of where it came from, which is a worse place
+        than where it started.
+        """
         root = str(props['root'])
         async with open_transport(self._device(props)) as transport:
-            await transport.remove(marker_path(root))
             purged = await transport.run(purge_script(root))
             if purged.exit_status == ssh.ReservedStatus.SYMBOLIC_LINK:
                 raise ssh.SymbolicLinkAtPath(root)
+            await transport.remove(marker_path(root))
             await run_hook(transport, props)
 
 
@@ -1051,10 +1076,11 @@ class DeviceFile(dynamic.Resource, module='device', name='File'):
         after the delete; a non-zero exit fails the operation. `secret=True`
         marks the content a credential, for the files that carry one.
 
-        **`path` is the file, not a symbolic link to one.** A link found there
-        is drift a preview reports and an apply refuses by name, either way
-        round, and the answer is to declare the path the link points at
-        (`ssh.SymbolicLinkAtPath`).
+        **`path` is the file, and not a link to one or a directory of that
+        name.** Anything else at the path is drift a preview reports and an
+        apply refuses by name, either way round, and the answer is to declare
+        what is actually there or take it away (`ssh.SymbolicLinkAtPath`,
+        `ssh.WrongKindAtPath`).
         """
         super().__init__(
             DeviceFileProvider(),
@@ -1200,6 +1226,23 @@ async def _mark(transport: ssh.Transport, location: str, digest: str) -> None:
     await transport.write(marker_path(location), f'{digest}\n'.encode(), mode=MARKER_MODE, owner=None)
 
 
+async def _marker(transport: ssh.Transport, directory: str) -> bytes | None:
+    """What the marker beside `directory` claims, or `None` if there is none.
+
+    The kind is asked about before the bytes are read, because `read` resolves
+    a link and the marker is this provider's own record of where the tree came
+    from. A link there is no marker, exactly as a link at a declared path is no
+    file -- and the write that would replace it refuses too, so a marker read
+    through one would be a claim this provider never made and can never
+    correct.
+    """
+    path = marker_path(directory)
+    stat = await transport.stat(path)
+    if stat is None or not stat.is_regular_file:
+        return None
+    return await transport.read(path)
+
+
 async def _tree_holds(transport: ssh.Transport, directory: str, digest: str) -> bool:
     """Whether the device has a tree at `directory` unpacked from `digest`.
 
@@ -1213,7 +1256,7 @@ async def _tree_holds(transport: ssh.Transport, directory: str, digest: str) -> 
         # tree is declared is no tree, and a marker beside it says nothing
         # about what a container would boot.
         return False
-    marker = await transport.read(marker_path(directory))
+    marker = await _marker(transport, directory)
     return marker is not None and marker.decode(errors='replace').strip() == digest
 
 

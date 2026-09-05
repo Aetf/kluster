@@ -172,7 +172,12 @@ class Transport:
     async def read(self, path: str) -> bytes | None:
         entry = self.device.files.get(path)
         self.device.log.append(f'read {path}')
-        return None if entry is None else entry.data
+        if entry is None or entry.kind == ssh.DIRECTORY:
+            # `[ ! -f path ]` is what the shipped read asks, and it answers
+            # "absent" for a directory as surely as for nothing at all. A link
+            # it resolves, which is why one still reads as its target's bytes.
+            return None
+        return entry.data
 
     async def stat(self, path: str) -> ssh.FileStat | None:
         entry = self.device.files.get(path)
@@ -185,6 +190,7 @@ class Transport:
 
     async def write(self, path: str, data: bytes, *, mode: str, owner: str | None) -> None:
         self._refuse_a_link(path)
+        self._refuse_a_wrong_kind(path)
         user, _, group = (owner or 'root:root').partition(':')
         self.device.files[path] = Entry(data=data, mode=mode, owner=user, group=group or 'root')
         self.device.log.append(f'write {path}')
@@ -198,11 +204,18 @@ class Transport:
         """What the shipped transport's own scripts do, in the double's terms.
 
         Both verbs ask before they act, so a provider case about a link reaches
-        the same refusal here that a session would raise on the device.
+        the same refusal here that a session would raise on the device. Only a
+        write asks about the other kinds, which is where `mv -f` would
+        otherwise be silent.
         """
         entry = self.device.files.get(path)
         if entry is not None and entry.kind == ssh.SYMBOLIC_LINK:
             raise ssh.SymbolicLinkAtPath(path)
+
+    def _refuse_a_wrong_kind(self, path: str) -> None:
+        entry = self.device.files.get(path)
+        if entry is not None and entry.kind not in (ssh.REGULAR_FILE, ssh.REGULAR_EMPTY_FILE):
+            raise ssh.WrongKindAtPath(path)
 
     async def run(self, command: str) -> ssh.CommandResult:
         self.device.log.append(f'run {command}')
@@ -741,6 +754,43 @@ def test_a_link_where_a_file_is_declared_is_drift_whatever_it_points_at(device: 
     assert file_provider().diff('id', props, props).changes is True
 
 
+def test_a_directory_where_a_file_is_declared_is_drift(device: Device) -> None:
+    """The case that would otherwise succeed and never converge.
+
+    `mv -f staged path` moves the staged file *into* a directory at the path
+    and exits zero, so an apply would report success while the declared file
+    was never there -- and the next preview would ask for the same write again.
+    """
+    props = file_props()
+    converged(device, props)
+    device.files[CONFIG_PATH].kind = ssh.DIRECTORY
+
+    assert file_provider().diff('id', props, props).changes is True
+
+
+def test_a_file_with_nothing_in_it_is_still_a_regular_file(device: Device) -> None:
+    """`stat`'s `%F` says `regular empty file`, which is a kind this program
+    writes all the time: reading it as the wrong kind would make every empty
+    declared file permanent drift."""
+    props = file_props(content='')
+    converged(device, props)
+    device.files[CONFIG_PATH].kind = ssh.REGULAR_EMPTY_FILE
+
+    assert file_provider().diff('id', props, props).changes is False
+
+
+def test_a_directory_where_a_file_is_declared_fails_the_apply(device: Device) -> None:
+    """Refused by name rather than written into, and the hook is not told."""
+    converged(device, file_props())
+    device.files[CONFIG_PATH].kind = ssh.DIRECTORY
+
+    with pytest.raises(ssh.WrongKindAtPath) as raised:
+        _ = file_provider().create(file_props())
+
+    assert CONFIG_PATH in str(raised.value)
+    assert HOOK not in device.commands
+
+
 def test_a_link_where_a_file_is_declared_fails_the_apply(device: Device) -> None:
     """`mv -f` lands the bytes inside a link to a directory and replaces a link
     to a file, so neither is done: the apply stops and names the path."""
@@ -765,6 +815,16 @@ def test_a_link_where_a_file_is_declared_fails_the_delete(device: Device) -> Non
     assert CONFIG_PATH in str(raised.value)
     assert HOOK not in device.commands
     assert CONFIG_PATH in device.files
+
+
+def test_a_refresh_asks_for_no_contents_where_there_is_no_file(device: Device) -> None:
+    """The kind is the whole answer, so nothing tries to read a directory."""
+    converged(device, file_props())
+    device.files[CONFIG_PATH].kind = ssh.DIRECTORY
+    device.log.clear()
+
+    assert file_provider().read('id', file_props()).id is None
+    assert device.log == [f'stat {CONFIG_PATH}']
 
 
 def test_a_refresh_reports_a_file_a_link_stands_in_for_as_gone(device: Device) -> None:
@@ -1013,23 +1073,36 @@ def test_a_symlink_where_a_directory_is_declared_fails_the_delete(device: Device
     assert DIRECTORY_HOOK not in device.commands
 
 
+def rendered_scripts() -> dict[str, tuple[str, str]]:
+    """Every script renderer this module ships, rendered, with the path it acts on."""
+    return {
+        'make_script': (provider.make_script(DIRECTORY_PATH, '0755', 'root:root'), DIRECTORY_PATH),
+        'remove_script': (provider.remove_script(DIRECTORY_PATH), DIRECTORY_PATH),
+        'pull_script': (provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE), ROOTFS_TREE),
+        'unpack_script': (provider.unpack_script(ROOTFS_TREE), ROOTFS_TREE),
+        'purge_script': (provider.purge_script(ROOTFS_TREE), ROOTFS_TREE),
+    }
+
+
 def test_every_script_that_acts_on_a_declared_path_asks_about_a_link_first() -> None:
     """One rule for the three resources, and the question has to come first.
 
     Every command after it follows a link, or displaces one, or deletes one --
     so a script that reached its work before asking would have acted on a path
-    the declaration never named. The two verbs the transport renders itself are
-    held to the same order where they are asserted.
-    """
-    asked = ssh.symlink_test(DIRECTORY_PATH)
-    tree = ssh.symlink_test(ROOTFS_TREE)
+    the declaration never named.
 
-    assert provider.make_script(DIRECTORY_PATH, '0755', 'root:root').startswith(asked)
-    assert provider.remove_script(DIRECTORY_PATH).startswith(asked)
-    assert provider.pull_script(ROOTFS_REFERENCE, ROOTFS_TREE).startswith(tree)
-    assert provider.unpack_script(ROOTFS_TREE).startswith(tree)
-    assert provider.purge_script(ROOTFS_TREE).startswith(tree)
-    assert f'exit {ssh.ReservedStatus.SYMBOLIC_LINK}' in asked
+    The roll is read off the module rather than written out here: a sixth
+    renderer that shipped unguarded would otherwise leave this case green,
+    which is the one thing it exists to prevent. The two verbs the transport
+    renders itself are held to the same order where they are asserted.
+    """
+    rendered = rendered_scripts()
+    shipped = {name for name in vars(provider) if name.endswith('_script')}
+
+    assert set(rendered) == shipped, 'a script renderer with no case here is one nobody checks'
+    for name, (script, path) in rendered.items():
+        assert script.startswith(ssh.symlink_test(path)), name
+    assert f'exit {ssh.ReservedStatus.SYMBOLIC_LINK}' in ssh.symlink_test(DIRECTORY_PATH)
 
 
 def test_reading_a_directory_reports_the_shape_the_device_has(device: Device) -> None:
@@ -1313,6 +1386,36 @@ def test_a_write_refuses_a_link_to_a_file_rather_than_replacing_the_indirection(
     assert target.read_text() == 'what the link points at\n'
 
 
+def test_a_write_refuses_a_directory_rather_than_landing_the_bytes_inside_it(tmp_path: Path) -> None:
+    """The one failure in this family that would report success.
+
+    `mv -f staged path` moves the staged file *into* a directory at the path
+    and exits zero, leaving `<path>/<name>.kluster-staged` behind: the apply
+    converges nothing, says so to nobody, and every preview after it asks for
+    the same write again.
+    """
+    path = tmp_path / 'frr.conf'
+    path.mkdir()
+
+    with pytest.raises(ssh.WrongKindAtPath):
+        asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0644', owner=None))
+
+    assert path.is_dir()
+    assert list(path.iterdir()) == []
+
+
+def test_a_write_replaces_a_file_that_is_already_there(tmp_path: Path) -> None:
+    """The kind test refuses what is not a file and nothing else: converging a
+    file the device already has is the ordinary case and stays one."""
+    path = tmp_path / 'frr.conf'
+    _ = path.write_text('what the device holds now\n')
+
+    asyncio.run(shell_transport().write(str(path), b'router bgp 65000\n', mode='0644', owner=None))
+
+    assert path.read_bytes() == b'router bgp 65000\n'
+    assert [entry.name for entry in tmp_path.iterdir()] == ['frr.conf']
+
+
 def test_a_remove_refuses_a_link_rather_than_taking_the_indirection_away(tmp_path: Path) -> None:
     """`rm -f` deletes a link without following it, so the guard is the whole
     difference between refusing one and destroying one."""
@@ -1560,7 +1663,13 @@ def test_reading_an_artifact_whose_tree_is_gone_drops_the_identifier(device: Dev
 
 def test_deleting_an_artifact_takes_the_tree_and_its_staging_with_it(device: Device) -> None:
     """Derived state the push created is state the push removes, leftovers of an
-    interrupted pull or unpack included."""
+    interrupted pull or unpack included.
+
+    The tree goes before the claim about it, which is the reverse of the push's
+    order and has the same reason: a delete that stopped in the middle would
+    otherwise leave a running container's root filesystem with no record of
+    where it came from.
+    """
     props = artifact_props()
     landed(device, props)
     device.log.clear()
@@ -1568,8 +1677,8 @@ def test_deleting_an_artifact_takes_the_tree_and_its_staging_with_it(device: Dev
     artifact_provider().delete('id', props)
 
     assert device.log == [
-        f'remove {provider.marker_path(ROOTFS_TREE)}',
         f'run {provider.purge_script(ROOTFS_TREE)}',
+        f'remove {provider.marker_path(ROOTFS_TREE)}',
         f'run {HOOK_COMMAND}',
     ]
     purge = provider.purge_script(ROOTFS_TREE)
@@ -1646,7 +1755,12 @@ def test_a_link_where_a_tree_is_declared_fails_the_push_before_a_byte_is_fetched
 
 
 def test_a_link_where_a_tree_is_declared_fails_the_delete(device: Device) -> None:
-    """`rm -rf` takes a link away without following it, so the purge asks first."""
+    """`rm -rf` takes a link away without following it, so the purge asks first.
+
+    And the marker survives it: the tree is taken away before the claim about
+    it, so a delete that stops here leaves a running container's root
+    filesystem with the record of where it came from still beside it.
+    """
     landed(device, artifact_props())
     device.statuses = {'-L': ssh.ReservedStatus.SYMBOLIC_LINK}
 
@@ -1655,6 +1769,24 @@ def test_a_link_where_a_tree_is_declared_fails_the_delete(device: Device) -> Non
 
     assert ROOTFS_TREE in str(raised.value)
     assert HOOK_COMMAND not in device.commands
+    assert provider.marker_path(ROOTFS_TREE) in device.files, 'the claim outlives a delete that failed'
+
+
+def test_a_marker_a_link_stands_in_for_is_no_marker(device: Device) -> None:
+    """The provenance record is this provider's own file, and `read` resolves a link.
+
+    A link at the marker's path pointing at the pinned digest would report the
+    artifact converged forever, while the record sits somewhere this provider
+    never wrote and its own write refuses to touch. The next moved pin would
+    then swap the tree and fail at the marker, leaving a live tree the record
+    denies.
+    """
+    props = artifact_props()
+    landed(device, props)
+    device.files[provider.marker_path(ROOTFS_TREE)].kind = ssh.SYMBOLIC_LINK
+
+    assert artifact_provider().diff('id', props, props).changes is True
+    assert artifact_provider().read('id', props).id is None
 
 
 def test_a_refresh_reports_a_tree_a_link_stands_in_for_as_gone(device: Device) -> None:
@@ -1965,6 +2097,7 @@ def test_a_write_is_staged_and_moved_into_place() -> None:
 
     assert connection.commands == [
         f'{ssh.symlink_test("/data/frr/frr.conf")}'
+        f' && {ssh.regular_file_test("/data/frr/frr.conf")}'
         ' && mkdir -p /data/frr'
         ' && cat > /data/frr/frr.conf.kluster-staged'
         ' && chmod 0640 /data/frr/frr.conf.kluster-staged'
@@ -2063,9 +2196,16 @@ def test_ownership_is_compared_only_as_far_as_it_was_declared() -> None:
 
 
 #: Spellings `check` admits, each the device's own single name for one place.
-DECLARED_PATHS = ('/', '/data', CONFIG_PATH, DIRECTORY_PATH, ROOTFS_TREE)
+DECLARED_PATHS = ('/data', CONFIG_PATH, DIRECTORY_PATH, ROOTFS_TREE)
 #: Spellings it refuses, one per departure the grammar names.
-REFUSED_PATHS = ('data/frr', f'{CONFIG_PATH}/', '/data//frr/frr.conf', '/data/frr/../frr/frr.conf', '//data/frr')
+REFUSED_PATHS = (
+    'data/frr',
+    f'{CONFIG_PATH}/',
+    '/data//frr/frr.conf',
+    '/data/frr/../frr/frr.conf',
+    '//data/frr',
+    paths.ROOT,
+)
 
 
 @pytest.mark.parametrize('path', DECLARED_PATHS)
@@ -2074,12 +2214,14 @@ def test_a_path_the_checker_admits_is_one_the_transport_can_take_apart(path: str
 
     `check` decides what a declared path is and the transport builds its
     `mkdir -p` from the parent of one, so the parent of an admitted path has to
-    be an admitted path itself -- otherwise the directory a write creates is a
-    place the declaration could not have named.
+    be absolute and canonical -- the directory a write creates is then the one
+    the declared path sits in and no other spelling of it. It need not be a
+    path a resource may declare: `/data` sits in the root, and `mkdir -p /` is
+    a no-op rather than a declaration.
     """
     assert file_provider().check({}, file_props(path=path)).failures == []
-    assert paths.refusal(paths.parent(path)) is None
     assert paths.parent(path).startswith(paths.ROOT)
+    assert paths.parent(path) == paths.canonical(paths.parent(path))
 
 
 @pytest.mark.parametrize('path', REFUSED_PATHS)
@@ -2094,6 +2236,26 @@ def test_a_path_the_checker_refuses_has_no_parent_for_the_transport_to_use(path:
     assert [failure.property for failure in file_provider().check({}, file_props(path=path)).failures] == ['path']
     with pytest.raises(ValueError, match='no declared path'):
         _ = paths.parent(path)
+
+
+def test_the_device_root_is_a_parent_and_never_a_declaration() -> None:
+    """`/` is the one canonical spelling that no resource may name.
+
+    Every operation these resources have would be destructive or meaningless
+    there -- `chmod` on the root, a staged file moved over it, a delete of it --
+    while a write to `/data` still has to make the root's own `mkdir -p` a
+    no-op. So the grammar refuses it as a declaration and answers it as a
+    parent.
+    """
+    for check in (
+        file_provider().check({}, file_props(path=paths.ROOT)),
+        directory_provider().check({}, directory_props(path=paths.ROOT)),
+        artifact_provider().check({}, artifact_props(root=paths.ROOT)),
+    ):
+        assert len(check.failures) == 1
+        assert 'device root' in check.failures[0].reason
+
+    assert paths.parent('/data') == paths.ROOT
 
 
 def test_a_write_to_a_path_the_checker_would_refuse_reaches_no_device() -> None:
@@ -2130,6 +2292,12 @@ def test_every_reserved_status_is_drawn_from_the_range_the_class_states() -> Non
     assert [status for status in ssh.ReservedStatus if status not in available] == []
     assert len({status.value for status in ssh.ReservedStatus}) == len(list(ssh.ReservedStatus))
     assert [status for status in (0, 1, 2, 126, 127, 128, 137, 255) if status in available] == []
+
+
+def test_a_status_outside_the_range_cannot_be_declared() -> None:
+    """The range is a rule the class keeps, not one a test remembers for it."""
+    with pytest.raises(ValueError, match='reserves'):
+        ssh.ReservedStatus.__init__(ssh.ReservedStatus.ABSENT, 200)
 
 
 def test_a_reserved_status_renders_as_the_number_a_script_exits() -> None:
