@@ -144,15 +144,15 @@ Job names below are the ones the checks tab shows.
 
 ```
 PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
-                              (parallel, report-only; the matrix is the set
-                               the path filter selected, and it is empty for
-                               a change that reaches no stack; physical has
-                               no PR preview — its credentials are
-                               main-only, see partitioning below)
+                              (parallel, report-only; all three or none —
+                               the three filters are one pattern list — and
+                               none for a change that reaches no stack;
+                               physical has no PR preview — its credentials
+                               are main-only, see partitioning below)
 
         noop-automerge.yml: classify ─→ prove (dns | k8s-base | apps) ─→ merge
                                      │                                     ↑
-                                     └───── inert: no stack to prove ──────┘
+                                     └──── unproven: nothing to prove ─────┘
                               (its own workflow, not a reader of
                                preview's verdict)
 
@@ -188,26 +188,34 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     and annotated on the PR; the serial `needs` order of the up jobs is
     what guarantees correctness at apply time.
 -   **Path-filter skipping is a setup-cost optimization, not a
-    correctness mechanism**: docs-only or clearly single-layer changes
-    skip other jobs (saving checkout/deps/ZT-join); anything touching
-    shared code (`conventions/`, `putils/`, `packages/crds`) runs all
-    layers and lets the internal previews no-op. The filter is an
-    all-negation deny-list — a file is code unless it is under `docs/`,
-    is a markdown file, is under `.vscode/` or is `.gitignore` — so a
-    path nobody thought of defaults to running the job rather than to
-    being missed. **A deny-list only reads that way under
-    `predicate-quantifier: every`**: the action's default asks whether
-    *any* pattern matches, and each negation matches every file the
-    other negations are there to exclude, so an all-negation list under
-    the default selects every file there has ever been.
+    correctness mechanism**, and **selection is all-or-nothing**: a
+    change that reaches no stack skips the matrix entirely (saving
+    checkout/deps/ZT-join), and every other change runs all three
+    layers and lets the internal previews no-op. There is no
+    single-layer case to select — the three filters are one YAML anchor
+    and its two aliases, so `changes` answers with all three names or
+    with none, never a subset. That is deliberate: shared code
+    (`conventions/`, `putils/`, `packages/crds`) is most of what a
+    change touches, and a per-layer list would have to be right about
+    which layer reads it.
+-   **The list is a deny-list, and only reads as one under
+    `predicate-quantifier: every`.** A file is code unless it is under
+    `docs/`, is a markdown file, is under `.vscode/` or is
+    `.gitignore` — so a path nobody thought of defaults to running the
+    job rather than to being missed. The action's default quantifier
+    asks whether *any* pattern matches, and each negation matches every
+    file the other negations are there to exclude, so an all-negation
+    list under the default selects every file there has ever been.
 -   **The unattended merge waits for the required checks rather than
     racing them.** `main` requires `checks` and `changes` on an
     up-to-date branch (§5), and the merge API refuses while either is
     outstanding — a race a skipped proof is fast enough to lose, since
     `classify` is finished while `checks` is still installing its
-    tools. `noop-automerge`'s merge job therefore blocks on
+    tools. The merge job therefore blocks on
     `gh pr checks --required --watch` before it merges, and a required
-    check that goes red takes that job down with it.
+    check that goes red takes that job down with it. It also stands
+    down on a draft, which `pull_request` fires for and `gh pr merge`
+    refuses — a red job where the point was a merge.
 -   **The installer that fetches every other tool is pinned too.**
     Every job that runs a `mise` command installs mise through
     `jdx/mise-action`'s `version` input rather than the action's
@@ -218,7 +226,12 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     in the workflows rather than in `mise.toml` because `[tools]`
     declares what mise installs, not what mise is — the action fetches
     the binary before any configuration is read. Renovate knows this
-    action's `version` input by name and bumps it where it sits.
+    action's `version` input by name and bumps it where it sits, at a
+    cadence this repository's `patch: enabled: false` sets to roughly
+    monthly: mise numbers releases by date, so `2026.9.1` to `2026.9.2`
+    reads as a patch and is suppressed, a new month reads as a minor
+    and opens a pull request, and a new year reads as a major and waits
+    on the dependency dashboard.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
@@ -325,14 +338,26 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     zero-diff proof, and an `expect-changes` label opts a pull request
     out of the whole path. A candidate that touches nothing but
     documentation, `.vscode/` or `.gitignore` — the same deny-list the
-    preview filter uses — **skips the proof and merges on `checks`
-    alone**: no stack program reads those paths, so an empty preview of
-    them is a ceremony rather than evidence. That path does not retire,
-    because which files a stack program reads is not a phase. A fork's
-    pull request is refused by name in `classify`, and by name rather
-    than by consequence because the skipping path reaches the merge
-    without running any job that a missing Environment secret would
-    fail. Repo secret scanning and push protection are on.
+    preview filter uses — **may skip the proof and merge on the
+    required checks alone**: no stack program reads those paths, so an
+    empty preview of them is a ceremony rather than evidence. That
+    reasoning does not retire, because which files a stack program
+    reads is not a phase. **That route, and only that route, also tests
+    the author**: skipping the proof skips the last thing holding a
+    documentation change until somebody read it, and dispatch.md §3
+    says no pull request merges reviewed by nobody but its author — a
+    rule aimed at `AGENTS.md` and `docs/` above all. So it is open to
+    renovate's own pull requests and to nothing else, and every other
+    documentation change takes the proven route. An operator opt-in
+    belongs there too and is not built: it would be a label, and a
+    label a workflow branches on has to be in the census first, or the
+    condition is silently dead. kluster-ops#244 asks whether this
+    repository should have a review-free merge at all; this narrow
+    class holds until it is ruled on. A fork's pull request is refused
+    by name in `classify`, and by name rather than by consequence
+    because the proof-skipping route reaches the merge without running
+    any job that a missing Environment secret would fail. Repo secret
+    scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
     drill workflows run** — carries the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
@@ -551,11 +576,13 @@ Every pull request that touches code runs both entries. `prove` is
 `fail-fast: true`, so an entry that fails first can cancel the other
 two: which names are reported failed and which cancelled varies
 between runs and carries no information. A pull request that touches
-only documentation, `.vscode/` or `.gitignore` reaches neither matrix
-— `changes` selects an empty set and `preview` stands down, and
-`classify` calls it inert and skips `prove` — so it is green on both
-counts and merges unattended (§3). **Retires with the M2 stacks**
-(`kluster-ops#77`), which create both and make the matrices honest.
+only documentation, `.vscode/` or `.gitignore` runs no `preview` at
+all — `changes` selects an empty set and the matrix job stands down.
+Whether it also skips `prove` turns on who opened it: renovate's own
+pull requests merge unattended, and every other documentation change
+still proves against the missing stacks and is merged by hand (§3).
+**Retires with the M2 stacks** (`kluster-ops#77`), which create both
+and make the matrices honest.
 
 **Neither of those is a secret-availability problem, and the tell is
 which step fails, and then which name the message carries.** All five
