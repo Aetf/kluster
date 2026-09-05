@@ -243,42 +243,64 @@ version — the mutation — is throwaway code, and the whole of the
 discipline below is about getting rid of it again without taking the
 real change with it.
 
-**A mutation belongs in a throwaway copy of the file, not in the working
-tree that holds the change being proved.** Copy the file aside, mutate
-the copy, run the suite against it, delete it. Nothing then has to be
-reverted, and the step every loss of work turns on does not happen.
+**Keep a pristine copy and mutate in place.** The throwaway artifact is
+the copy, not the mutation:
 
-**Where the mutation has to be in place, commit first — or stash the
-real work.** Describe the change and `jj new`, so that the work sits at
-`@-` and the mutation is alone in `@`. A revert can then restore only
-what the mutation changed, because there is nothing else in the file to
-restore.
+```bash
+cp <file> "$(mktemp -d)/orig"   # mutate <file> in place, run the suite,
+                                # then copy the pristine one back
+```
 
-**`git checkout HEAD -- <file>` is the trap.** It is the obvious revert,
-and it is destructive: on a file that also carries uncommitted work it
-discards that work along with the mutation, without a prompt and without
-a non-zero exit. What makes it hard to catch is the state it leaves
-behind — the file stops appearing as modified, which reads as
-*committed* rather than *gone*. A clean `git status` is evidence of
-nothing. Inside a `jj` workspace it is worse, because the workspace has
-no git repository of its own and `HEAD` answers about the primary
-checkout ([dispatch.md](dispatch.md) §1.2): the file is restored to
-whatever `main` holds, however many commits the branch is ahead. The
-`jj` revert that means what it says is `jj restore <file>`, which
-restores from the working copy's own parent.
+Mutating a copy beside the original and running the suite against *that*
+does not work: the suite imports the package from the import path, so
+the run is against unmutated code and passes — which in a mutation round
+is the alarming answer, and reads as "the new test does not bite".
+
+**The other correct answer is to commit first.** Describe the change and
+`jj new`, so that the work sits at `@-` and the mutation is alone in
+`@`. **`jj new` is the stash here**: `jj` has no stash of its own, and
+`git stash` inside a workspace reports on the *primary's* tree — `No
+local changes to save`, exit 0, the workspace's file untouched and its
+real change still sitting in it, which is the setup for losing it.
+
+Only after that `jj new` is `jj restore <file>` a revert of the mutation
+alone; run against a `@` that holds the real change as well, it takes
+both and exits 0. It is the recoverable failure, though — the working
+copy is a commit, so `jj undo` puts back what the restore took.
+
+**`git checkout HEAD -- <file>` is the trap, and it does not spring
+where a builder here would expect.** In a checkout git can see — the
+colocated primary, or a plain clone — it exits 0 and discards the real
+change along with the mutation, with no prompt. What makes that hard to
+catch is the state it leaves behind: the file stops appearing as
+modified and `git status --porcelain` comes back empty, which reads as
+*committed* rather than *gone*. There is no undo.
+
+Inside a `jj` workspace the same command is instead **inert**. The
+workspace has no git repository of its own, so git walks up to the
+colocated primary ([dispatch.md](dispatch.md) §1.2) — and that walk
+re-roots the `pathspec` as well as `HEAD`. `f.txt` resolves to
+`.claude/workspaces/<name>/f.txt`, which is inside an ignored directory
+and in no tree git knows, so the command fails with `error: pathspec
+'f.txt' did not match any file(s) known to git`, exits 1, and changes
+nothing. Read that exit 1 as "nothing happened", not as evidence that
+something was lost.
 
 **After any mutation round, verify the diff against the branch's own
 base:**
 
 ```bash
-jj diff --from main --stat
+jj diff --from main
 ```
 
-The change is either still there or it is not, and this is the check
-that distinguishes the two. Nothing else does. A test proved against a
-fix that no longer exists passes for the wrong reason, so the suite
-stays green, the documentation still describes the fix, and the diff is
-the only artifact that disagrees.
+Without `--stat`. The summary is decisive only for a whole-change loss
+(`0 files changed`); after a partial one it reads `1 file changed, 1
+insertion(+)`, which helps only a reader who remembers it should have
+been two. The full diff shows both halves of the question — that the
+change is intact, and that the mutation is gone. Nothing else does: a
+test proved against a fix that is no longer there passes for the wrong
+reason, so the suite stays green, the documentation still describes the
+fix, and the diff is the only artifact that disagrees.
 
 ## 7. Best Practices
 
