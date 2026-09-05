@@ -31,6 +31,7 @@ computed outputs the provider reads back, and which invokes it answers.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -172,13 +173,39 @@ class Recorder(pulumi.runtime.Mocks):
         """Every declaration of one type, in registration order."""
         return [declaration for declaration in self.declared if declaration.typ == typ]
 
+    def _one_each(self, typ: str) -> list[Declaration]:
+        """Every declaration of one type, refusing a name two of them answer to.
+
+        A record keyed by the logical name keeps only the last declaration under
+        it, so on a run that declared one name twice every by-name answer is a
+        claim about one of the two and silently stands for both -- which is what
+        makes *any* "declared exactly once" claim built on `names` or `by_name`
+        vacuous, the second declaration having collapsed into the first. The
+        ambiguity is refused here rather than resolved, the way `one` and
+        `options_of` already refuse theirs.
+
+        Not refused at registration, where an engine would refuse it: a suite
+        may declare one component twice in a run on purpose -- a variant built
+        beside its baseline, read for the configuration it renders rather than
+        for the program it declares -- and that run is only wrong when something
+        asks it a question by name.
+        """
+        declarations = self.of_type(typ)
+        repeated = sorted(name for name, count in Counter(it.name for it in declarations).items() if count > 1)
+        if repeated:
+            raise AssertionError(
+                f'{typ} was declared more than once under each of {repeated}, '
+                'so no answer keyed by name describes this run; read `of_type` and count'
+            )
+        return declarations
+
     def names(self, typ: str) -> set[str]:
-        """The logical names registered under one type."""
-        return {declaration.name for declaration in self.of_type(typ)}
+        """The logical names registered under one type, which must be one apiece."""
+        return {declaration.name for declaration in self._one_each(typ)}
 
     def by_name(self, typ: str) -> dict[str, dict[str, Any]]:
         """What each resource of one type was declared with, by logical name."""
-        return {declaration.name: declaration.inputs for declaration in self.of_type(typ)}
+        return {declaration.name: declaration.inputs for declaration in self._one_each(typ)}
 
     def one(self, name: str, typ: str | None = None) -> Declaration:
         """The declaration under this name, which must be exactly one.

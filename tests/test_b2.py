@@ -590,6 +590,12 @@ def _stage_calls() -> dict[str, int]:
 
 
 CALLS = _stage_calls()
+# A stage that measures zero calls loses its entire sweep below and takes no
+# case with it -- the parametrization simply collects fewer, and nothing
+# anywhere reports the stage as unswept. Measuring is what keeps the sweep from
+# being a number anyone maintains; this is what keeps a measurement of zero
+# from reading as a stage with nothing to check.
+assert all(CALLS.values()), CALLS
 
 #: One case per (stage, call, crash point): the whole sweep, enumerated from
 #: the measurement above rather than from a number anyone maintains.

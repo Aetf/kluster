@@ -66,7 +66,13 @@ def build(scopes: Sequence[Scope] = CLUSTER_SCOPES) -> BackupBucket:
 
 @pytest.mark.asyncio
 async def test_no_key_can_delete_a_file() -> None:
-    bucket = build([etcd_scope(), volsync_scope('immich'), barman_scope('immich')])
+    scopes = [etcd_scope(), volsync_scope('immich'), barman_scope('immich')]
+    bucket = build(scopes)
+    # The rule is about every key there is, so which keys there are is pinned
+    # before the loop: a bucket that minted none would satisfy the loop below
+    # without any key having been checked, and the rule would read as held.
+    assert set(bucket.keys) == {scope.name for scope in scopes}
+
     for key in bucket.keys.values():
         capabilities = await key.capabilities.future()
         assert capabilities is not None
@@ -78,6 +84,8 @@ async def test_no_key_can_delete_a_file() -> None:
 @pytest.mark.asyncio
 async def test_a_writer_key_can_still_read_its_own_index() -> None:
     bucket = build()
+    assert set(bucket.keys) == {scope.name for scope in CLUSTER_SCOPES}
+
     for key in bucket.keys.values():
         capabilities = await key.capabilities.future()
         assert capabilities is not None
@@ -148,6 +156,8 @@ async def test_the_bucket_is_private_and_protected() -> None:
 @pytest.mark.asyncio
 async def test_keys_stay_unprotected_so_they_can_rotate() -> None:
     bucket = build()
+    assert set(bucket.keys) == {scope.name for scope in CLUSTER_SCOPES}
+
     for key in bucket.keys.values():
         # Rotation is a mint and a retire; protection would make the routine
         # act require an unprotect diff and thus tempt nobody to do it.

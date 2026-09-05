@@ -43,6 +43,15 @@ ADDRESSES = {
     'adguard-alice': IPv4Address('10.0.5.3'),
     'adguard-bob': IPv4Address('10.0.5.4'),
 }
+# Every bridged service is in the table and the table invents none, checked
+# where the table is written rather than by whoever reads it. Every case below
+# reaches the table by the census's own name for a service, so *removing* one
+# from the census removes it from the cases too and each of them stays green: a
+# table read only for the entries the census still has can never report one
+# missing. This equality is the direction that reports it.
+assert set(ADDRESSES) == {
+    service.name for service in conventions.gateway.SERVICES if isinstance(service, conventions.gateway.BridgedService)
+}
 
 
 def pin(service: str) -> container.Rootfs:
@@ -196,6 +205,11 @@ def test_a_machine_names_no_unit_because_it_has_none_of_its_own() -> None:
     `machinectl` and `systemd-nspawn@.service` already read; a unit written
     here would be a second such place and the one nothing consults.
     """
+    # A loop is only a claim about what it visits: the roster is pinned so that
+    # a `declarations` that lost a service cannot pass this case by not
+    # reaching it. `SERVICES` is anchored to the literal table above.
+    assert {declaration.service.name for declaration in declarations()} == set(SERVICES)
+
     for declaration in declarations():
         settings = container.nspawn_file(declaration)
 
@@ -237,6 +251,11 @@ def test_every_machine_runs_an_s6_image_on_the_terms_that_image_sets() -> None:
     needs a capability nspawn does not keep by default. And nothing synthesizes
     a resolver file over the one the image decided on.
     """
+    # A loop is only a claim about what it visits: the roster is pinned so that
+    # a `declarations` that lost a service cannot pass this case by not
+    # reaching it. `SERVICES` is anchored to the literal table above.
+    assert {declaration.service.name for declaration in declarations()} == set(SERVICES)
+
     for declaration in declarations():
         settings = container.nspawn_file(declaration)
 
