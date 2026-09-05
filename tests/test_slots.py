@@ -239,20 +239,25 @@ def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], se
     Three ways to disagree, and the triple separates them: a channel the cell
     hands out as delivered that no row addresses, a channel a row addresses that
     the cell does not name, and a channel the two disagree about being
-    `pending` -- a cell qualifying one no row is waiting on, or a row waiting on
-    one the cell hands out as delivered.
+    `pending` -- a cell qualifying one no row is waiting on, a row waiting on
+    one the cell hands out as delivered, or a channel one row fills while
+    another says it is waiting.
 
-    The third is an equality between two sets of channels rather than a count,
+    The third compares two sets of channels rather than counting reasons,
     because a row files each reason under the channel it is about: a cell
     deferring a CI Environment secret while the row is waiting on an
-    ops-repository one is drift, though both sides have something pending.
+    ops-repository one is drift, though both sides have something pending. The
+    filled-and-deferred half is kept beside that comparison rather than left to
+    it, because a credential may be several rows -- a row's own `pending` is
+    held against its own targets when it is built, and nothing holds it against
+    a sibling's.
     """
     promised = promised_channels(cell)
     delivered = {term for term, waiting in promised.items() if not waiting}
     waiting = promised.keys() - delivered
     addressed = {slots.register_column(target) for row in rows for target in row.targets}
     unaddressed = {channel for row in rows for channel in row.pending}
-    return delivered - addressed, addressed - promised.keys(), waiting ^ unaddressed
+    return delivered - addressed, addressed - promised.keys(), (waiting ^ unaddressed) | (waiting & addressed)
 
 
 def test_every_register_slot_cell_names_the_channels_its_rows_address() -> None:
@@ -320,6 +325,43 @@ def test_a_reason_for_one_channel_does_not_excuse_a_pending_mark_on_another() ->
         set(),
         {'CI env', 'ops-repo secret'},
     )
+
+
+def test_a_channel_one_row_fills_while_another_defers_it_is_drift() -> None:
+    # One credential may be several rows -- the ZeroTier CI identities are three
+    # -- and a row's own reasons are held against its own targets when it is
+    # built. Nothing holds them against a sibling's, so this is where a cell
+    # that says `pending` at an operator already being served is caught.
+    siblings = [
+        slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(slots.PulumiState('a-stack', 'a value'),),
+        ),
+        slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            pending={'Pulumi state': 'the stack that would export it has never run'},
+        ),
+    ]
+
+    assert drifted_channels('Pulumi state (pending)', siblings) == (set(), set(), {'Pulumi state'})
+
+
+def test_a_sink_naming_a_repository_the_census_does_not_declare_is_refused() -> None:
+    # The Slot column's terms are keyed by repository, so a sink in a repository
+    # nothing declares has no term -- and a secret pushed there is one no job of
+    # this installation can see. The map refuses it by name, at the row that
+    # names it, rather than raising a lookup whose message is a tuple.
+    with pytest.raises(SlotRefused, match='Aetf/not-a-repository'):
+        _ = slots.register_column(Slot(repository='Aetf/not-a-repository', name='A_SECRET'))
+
+    with pytest.raises(SlotRefused, match='Aetf/not-a-repository'):
+        _ = slots.Row(
+            register='a credential',
+            source=slots.Derived('a-label'),
+            targets=(Slot(repository='Aetf/not-a-repository', name='A_SECRET'),),
+        )
 
 
 def test_a_reason_filed_under_a_channel_the_register_cannot_name_is_refused() -> None:
@@ -400,11 +442,17 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
 
 
 def test_no_device_field_is_delivered_into_the_committed_file_in_the_clear() -> None:
-    # Rule 6's closed set has one Pulumi config channel and it is the secret
-    # one, so the map has no way to say "this key is in the clear" -- and a
+    # Rule 6's closed set names the Pulumi config secret and no plain committed
+    # key, so the map has no way to say "this key is in the clear" -- and a
     # device field that was would be delivered under a term claiming the
     # opposite. A plain field therefore needs a channel in rule 6 and a term in
     # the vocabulary before it can have a row here, which is what this holds.
+    #
+    # The claim is about `devices.py`, and it is held here because it is the
+    # map's vocabulary that cannot say it. `test_devices.py`'s
+    # `test_every_delivered_field_takes_the_encrypted_channel` owns the sibling
+    # claim about what the delivery does, so this moves there the day someone
+    # owns both paths in one change.
     plain = {
         (member, field.name)
         for member, device in devices.DEVICES.items()

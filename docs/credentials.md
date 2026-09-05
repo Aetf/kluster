@@ -436,7 +436,9 @@ cannot promise a delivery the code does not make. A `pending` qualifier
 is held against the map row's reason **for that same channel**: the row
 files each reason under the channel it is about, so a cell that defers
 one channel while the row is waiting on a different one is drift rather
-than a cell that reads well.
+than a cell that reads well. Where a credential is several rows, a
+channel one of them fills while another defers it is drift too — the
+cell would say `pending` to an operator already being served.
 
 | Credential | From | Scope | Slot | Consumer |
 | --- | --- | --- | --- | --- |
