@@ -35,6 +35,18 @@ crosses from untyped to typed in one place, and a shape mistake is
 reported as "what is wrong with which entry", never as a downstream
 traceback.
 
+**A design document naming `pkg.module.NAME` names the home, not the
+call site.** A table in an RFC or a design document says where a value
+lives, in the same voice as the row beside it naming a configuration
+key; it is not telling a caller how to spell the import. How a package
+is imported from is the package's own statement, made in its
+`__init__.py` — which of its surface is re-exported flat, and which
+domains are read qualified — and nothing outside the package overrides
+it. `conventions.providers.CLOUDFLARE_ACCOUNT` in a design table
+therefore says the constant lives in the `providers` module of
+`conventions`; whether a caller writes it qualified or flat is answered
+by `conventions/__init__.py` and by nothing else.
+
 **Long literals are not code.** Another program's configuration
 language (a config file, a rules program) lives in a file beside the
 module, loaded by the shared mechanism — string literals in Python are
