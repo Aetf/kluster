@@ -104,31 +104,63 @@ declarative/physical.md §4.
 
         **What is not a restart is a deliberate stop of the unit.**
         `systemctl stop` on the machine's unit ends the loop, and a
-        restart policy does not act on it — which is what the push,
-        `machine-rollback` and `machinectl terminate` do, the last by
-        asking systemd to stop the unit the machine runs as, which is
-        what `--keep-unit` makes it. That route is systemd 257 and
-        older: from 258 machined records that the payload sits in a
-        control group below the unit's own, and `terminate` sends
-        `SIGTERM` to `systemd-nspawn` itself instead — the container
-        goes down with it, the unit exits, and the machine comes back.
-        `systemctl --version` on the box says which side it is on.
-        `machinectl poweroff` is not that: it signals the container's
-        PID 1, which these images' s6 does not act on. It sends
+        restart policy does not act on it — which is what the push and
+        `machine-rollback` do. `machinectl terminate` is meant to be
+        the third, by asking systemd to stop the unit the machine runs
+        as, which is what `--keep-unit` makes it.
+
+        **Which side of systemd 258 this box is on is measured**, and
+        it is the older one: `systemctl --version` says `systemd 247
+        (247.3-7+deb11u8)` — measured on the device 2026-09-05, on
+        UniFi OS 5.1.31, whose base is Debian 11 — so `terminate` here
+        stops the unit, which is the route above. Reading upstream, since
+        this box is not there: from 258 machined records that the
+        payload sits in a control group below the unit's own, and
+        `terminate` sends `SIGTERM` to `systemd-nspawn` itself
+        instead — the container goes down with it, the unit exits, and
+        the machine comes back. A firmware jump onto a newer base is
+        what would move this verb, and re-reading `systemctl
+        --version` is what would say that it had.
+
+        **The `machinectl` verbs below are derived from systemd's and
+        s6's sources rather than measured on this device**, which is
+        the opposite of the reading in §1.3 and is marked because the
+        difference matters at 2am; what settles them is listed after
+        them. `machinectl poweroff` is not `terminate`: it signals
+        the container's PID 1, which these images' s6 does not act on.
+        It sends
         `SIGRTMIN+4`, s6 handles no real-time signal, and a signal a
         container's PID 1 has no handler for never reaches it from
-        outside the namespace — so `poweroff` does nothing at all.
-        `machinectl reboot` is the verb that bounces a machine: it
-        sends `SIGINT`, s6 reboots on that, and `Restart=always`
-        brings the machine back whatever exit status the reboot path
-        produces. That verb rests on s6 keeping its own `SIGINT`
-        handler, which a non-zero `S6_CMD_RECEIVE_SIGNALS` in a
-        machine's environment takes away — s6-overlay's `stage0`
-        renames the `.s6-svscan` handlers aside and installs a
-        forwarder instead. So the variable is refused where a
-        machine's settings are rendered: a declaration carrying it
-        fails to render rather than producing a machine this verb no
-        longer bounces.
+        outside the namespace — so `poweroff` is expected to do
+        nothing at all. `machinectl reboot` is the verb expected to
+        bounce a machine: it sends `SIGINT`, s6 reboots on that, and
+        `Restart=always` brings the machine back whatever exit status
+        the reboot path produces. That verb rests on s6 keeping its
+        own `SIGINT` handler, which a non-zero
+        `S6_CMD_RECEIVE_SIGNALS` in a machine's environment takes
+        away — s6-overlay's `stage0` renames the `.s6-svscan` handlers
+        aside and installs a forwarder instead. So the variable is
+        refused where a machine's settings are rendered: a declaration
+        carrying it fails to render rather than producing a machine
+        this verb no longer bounces.
+
+        **What the soak settles**, recorded in §1.3's form — the
+        reading, the date, and the firmware it was taken on. Against
+        **one** resolver while the other serves:
+        `machinectl poweroff adguard-bob`, then `machinectl list` and
+        `systemctl show -p NRestarts systemd-nspawn@adguard-bob.service`
+        a few seconds later; then `machinectl reboot adguard-bob` and
+        the same two readings again. Expected is no change at all from
+        the first verb and a restart count raised by one from the
+        second. Whatever is seen is what gets written down, because
+        that is the reading the paragraph above is replaced by.
+
+        The marker is not caution for its own sake. Reasoning from
+        upstream has been wrong on this firmware more than once, each
+        time in a way the documentation did not hint at: `frr.service`
+        cannot reload here, the daemon's start script returns before
+        the daemons accept configuration, and `vtysh -C -f` proves a
+        file parses rather than that anything accepted it (§1.3).
     -   **`After=` the bridge's device unit**, for the three machines
         on the container VLAN. It is ordering and nothing else: a start
         systemd queues while the bridge is coming up waits for the
@@ -994,17 +1026,33 @@ to be authorized until the delivery has happened.
 What breaks the cycle is the LAN, which reaches the UDM before and
 independently of ZT, and an optional key of the `physical` stack:
 
-**`gatewayBootstrapHost`** — a LAN address for the gateway, e.g. a name
-the home resolvers already answer for. It answers one question: where
-does the device answer today. While it is set, both providers that
-reach the device dial that address instead of the roster's
-`10.144.1.1` — the desired-state push over SSH and the controller's API
-over HTTPS, one box behind two ports. Unset, which is the steady state,
-both derive the address from `conventions`. Whether the gateway is a
-member at all is a separate question with a separate answer: the roster
-carries an entry for it or it does not (§2.1).
+**`gatewayBootstrapHost`** — a LAN address for the gateway, **spelled
+as a literal address and never as a name**: `10.0.5.1`, the device's
+own leg on the container VLAN (`conventions.site.CONTAINER_VLAN`), or
+whichever other of its legs the workstation reaches. It answers one
+question: where does the device answer today. While it is set, both
+providers that reach the device dial that address instead of the
+roster's `10.144.1.1` — the desired-state push over SSH and the
+controller's API over HTTPS, one box behind two ports. Unset, which is
+the steady state, both derive the address from `conventions`. Whether
+the gateway is a member at all is a separate question with a separate
+answer: the roster carries an entry for it or it does not (§2.1).
 
-The ceremony, four steps and three applies:
+**A name cannot be used here, and that is structural rather than a
+preference.** The one apply this knob exists for runs inside the
+cutover window, and that window stops both home resolvers for its whole
+length — every lease on the LAN names them, so for that span nothing on
+the LAN answers for any name at all
+([gateway-cutover.md](gateway-cutover.md) §4). A literal address needs
+no resolver; a name that the resolvers answer for is unresolvable at
+the only moment this key is read. Which of the device's legs to use is
+a site fact rather than one this program declares — the untagged LAN
+carries no gateway address in `conventions` — so the value is confirmed
+by reaching it before the window rather than derived here
+(gateway-cutover.md §3).
+
+The ceremony is four steps; steps 1, 3 and 4 each apply, and step 1's
+apply is run in two parts around the cutover window:
 
 1.  **Set `gatewayBootstrapHost`, then `physical` up.** The push goes
     over the LAN and delivers the services, the ZT container included.
@@ -1013,6 +1061,14 @@ The ceremony, four steps and three applies:
     live state under the declared paths — the procedure, its
     verification and its rollback are
     [gateway-cutover.md](gateway-cutover.md).
+    **This is also the first apply of the whole stack, and the window
+    runs only the gateway's share of it**: the cutover targets the
+    gateway's own resources by URN, and the run with no targets that
+    completes this step follows once the window has closed
+    (gateway-cutover.md §4 step 3, then §5 step 5). Why it is split
+    that way is below. Step 2 needs only the first of those two runs;
+    step 3 needs both, because the address it reads is formed by a
+    machine the second one boots.
     Nothing is declared for the gateway on the overlay. `workerGua`
     is unset here and optional for that reason: the address it
     carries is formed by the worker off this apply's own router
@@ -1025,7 +1081,34 @@ The ceremony, four steps and three applies:
 3.  **Read the worker's GUA off the VLAN-7 advertisement** — the
     address it formed by SLAAC once step 1 declared the network and
     booted it — into `workerGua`, and **apply again, knob still
-    set.** The roster now authorizes the member and assigns it
+    set.** The worker is a Talos node and has no shell, so the address
+    is read over the machine API. `talosctl` reads its credential
+    from a file rather than from the export, so step 1's export is
+    written out first — it is a cluster-admin credential, so it is
+    written where the operator keeps such things and not left in a
+    working directory:
+
+    ```sh
+    pulumi stack select physical
+    mkdir -p ~/.talos
+    (umask 077; pulumi stack output talosconfig --show-secrets > ~/.talos/kluster)
+    talosctl --talosconfig ~/.talos/kluster -n 192.168.70.10 get addresses
+    ```
+
+    The value is the address out of the site's delegated prefix — one
+    beginning with `2` or `3` — **on the link that carries
+    `192.168.70.10`**, which is the row to find first, because that
+    listing covers every link the node has. Two families of decoy sit
+    in it: an `fe80::` link-local on each link, and the `fd`-prefixed
+    unique-local addresses, which are the VLAN's own /64 and the one
+    KubeSpan gives the node on its own interface. The VLAN advertises
+    the delegated prefix and nothing else global
+    (`ipv6_ra_enable`, `ipv6_interface_type='pd'` on the network this
+    same declaration creates), so on that link there is exactly one
+    candidate. A worker with none there has seen no advertisement,
+    which is a fault to chase rather than something to wait for.
+
+    The roster now authorizes the member and assigns it
     `10.144.1.1`; the device joins the network it is the router of,
     and the inbound-v6 pinhole (§4.2) is declared for the first time.
     The managed routes are not added here: they are declared on the
@@ -1040,6 +1123,36 @@ The ceremony, four steps and three applies:
     verification rather than a formality: it rewrites the services through
     the path that is now load-bearing, and it converges only if that
     path carries the whole of it.
+
+**Why the window carries only part of step 1.** This is the first
+apply of the whole stack, so the run without targets is also the first
+cloud network and image import, the load balancer, the A1 launches,
+the Talos bootstrap and the health gate that releases the kubeconfig,
+the worker VM under libvirt, the backup bucket and the overlay network
+with every member of it — an inventory that belongs to
+declarative/physical.md §6 and to the stack program, recalled here
+only to say what the window is spared. None of it has anything to do
+with the LAN's DNS, and the A1 launches carry a risk this program
+cannot retry away: capacity for that shape is drawn per availability
+domain, a launch that finds none in its own fails, and the component
+that makes them retries nothing (`stacks/physical.py` `_placements`,
+cluster/nodes.md §5). Those launches would otherwise sit in the same
+update as the tens of minutes of container pulling the window is made
+of, and a red `pulumi up` says the update failed rather than which
+half of it converged.
+
+**The gateway converges independently, which is what makes the split
+safe.** `Gateway` is built from configuration and `conventions` alone
+and nothing downstream reads a handle to it, so no resource of it
+waits on anything the second run creates.
+
+**What targeting does not remove.** The stack program still runs
+whole. The account's availability and fault domains are read off the
+cloud API before the gateway is declared at all, so an account this
+workstation cannot reach — or a credential that has lapsed — fails the
+apply inside the window having created no gateway resource, and every
+provider is still configured. What targeting removes is the creation of
+everything outside the gateway.
 
 Two properties make the ceremony safe to repeat. The pinned host key is
 a bare `ssh-ed25519 <blob>` line with no host name in front of it, so it
