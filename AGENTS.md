@@ -12,8 +12,8 @@ the work — how it is dispatched, reviewed, and reported — is
 
 ## The gate
 
-A change is done when every one of these passes, and CI runs the same
-set:
+A change is done when every one of these passes. CI runs the same set,
+except where a bullet says otherwise:
 
 * `mise x uv -- uv run ruff check` and `ruff format --check`
 * `mise x uv -- uv run basedpyright` — strict, clean
@@ -21,7 +21,8 @@ set:
 * `timeout 60 mise x uv -- uv run pytest`
 * `ltex-cli-plus` on every markdown file touched, one file at a time —
   where the binary is and how it reaches the repository's word lists is
-  under "Writing the prose"
+  under "Writing the prose". This one runs on a workstation only; CI
+  does not.
 * provider-facing code has one more requirement —
   [dispatch.md](docs/framework/dispatch.md) §1.1
 
@@ -70,20 +71,14 @@ documentation the change makes true ships with it rather than after it.
   no history the reader has to subtract.
 * **Prose is checked like code.** Every markdown file passes
   `ltex-cli-plus` against `.vscode/ltex.dictionary.en-US.txt` and
-  `.vscode/ltex.disabledRules.en-US.txt`. The binary is **not on `PATH`**
-  — on this machine it is `~/.local/share/nvim/mason/bin/ltex-cli-plus` —
-  and it reads neither word list on its own, so a run is two steps: build
-  a client configuration carrying the contents of both lists, then check
-  one file against that configuration.
+  `.vscode/ltex.disabledRules.en-US.txt`. The binary is **not on `PATH`**:
+  it comes with the editor tooling, here as mason's
+  `~/.local/share/nvim/mason/bin/ltex-cli-plus`. It reads neither word
+  list on its own either, so a run is two steps — build a client
+  configuration carrying the contents of both lists, then check one file
+  against it. From the workspace root:
 
-      python3 - <<'PY'
-      import json, pathlib
-      words = lambda p: pathlib.Path(p).read_text().split()
-      pathlib.Path(".claude/ltex.json").write_text(json.dumps({
-          "dictionary": {"en-US": words(".vscode/ltex.dictionary.en-US.txt")},
-          "disabledRules": {"en-US": words(".vscode/ltex.disabledRules.en-US.txt")},
-      }))
-      PY
+      mkdir -p .claude && python3 -c 'import json,pathlib as P;w=lambda n:P.Path(f".vscode/ltex.{n}.en-US.txt").read_text().split();P.Path(".claude/ltex.json").write_text(json.dumps({"dictionary":{"en-US":w("dictionary")},"disabledRules":{"en-US":w("disabledRules")}}))'
       ~/.local/share/nvim/mason/bin/ltex-cli-plus \
           --client-configuration=.claude/ltex.json <file.md>
 
@@ -102,20 +97,24 @@ documentation the change makes true ships with it rather than after it.
     rather than its contents — is **silently dropped** here: no error, the
     same exit code, and a run indistinguishable from one configured with
     `{}`. So the words go into the configuration whole, and the
-    configuration itself goes inside the workspace, where `.gitignore`
-    covers `.claude/`: a copy under `/tmp` is reaped between rounds and
-    comes back as that stack trace.
+    configuration goes where it will still be there when the checker runs
+    and will not be committed: `.claude/` inside the workspace, which
+    `.gitignore` covers and which the recipe above creates.
   - **Confirm the configuration loaded before believing any finding.**
-    Under a working configuration `docs/framework/github.md` reports
-    exactly two `info` findings; a count in the thirties on that file
-    means the word lists never reached the checker, and every finding on
-    the file actually under review is then suspect. Without this check the
-    failure looks like a large, plausible prose regression on a file that
-    is clean, and the repair is to rewrite correct sentences.
+    Under a working configuration `docs/framework/github.md` reports a
+    handful of `info` findings and nothing else — `ANY_MORE` and
+    `UP_TO_DATE_HYPHEN`, or fewer if someone has since fixed one of them.
+    Thirty-odd findings on that same file means the word lists never
+    reached the checker, and every finding on the file actually under
+    review is then suspect. Skip this check and a misconfigured run reads
+    as a large, plausible prose regression on a file that is clean,
+    inviting the mistaken repair: rewriting correct sentences, or growing
+    a word list to silence them.
   - **A dictionary entry is for a term this repository owns.** Anything
-    else gets the prose reworded instead: the dictionary is shared by
-    every open pull request, and growing it from a change about something
-    else is scope this repository would rather not take.
+    else gets the prose reworded instead. The word lists are **not** in
+    the serialized set below; what keeps them out of contention is that a
+    change about something else does not grow them — that is scope this
+    repository would rather not take.
   - Disable a rule only when it is systematically wrong for this repo (a
     firewall `ACCEPT`, a `.phd` domain, `key id`, the dot in `A1.Flex`,
     alice/bob as instance names). A one-off gets the prose fixed instead.
@@ -126,15 +125,15 @@ documentation the change makes true ships with it rather than after it.
     mis-columns inside very long table rows; it reports a fragment of a
     word as a misspelling; and it produces **sentence-segmentation
     artifacts**, where a grammar rule fires on a sentence the change never
-    touched. That last one comes from the conversion the checker runs
-    before it reads a file: inline code spans become dummy tokens whose
-    length differs from the source, and enough of them ahead of a line
-    shift where the checker believes a sentence starts. The first two
-    give themselves away on sight; this one does not, because the
-    sentence reads fine and the rule name is real. Its tells are that
-    the finding does **not** reproduce on `main`'s copy of the same
-    file, and that it moves or vanishes when unrelated nearby text
-    changes length.
+    touched. Those come from the conversion the checker runs before it
+    reads a file: inline code spans become dummy tokens whose length
+    differs from the source, and enough of them ahead of a line shift
+    where the checker believes a sentence starts. A mis-columned row and
+    a word fragment give themselves away on sight; a segmentation
+    artifact does not, because the sentence reads fine and the rule name
+    is real. Its tells are that the finding does **not** reproduce on
+    `main`'s copy of the same file, and that it moves or vanishes when
+    unrelated nearby text changes length.
 
 ## Working beside other agents
 
