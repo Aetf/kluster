@@ -13,6 +13,7 @@ which is where a wiring mistake would surface.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from ipaddress import IPv4Address
 from pathlib import Path
 
@@ -274,6 +275,38 @@ def test_every_machine_runs_an_s6_image_on_the_terms_that_image_sets() -> None:
         assert f'Environment=S6_KILL_GRACETIME={container.S6_KILL_GRACETIME}' in settings
         assert f'Capability={container.CAPABILITY}' in settings
         assert 'ResolvConf=off' in settings
+
+
+def intercepting_signals(_declaration: container.ServiceDeclaration) -> Mapping[str, str]:
+    """An environment as a future change to a declaration might compute one."""
+    return {container.S6_CMD_RECEIVE_SIGNALS: '1'}
+
+
+def test_no_machine_asks_s6_to_hand_its_signals_to_a_forwarder() -> None:
+    """`machinectl reboot` is the verb that bounces a machine (gateway.md §1.1),
+    and it works because s6-linux-init handles `SIGINT` as a reboot.
+
+    A non-zero `S6_CMD_RECEIVE_SIGNALS` makes s6-overlay's `stage0` rename the
+    `.s6-svscan` handlers aside -- `SIGINT` among them -- and install its own
+    forwarder instead. The verb would then bounce nothing, and nothing would
+    fail to say so, which is why no machine's environment carries the variable.
+    """
+    for declaration in declarations():
+        assert container.S6_CMD_RECEIVE_SIGNALS not in declaration.environment
+        assert container.S6_CMD_RECEIVE_SIGNALS not in container.nspawn_file(declaration)
+
+
+def test_a_machine_that_would_take_s6s_signals_away_fails_to_render(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal is where every machine's environment passes, so the line
+    somebody would add fails at the render rather than on the device."""
+    declaration = declared_for('caddy')
+    monkeypatch.setattr(type(declaration), 'environment', property(intercepting_signals))
+
+    with pytest.raises(container.InterceptedSignals) as raised:
+        _ = container.nspawn_file(declaration)
+
+    assert 'caddy' in str(raised.value)
+    assert container.S6_CMD_RECEIVE_SIGNALS in str(raised.value)
 
 
 def test_caddy_is_told_where_to_read_its_configuration_and_where_to_keep_what_it_buys() -> None:
