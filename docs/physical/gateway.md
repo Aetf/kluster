@@ -1206,11 +1206,11 @@ on a pair holding both a drop and an allow the position *is* the rule.
     from the LAN's least-trusted population). Address groups are
     single-family, so both rules come in v4-CIDR and ULA pairs.
     **The firewall names only the stable media VIP** (a
-    `conventions` literal): which apps are IoT-reachable is
-    decided at the Gateway layer (`media-gw` route attachment, a
-    review-visible per-app parameter) — app membership changes
-    never touch a firewall rule. *Correction on record*: audit
-    M2's "recorded cross-VLAN dependencies all originate
+    `conventions` literal): which apps are IoT-reachable is decided
+    at the Gateway layer (`media-gw` route attachment, recorded per
+    app as `Exposure.IOT` on its census row) — app membership
+    changes never touch a firewall rule. *Correction on record*:
+    audit M2's "recorded cross-VLAN dependencies all originate
     cluster→IoT" was wrong — TV/streamer → jellyfin is an
     IoT-originated dependency the census missed; a blanket drop
     would have severed it at jellyfin's migration wave.

@@ -252,9 +252,10 @@ All decided behavior from architecture.md §3, expressed as config:
     dedicated `lan`-pool VIP** — a `conventions` literal, because
     the UDM firewall's IoT→media allow names it,
     physical/gateway.md §4.2). Attaching a route to `media-gw` *is*
-    the decision "reachable from the IoT VLAN"; the helper exposes
-    it as a parameter, so the choice is visible in the app's diff.
-    Apps attach `HTTPRoute`s (§3.6 matrix).
+    the decision "reachable from the IoT VLAN", and the route census
+    row records it as `Exposure.IOT` (conventions/routes.py), so the
+    choice is on the row a reviewer reads rather than an argument at a
+    call site. Apps attach `HTTPRoute`s (§3.6 matrix).
 -   **Egress Gateway**: enabled (the dedicated-VIP pattern's outbound
     half, architecture.md §3.2); the `CiliumEgressGatewayPolicy`
     instances themselves belong to the workloads that need them

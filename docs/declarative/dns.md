@@ -370,14 +370,15 @@ set the row names. It is the same row `dns` writes the AdGuard rewrite
 from, read by both stacks rather than emitted by either; the helper
 never writes a rewrite itself, which is the split §3 describes.
 `lan_route(conventions.routes.GOLINKS)` is the LAN-only variant (a
-`lan-gw` route, no public record, §4); its `iot_reachable=True`
-parameter attaches `media-gw` instead, and the rewrite answers with
-the media VIP — the review-visible form of "IoT devices may reach this
-app" (cluster-infra.md §2, physical/gateway.md §4.2). `public_port(…)`
-is the raw TCP/UDP analog, and it is the **only** helper that emits an
-NLB listener and its security rule (physical.md §1's
-derived-not-enumerated principle) — an HTTP route rides listeners the
-cluster already has.
+`lan-gw` route, no public record, §4). Which LAN gateway it attaches to
+is the row's own `Exposure`: `Exposure.IOT` attaches `media-gw`, and
+the rewrite answers with the media VIP — so "IoT devices may reach this
+app" is decided once, on the census row a reviewer reads, and the
+helper has no say in it (cluster-infra.md §2, physical/gateway.md
+§4.2). `public_port(…)` is the raw TCP/UDP analog, and it is the
+**only** helper that emits an NLB listener and its security rule
+(physical.md §1's derived-not-enumerated principle) — an HTTP route
+rides listeners the cluster already has.
 
 ## 6. Migration shape
 

@@ -23,6 +23,14 @@
     (`kluster-ops#189`). That rule is stated in `conventions/__init__.py`
     and in no design document, so the sentence above does not reach it; §7's
     `entries=rewrites(conventions.ROUTES)` sketch no longer imports.
+    **§6.3's argument for the fourth `Exposure` value is ruled backwards**:
+    `iot_reachable` retires rather than surviving as a helper parameter,
+    because a flag beside a row that already carries `Exposure` reintroduces
+    at the signature what the single field forbids at the row. `IOT` is a
+    value *because* it cannot be expressed as a flag, so the value stands on
+    itself and the parameter has nowhere to stand (`kluster-ops#224`);
+    declarative/dns.md §5 and declarative/workloads.md §1 carry the
+    contract.
     **§8.1 is a dated snapshot**: it describes the rewrite provider as it
     stood when this text was written, with its credential an input on every
     resource, which the stateless-provider work undid for the credential and
