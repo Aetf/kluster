@@ -486,6 +486,19 @@ Environment, the Butane recipient swapped, a fresh dump verified, the old
 key deleted (state-backend.md §5), because its contract covers the newest
 object rather than a retention window.
 
+**A provider role is one shape.** The name a credential is minted under
+and the whole of what it may do are a single value — `b2.Role`,
+`cloudflare.Role` and `oci_iam.Identity` are that value in each
+platform's own vocabulary: B2 capabilities and the bucket and prefix
+they are confined to, Cloudflare permission groups, OCI policy
+statements. A mint takes a role rather than a name plus whatever
+permission constant is in scope, so a name cannot reach a mint without
+its grant, and the **Scope** column above is the register's reading of
+the same value. Which resources a role is granted over is not part of
+it: the zones a token covers and the compartment a key administers are
+this installation's to name at the mint, while the role is the same
+wherever it is minted.
+
 **A stack-generated row leaves Pulumi state only where something
 outside Pulumi reads it.** The kubeconfig has no such reader: `k8s-base`
 and `apps` take it from the `physical` stack through a StackReference, so
@@ -621,11 +634,11 @@ name.
 | `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. |
 | `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
-| `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
+| `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records — this being the first place in a bring-up that check can fire. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
 | `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, under the one key the stack reads; the stack file is then committed. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
-| `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. Re-running it rotates that token. |
+| `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
 | `credentials derived b2-management mint` | After the state backend exists. Mints the B2 management key (§3) from the B2 seed into the `physical` stack's config secret. Re-running it rotates that key and retires the one it replaces. |
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
@@ -655,7 +668,11 @@ seed belonging to an account this installation does not own is knowable
 before anything is created — from the seed's own row for OCI, from the
 zone listing for Cloudflare — and a run that discovered it afterward
 would refuse while leaving a live credential behind in that account,
-recorded in no register and known to nobody who could revoke it. The
+recorded in no register and known to nobody who could revoke it. It is
+a step only where the platform's account is a fact this program records:
+`conventions` names the OCI tenancy and the Cloudflare account, and
+`conventions.B2Account` carries a region and nothing to check against, so
+`b2-management` is the one minting subcommand with no first step. The
 slot map (below) does not drive those pushes; it records where they
 land, naming each config key by importing it from the code that writes
 it, so the two cannot say different things. `generate` keeps that

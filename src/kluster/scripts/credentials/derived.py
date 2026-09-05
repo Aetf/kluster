@@ -273,7 +273,8 @@ def oci_state_backend(
     row above, because the mint holds it rather than the row does: this key
     provisions the appliance the whole installation's state lives on, and one
     minted in the wrong tenancy would build that appliance in an account
-    nothing here manages.
+    nothing here manages. A run given `compartment_id` is pointed at a drill
+    tenancy and is not held to it, exactly as the row above is not.
     """
     minted = oci_iam.mint_api_key(
         kit,

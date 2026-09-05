@@ -1018,6 +1018,24 @@ def test_a_seed_from_another_tenancy_creates_nothing(
     assert sorted(policy.name for policy in tenancy.identity.policies.values()) == [oci_iam.SEED_NAME]
 
 
+def test_a_seed_from_another_tenancy_does_not_converge_its_own_policy_there(
+    seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    # A tenancy this installation does not own holds no `kluster-seed` policy,
+    # so converging one is a create rather than the read-only no-op it is in a
+    # tenancy a bring-up has already run in -- and it is the *first* thing a
+    # mint writes, ahead of the compartment and everything under it. A check
+    # that sat one line below it would leave an IAM policy behind in that
+    # account, which is the orphan class in its earliest form.
+    tenancy.identity.policies.clear()
+
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = oci_iam.mint_api_key(seeded, consumer=conventions.PHYSICAL, seed_entry=SEED_ENTRY, connect=tenancy)
+
+    assert tenancy.identity.policies == {}
+
+
 def test_a_drill_tenancy_is_not_held_against_the_recorded_account(
     seeded: KdbxStore, tenancy: Tenancy, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -292,6 +292,26 @@ def test_the_gateway_token_lands_in_the_stack_config_and_sees_only_its_own_zone(
     assert scoped < set(conventions.ALL_ZONES)
 
 
+def test_the_gateway_row_is_refused_in_another_account_before_anything_is_minted(
+    api: FakeApi,
+    kit: KdbxStore,
+    physical_stack: tuple[pulumi_config.Stack, RecordedPulumi],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot, runner = physical_stack
+    _with_cloudflare_account(monkeypatch, 'some-other-account')
+
+    with pytest.raises(masters.CredentialRejected, match='CLOUDFLARE_ACCOUNT'):
+        _ = derived.cloudflare_gateway_acme(kit, stack=slot)
+
+    # This row delivers no account identifier and its consumer names none, but
+    # the check belongs to the mint rather than to a row, so it is held to the
+    # recorded account exactly as the zones row is -- and leaves nothing live
+    # in an account this installation does not own.
+    assert runner.config == {}
+    assert _gateway_live(api) == []
+
+
 def test_the_two_cloudflare_rows_are_separate_credentials(
     api: FakeApi,
     kit: KdbxStore,
@@ -685,6 +705,25 @@ def test_the_appliance_key_lands_in_a_configuration_the_sdk_reads(
     # The credential and nothing else: where the appliance may act is a
     # convention its provisioner reads, so a copy here could only go stale.
     assert 'compartment-id' not in config
+
+
+def test_the_appliance_row_is_refused_in_another_account_before_anything_is_created(
+    oci_kit: KdbxStore, tenancy: Tenancy, slots: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    users, policies = dict(tenancy.identity.users), dict(tenancy.identity.policies)
+
+    # No compartment is named, so this is the ordinary path rather than the
+    # drill: the check fires before the compartment is even looked up.
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = derived.oci_state_backend(oci_kit, connect=tenancy)
+
+    # The first place in a bring-up where the check can fire, and the row whose
+    # key builds the appliance the whole installation's state lives on.
+    assert not slots.exists()
+    assert tenancy.identity.users == users
+    assert tenancy.identity.policies == policies
+    assert tenancy.identity.compartments == {}
 
 
 def test_the_appliance_key_is_a_file_only_its_owner_can_read(oci_kit: KdbxStore, tenancy: Tenancy, slots: Path) -> None:
