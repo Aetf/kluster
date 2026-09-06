@@ -120,6 +120,9 @@ async def test_a_single_ad_region_spreads_across_fault_domains_instead(monitor: 
 
 @pytest.mark.asyncio
 async def test_the_legacy_metadata_endpoint_is_off_on_every_node(nodes: CloudNodes) -> None:
+    # "Every node" is a claim about a fleet, so the fleet is pinned before it
+    # is walked: an empty one satisfies the loop and nothing else here.
+    assert set(nodes.instances) == {'cp1', 'cp2', 'cp3'}
     for instance in nodes.instances.values():
         options = await instance.instance_options.future()
         assert options is not None

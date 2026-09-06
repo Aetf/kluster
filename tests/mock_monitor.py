@@ -109,7 +109,9 @@ class Recorder(pulumi.runtime.Mocks):
     """A monitor that invents nothing and remembers every declaration.
 
     Every registration is answered with its own inputs and an id built from the
-    logical name, which is what a provider that only defines things would do.
+    logical name, which is what a provider that only defines things would do --
+    except for the one registration an engine answers with an error instead,
+    a second one under an identity the run already used (`_capture_request`).
 
     A suite whose subject needs more overrides one of the two hooks:
     `computed` for an output the provider would read back that the inputs do
@@ -129,10 +131,12 @@ class Recorder(pulumi.runtime.Mocks):
         #: component, the resource inside it and that resource's own
         #: sub-resource all carry one name. See `_capture_request`.
         self.requested: list[Any] = []
-        #: The same requests indexed by logical name, last one wins. It cannot
-        #: tell a component from its children, so nothing here reads it; the
-        #: suites that ask only *whether* a name registered at all do.
-        #: TODO(kluster-ops#209): delete with those readers.
+        #: The same requests indexed by the URN each registered under -- the
+        #: identity the engine keys on, which qualifies a logical name by the
+        #: type and the parent's type. A component, the resource inside it and
+        #: that resource's own sub-resource land in three entries here where a
+        #: name would have collapsed them into one. A repeated URN is refused
+        #: rather than overwritten; `_capture_request` is where, and why.
         self.registrations: dict[str, Any] = {}
 
     # -- what a suite overrides ---------------------------------------------
@@ -189,11 +193,12 @@ class Recorder(pulumi.runtime.Mocks):
         ambiguity is refused here rather than resolved, the way `one` and
         `options_of` already refuse theirs.
 
-        Not refused at registration, where an engine would refuse it: a suite
-        may declare one component twice in a run on purpose -- a variant built
-        beside its baseline, read for the configuration it renders rather than
-        for the program it declares -- and that run is only wrong when something
-        asks it a question by name.
+        A repeated *identity* is already refused at registration
+        (`_capture_request`), so what reaches here is the ambiguity a URN
+        permits and a name cannot express: one type under one name below two
+        parents of different types is two distinct URNs and one by-name
+        question, which is refused rather than resolved to whichever
+        registered last.
         """
         declarations = self.of_type(typ)
         repeated = sorted(name for name, count in Counter(it.name for it in declarations).items() if count > 1)
@@ -257,22 +262,48 @@ _register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
 
 
 def _capture_request(self: Any, request: Any) -> Any:
-    """Keep the two things Pulumi's mock monitor otherwise drops.
+    """Refuse a registration the engine would, and keep the two things the mock drops.
 
-    The request itself, because a resource's *options* -- `import_`,
-    `ignore_changes`, `delete_before_replace`, `depends_on` -- reach no output
-    and are exactly what several suites are about -- every one of them, rather
-    than only the last under each logical name; and the per-property
-    dependency edges, which the mock's response leaves empty although the
-    request carried them (framework/testing.md §3.1).
+    **The refusal.** A URN is a resource's identity, and a program that
+    registers one twice is a program the engine stops: `Duplicate resource URN
+    <urn>; try giving it a unique name`. Pulumi's mock monitor does not stop
+    it -- it writes its resource table under that same URN and the second
+    registration silently replaces the first, so a run no engine would have
+    accepted reads back as a run with one resource in it. Refusing here is
+    what makes the double answer the way the thing it stands in for does, and
+    it catches the shape rather than the readers: a case that asks nothing by
+    name is caught too.
+
+    The identity is the URN the mock computes, which is the engine's shape --
+    stack, project, the parent's type, the type, the logical name -- with one
+    difference: it qualifies by the *immediate* parent's type where the engine
+    carries the whole chain of them. That makes the refusal here at worst
+    stricter than the engine's, never laxer. Note what neither form carries:
+    the parent's *name*. Two components of one type, each holding a child of
+    one type under one name, are a duplicate URN in the engine too, which is
+    why a child is conventionally named after the component that holds it.
+
+    **What is kept.** The request itself, because a resource's *options* --
+    `import_`, `ignore_changes`, `delete_before_replace`, `depends_on` -- reach
+    no output and are exactly what several suites are about -- every one of
+    them, rather than only the last under each logical name; and the
+    per-property dependency edges, which the mock's response leaves empty
+    although the request carried them (framework/testing.md §3.1).
 
     Patched on the class, once, at import: `set_mocks` builds a fresh monitor
     per run, so there is no instance to hook, and the recording lands on
     whichever `Recorder` that monitor was built around rather than on a global.
     """
     if isinstance(self.mocks, Recorder):
+        urn = self.make_urn(request.parent, request.type, request.name)
+        if urn in self.mocks.registrations:
+            raise AssertionError(
+                f'duplicate resource URN {urn}; try giving it a unique name. '
+                'The engine refuses a run that registers one identity twice, so a run that '
+                'declares a variant beside its baseline names the variant something else.'
+            )
         self.mocks.requested.append(request)
-        self.mocks.registrations[request.name] = request
+        self.mocks.registrations[urn] = request
     response = _register_resource(self, request)
     for name, dependencies in request.propertyDependencies.items():
         response.propertyDependencies[name].urns.extend(dependencies.urns)

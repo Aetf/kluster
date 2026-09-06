@@ -83,7 +83,16 @@ def test_object_storage_is_capped_in_the_unit_it_is_spelled_in() -> None:
 def test_every_statement_names_the_compartment() -> None:
     from kluster.components.cloud.guardrails import quota_statements
 
-    for line in quota_statements(COMPARTMENT_NAME):
+    lines = quota_statements(COMPARTMENT_NAME)
+    # "Every statement" is a claim about the policy, so the policy is pinned
+    # before it is walked: one that lost its statements satisfies the loop.
+    assert {line.split()[1] for line in lines} == {
+        'compute-core',
+        'compute-memory',
+        'block-storage',
+        'object-storage',
+    }
+    for line in lines:
         # The statement language has no OCIDs: a compartment is named, and a
         # statement that names none applies to the whole tenancy.
         assert line.endswith(f'in compartment {COMPARTMENT_NAME}')
@@ -120,6 +129,8 @@ async def test_one_alert_can_arrive_before_the_money_is_spent() -> None:
 @pytest.mark.asyncio
 async def test_every_alert_has_an_audience() -> None:
     guardrails = build()
+    # "Every alert" is a claim about the roll, so the roll is pinned first.
+    assert set(guardrails.alerts) == {rule.name for rule in ALERT_RULES}
     for rule in guardrails.alerts.values():
         assert await rule.recipients.future() == ','.join(RECIPIENTS)
         assert await rule.threshold_type.future() == 'PERCENTAGE'
