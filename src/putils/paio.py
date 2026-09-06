@@ -18,7 +18,6 @@ import traceback
 from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar, cast
 
 import pulumi
-import pulumi.runtime
 from pulumi.output import contains_unknowns
 
 __all__ = 'task', 'background', 'async_output', 'resolve', 'UnknownValueException'
@@ -95,7 +94,7 @@ def background(func: Callable[Param, T]) -> Callable[Param, Awaitable[T]]:
 
 class UnknownValueException(Exception):
     """
-    Raised by `resolve` during preview when an awaited output is unknown.
+    Raised by `resolve` when an awaited output is unknown.
 
     Aborts the enclosing `async_output` coroutine early; `async_output`
     catches it and marks its output as unknown. User code normally should
@@ -133,13 +132,16 @@ def resolve(*outputs: 'pulumi.Output[Any] | Any') -> Awaitable[Any]:
         vpc_id, subnet_id = await resolve(vpc.id, subnet.id)
 
     The resources behind the outputs are recorded as dependencies of the
-    enclosing `async_output`, and their secretness propagates to it. During
-    preview, raises `UnknownValueException` if any awaited value is unknown.
+    enclosing `async_output`, and their secretness propagates to it. Raises
+    `UnknownValueException` if any awaited value is unknown, in any kind of
+    run: a coroutine never receives the `Unknown` sentinel, and the code
+    after an `await resolve(...)` may assume it holds plain values, at the
+    price of not running at all when an upstream value is unknown
+    (framework/pulumi.md §1.2).
 
     Only valid inside an `async_output` coroutine. Anywhere else it raises
     `RuntimeError`: dependencies would be silently dropped, and an unknown
-    during preview would crash the program instead of degrading to an
-    unknown output.
+    would crash the program instead of degrading to an unknown output.
     """
     if not outputs:
         raise TypeError('resolve() requires at least one output')
@@ -151,12 +153,12 @@ async def _resolve(outputs: tuple[Any, ...]) -> Any:
     if ctx is None:
         raise RuntimeError(
             'resolve() must be awaited inside an async_output coroutine; '
-            'outside one, dependency tracking and preview unknown-handling cannot work'
+            'outside one, dependency tracking and unknown-handling cannot work'
         )
 
     outs = [pulumi.Output.from_input(o) for o in outputs]
     # Record dependencies and secretness *before* waiting on values, so they
-    # are captured even if the wait aborts on an unknown during preview.
+    # are captured even if the wait aborts on an unknown.
     for resources in await asyncio.gather(*(o.resources() for o in outs)):
         ctx.deps.update(resources)
     ctx.secret = ctx.secret or any(await asyncio.gather(*(o.is_secret() for o in outs)))
@@ -164,9 +166,11 @@ async def _resolve(outputs: tuple[Any, ...]) -> Any:
     # Exceptions from upstream outputs (e.g. a failed resource registration)
     # propagate naturally out of these awaits.
     values = await asyncio.gather(*(o.future(with_unknowns=True) for o in outs))
-    if pulumi.runtime.is_dry_run() and (
-        contains_unknowns(values) or not all(await asyncio.gather(*(o.is_known() for o in outs)))
-    ):
+    # An unknown is a property of the value, not of the kind of run: a
+    # `--target`ed update leaves the resources it skips creating unknown to a
+    # program that is otherwise applying for real. The abort is unconditional;
+    # why that is what the engine wants is framework/pulumi.md §1.2.
+    if contains_unknowns(values) or not all(await asyncio.gather(*(o.is_known() for o in outs))):
         raise UnknownValueException()
     return values[0] if len(outputs) == 1 else tuple(values)
 
@@ -179,9 +183,10 @@ def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output
     The coroutine awaits other outputs via `resolve`, which records the
     resources behind them; the returned Output carries those as dependencies
     so the Pulumi DAG stays intact, and is marked secret if any resolved
-    output was secret. During preview, if the coroutine hits an unknown
-    value, the returned Output becomes unknown -- other inputs of the same
-    resource are unaffected, preserving fine-grained diffs.
+    output was secret. If the coroutine hits an unknown value the returned
+    Output becomes unknown, in any kind of run -- other inputs of the same
+    resource are unaffected, preserving fine-grained diffs
+    (framework/pulumi.md §1.2).
 
     Accepts either a coroutine function (called immediately) or a coroutine
     object.
@@ -194,9 +199,6 @@ def async_output(fn: Callable[[], Awaitable[T]] | Awaitable[T]) -> pulumi.Output
             value = await unwrap(fn() if callable(fn) else fn)
             return ctx.deps, value, True, ctx.secret
         except UnknownValueException:
-            if not pulumi.runtime.is_dry_run():
-                # resolve() only aborts during preview; anything else is a bug.
-                raise
             return ctx.deps, None, False, ctx.secret
         except Exception:
             _log_error(f'async_output {fn}')

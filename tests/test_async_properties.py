@@ -1,13 +1,13 @@
 """The native async inputs framework (rfc-001): `async_output`, `resolve`, `Component`.
 
 What is proven here is the part that has no equivalent in a diff: which
-dependencies an asynchronously computed input carries, what a preview does
-with one whose upstream is unknown, and that a failure inside one fails the
-run rather than hanging it.
+dependencies an asynchronously computed input carries, what becomes of one
+whose upstream is unknown, and that a failure inside one fails the run rather
+than hanging it.
 """
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pulumi
 import pytest
@@ -24,7 +24,9 @@ class Engine(Recorder):
     Unlike the installation's suites this one is about the framework, so the
     resources are stand-ins and the only interesting answer is the id: a
     network's is what a component's async input is computed from, and
-    withholding it is what a preview of an unbuilt stack looks like.
+    withholding it is what an upstream that has not been created looks like
+    -- a preview of an unbuilt stack, or an update whose `--target` left that
+    resource out.
     """
 
     def __init__(self, *, network_id_unknown: bool = False) -> None:
@@ -91,6 +93,18 @@ async def mocks() -> Engine:
 async def previewing() -> Engine:
     """A preview of a stack whose network has not been created yet."""
     return await run_with(Engine(network_id_unknown=True), stack='dev', project='my-project', preview=True)
+
+
+@pytest_asyncio.fixture(params=[True, False], ids=['preview', 'update'])
+async def unbuilt(request: pytest.FixtureRequest) -> Engine:
+    """An output that comes back unknown, in a run that is a preview and in one that is not.
+
+    Both modes because the kind of run is not what decides
+    (framework/pulumi.md §1.2); a case given this fixture is asserting a
+    property of the value.
+    """
+    preview = cast('bool', request.param)
+    return await run_with(Engine(network_id_unknown=True), stack='dev', project='my-project', preview=preview)
 
 
 @pytest.mark.asyncio
@@ -216,17 +230,22 @@ async def test_a_failure_inside_an_async_input_fails_its_output(mocks: Engine) -
 
 
 @pytest.mark.asyncio
-async def test_a_preview_that_aborts_on_an_unknown_still_carries_its_dependencies(previewing: Engine) -> None:
-    # RFC-001 §4.2: dependencies awaited before the unknown abort must still be
-    # recorded on the resulting (unknown) output.
+async def test_an_unknown_aborts_the_coroutine_and_still_carries_its_dependencies(unbuilt: Engine) -> None:
+    # Nothing after the `resolve` runs, so no coroutine ever holds the
+    # sentinel; RFC-001 §4.1: the dependencies awaited before the abort are
+    # still recorded on the resulting (unknown) output.
     vpc = VPC('abort-vpc')
+    after_resolve: list[object] = []
 
-    async def prepare():
+    async def prepare() -> str:
         vpc_id = await resolve(vpc.id)
+        after_resolve.append(vpc_id)
         return f'subnet-for-{vpc_id}'
 
     out = async_output(prepare)
+
     assert await out.is_known() is False
+    assert after_resolve == []
     dep_urns = {await r.urn.future() for r in await out.resources()}
     assert await vpc.urn.future() in dep_urns
 
