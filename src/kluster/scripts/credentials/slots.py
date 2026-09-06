@@ -82,6 +82,8 @@ from pathlib import Path
 from typing import ClassVar
 from urllib.parse import urlsplit
 
+from pulumi.runtime import rpc
+
 from ... import conventions
 from ...lib import config
 from ..state_backend import config as appliance
@@ -544,9 +546,25 @@ class StateRead(SingleValue):
         # stopped being one must refuse rather than be coerced into the four
         # characters `null` or into its own JSON.
         try:
-            return config.text(outputs[self.output], f'the `{self.stack}` stack output `{self.output}`')
+            value = config.text(outputs[self.output], f'the `{self.stack}` stack output `{self.output}`')
         except TypeError as exc:
             raise SlotRefused(str(exc)) from exc
+        # A stack output read after a targeted apply can be present, well-typed
+        # and meaningless, so being a string is not enough. An apply restricted
+        # by `--target` skips the resources outside the set, but the stack's own
+        # resource is never outside one: an export whose value comes from a
+        # skipped resource is accepted and written to state as the sentinel
+        # below, which every reader gets back as an ordinary string
+        # (`docs/framework/pulumi.md` §1.4). Without this the sentinel goes into
+        # the slot and the push verifies, because the value did arrive.
+        if value == rpc.UNKNOWN:
+            raise SlotRefused(
+                f"the `{self.stack}` stack exports `{self.output}` as Pulumi's unknown sentinel, which is what an "
+                f'apply restricted by `--target` leaves behind for an export whose value comes from a resource it '
+                f'skipped -- the output is there and is a string, and it stands for nothing yet. Apply `{self.stack}` '
+                f'again with no targets, then run this sync again'
+            )
+        return value
 
 
 @dataclass(frozen=True)

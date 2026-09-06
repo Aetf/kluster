@@ -807,6 +807,24 @@ def test_a_state_read_of_an_output_that_is_not_a_string_says_so() -> None:
         _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
 
+def test_a_state_read_of_the_unknown_sentinel_says_the_apply_was_targeted() -> None:
+    gh = RecordedGh()
+    # The literal Pulumi writes for an unknown, spelled out rather than imported
+    # from `pulumi.runtime.rpc`: a test that pins a constant against itself pins
+    # nothing, and this string is the interface the checkpoint carries.
+    sentinel = '04da6b54-80e4-46f7-96ec-b56ff0331ba9'
+    pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': sentinel})
+
+    # An export whose value comes from a resource a `--target`ed apply skipped
+    # is a string, so the type boundary above lets it through: it is present,
+    # well-typed and meaningless, and pushing it fills the slot with a value CI
+    # would only discover to be worthless when a workflow tried to use it.
+    with pytest.raises(SlotRefused, match='unknown sentinel'):
+        _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
+
+    assert not gh.values
+
+
 def test_the_network_id_is_pushed_from_the_constant_that_decides_it() -> None:
     gh = RecordedGh()
 
