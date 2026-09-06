@@ -168,3 +168,16 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
     assert set(machines.removeprefix('DECLARED="').rstrip('"').split()) == {
         service.name for service in conventions.gateway.SERVICES
     }
+
+
+def test_the_type_token_the_cutover_targets_by_is_the_one_the_runbook_spells() -> None:
+    # A token is part of every URN, and this component's URN is written out
+    # literally in docs/physical/gateway-cutover.md §3 and §4 — a `pulumi
+    # preview` before the window and the `pulumi up` inside it, each targeting
+    # the gateway alone by URN and by a `$**::**` glob below it. The operator
+    # cannot derive those mid-window: `pulumi stack --show-urns` reads state,
+    # and the stack has none at the moment they are needed. A module or class
+    # rename moves the token, and the glob would then select nothing without
+    # erroring at all — so the rename fails here instead, and whoever makes it
+    # is pointed at the runbook sections that have to move with it.
+    assert Gateway.__pulumi_type__ == 'kluster:components:gateway:Gateway'

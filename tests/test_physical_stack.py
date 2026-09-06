@@ -44,9 +44,13 @@ OBJECT_NAMESPACE = 'axmpletenancy'
 TENANCY_ID = 'ocid1.tenancy.oc1..test'
 BUDGET_RECIPIENTS = ['alerts@example.invalid', 'second@example.invalid']
 ZT_NETWORK_ID = '0123456789abcdef'
-#: A LAN name for the gateway, as the first-bring-up knob carries one. Its shape
-#: is all that matters here: something that is not the overlay address.
-BOOTSTRAP_HOST = 'gateway.invalid'
+#: A LAN address for the gateway, as the first-bring-up knob carries one. It is
+#: a literal address because the knob takes nothing else (`gateway.md` §2.5),
+#: and it is from the documentation range like every other invented address
+#: here; what the cases below need of it is that it is not the overlay address.
+BOOTSTRAP_HOST = '192.0.2.1'
+#: The shape the knob forbids, spelled out for the case that proves the refusal.
+BOOTSTRAP_NAME = 'gateway.invalid'
 #: The worker VM's global address, as the operator reads it off the cluster
 #: VLAN's router advertisement. Nothing derives it — that is the point of the
 #: key — so the value only has to be inside a documentation prefix.
@@ -446,6 +450,22 @@ async def test_the_bootstrap_knob_moves_both_doors_to_the_gateway_at_once(setup:
     # key with no host name in front of it, so it matches the device at either
     # address (`test_device_files`).
     assert setup.inputs_of(f'{conventions.CLUSTER_NAME}-routing-config')['port'] == 22
+
+
+@pytest.mark.asyncio
+async def test_a_bootstrap_host_that_is_a_name_is_refused_before_the_window_opens() -> None:
+    """The one apply this knob exists for has no resolver behind it.
+
+    The cutover window stops both home resolvers for its whole length, so a
+    name is unresolvable at the only moment the key is read. Nothing later
+    would catch it kindly: the providers would dial the name inside the window,
+    after the device's live state has already moved. So the run refuses at the
+    read, and says why rather than only that the value is wrong.
+    """
+    pulumi.runtime.set_all_config(dict(STACK_CONFIG) | {f'kluster:{physical.GATEWAY_BOOTSTRAP_HOST}': BOOTSTRAP_NAME})
+
+    with pytest.raises(ValueError, match='not a literal IP address'):
+        await physical.main()
 
 
 @pytest.mark.asyncio
