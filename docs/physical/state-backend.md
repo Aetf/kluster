@@ -27,8 +27,15 @@ shape nor the domain, which reads like a permissions problem.
 > bundle into its workstation slot (§3), logs in for diagnosis, and
 > takes and restores dumps (§7). Still design-only: the key-rotation
 > script of §1; the **drill key** of §5, so today every dump opens with
-> an escrowed generation and nothing else; and the scheduled drills of
-> §7.3.
+> an escrowed generation and nothing else; and **everything that was to
+> run outside the box** — the expiry probe of §3, the freshness
+> assertion of §5, the dump-freshness and certificate-expiry probes of
+> §6, and the scheduled drill of §7.3.
+> `kluster-ops` carries no `.github/workflows` directory, so nothing
+> watches the server certificate, nothing notices a dump that stopped
+> being written, and no drill runs. §7.3.1 is the restore rehearsal an
+> operator runs in their place, and it is written down rather than run:
+> `state-backend restore` has never executed against a live box.
 
 ## 1. OS & configuration management
 
@@ -152,10 +159,12 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 -   **Every hand operation is a script.** The box is outside Pulumi,
     but not outside version control: `deploy/state-backend/` carries
     the machine's definition, and the `state-backend` console script
-    carries the executable form of every operation this document names
-    — provision/re-provision, dump, restore, key rotation. The
-    playbooks (§7) *invoke* these; a procedure that exists
-    only as prose in a playbook is a bug.
+    carries the executable form of the operations this document names
+    — render, provision/re-provision, ssh, pins, bundle, dump and
+    restore. Key rotation is the exception the status paragraph above
+    names: it is still prose, and by this rule that makes it a bug
+    rather than a design. The playbooks (§7) *invoke* the script; a
+    procedure that exists only as prose in a playbook is a bug.
 -   **Secrets ride Ignition, accepted**: the server TLS key (§3) and
     the B2 upload credential (§5) are in `user_data`. On this box
     that's fine where it wasn't for cluster nodes (audit H1): no
@@ -244,7 +253,8 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     at all, nobody has to be watching a date. What the plain run does
     *not* do is act: replacing the box is `--force`, like every other
     replacement (§1), so the certificate is re-issued when an operator
-    says so and not before. **Still design-only**: the ops repo's
+    says so and not before. **Still design-only, and the repository that
+    would carry it is empty of workflows** (§6): the ops repo's
     scheduled workflow (ci.md
     §3) is to assert ≥30 days remaining on the server cert via an
     `openssl s_client` probe (no credentials needed), failing into the
@@ -323,9 +333,14 @@ there is nothing for it to edit.)
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
--   Freshness is asserted **from outside** by the ops repo's
+-   Freshness is to be asserted **from outside** by the ops repo's
     scheduled workflow (object-age on the prefix, ci.md §3) — the
-    box monitors nothing about itself.
+    box monitors nothing about itself. **That workflow does not
+    exist** (§6), and the box's design is what makes its absence
+    total: a nightly that stopped in August looks exactly like one
+    that ran, until a restore reaches for it. Reading the newest
+    object's timestamp is the assertion, and today the only thing
+    that performs it is an operator running §7.3.1.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** A generation is a label with a **stored ciphertext**:
     the identity for `backup/age/<generation>` is random at creation
@@ -337,9 +352,13 @@ there is nothing for it to edit.)
     retired generation's ciphertext stays in the repository until the
     last dump under it expires. Rotation is a designed path, not an
     emergency improvisation:
-    -   **Every dump is encrypted to the two newest generations plus
-        the ops-repo-held drill key** — age is natively multi-recipient,
-        and all three public keys sit in the Butane file. The
+    -   **Every dump is encrypted to the two newest generations, and
+        is to gain the ops-repo-held drill key as a third recipient** —
+        age is natively multi-recipient, and the public keys sit in the
+        Butane file. **The drill key does not exist yet**: the
+        recipients a provision run writes are the generations alone, so
+        every object in the bucket opens with an escrowed identity and
+        nothing else, and a drill needs the kit (§7.3.1). The
         generational pair makes per-object key attribution
         unnecessary (deploys are intentionally manual, so git dates
         prove nothing about which key an object carries): any object
@@ -349,8 +368,8 @@ there is nothing for it to edit.)
         is no previous key and the window is generation 1 alone —
         naming a generation 0 would escrow a key for a generation
         that never existed. The **drill key**
-        (operations.md §4, credentials.md) exists so the rebuild
-        drill runs unattended; it adds no new *class* of exposure —
+        (operations.md §4, credentials.md) is what would let the rebuild
+        drill run unattended; it adds no new *class* of exposure —
         the kluster CI's client cert already reads the live
         database, and the ops repo holding the key is fenced at
         the same private tier (architecture.md §4.3) — while the
@@ -410,7 +429,9 @@ Everything observable lives **outside** the box:
     freshness
     (object-age on B2) and server-cert expiry (≥30 days), alerting
     into the unified alert channel (architecture.md §4.3). **Both
-    probes are design-only.** For the certificate the renewal margin
+    probes are design-only, and so is the workflow that would carry
+    them: `kluster-ops` has no `.github/workflows` directory at all.**
+    For the certificate the renewal margin
     of §1 narrows the gap — any converge reports the coming expiry
     without being asked, though the re-issue itself waits for
     `--force` — and for the dump nothing does. Each alert maps to a
@@ -420,10 +441,15 @@ Everything observable lives **outside** the box:
     diagnosis path (there is no NSG allowlist to refresh — §4).
 -   **Deliberately unmonitored, with rationale**: Zincati/update
     failures and disk fill. The DB is ~4 orders of magnitude under
-    the disk, and OS staleness is bounded by the quarterly
-    re-provision drill (§7.3), which always lands the current image.
-    If either ever bites first, that is the signal to add the probe —
-    not before.
+    the disk, and OS staleness is to be bounded by the quarterly
+    re-provision drill (§7.3), which always lands the current image —
+    until that drill is scheduled the bound is whatever converges an
+    operator runs. If either ever bites first, that is the signal to
+    add the probe — not before.
+
+So what observes this box today is the first bullet alone: something
+needed the backend, and either reached it or did not. Nothing reports
+on an appliance nobody is using.
 
 ## 7. Playbooks
 
@@ -507,7 +533,12 @@ is the moment nobody can afford to find out later:
     (operations.md §4). One pass exercises B2 download, decryption,
     provision-from-Butane, restore, and cert delivery. The *offline*
     age identity is proven separately by the yearly rotation (§7.4),
-    which inherently decrypts with it.
+    which inherently decrypts with it. **None of it is built**: the ops
+    repository carries no workflows and holds no drill key, so nothing
+    runs this on a schedule and no pass of it has happened. Until one does, the
+    same ground is covered by hand — §7.3.1, which opens the object
+    with the kit because the `--identity-file` form has no key to be
+    handed.
 -   **§7.4 age identity rotation.** Trigger: yearly cadence, key
     compromise, custody change. Outline: `credentials derived
     backup-age-<N+1> generate` → note the rotation date and N−1's
@@ -520,3 +551,126 @@ is the moment nobody can afford to find out later:
     both decrypt paths → destroy N−1 on its date by deleting its escrow
     ciphertext (compromise: drop the key from recipients now, fresh
     dump, early-delete old objects).
+
+### 7.3.1 Restore rehearsal
+
+**Status: designed, not yet run.** The rest of §7 is outline because a
+command carries the detail; this one is written out because the command
+it proves — `state-backend restore` — has never run against a live box,
+and because the first replacement of the appliance leaves a backend
+holding nothing until a restore fills it (§1). So the rehearsal comes
+*before* that replacement rather than during it, and it is the operator
+form of the §7.3 drill: same object, same commands, a kit where the
+drill would have had its own key.
+
+**It runs against a scratch box, never against the appliance.** The
+appliance is a singleton — `state-backend provision` finds it by
+display name and owns the reserved address — so nothing here uses
+`provision`, and the scratch box is launched by hand from a rendered
+Ignition. What that costs is a second instance of the shape in the same
+availability domain, the one that offers it (§1).
+
+**What it establishes**, and the order the steps are in so that each
+failure is cheap:
+
+1.  **Mint a key that can read the prefix, and take the newest
+    object.** Nothing already in service reads a dump: the appliance's
+    own key holds `writeFiles` alone and can neither list nor read (§5),
+    the B2 writer keys the cluster's backups run on are confined to
+    their own prefixes, and neither the seed (credentials.md §2, where
+    its grant is key and bucket administration) nor the management key
+    (§3) carries file capabilities at all. The account master key
+    could, and it is borrowed to re-seed and to nothing else (§2 as
+    well). What the seed carries is `writeKeys`, which is how every
+    prefix-scoped key on this bucket is minted — so the rehearsal mints
+    a temporary one with `listFiles` and `readFiles`, confined to the
+    dump bucket and the `pulumi-state/` prefix. That key is the
+    hand-made stand-in for the
+    drill Environment's dump-read credential, which the register expects
+    from this same seed. Nothing in this repository fetches an object,
+    so listing the prefix and downloading the newest `.dump.age` are
+    `b2_list_file_names` and `b2_download_file_by_name` under it. Record
+    the object's name, size and timestamp — that timestamp is the
+    freshness assertion §5 leaves to nobody else. Keep the file outside
+    the checkout: it is every stack's state.
+2.  **Render the scratch box.** `state-backend render --address
+    127.0.0.1 > <scratch>/scratch.ign` — the command prints the
+    Ignition rather than placing it. The address is the server
+    certificate's SAN, and the drill reaches the box through an SSH
+    tunnel so that the connection is `sslmode=verify-full` against a SAN
+    that matches — the alternative, an ephemeral public IP no
+    certificate names, would prove the restore under a weaker mode than
+    the one every real client uses. A rendered Ignition carries
+    placeholder B2 credentials, so the scratch box's own dump timer
+    fails and uploads nothing: a drill cannot write to the bucket.
+3.  **Launch it** with `oci compute instance launch --user-data-file`
+    against the rendered file, in the appliance's compartment, subnet
+    and availability domain, on the imported FCOS image, with an
+    ephemeral public IP. **Give it a display name that is not the
+    appliance's**: a converge adopts whatever box carries that name,
+    and would move the reserved address onto this one.
+4.  **Open the tunnel**: `ssh -L 5432:127.0.0.1:5432 core@<scratch
+    address>` with the operator key. The workstation's public key has to
+    be in `deploy/state-backend/operator-keys.txt`, which is the file
+    the render put on the box (§1). Where 5432 is taken locally, forward
+    another port and rewrite it in the bundle's `backend-url` below.
+5.  **Write a scratch client bundle**: `state-backend bundle operator
+    --address 127.0.0.1 --directory <scratch>/bundle`. **`--directory`
+    is not optional here** — omitted, the bundle lands in the
+    workstation slot and its `backend-url` becomes the address
+    `mise.toml` hands every later `pulumi` run.
+6.  **Restore**: `state-backend restore <object> --bundle
+    <scratch>/bundle`, with no `--identity-file`, so the escrowed
+    generation in the kit is what opens the object — the first thing the
+    rehearsal establishes. The command refuses a backend that already
+    serves stacks, so a bundle pointed at the appliance by accident
+    stops here; that is a guard rather than the check, and reading the
+    URL in the bundle first is the check. Its own steps are the next
+    assertions: decrypt, list, `pg_restore --single-transaction`, and
+    `pulumi stack ls --all` against what came back. Ownership is
+    preserved rather than flattened, which works because the roles the
+    archive names are created by the same Butane the scratch box booted
+    from.
+7.  **Count the rows.** Point libpq — `psql`, from the same Postgres
+    client package as `pg_restore` — at the same bundle, with
+    `PGSSLROOTCERT`, `PGSSLCERT` and `PGSSLKEY` naming `ca.crt`,
+    `client.crt` and `client.key` in that directory (§3), and ask:
+
+        psql "$(cat <scratch>/bundle/backend-url)" -At -c "
+          select table_name,
+                 (xpath('/row/c/text()', query_to_xml(
+                     format('select count(*) as c from public.%I', table_name),
+                     false, true, '')))[1]::text::bigint
+            from information_schema.tables
+           where table_schema = 'public' and table_type = 'BASE TABLE'
+           order by table_name"
+
+    **The assertion is the counts, and it has to be, because
+    `pg_restore --list` does not detect truncation**: a 145 MB
+    custom-format archive cut to 5 000 bytes still lists every table and
+    exits 0, since the table of contents sits at the archive's head.
+    What the listing does catch is a dump of a *table-less* database —
+    the shape a box produces after a replacement nobody restored (§5).
+    A drill that only listed the object would have tested nothing about
+    restoration. The counts are also what to write down: the next
+    rehearsal reads them to see whether the state has quietly shrunk.
+8.  **Select a stack**: `pulumi stack select <one of the names the
+    restore printed>`, from the checkout, with `PULUMI_BACKEND_URL` set
+    to the scratch bundle's URL. The restore proved the backend answers
+    a listing; this proves an operator's own client opens a stack in it.
+9.  **Record the elapsed time** — the download, the restore, and the
+    wall clock across the whole sequence. That is what lets the bring-up
+    runbook price the recovery path instead of assuming it.
+10. **Destroy the scratch box, the key and the copies.** Terminate the
+    instance, close the tunnel, delete step 1's temporary key with the
+    seed's `deleteKeys` (`b2_delete_key`), and delete the downloaded
+    object and the scratch bundle. `state-backend restore` decrypts into
+    a temporary directory of its own, so the plaintext archive is
+    already gone. The key is the piece that outlives a forgotten step
+    worst: it reads every dump the bucket holds.
+
+**What it does not establish**: the `--identity-file` path, there being
+no drill key to hand it; the unattended shape of §7.3, which is a
+workflow rather than a sequence; and anything about objects older than
+the one it opened — a generation still covers those by design (§5),
+which is a claim the yearly rotation exercises (§7.4).
