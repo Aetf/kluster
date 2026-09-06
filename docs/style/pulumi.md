@@ -121,6 +121,43 @@ network object) another, and `Exposure` a third — it says what an
 application's reachability *is* rather than which two resources it
 produces.
 
+**A census is the source of truth, and no test restates it.** A check
+that holds one reader of a census against another agrees with whatever
+the census says; a check that holds the census against a copy typed in a
+test can fail only for whoever edits the census, and goes green again as
+soon as the copy is moved to match ([testing.md](testing.md)). What a
+census's tests hold are its **invariants** — relations between entries
+that a row's type cannot carry — and its **derivations**, whose expected
+outputs are literals precisely because a derivation can move with no new
+value typed anywhere. A row's coupling to the world — the dataset
+already at its mount, the leases already pointing at its address, the
+port the appliance already binds — is stated on the row itself, and
+proven at the tier that can consult that world.
+
+**A seam test names the side it holds still.** The seam is wherever the
+census is not the other side's source: a file no import reaches (a
+workflow, a rendered configuration, the transcript of what a device
+serves), or another program's own spelling of the same decision. Those
+can disagree with the census, which is what makes them able to catch it,
+and which rows they catch is a property of the rows — the map the
+`credentials` command pushes from spells `ZEROTIER_PHYSICAL` and
+`ZEROTIER_DNS` out, so renaming the `dns` Environment reddens its check
+and renaming `apps` does not. An assertion whose other side turns out to
+be the census itself is deleted rather than left reading as a guard.
+
+**A census's invariants and seam tests live in
+`tests/test_conventions.py`** — the suite that mirrors the package the
+censuses are declared in — whatever program reads the census, and never
+in a suite named for one of those programs. A reader looking for what
+holds a census still then does not have to know which program reads it,
+and the check does not sit behind that program's fixtures: a
+module-scoped `autouse` fixture errors every case in its file when the
+program fails to run, so a check kept there is out of reach at exactly
+the moment it is wanted, which is when that program's own cases are
+failing. The invariants sit beside the seam tests because they answer
+the same question about the same table: is it still what it says it
+is.
+
 ## Resources and their contents
 
 **Runtime behavior belongs to the runtime.** Pulumi declares the
@@ -164,6 +201,9 @@ The architecture reviewer's standing questions, for the review stage
 -   Is every new table written in this installation's terms, with the
     provider's per-member form derived rather than written out, and does
     every census parameter arrive without a default?
+-   Does every case that holds a census against something have a side
+    the census is not the source of, and does no test restate a
+    census's typed content ([testing.md](testing.md))?
 -   Does every new resource hang off the right component, with
     providers inherited rather than re-plumbed?
 -   Would the diff's names survive the "no metaphor, one term per

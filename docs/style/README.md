@@ -8,6 +8,8 @@ language. The review gate holds every change to it
     the Google Python Style Guide.
 -   **[pulumi.md](pulumi.md)** — architecture and style for the Pulumi
     programs: layering, components, providers, data placement.
+-   **[testing.md](testing.md)** — what a test may assert, and what it
+    may write down to assert it.
 
 The rules below apply to everything.
 
