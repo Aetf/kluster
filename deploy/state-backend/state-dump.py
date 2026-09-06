@@ -39,7 +39,11 @@ CONTAINER = 'pgstate'
 
 #: Where the archive and its ciphertext sit while the run needs them. Not
 #: /tmp: that is a tmpfs sized from a 1 GB box's memory, and this holds the
-#: whole state twice over for the length of one dump.
+#: whole state twice over for the length of one dump. The unit that runs this
+#: sets no `PrivateTmp=`, which would otherwise settle the same question from
+#: the other side: `disconnected` backs the service's /var/tmp with a tmpfs
+#: too, and plain `yes` hands it a private /var/tmp instead of the host's
+#: (butane.yaml.j2).
 SPOOL = '/var/tmp'
 
 #: What an entry line calls a table in `pg_restore --list` output, and the
@@ -135,7 +139,10 @@ def dump(destination: Path) -> None:
             check=False,
         )
     if listing.returncode != 0:
-        raise SystemExit(f'pg_restore --list failed ({listing.returncode})')
+        # With the output captured, what pg_restore said is the only account
+        # of why it refused the archive, and a status on its own sends the
+        # reader to a box nobody logs into to reproduce it by hand.
+        raise SystemExit(f'pg_restore --list failed ({listing.returncode}): {listing.stderr.strip()}')
     if not tables(listing.stdout):
         raise SystemExit('the archive lists no tables, so it is not a dump of the state backend')
 

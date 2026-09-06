@@ -1,4 +1,4 @@
-"""The appliance's dump script, exercised without an appliance.
+"""The appliance's nightly dump — the script, and the unit that runs it.
 
 It is stdlib-only and runs unattended on a box nobody logs into, so the parts
 worth pinning are the ones a silent change would break: that every B2 call
@@ -6,6 +6,12 @@ goes through `_request`, that the upload carries the checksum and length B2
 validates against, that a failing step is raised rather than uploaded as a
 truncated object, and that an archive `pg_restore` cannot list never becomes
 an object at all.
+
+The same standard reaches the wiring, which is why the last section reads the
+Butane template. Where the archive is spooled, where the listing gets its
+input, and whether the unit can time out at all are each a choice that fails
+silently when it moves: the run still passes, on a box with no watcher, until
+the night it does not.
 """
 
 from __future__ import annotations
@@ -21,9 +27,9 @@ from typing import IO, Any, cast
 
 import pytest
 
-from kluster.scripts.state_backend import state
+from kluster.scripts.state_backend import config, state
 
-_SCRIPT = Path(__file__).parent.parent / 'deploy' / 'state-backend' / 'state-dump.py'
+_SCRIPT = config.DEPLOY_DIR / config.DUMP_SCRIPT
 
 
 def _load() -> types.ModuleType:
@@ -187,11 +193,40 @@ def test_the_box_and_the_operator_read_a_listing_the_same_way(what: str, listing
 
 
 class _Ran:
-    """What the script reads off a finished process: a status, and a listing."""
+    """What the script reads off a finished process: a status, and its output."""
 
-    def __init__(self, returncode: int, stdout: str = '') -> None:
+    def __init__(self, returncode: int, stdout: str = '', stderr: str = '') -> None:
         self.returncode: int = returncode
         self.stdout: str = stdout
+        self.stderr: str = stderr
+
+
+def _path_of(stream: object) -> Path | None:
+    """The file a redirected stream is bound to, if it is bound to one."""
+    name = getattr(stream, 'name', None)
+    return Path(name) if isinstance(name, str) else None
+
+
+def _drain(stream: object) -> bytes | None:
+    """What a redirected input stream is carrying, read while it is still open."""
+    return cast('IO[bytes]', stream).read() if hasattr(stream, 'read') else None
+
+
+class _Invocation:
+    """One subprocess the script started: its argv, and what it was wired to.
+
+    The wiring is recorded at call time and not afterwards, because the
+    script closes both files as soon as the call returns -- and it is the
+    wiring, not the argv, that decides whether the listing reads the archive
+    and where the archive is written.
+    """
+
+    def __init__(self, argv: list[str], kwargs: dict[str, Any]) -> None:
+        stdin = kwargs.get('stdin')
+        self.argv: list[str] = argv
+        self.stdin: Path | None = _path_of(stdin)
+        self.fed: bytes | None = _drain(stdin)
+        self.stdout: Path | None = _path_of(kwargs.get('stdout'))
 
 
 def _tools(
@@ -200,20 +235,21 @@ def _tools(
     pg: int = 0,
     listing: str = LISTING,
     list_status: int = 0,
+    complaint: str = '',
     age: int = 0,
-) -> list[list[str]]:
-    """Stand in for pg_dump, `pg_restore --list` and age, recording each argv."""
-    seen: list[list[str]] = []
+) -> list[_Invocation]:
+    """Stand in for pg_dump, `pg_restore --list` and age, recording each call."""
+    seen: list[_Invocation] = []
 
     def run(argv: list[str], **kwargs: Any) -> _Ran:
-        seen.append(argv)
+        seen.append(_Invocation(argv, kwargs))
         stdout = cast('IO[bytes] | None', kwargs.get('stdout'))
         if len(seen) == 1:
             if stdout is not None:
                 _ = stdout.write(ARCHIVE)
             return _Ran(pg)
         if len(seen) == 2:
-            return _Ran(list_status, listing)
+            return _Ran(list_status, listing, complaint)
         if stdout is not None:
             _ = stdout.write(b'age-encrypted bytes')
         return _Ran(age)
@@ -237,15 +273,49 @@ def test_dump_lists_the_archive_and_encrypts_to_every_recipient(monkeypatch: pyt
 
     state_dump.dump(pg_env / 'out.age')
 
-    pg_argv, list_argv, age_argv = seen
-    assert pg_argv[:3] == ['podman', 'exec', state_dump.CONTAINER]
-    assert '-Fc' in pg_argv and pg_argv[-2:] == ['operator', 'pulumi_state']
+    pg, listing, encrypt = seen
+    assert pg.argv[:3] == ['podman', 'exec', state_dump.CONTAINER]
+    assert '-Fc' in pg.argv and pg.argv[-2:] == ['operator', 'pulumi_state']
     # The listing runs in the same container, reading the archive on standard
     # input rather than through a mount of the spool directory.
-    assert list_argv == ['podman', 'exec', '-i', state_dump.CONTAINER, 'pg_restore', '--list']
+    assert listing.argv == ['podman', 'exec', '-i', state_dump.CONTAINER, 'pg_restore', '--list']
     # Blank lines are skipped and surrounding whitespace stripped, or age
     # would be handed a recipient it rejects.
-    assert age_argv == ['/opt/bin/age', '--encrypt', '-r', 'age1aaa', '-r', 'age1bbb']
+    assert encrypt.argv == ['/opt/bin/age', '--encrypt', '-r', 'age1aaa', '-r', 'age1bbb']
+
+
+def test_the_listing_is_fed_the_archive_the_dump_just_wrote(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    """`-i` in the argv is half of the plumbing; the handle is the other half.
+
+    `pg_restore --list` with nothing on standard input reads an empty stream,
+    which it refuses -- so losing the handle turns the check into a step that
+    fails every night rather than one that silently passes. What makes it
+    worth its own case is that the argv the case above asserts does not
+    change when the handle goes.
+    """
+    seen = _tools(monkeypatch)
+
+    state_dump.dump(pg_env / 'out.age')
+
+    listing = seen[1]
+    assert listing.stdin == pg_env / 'state.dump'
+    assert listing.fed == ARCHIVE
+
+
+def test_the_archive_is_spooled_beside_the_ciphertext(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    """Both copies of the state live in the directory the caller chose.
+
+    The caller is `main`, whose directory is under `SPOOL` for the reason
+    that constant gives; an archive written anywhere else is that reasoning
+    silently opted out of, and on this box the default anywhere-else is a
+    tmpfs holding a fraction of the state.
+    """
+    seen = _tools(monkeypatch)
+
+    state_dump.dump(pg_env / 'out.age')
+
+    assert seen[0].stdout == pg_env / 'state.dump'
+    assert seen[2].stdout == pg_env / 'out.age'
 
 
 def test_the_nightly_object_is_listed_before_it_is_uploaded(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
@@ -271,6 +341,21 @@ def test_a_listing_that_cannot_be_read_stops_the_run(monkeypatch: pytest.MonkeyP
     _ = _tools(monkeypatch, list_status=1, listing='')
 
     with pytest.raises(SystemExit, match='pg_restore --list failed'):
+        state_dump.dump(pg_env / 'out.age')
+
+
+def test_the_refusal_carries_what_pg_restore_said(monkeypatch: pytest.MonkeyPatch, pg_env: Path) -> None:
+    """A status is not a diagnosis, and this one cannot be reproduced later.
+
+    The listing runs with its output captured, so its stderr is the only
+    account of why the archive was refused; the archive itself goes with the
+    run's temporary directory, and the box it happened on is one nobody logs
+    in to. Dropped here, the reason is gone.
+    """
+    said = 'pg_restore: error: did not find magic string in file header'
+    _ = _tools(monkeypatch, list_status=1, listing='', complaint=f'{said}\n')
+
+    with pytest.raises(SystemExit, match=said):
         state_dump.dump(pg_env / 'out.age')
 
 
@@ -321,3 +406,131 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
 
     assert provision.wait_for_backend('192.0.2.10', timeout=600) is True
     assert len(calls) == 3
+
+
+# -- where a run spools, and what carries that choice -------------------------
+
+
+def test_the_spool_is_the_disk_rather_than_memory() -> None:
+    """`/var/tmp` is a statement about this box, not a synonym for `/tmp`.
+
+    The appliance has 1 GB of memory and a 50 GB boot volume with no separate
+    `/var`, and a run holds the whole state twice for its duration: the
+    archive, and the ciphertext beside it. Spooled to `/tmp` -- a tmpfs sized
+    from memory -- a state that outgrows that takes the dump down with an
+    ENOSPC on a box that has tens of gigabytes free.
+    """
+    assert state_dump.SPOOL == '/var/tmp'
+
+
+def test_the_run_takes_its_temporary_directory_from_the_spool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The constant is worth only what `main` does with it.
+
+    `dir=` dropped from the `TemporaryDirectory` is `/tmp` again with the
+    constant still reading `/var/tmp`, and nothing downstream notices: the
+    dump succeeds every night the state fits.
+    """
+    spool = tmp_path / 'spool'
+    spool.mkdir()
+    monkeypatch.setattr(state_dump, 'SPOOL', str(spool))
+    monkeypatch.setenv('B2_PREFIX', 'kluster/state')
+    written: list[Path] = []
+    sent: list[tuple[Path, str]] = []
+
+    def dump(destination: Path) -> None:
+        written.append(destination)
+        _ = destination.write_bytes(b'age-encrypted bytes')
+
+    def upload(path: Path, name: str) -> None:
+        sent.append((path, name))
+
+    monkeypatch.setattr(state_dump, 'dump', dump)
+    monkeypatch.setattr(state_dump, 'upload', upload)
+
+    assert state_dump.main() == 0
+
+    (destination,) = written
+    assert destination.parent.parent == spool
+    # What is uploaded is what the dump wrote, under the prefix and a stamp.
+    (uploaded, name) = sent[0]
+    assert uploaded == destination
+    assert name.startswith('kluster/state/') and name.endswith('.dump.age')
+    # And the spool is left as it was found.
+    assert list(spool.iterdir()) == []
+
+
+# -- the unit that runs it ----------------------------------------------------
+
+BUTANE = (config.DEPLOY_DIR / config.TEMPLATE).read_text()
+
+#: The notice a failed run leaves, and a good one removes.
+MOTD = '/etc/motd.d/10-state-dump.motd'
+
+
+def _unit(name: str) -> str:
+    """One systemd unit's own lines, out of the Butane template.
+
+    Read as text rather than rendered: rendering wants escrow material and the
+    `butane` binary, while every property below is written in the template
+    itself. The slice stops at the next entry or at the comment introducing
+    it, so one unit's rationale is never read as another unit's contents.
+
+    It refuses to return a slice with no unit in it, because the assertion
+    that a unit sets no `PrivateTmp=` is one an empty string also satisfies.
+    """
+    marker = f'    - name: {name}\n'
+    assert marker in BUTANE, f'{name} is not one of the appliance units'
+    lines: list[str] = []
+    for line in BUTANE.split(marker, 1)[1].splitlines():
+        if line.startswith('    - name:') or line.startswith('    #'):
+            break
+        lines.append(line)
+    unit = '\n'.join(lines)
+    assert '[Service]' in unit, f'{name} was sliced down to something that is not a unit'
+    return unit
+
+
+def test_the_dump_unit_can_time_out() -> None:
+    """A `Type=oneshot` unit has no start timeout unless it asks for one.
+
+    Every step of a dump can hang rather than fail -- a `podman exec` into a
+    container that has stopped answering, an upload against a socket nothing
+    closes -- and a timer does not start a service whose last run is still
+    going. So an untimed hang is not one missed night; it is every night
+    after it, with the unit sitting in `activating` and nothing raised.
+    """
+    unit = _unit('state-dump.service')
+
+    assert 'Type=oneshot' in unit
+    assert 'TimeoutStartSec=' in unit
+
+
+def test_a_failed_dump_reaches_the_next_login() -> None:
+    """Nothing watches the objects yet, so a failure waits for a human.
+
+    Fedora CoreOS prints `/etc/motd.d/*` at ssh login and `state-backend ssh`
+    is how an operator reaches this box, which makes a notice there the one
+    channel a failure has. It is worth having only while it means "the last
+    run failed", so a successful run takes it down again.
+    """
+    unit = _unit('state-dump.service')
+    assert 'OnFailure=state-dump-failed.service' in unit
+    assert 'ExecStartPost=' in unit and MOTD in unit
+
+    notice = _unit('state-dump-failed.service')
+    assert MOTD in notice
+    # And it says where the rest of the story is.
+    assert 'journalctl -u state-dump.service' in notice
+
+
+def test_the_dump_unit_spools_to_the_hosts_var_tmp() -> None:
+    """`PrivateTmp=` would settle `SPOOL`'s question from the other file.
+
+    `disconnected` backs the service's `/var/tmp` with a fresh tmpfs, which on
+    a 1 GB box is the memory that constant exists to avoid; plain `yes` keeps
+    the host's disk behind it but hands the service a private `/var/tmp`, so
+    the directory the script named is not the one it writes to. The spool is a
+    statement about this box's disk, and neither form of the setting leaves it
+    one.
+    """
+    assert 'PrivateTmp' not in _unit('state-dump.service')

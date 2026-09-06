@@ -33,6 +33,11 @@ storage:
       mode: 0755
     - path: /opt/bin
       mode: 0755
+    # Where a failed dump leaves its notice. Fedora CoreOS prints
+    # /etc/motd.d/* at every ssh login, and `state-backend ssh` is the one
+    # human channel this box has.
+    - path: /etc/motd.d
+      mode: 0755
 
   files:
     # --- PKI: issued from the escrowed CA (credentials.md §2.2) ------------
@@ -199,17 +204,57 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
+    # A `Type=oneshot` unit has no start timeout unless it asks for one, and
+    # every step of a dump can hang rather than fail: a `podman exec` whose
+    # container has stopped answering waits forever, and so does a socket
+    # nothing closes. Untimed, one hang is the last dump this box ever takes,
+    # because a timer does not start a service that is still running. The
+    # budget is the script's own deadlines -- 120 s for each of the two B2
+    # control calls and 600 s for the upload -- plus pg_dump, the listing and
+    # age on this shape's single OCPU, so anything past half an hour is a hang
+    # and not a slow dump. It is the unit that carries it rather than each
+    # subprocess: expiry here kills the whole cgroup, where a deadline inside
+    # the script would leave the `podman exec` it gave up on still running.
+    #
+    # `PrivateTmp=` is deliberately absent, in either of its forms.
+    # `disconnected` backs the service's /tmp and /var/tmp with a fresh tmpfs,
+    # which on a box with 1 GB of memory is what the spool exists to avoid;
+    # plain `yes` leaves the host's disk behind them but gives the service a
+    # private pair of its own, so the /var/tmp the script names
+    # (state-dump.py) is no longer the /var/tmp it gets. That spool is a
+    # choice about this box's disk, and it is made in one file.
     - name: state-dump.service
       contents: |
         [Unit]
         Description=Dump, encrypt and upload the Pulumi state
         After=pgstate.service age-install.service
         Requires=age-install.service
+        OnFailure=state-dump-failed.service
 
         [Service]
         Type=oneshot
+        TimeoutStartSec=30min
         EnvironmentFile=/etc/kluster/state-dump.env
         ExecStart=/usr/local/bin/state-dump
+        ExecStartPost=-/usr/bin/rm -f /etc/motd.d/10-state-dump.motd
+
+    # Where a failure goes, and how far it gets. No probe watches the objects
+    # yet, so this reaches exactly one place: Fedora CoreOS prints
+    # /etc/motd.d/* at ssh login, and `state-backend ssh` is how an operator
+    # gets there. It pages nobody. What it buys is that a dump which has been
+    # failing for a week says so to the next person who logs in for any
+    # reason, instead of being a `systemctl status` nobody thought to run.
+    # The notice means "the last run failed", which is why a good run removes
+    # it: ExecStartPost above does not run when ExecStart failed or was killed
+    # by the timeout.
+    - name: state-dump-failed.service
+      contents: |
+        [Unit]
+        Description=Leave a failed state dump where the next login will see it
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/bash -c '{ echo "kluster: the last state dump FAILED, so nothing was uploaded for it. Full story: journalctl -u state-dump.service"; journalctl -u state-dump.service -n 20 --no-pager -o short-iso; } > /etc/motd.d/10-state-dump.motd'
 
     - name: state-dump.timer
       enabled: true

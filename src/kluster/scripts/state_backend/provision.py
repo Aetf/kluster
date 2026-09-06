@@ -609,8 +609,19 @@ def _shape_domain(clients: OciClients, image_id: str) -> str:
 
 
 def find_instance(clients: OciClients) -> Any | None:
-    """The appliance, if it exists. Creates nothing."""
-    return _find(_data(clients.compute.list_instances(clients.compartment_id)), _name('vm'))
+    """The appliance, if it exists. Creates nothing.
+
+    Paginated, because the compartment's instance list is not a list of the
+    boxes that exist: a terminated instance stays in it, and this box is
+    cattle, so the list grows by one on every replacement while the answer
+    stays one box. A single page would eventually stop containing the running
+    appliance, and everything that reads this answer reads a miss as "no
+    appliance": no approval gate in front of a replacement, no dump of the box
+    about to be destroyed, and an escrow that mints a fresh CA and age
+    identity over the live one.
+    """
+    instances = oci.pagination.list_call_get_all_results(clients.compute.list_instances, clients.compartment_id).data
+    return _find(instances, _name('vm'))
 
 
 #: What the box was built from, carried on the box. Instance metadata rather
