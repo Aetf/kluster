@@ -353,16 +353,23 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     says no pull request merges reviewed by nobody but its author — a
     rule aimed at `AGENTS.md` and `docs/` above all. So it is open to
     renovate's own pull requests and to nothing else, and every other
-    documentation change takes the proven route. An operator opt-in
-    belongs there too and is not built: it would be a label, and a
-    label a workflow branches on has to be in the census first, or the
-    condition is silently dead. kluster-ops#244 asks whether this
-    repository should have a review-free merge at all; this narrow
-    class holds until it is ruled on. A fork's pull request is refused
-    by name in `classify`, and by name rather than by consequence
-    because the proof-skipping route reaches the merge without running
-    any job that a missing Environment secret would fail. Repo secret
-    scanning and push protection are on.
+    documentation change takes the proven route. **An operator opt-in
+    by label is ruled out rather than pending** (kluster-ops#244,
+    #247): a label carries no record of who applied it, and on a later
+    `synchronize` the actor is the author regardless, so a label that
+    *removes* a gate is one an author can put on their own pull request
+    and merge behind — the case dispatch.md §3 forbids by name.
+    `expect-changes` is safe against the same hole only because it runs
+    the other way: it can stand the merge down and can never let one
+    through. The switches a workflow branches on live in the census
+    `conventions/forge.py` carries — the labels it reads, and the
+    identities it tests a pull request's author against — because one
+    the census does not name is silently dead: the comparison is never
+    true, and the route it guards is never taken. A fork's pull request
+    is refused by name in `classify`, and by name rather than by
+    consequence because the proof-skipping route reaches the merge
+    without running any job that a missing Environment secret would
+    fail. Repo secret scanning and push protection are on.
     A dedicated **`drill` Environment — in the ops repo, where the
     drill workflows run** — carries the unattended drills'
     credentials (drill-compartment OCI user, dump-read B2 key, drill
