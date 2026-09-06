@@ -282,6 +282,12 @@ into components and let their `async_output` coroutines do the awaiting.
 
 ## 6. API Reference
 
+*The table is the API as it was accepted, and its unknown-abort cells are
+among the ones the status header's "Built otherwise" note supersedes: the
+abort is unconditional, not a preview's. What the API is today is
+[framework/pulumi.md](../framework/pulumi.md) §1.2 and `src/putils/paio.py`
+itself.*
+
 | API | Where | Summary |
 | --- | --- | --- |
 | `async_output(fn)` | `putils.paio` | Run coroutine (function or object), return `pulumi.Output` with tracked deps and secretness; unknown in preview on abort. |

@@ -203,20 +203,50 @@ dep_urns = {await d.urn.future() for d in deps}
 assert await vpc.urn.future() in dep_urns
 ```
 
-### 3.3 Dry-Run/Preview Safety
+### 3.3 Unknown values
 
-In dry-run tests (where `preview=True`), unresolved output properties return the
-`UNKNOWN` sentinel. Awaiting such outputs via `resolve` raises
-`UnknownValueException`, which `async_output` converts into an unknown output.
-If testing preview behavior, retrieve the output's future using
-`.future(with_unknowns=True)` to inspect if it's an instance of `Unknown`:
+An unknown awaited by an `async_output` coroutine aborts it and leaves that
+one output unknown. **The abort does not ask which kind of run it is in**, so
+a mock run built with `preview=False` reaches it exactly as a `preview=True`
+one does; how a run comes to hold an unknown and what the engine does with it
+is [pulumi.md](pulumi.md) §1.2. A case about this path therefore names the
+value that is unknown rather than the flag the run was built with, and the
+`unbuilt` fixture in `tests/test_async_properties.py` is parameterized over
+both kinds of run for that reason.
+
+Assert on the output, not on the exception, which `async_output` catches by
+design:
 
 ```python
 from pulumi.output import Unknown
 
-val = await my_component.subnet.network_id.future(with_unknowns=True)
-assert isinstance(val, Unknown)
+network_id = my_component.subnet.network_id
+assert isinstance(await network_id.future(with_unknowns=True), Unknown)
+assert await network_id.is_known() is False
 ```
+
+**How a mock run produces an unknown is not how a real one does.** The engine
+reports a create it skipped by setting `unknown` on the
+`RegisterResourceResponse`, which the SDK turns into
+`resolve_missing_as_unknown` for that resource's outputs;
+`MockMonitor.RegisterResource` never sets that field, so the real mechanism is
+unreachable from a test. A case models it instead by having the mock return
+`pulumi.UNKNOWN` as a dependency's `id`, which reaches the same `Output` state
+and is a fair proxy for one output of one resource. What the proxy does not
+carry:
+
+-   **Transitivity.** The engine leaves everything downstream of a skipped
+    create unknown; the double leaves unknown exactly the property the mock
+    wrote, so a case that reads the abort as propagating is asserting
+    something the double never modelled.
+-   **The meaning of a property the mock omits.** Outside a preview such a
+    property resolves as a **known `None`** rather than as unknown:
+    `pulumi/runtime/rpc.py` computes
+    `known = not settings.is_dry_run() and not resolve_missing_as_unknown`
+    for every resolver whose key the response is missing, and under the mocks
+    the second half is always true. A case that withholds a property
+    expecting an unknown therefore passes in a `preview=False` run without
+    ever reaching the abort it is named for.
 
 ## 4. Fakes and the Ratchet
 
