@@ -6,16 +6,15 @@ push that is refused, a repository a destroy may not delete. Two more are
 about where a resource *is* rather than what it says: the provider that signs
 it, and the URN it keeps.
 
-The census (`conventions.forge`) is pinned here as well, in literals. The
-program's cases read it, so a census that quietly changed would move what they
-assert along with it -- and the `credentials` command reads the same table, so
-a wrong entry is a secret pushed where no job will see it as readily as a
-setting nobody meant.
+The census these cases read (`conventions.forge`) is pinned in
+`test_conventions`, where every census's pins are (style/pulumi.md). They need
+that pin: a census that quietly changed would move what they assert along with
+it. It is out of this module deliberately as well as by the rule -- the fixture
+below is `autouse`, so a pin kept here would be unreachable at exactly the
+moment it is wanted, which is when this program fails to run.
 """
 
-import re
 from collections.abc import AsyncGenerator
-from pathlib import Path
 from typing import Any
 
 import pulumi
@@ -28,39 +27,6 @@ from kluster import conventions
 from kluster.components.forge import LABEL_COLOR, ManagedRepository
 from kluster.stacks import github as program
 
-WORKFLOWS = Path(__file__).parent.parent / '.github' / 'workflows'
-
-
-def _workflows() -> list[Path]:
-    """Every workflow file GitHub would run, which is both spellings of the suffix.
-
-    GitHub reads `.yml` and `.yaml` out of this directory identically, so a
-    census that globs one of them is one a file named the other way is invisible
-    to -- and invisible is the state every case that uses it exists to prevent.
-    """
-    return sorted(WORKFLOWS.glob('*.yml')) + sorted(WORKFLOWS.glob('*.yaml'))
-
-
-#: How a workflow condition names a label on the pull request it is running
-#: for, which is the only way any of them reads a label.
-LABEL_IN_A_CONDITION = re.compile(r"pull_request\.labels\.\*\.name,\s*'([^']+)'")
-
-#: How a workflow compares who is behind the event against a login: one of the
-#: contexts that carries one -- `github.actor`, `github.triggering_actor`, a
-#: `user.login`, a `sender.login` -- either way round the comparison is
-#: written. `!=` is matched as well as `==`, because a login misspelt in a
-#: negative test fails *open*, which is the worse of the two directions to
-#: leave unpinned. Two groups, one per way round, so a match carries the login
-#: in whichever of them is not empty.
-AUTHOR_IN_A_CONDITION = re.compile(
-    r"\.(?:\w+_)?(?:actor|login)\s*[=!]=\s*'([^']+)'|'([^']+)'\s*[=!]=\s*[\w.]*(?:actor|login)\b"
-)
-
-#: The other way GitHub spells the same identity. `conventions.forge.Author`
-#: carries a login and no id and says why, so a workflow reaching for the id
-#: form is outside what the census covers -- and this is what makes that a red
-#: check rather than a workflow that slipped past the scan above.
-AUTHOR_BY_ID = re.compile(r'\.(?:user|sender)\.id\b|\.actor_id\b')
 
 REPOSITORY = 'github:index/repository:Repository'
 BRANCH_PROTECTION = 'github:index/branchProtection:BranchProtection'
@@ -134,116 +100,6 @@ async def stack() -> AsyncGenerator[Forge]:
         async with declaring():
             await program.main()
         yield monitor
-
-
-def test_the_census_names_the_two_repositories_and_what_the_plan_gives_each() -> None:
-    """Visibility is the flag the plan's public-only features are derived from.
-
-    A repository recorded under the wrong one asks for a feature it cannot
-    have, or declines one it could.
-    """
-    assert {repository.name: repository.public for repository in conventions.forge.REPOSITORIES} == {
-        'kluster': True,
-        'kluster-ops': False,
-    }
-    assert conventions.forge.DEPLOYMENT.plan_offers_public_features is True
-    assert conventions.forge.OPS.plan_offers_public_features is False
-    assert conventions.forge.ACCOUNT == conventions.forge.Account(login='Aetf', user_id=1519759)
-    assert conventions.forge.DEPLOYMENT.full_name == 'Aetf/kluster'
-
-
-def test_the_census_carries_the_environments_the_merge_chain_runs() -> None:
-    """The credential partition, written out: which Environments exist and what each admits.
-
-    Order is part of it -- the credentials command reads this tuple as the
-    order the chain runs in -- and so is the branch policy, which is what keeps
-    a credential that can root the gateway off a pull request's own branch.
-    """
-    protected, any_branch = conventions.forge.BranchPolicy.PROTECTED_ONLY, conventions.forge.BranchPolicy.ANY_BRANCH
-
-    assert [
-        (environment.name, environment.branches, environment.gated)
-        for environment in conventions.forge.DEPLOYMENT.environments
-    ] == [
-        ('physical-plan', protected, False),
-        ('physical', protected, True),
-        ('dns', any_branch, False),
-        ('k8s-base', any_branch, False),
-        ('apps', any_branch, False),
-    ]
-    # Ungated, because the drill's scope is the gate (credentials.md §4) and
-    # this plan offers a private repository none anyway.
-    assert conventions.forge.OPS.environments == (conventions.forge.DRILL,)
-    assert conventions.forge.DRILL == conventions.forge.Environment('drill', any_branch, gated=False)
-
-
-def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
-    """A label a workflow reads and nothing declares fails in the quietest way there is.
-
-    The condition is simply never true, so the behaviour it guards is
-    unavailable at the moment somebody needs it and nothing anywhere reports
-    that. Reading the workflows is what keeps the census from being shorter
-    than what they depend on.
-    """
-    declared = {label.name for repository in conventions.forge.REPOSITORIES for label in repository.labels}
-    read = {label for workflow in _workflows() for label in LABEL_IN_A_CONDITION.findall(workflow.read_text())}
-
-    # `expect-changes` stands noop-automerge down altogether (ci.md §3). A
-    # census that lost it would leave a live condition pointing at a label no
-    # pull request can carry, and that one fails open: the escape hatch is what
-    # stops a deliberate change from merging on a proof it was never going to
-    # pass.
-    assert 'expect-changes' in read
-    assert read <= declared, f'read by a workflow and declared nowhere: {sorted(read - declared)}'
-
-
-def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> None:
-    """A login a workflow compares against and nothing names is a route that never fires.
-
-    Which is indistinguishable from a route nobody has needed yet, so nothing
-    reports it. `renovate[bot]` is the hosted app's own login; a self-hosted
-    instance, a different app slug or a personal-access-token user arrives
-    under another one, and the difference is invisible until a pull request
-    that should have taken the route quietly does not. Naming the login is what
-    makes a wrong literal a red check instead.
-
-    **What this reaches is a login written as a literal beside a comparison**,
-    which is how every workflow here spells it and what the case below holds
-    still. It is not a proof that no workflow can consult an identity any other
-    way: a `startsWith`, a login inside a `fromJSON` list, and a literal parked
-    in `env:` and compared in the shell all read as ordinary text to it. The id
-    spelling is the one exception, refused by name in the case after this,
-    because that is the substitution a workflow is most likely to make on
-    purpose.
-    """
-    named = {author.login for repository in conventions.forge.REPOSITORIES for author in repository.authors}
-    read = {
-        login
-        for workflow in _workflows()
-        for match in AUTHOR_IN_A_CONDITION.findall(workflow.read_text())
-        for login in match
-        if login
-    }
-
-    # noop-automerge's unproven route is renovate's and nobody else's (ci.md
-    # §3), so a workflow that stopped naming the login, or a census that
-    # stopped carrying it, is what this holds still.
-    assert 'renovate[bot]' in read
-    assert read <= named, f'compared against by a workflow and named nowhere: {sorted(read - named)}'
-
-
-def test_no_workflow_identifies_an_account_by_id() -> None:
-    """`conventions.forge.Author` carries a login and no id, and says why.
-
-    A workflow that switches to the id form is reaching for a spelling the
-    census does not carry -- and one the case above cannot see, since it reads
-    logins written as literals. Refusing it by name is what keeps that a red
-    check with a reason on it, instead of a census that silently stopped
-    covering the condition it exists for.
-    """
-    reached = {workflow.name for workflow in _workflows() if AUTHOR_BY_ID.search(workflow.read_text())}
-
-    assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
 
 
 def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:

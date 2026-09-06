@@ -121,6 +121,65 @@ network object) another, and `Exposure` a third — it says what an
 application's reachability *is* rather than which two resources it
 produces.
 
+**A census both sides read is pinned by content.** A check that holds
+one reader of a census against another agrees with whatever the census
+says: a renamed row moves both sides in the one edit, and the check
+passes by construction. It does not go red — it stops being *able* to go
+red, while the ledger still shows a guard, which is worse than having
+none. So a census carries a case that writes its content out — the
+names, and the fields decisions are derived from — as literals typed at
+the test and read from nowhere. That literal is the second source the
+comparison needs to have something to be wrong about, and editing the
+census then costs a second line: a reader deciding, deliberately, that
+the pin moves with it.
+
+**A seam test keeps only what still crosses a seam.** The seam is
+wherever the census is not the other side's source: a file no import
+reaches (a workflow, a rendered configuration, the live one on a
+device), or a value some reader spells as a literal of its own. Those
+keep biting, and which rows they bite on is a property of the rows
+rather than of the test — the map the `credentials` command pushes from
+spells `ZEROTIER_PHYSICAL` and `ZEROTIER_DNS` out, so renaming the `dns`
+Environment reddens its check and renaming `apps` does not. So a seam
+test names the side it is holding still, and an assertion whose other
+side turned out to be the census is moved to the pin rather than left
+where it reads as a second guard.
+
+**A pin is at the census, not wherever the value happens to be
+covered.** A census value is often reachable from a golden file or a
+rendered artifact a few suites away, and that guard is real — but it
+belongs to its own subject, it moves when that subject moves, and it
+names no census. So a case kept because the ground is covered elsewhere
+says where, and a case that can say nowhere is either given literals or
+deleted with its reason recorded where the next reader meets it:
+otherwise "deleted because it could not fail" and "deleted by mistake"
+leave the same diff behind.
+
+**A seam that reaches every row stands in for the content pin — for the
+fields it carries, and no others.** It has to be content itself: the
+other side written out by hand rather than derived from the census, as
+the gateway's services are, held name by name and address by address
+against the configuration the device serves. Where one does stand in,
+the census's entry in `tests/test_conventions.py` says which suite
+carries it and which fields, so that finding a census's pin stays one
+lookup and so a golden file — which goes when its own subject goes —
+takes a written claim with it instead of orphaning one silently. A field
+no substitute carries is written out here whatever else covers the row:
+a table with one field pinned and the field beside it bare reads as
+covered and is not.
+
+**A census's pins and invariants live in `tests/test_conventions.py`** —
+the suite that mirrors the package the censuses are declared in —
+whatever program reads the census, and never in a suite named for one of
+those programs. A reader looking for what pins a census then does not
+have to know which program reads it, and the pin does not sit behind
+that program's fixtures: a module-scoped `autouse` fixture errors every
+case in its file when the program fails to run, so pins kept there are
+out of reach at exactly the moment they are wanted, which is when that
+program's own cases are failing. The invariants go with the pin because
+they answer the same question about the same table: is it still what it
+says it is.
+
 ## Resources and their contents
 
 **Runtime behavior belongs to the runtime.** Pulumi declares the
@@ -164,6 +223,10 @@ The architecture reviewer's standing questions, for the review stage
 -   Is every new table written in this installation's terms, with the
     provider's per-member form derived rather than written out, and does
     every census parameter arrive without a default?
+-   Is every new census pinned by literals at
+    `tests/test_conventions.py`, and does every case that holds a census
+    against something still have a side the census is not the source
+    of?
 -   Does every new resource hang off the right component, with
     providers inherited rather than re-plumbed?
 -   Would the diff's names survive the "no metaphor, one term per
