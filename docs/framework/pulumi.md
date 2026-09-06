@@ -285,7 +285,13 @@ different things:
     apply — an identifier the cloud generates, an address it assigns, a
     credential a resource mints. The cost is that a reader sees
     whatever the producer published last, so a preview taken before the
-    producer applies previews stale values.
+    producer applies previews stale values. Staleness is the milder
+    hazard: an output the producer last published from a targeted apply
+    can be present, well-typed and meaningless, because Pulumi's unknown
+    sentinel reaches a reader as an ordinary known string — the
+    mechanism, and the rule that nothing may read such an output until
+    the rest of the producer is applied, are §1.4's "When an awaited
+    value is unknown".
 
 -   **A Python module both programs import.** The value is a literal,
     so it is concrete during preview and imposes no apply order. It
