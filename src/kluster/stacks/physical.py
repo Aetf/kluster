@@ -33,7 +33,7 @@ one block at the end, because they are this stack's whole contract with `dns`,
 from __future__ import annotations
 
 from collections.abc import Mapping
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 
 import pulumi
 import pulumi_oci as oci
@@ -429,10 +429,30 @@ def _gateway(config: pulumi.Config) -> Gateway:
     separate question with a separate answer: the roster carries an entry for
     it or it does not, and the ceremony that gets from one to the other is
     physical/gateway.md §2.5.
+
+    **The knob is a literal address, and that is checked here.** The one apply
+    it exists for runs inside the cutover window, and that window stops both
+    home resolvers for its whole length (physical/gateway-cutover.md §4), so a
+    name is unresolvable at the only moment this value is read. Reading it is
+    the last point at which the mistake is cheap: rejected here the run refuses
+    before the gateway is declared, where a name that reached the providers
+    would fail mid-window, on a device whose live state has already moved.
     """
+    bootstrap_host = config.get(GATEWAY_BOOTSTRAP_HOST)
+    if bootstrap_host is not None:
+        try:
+            _ = ip_address(bootstrap_host)
+        except ValueError:
+            raise ValueError(
+                f'{GATEWAY_BOOTSTRAP_HOST} is {bootstrap_host!r}, which is not a literal IP '
+                'address. The apply this key exists for runs inside the cutover window, which '
+                'stops both home resolvers, so nothing on the LAN answers for a name at the '
+                'moment this key is read (physical/gateway.md §2.5).'
+            ) from None
+
     return Gateway(
         conventions.CLUSTER_NAME,
-        host=config.get(GATEWAY_BOOTSTRAP_HOST) or str(conventions.overlay.UDM),
+        host=bootstrap_host or str(conventions.overlay.UDM),
         # One declaration per census entry, each holding the entry itself: the
         # gateway knows what a service's image is pinned at and what secret it
         # reads, and `conventions` knows the rest (rfc-002 §5.3).
