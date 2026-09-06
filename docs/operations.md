@@ -5,8 +5,8 @@ the update-ownership matrix, the upgrade and node-replacement
 runbooks, and the drill program with its trigger machinery. Sits at
 the docs root like [credentials.md](credentials.md) — day-2 crosses
 every layer boundary. Runbooks here follow the census discipline
-(title, trigger, gist; executable form — `just` recipes and scripts —
-ships with the implementation).
+(title, trigger, gist; executable form — the console scripts of
+`src/kluster/scripts/` — ships with the implementation).
 
 ## 1. Update ownership matrix
 
@@ -16,9 +16,33 @@ this matrix is the census. "Reviewed" means a human merges after
 reading the preview; nothing on this table automerges unless the row
 says so.
 
+**Which rows can be applied today.** The `physical` stack carries the
+Talos pin, the Image Factory schematic and the nspawn rootfs
+references, so those rows apply through a deploy of that stack. The
+node-by-node upgrade that follows is run by hand: no task wraps
+`talosctl upgrade` or `upgrade-k8s`. The state-backend pins apply through
+`state-backend provision`. **The rest wait on the `k8s-base` stack**,
+the dependency bumps included; the UDM firmware row waits on nothing,
+being the vendor's.
+
+For the rows whose apply path is the CI chain — the Cilium and
+k8s-base charts, the cluster images, the blog image git-sync would
+deliver — a merge deploys none of them: the chain stalls in front of
+their stacks, and the deploy-failure alert the images row names as its
+safety valve, which is built and is the interim Home Assistant webhook
+(ci.md §3), fires on every merge alike, so it singles out nothing. The
+dependency bumps wait one step further back. The noop-automerge
+workflow is built, but a bump touches `uv.lock`, `pyproject.toml` or a
+workflow file, which puts it on the route that proves itself with a
+preview of `k8s-base` and `apps` among others, and no stack of either
+name exists in the state backend for that preview to resolve — so the
+proof errors rather than passing. The whole account, the other facts
+behind that error included, is ci.md §5. Every bump therefore merges
+the way the waiting rows do: as a reviewed pull request.
+
 | Surface | PR opened by | Applied by | Policy |
 | --- | --- | --- | --- |
-| Talos version (machine-config pin + Image Factory schematic) | renovate (GitHub-releases datasource) | `just` task wrapping `talosctl upgrade`, serial, staged (declarative/physical.md §2) | Reviewed; §2.1 runbook |
+| Talos version (machine-config pin + Image Factory schematic) | renovate (GitHub-releases datasource) | `physical` stack for the pin and the schematic; `talosctl upgrade` by hand, serial, staged (declarative/physical.md §2) | Reviewed; §2.1 runbook |
 | Kubernetes version | same PR family (Talos-coupled) | `talosctl upgrade-k8s` | Reviewed; after the Talos bump it belongs to |
 | Cilium chart | renovate | CI chain (merge = deploy) | Reviewed, **never automerged** — §2.2 runbook; ≥1.20 floor (ExternalAuth) |
 | k8s-base charts (cert-manager, CNPG, VolSync, sealed-secrets, VictoriaMetrics, …) | renovate | CI chain | Reviewed — chart bumps always produce a real diff; major behind dashboard approval |
@@ -26,7 +50,7 @@ says so.
 | blog image / built branch | blog repo CI | git-sync | Automatic — content, not code |
 | nspawn rootfs (caddy, AdGuard, ZeroTier) | renovate here — docker datasource, reading whole references off the `versions:image-gateway-…` pins | `physical` stack: the device pulls the pinned manifest itself and unpacks it beside the tree it is running, then the boot chain's machine script restarts what changed | Reviewed; the run-number tag reads as a major bump, so every one waits on dashboard approval |
 | State-backend pins (FCOS stream handled by Zincati; `postgres:NN` in Butane) | Zincati (periodic window) / renovate on `deploy/state-backend/` | auto / manual re-provision | state-backend.md §4 |
-| Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
+| Pulumi SDK + providers, Python deps, Actions versions | renovate | **noop-automerge workflow** — merges once the preview is proven empty (the zero-diff rule, ci.md); that proof previews stacks that do not exist yet, so nothing takes this path today (paragraph above) | Automerged when diff-free; a bump that produces a real diff falls out of the noop path to human review; major behind dashboard approval |
 | UDM firmware | **vendor-controlled** (auto-update schedule; outage history on record) | — | Not ours to pin; the device's services self-heal via on_boot.d, ZT recovery runbook gateway.md §3 |
 
 ## 2. Upgrade runbooks (census)
@@ -62,9 +86,10 @@ says so.
     (architecture.md §3.2).
 -   **§3.2 Homelab worker VM.** Trigger: VM/disk loss or rebuild.
     Gist: re-create from machine config (nocloud seed); local-path
-    data returns via VolSync restore (that's the drilled move-path,
-    storage.md §2); NAS-backed PVs re-point untouched; BGP session
-    re-establishes from the static IP in the config.
+    data returns via VolSync restore (that's the designed move-path,
+    storage.md §2 — no drill of it has run, §4); NAS-backed PVs
+    re-point untouched; BGP session re-establishes from the static IP
+    in the config.
 -   **§3.3 Total-cloud-loss / total-home-loss** — owned by nodes.md
     §5 (cold-standby drill, both directions).
 
@@ -77,9 +102,13 @@ default form is a scheduled automation that alerts only on failure,
 and the human appears exactly where an offline secret or physical
 action is irreducible.
 
-**The enabler for the biggest drill**: pg_dumps gain a third age
+**The enabler for the biggest drill**: pg_dumps are to gain a third age
 recipient — an **ops-repo-held drill key** (credentials.md §3),
-living in that repository's `drill` Environment. This adds no new
+living in that repository's `drill` Environment. **The key does not
+exist**: the dumps carry the escrowed generations alone
+(state-backend.md §5), and the Environment holds nothing, so a rebuild
+today is an operator opening the object with the kit. The rest of this
+paragraph is the argument for building it. It adds no new
 *class* of exposure. The kluster CI already reads the live database
 through its client cert, so a dump-decrypting key in a second GitHub
 repository widens the reach of a forge compromise by one repository
@@ -97,14 +126,24 @@ alone, while the escrowed offline generations keep their actual
 role and survive the loss of GitHub itself. With it, the
 state-backend rebuild drill runs unattended end to end.
 
-| Drill | Cadence | Form |
+**Nothing in the table below runs.** The ops repository carries no
+`.github/workflows` directory, so neither the state-backend rebuild nor
+the etcd restore-verify is scheduled, and the two in-cluster drills wait
+on the `k8s-base` stack that would install the operators they drive and
+the alerting they report into (§1). The last column is the designed
+form rather than a census of schedulers: today every row is an operator
+act, and the only one written out as a procedure is the state-backend
+restore (state-backend.md §7.3.1). By the standing principle above,
+that makes every recovery path on this table an assumed-broken one.
+
+| Drill | Cadence | Form (designed; none of it is scheduled today) |
 | --- | --- | --- |
-| CNPG restore (immich pattern, ported from legacy) | Monthly | Automated in-cluster, alert on failure |
-| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Automated (ops repo), alert on failure |
-| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Automated (ops repo), alert on failure |
-| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | Automated in-cluster, alert on failure |
-| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Automated; `actionable` alert only on findings |
-| Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Automated; `actionable` alert when an expiry approaches |
+| CNPG restore (immich pattern, ported from legacy) | Monthly | In-cluster workflow, alert on failure |
+| State-backend rebuild — scratch micro from Butane → restore latest dump (drill key) → verify → destroy (state-backend.md §7.3) | Quarterly | Ops-repo workflow, alert on failure |
+| etcd snapshot restore-verify — latest B2 snapshot into a scratch etcd, health + key sanity | Monthly | Ops-repo workflow, alert on failure |
+| VolSync spot-restore — rotating PVC into a scratch namespace, checksum, tear down | Monthly | In-cluster workflow, alert on failure |
+| Orphan-volume audit, target zero (storage.md §3.3) | Quarterly | Ops-repo workflow; `actionable` alert only on findings |
+| Credential expiry tripwires (credentials.md §4) | Continuous (scheduled probes) | Ops-repo probes; `actionable` alert when an expiry approaches |
 | **Offline day**: age key rotation (proves offline custody, state-backend.md §7.4) + full cold-standby reverse bootstrap on homelab libvirt (nodes.md §5) + offline-kit verification against the register (credentials.md §2.1) + a `pulumi preview` against the Vultr-fallback stack config (nodes.md §3.1 — proves the scripted fallback still computes, creating nothing) + anything the probes can't reach | Yearly | One `actionable` issue, human-run |
 
 **Destroy dates are not on that clock, and only one of them is a date.**
@@ -121,13 +160,16 @@ byte-for-byte as it was and a generation's ciphertext carries no expiry,
 so a probe has no field to read. Honoring it is part of the yearly
 offline day until the register carries it.
 
-Every scheduled drill above runs in the **ops repo** (ci.md §3 —
+Every scheduled drill above belongs in the **ops repo** (ci.md §3 —
 the deployment repo carries no scheduled workflows; the two
 in-cluster drills, VolSync spot-restore and the CNPG restore, are
 the exceptions — kube-native scratch-namespace operations driven by
-the cluster itself, so the ops repo never needs a kubeconfig). Every automated drill is covered by a **freshness alert**
+the cluster itself, so the ops repo never needs a kubeconfig). Each
+automated drill is to be covered by a **freshness alert**
 (the backup-freshness family, cluster-infra.md §3): a drill that
-silently stops running is indistinguishable from a failing one. The only
+silently stops running is indistinguishable from a failing one. Until
+the workflows and that alert family exist, a drill that never started
+is indistinguishable from both. The only
 calendar ritual left is the yearly offline-day issue.
 
 ## 5. Playbook index
