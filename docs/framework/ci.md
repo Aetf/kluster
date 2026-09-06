@@ -477,17 +477,21 @@ Upgrades over the legacy workflow, both mandatory now:
     workstation. kluster-code's `docker/` retires with the migration
     (old-tracker rule).
 
-As built, `images.yml` is three jobs. **`changes`** discovers the image
-set by globbing `docker/*.Containerfile` and narrows it to the images
-whose own files moved — safe in a way the preview path-filter is not,
-because a published tag is a pure function of its `.conf`, so a tag that
-does not exist yet implies a change in `docker/<image>.*`; a change to
-the workflow or its action selects everything instead. **`build`** is a
-matrix of image × architecture, each entry on its native runner
-(`ubuntu-24.04`, `ubuntu-24.04-arm`), publishing `:<tag>-amd64` /
-`:<tag>-arm64`. **`manifest`** stitches those two into the tag the
-cluster actually pins. A PR builds both architectures and publishes
-nothing, so the manifest job does not run there.
+As built, `images.yml` is three jobs. **`select-images`** discovers the
+image set by globbing `docker/*.Containerfile` and narrows it to the
+images whose own files moved — safe in a way the preview path-filter is
+not, because a published tag is a pure function of its `.conf`, so a tag
+that does not exist yet implies a change in `docker/<image>.*`; a change
+to the workflow or its action selects everything instead. Its name is
+distinct from `preview.yml`'s `changes` on purpose: a job name is a
+check-run name, and `changes` is a required context (§5) that this
+workflow's filtered trigger would otherwise fill a second time on the
+pull requests that touch `docker/**`. **`build`** is a matrix of
+image × architecture, each entry on its native runner (`ubuntu-24.04`,
+`ubuntu-24.04-arm`), publishing `:<tag>-amd64` / `:<tag>-arm64`.
+**`manifest`** stitches those two into the tag the cluster actually
+pins. A PR builds both architectures and publishes nothing, so the
+manifest job does not run there.
 
 The per-image `.conf` is the contract: it is *sourced*, and beyond the
 build args it declares **`IMAGE`** (the ghcr path) and **`TAG`**, the

@@ -38,7 +38,13 @@ permissions:
   packages: write
 
 jobs:
-  changes:
+  # A job name is a check-run name, and branch protection requires the
+  # context `changes` by name — preview.yml's job, which reports on every
+  # pull request because that trigger carries no `paths:` filter
+  # (framework/ci.md §5). This workflow's trigger is filtered, so naming
+  # this job `changes` too would fill that one required context with a
+  # second run on the pull requests that touch `docker/**` alone.
+  select-images:
     runs-on: ubuntu-latest
     outputs:
       # A JSON array of docker/*.Containerfile basenames, which is the shape
@@ -91,16 +97,16 @@ jobs:
           echo "images=$(jq -cRn '[inputs | select(length > 0)]' <<<"$picked")" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: changes
+    needs: select-images
     # An empty matrix is not an error but it is also not a job, and a matrix
     # built from an empty array would be one — so the whole job stands down
     # when nothing matched.
-    if: needs.changes.outputs.images != '[]'
+    if: needs.select-images.outputs.images != '[]'
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJSON(needs.changes.outputs.images) }}
+        image: ${{ fromJSON(needs.select-images.outputs.images) }}
         platform:
           - arch: amd64
             runner: ubuntu-24.04
@@ -149,14 +155,14 @@ jobs:
           buildah push "$REF-$ARCH"
 
   manifest:
-    needs: [changes, build]
+    needs: [select-images, build]
     # PR builds publish nothing, so there is nothing to stitch.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJSON(needs.changes.outputs.images) }}
+        image: ${{ fromJSON(needs.select-images.outputs.images) }}
     steps:
       - uses: actions/checkout@v5
 
