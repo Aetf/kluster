@@ -937,6 +937,69 @@ def test_the_replaced_status_is_published_in_help() -> None:
     assert 'state-backend restore' in help_text
 
 
+# -- finding the box among everything OCI still lists -------------------------
+
+
+class _Page:
+    """One page of an OCI list response, in the shape `oci.pagination` reads.
+
+    The two token attributes are the whole point of the class: a stand-in
+    without them answers a paginated call and an unpaginated one identically,
+    which is how a listing that reads one page passes for one that reads all
+    of them.
+    """
+
+    def __init__(self, data: list[Any], *, next_page: str | None = None) -> None:
+        self.data: list[Any] = data
+        self.next_page: str | None = next_page
+        self.has_next_page: bool = next_page is not None
+        self.status: int = 200
+        self.headers: dict[str, str] = {}
+        self.request: Any = None
+
+
+def _instance(state: str = 'RUNNING') -> Any:
+    """A box under the appliance's name, in the state given."""
+    return type('Instance', (), {'display_name': f'{settings.NAME}-vm', 'lifecycle_state': state})()
+
+
+class _PagedCompute:
+    """A compartment whose instance list runs to more than one page."""
+
+    def __init__(self, pages: list[list[Any]]) -> None:
+        self.pages: list[list[Any]] = pages
+        self.asked: list[str | None] = []
+
+    def list_instances(self, _compartment_id: str, **kwargs: object) -> _Page:
+        token = cast('str | None', kwargs.get('page'))
+        self.asked.append(token)
+        index = int(token) if token is not None else 0
+        following = str(index + 1) if index + 1 < len(self.pages) else None
+        return _Page(self.pages[index], next_page=following)
+
+
+def test_the_running_box_is_found_behind_a_page_of_terminated_ones() -> None:
+    """The compartment lists the boxes that ever were, not the one that is.
+
+    A terminated instance stays in the listing and this box is cattle, so the
+    list grows by one on every replacement while the answer stays a single
+    box — and the running one is the newest, which is to say the furthest
+    from the first page. Everything that reads this answer reads a miss as
+    "no appliance": no approval in front of a replacement, no dump of the box
+    about to be destroyed, and an escrow that mints a fresh CA and age
+    identity over a live one.
+    """
+    graveyard = [_instance('TERMINATED') for _ in range(3)]
+    compute = _PagedCompute([graveyard, [_instance()]])
+    clients = cast('Any', type('Clients', (), {'compute': compute, 'compartment_id': 'ocid1.compartment.test'})())
+
+    found = provision.find_instance(clients)
+
+    assert found is not None and found.lifecycle_state == 'RUNNING'
+    # The second page was asked for with the token the first one returned.
+    assert compute.asked == [None, '1']
+
+
 # -- what the launch actually puts on the box --------------------------------
 
 
@@ -946,8 +1009,8 @@ class _Compute:
     def __init__(self) -> None:
         self.launched: Any = None
 
-    def list_instances(self, _compartment_id: str, **_kwargs: object) -> Any:
-        return type('Response', (), {'data': []})()
+    def list_instances(self, _compartment_id: str, **_kwargs: object) -> _Page:
+        return _Page([])
 
     def launch_instance(self, details: Any) -> Any:
         self.launched = details
