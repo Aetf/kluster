@@ -89,13 +89,19 @@ async def fake() -> Talos:
     return await run_with(Talos(), stack='physical')
 
 
-def build_cluster(**kwargs: Any) -> TalosCluster:
-    """Day 0: the PKI and the configuration each machine boots with."""
+def build_cluster(name: str = 'kluster', **kwargs: Any) -> TalosCluster:
+    """Day 0: the PKI and the configuration each machine boots with.
+
+    `name` is the logical name, which a case only passes when it builds a
+    second cluster in one run: two components under one name are one URN, and
+    the recorder refuses that the way the engine does. The cluster's own
+    identity -- the name in every machine configuration -- is fixed either way.
+    """
     kwargs.setdefault('control_plane_nodes', ('cp1', 'cp2', 'cp3'))
     kwargs.setdefault('worker_nodes', ('homelab',))
     kwargs.setdefault('bgp_peers', {'homelab': '192.168.70.1/32'})
     return TalosCluster(
-        'kluster',
+        name,
         cluster_name='kluster',
         endpoint=ENDPOINT,
         cert_sans=[BALANCER],
@@ -147,13 +153,15 @@ async def test_day_zero_stands_on_its_own(fake: Talos) -> None:
     # ISO); day 1 needs machines that answer, which the stack only has later.
     cluster = build_cluster()
     await asyncio.gather(*(config.future() for config in cluster.machine_configs.values()))
-    assert 'kluster-bootstrap' not in fake.registrations
-    assert not [name for name in fake.registrations if name.endswith('-config')]
+    assert 'kluster-bootstrap' not in fake.names_declared
+    assert not [name for name in fake.names_declared if name.endswith('-config')]
 
 
 @pytest.mark.asyncio
 async def test_configuration_is_applied_over_apid_without_rebooting_the_quorum(fake: Talos) -> None:
     day1 = build()
+    # Every node is applied, so the set of them is pinned before it is walked.
+    assert set(day1.applies) == set(ADDRESSES)
     for node, applied in day1.applies.items():
         assert await applied.node.future() == ADDRESSES[node]
         # A reboot-needing change is staged, so the reboot is an operator's
@@ -166,6 +174,8 @@ async def test_a_node_without_an_endpoint_is_dialled_where_it_is_named(fake: Tal
     # The ordinary case, and the one the cloud nodes are in: the address that
     # names the node is also the address that reaches it.
     day1 = build()
+    # Every node is applied, so the set of them is pinned before it is walked.
+    assert set(day1.applies) == set(ADDRESSES)
     for node, applied in day1.applies.items():
         assert await applied.endpoint.future() == ADDRESSES[node]
 
@@ -203,6 +213,8 @@ async def test_destroying_an_apply_never_wipes_the_disk(fake: Talos) -> None:
     # `reset` wipes STATE and EPHEMERAL — every partition (provider issue
     # #205). Node replacement is an explicit procedure, never a side effect.
     day1 = build()
+    # Every node is applied, so the set of them is pinned before it is walked.
+    assert set(day1.applies) == set(ADDRESSES)
     for applied in day1.applies.values():
         on_destroy = await applied.on_destroy.future()
         assert on_destroy is not None
@@ -346,7 +358,7 @@ async def test_the_worker_boots_with_the_address_the_gateway_was_told_about(fake
     # on, and a worker under some other name is not this one.
     for node in ('cp1', 'cp2', 'cp3'):
         assert not interfaces(await patches_of(cluster, node))
-    assert not interfaces(await patches_of(build_cluster(), 'homelab'))
+    assert not interfaces(await patches_of(build_cluster('kluster-other-worker'), 'homelab'))
 
 
 @pytest.mark.asyncio
