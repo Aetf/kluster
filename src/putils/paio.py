@@ -15,15 +15,18 @@ import contextvars
 import functools
 import inspect
 import traceback
-from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar, cast
+from typing import Any, Awaitable, Callable, ParamSpec, TypeAlias, TypeVar, cast, overload
 
 import pulumi
 from pulumi.output import contains_unknowns
 
-__all__ = 'task', 'background', 'async_output', 'resolve', 'UnknownValueException'
+__all__ = 'task', 'background', 'async_output', 'resolve'
 
 
 T = TypeVar('T')
+T1 = TypeVar('T1')
+T2 = TypeVar('T2')
+T3 = TypeVar('T3')
 
 Nested: TypeAlias = T | Awaitable['Nested[T]']
 
@@ -97,8 +100,9 @@ class UnknownValueException(Exception):
     Raised by `resolve` when an awaited output is unknown.
 
     Aborts the enclosing `async_output` coroutine early; `async_output`
-    catches it and marks its output as unknown. User code normally should
-    not catch this.
+    catches it and marks its output as unknown. Not exported: it is the
+    handshake between those two, and the only correct thing to do with it
+    is not to catch it.
     """
 
 
@@ -121,7 +125,19 @@ _async_output_ctx: contextvars.ContextVar[_AsyncOutputCtx | None] = contextvars.
 )
 
 
-def resolve(*outputs: 'pulumi.Output[Any] | Any') -> Awaitable[Any]:
+@overload
+def resolve(output: 'pulumi.Input[T1]', /) -> Awaitable[T1]: ...
+@overload
+def resolve(output1: 'pulumi.Input[T1]', output2: 'pulumi.Input[T2]', /) -> Awaitable[tuple[T1, T2]]: ...
+@overload
+def resolve(
+    output1: 'pulumi.Input[T1]', output2: 'pulumi.Input[T2]', output3: 'pulumi.Input[T3]', /
+) -> Awaitable[tuple[T1, T2, T3]]: ...
+@overload
+def resolve(*outputs: 'pulumi.Input[Any]') -> Awaitable[Any]: ...
+
+
+def resolve(*outputs: 'pulumi.Input[Any]') -> Awaitable[Any]:
     """
     Natively await one or more Pulumi outputs inside an `async_output` coroutine.
 
@@ -137,7 +153,15 @@ def resolve(*outputs: 'pulumi.Output[Any] | Any') -> Awaitable[Any]:
     run: a coroutine never receives the `Unknown` sentinel, and the code
     after an `await resolve(...)` may assume it holds plain values, at the
     price of not running at all when an upstream value is unknown
-    (framework/pulumi.md §1.2).
+    (framework/pulumi.md §1.2). That unconditional abort is what lets the
+    overloads promise `T` rather than `T | Unknown`, so what a caller does
+    with a resolved value -- index it, add to it, interpolate it -- is
+    checked.
+
+    Typed through three arguments, which is what this program writes out;
+    a longer call, or one whose arguments are unpacked from a sequence,
+    falls back to `Any` and is the point at which a fourth overload earns
+    its place.
 
     Only valid inside an `async_output` coroutine. Anywhere else it raises
     `RuntimeError`: dependencies would be silently dropped, and an unknown

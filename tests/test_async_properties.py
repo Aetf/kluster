@@ -2,12 +2,15 @@
 
 What is proven here is the part that has no equivalent in a diff: which
 dependencies an asynchronously computed input carries, what becomes of one
-whose upstream is unknown, and that a failure inside one fails the run rather
-than hanging it.
+whose upstream is unknown, what type a resolved value has, and that a failure
+inside one fails the run rather than hanging it.
+
+The type-level case is checked by basedpyright rather than by pytest, so a
+green run of this file on its own does not mean it passed.
 """
 
 import asyncio
-from typing import Any, cast
+from typing import Any, assert_type, cast
 
 import pulumi
 import pytest
@@ -15,6 +18,7 @@ import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
 from pulumi.output import Unknown
 
+import putils
 from putils import Component, async_output, resolve
 
 
@@ -147,6 +151,32 @@ async def test_resolving_several_outputs_gives_them_in_order(mocks: Engine) -> N
 def test_resolving_nothing_is_refused() -> None:
     with pytest.raises(TypeError, match='at least one output'):
         resolve()
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_value_keeps_the_type_of_the_output_it_came_from(mocks: Engine) -> None:
+    """A type-level case: `assert_type` does nothing at runtime, basedpyright is what fails.
+
+    The unconditional abort on an unknown is what makes this sound -- the
+    coroutine below either holds plain values of these types or does not run
+    -- and it is what the index and the arithmetic afterwards rely on. Take
+    `resolve`'s overloads away and every one of these is `Any`: the calls
+    still pass the checker, so the only thing left asserting the contract is
+    the prose.
+    """
+    vpc = VPC('typed-vpc')
+    blocks = pulumi.Output.from_input(['10.0.0.0/24'])
+    prefix_length = pulumi.Output.from_input(23)
+
+    async def prepare() -> str:
+        assert_type(await resolve(vpc.id), str)
+        assert_type(await resolve(vpc.id, blocks), tuple[str, list[str]])
+        assert_type(await resolve(vpc.id, blocks, prefix_length), tuple[str, list[str], int])
+
+        identifier, addresses, length = await resolve(vpc.id, blocks, prefix_length)
+        return f'{identifier} {addresses[0]} {length + 1}'
+
+    assert await async_output(prepare).future() == 'typed-vpc_id 10.0.0.0/24 24'
 
 
 @pytest.mark.asyncio
@@ -295,3 +325,13 @@ async def test_resolve_outside_an_async_input_is_refused(mocks: Engine) -> None:
     vpc = VPC('ctx-vpc')
     with pytest.raises(RuntimeError, match='async_output'):
         await resolve(vpc.id)
+
+
+def test_the_abort_signal_is_not_part_of_the_public_surface() -> None:
+    """`resolve`'s handshake with `async_output`, and catching it defeats both.
+
+    Dropped from what `putils` re-exports rather than renamed: the documents
+    that describe the abort name the class, and a name they can still be
+    checked against is worth more than a leading underscore.
+    """
+    assert 'UnknownValueException' not in dir(putils)
