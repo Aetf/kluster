@@ -46,8 +46,10 @@ from kluster.components.forge import ManagedRepository
 #:
 #: The `preview` matrix is deliberately not here. Its check names carry the
 #: stack (`preview (dns)`), so pinning them would freeze the stack list into a
-#: setting that no longer moves with the code; and its verdict is consumed by
-#: noop-automerge, which is where "the preview was empty" is decided.
+#: setting that no longer moves with the code. What leaving it out causes is
+#: that a red `preview` blocks nothing: this tuple is the whole of what a merge
+#: to `main` is gated on, and the unattended merge proves a zero diff of its own
+#: rather than reading this matrix (github.md §3).
 REQUIRED_CHECKS = ('checks', 'changes')
 
 #: Where the provider's credential is read from. It is an account root held in

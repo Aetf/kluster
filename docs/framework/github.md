@@ -107,10 +107,13 @@ gates are one table there rather than constants in the stack program,
 because a second program reads the same table: the `credentials`
 command pushes a secret into every Environment the register names
 (credentials.md §3), and a script may import `conventions` but nothing
-a stack declares from. It also carries the labels a workflow branches
-on — today `expect-changes` (ci.md §3) — held no shorter than what the
-workflows actually read by a test, and declared as resources like
-everything else below.
+a stack declares from. It also carries the switches a workflow
+branches on: the labels it reads — today `expect-changes` (ci.md §3) —
+and the identities it tests a pull request's author against — today
+renovate's. Each is held no shorter than what the workflows actually
+read by a test. A label is declared as a resource like everything else
+below; an author is named to nothing, because the only thing that
+reads one is a workflow comparing a login against a string.
 
 **A row carries what defines the entry, not what GitHub stores about
 it.** The credential partition is defined in exactly these terms
