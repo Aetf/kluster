@@ -53,13 +53,17 @@ class MyComponent(Component):
 `resolve(x)` returns the plain value; `resolve(x, y)` returns a tuple and
 gathers dependencies from all arguments at once.
 
-### 1.2 Fine-Grained Preview Diffs
+### 1.2 Fine-Grained Diffs on an Unknown Value
 
 Known values are passed as plain arguments, so they always show up concretely
-in `pulumi preview`. If an `async_output` coroutine awaits a value that is
-unknown during preview, `resolve` raises `UnknownValueException` to abort that
-coroutine early, and only that one input becomes `UNKNOWN` — sibling inputs of
-the same resource are unaffected. No special protocol is needed.
+in a diff. If an `async_output` coroutine awaits a value that is unknown,
+`resolve` raises `UnknownValueException` to abort that coroutine early, and
+only that one input becomes `UNKNOWN` — sibling inputs of the same resource are
+unaffected. No special protocol is needed.
+
+The abort does not ask which kind of run it is in: an unknown is a property
+of the value, not of the run. How an update comes to hold one, and what the
+engine then does with it, is under "When an awaited value is unknown" below.
 
 ### 1.3 Parent Propagation via `child_opts`
 
@@ -201,14 +205,41 @@ async def main() -> None:
 
 `resolve` deliberately refuses to run there (`RuntimeError`): feeding resource
 outputs through async code is the job of `async_output` inside components,
-which tracks dependencies and stays preview-safe.
+which tracks dependencies and keeps an unknown from reaching Python.
 
-#### What happens during `pulumi preview`
+#### When an awaited value is unknown
 
 You don't need to do anything. If an awaited value is unknown (e.g. the VPC
 does not exist yet), the coroutine is aborted and just that one input shows as
-unknown in the diff; inputs passed plainly keep their concrete values. During
-`pulumi up` every value is known and coroutines always run to completion.
+unknown in the diff; inputs passed plainly keep their concrete values.
+
+A whole-stack `pulumi up` is the case where every value is known and every
+coroutine does run to completion, but it is not the only case. **An update
+restricted by `--target` skips the resources outside the target set**, and one
+whose *create* is skipped has no outputs to give: they reach a program that is
+otherwise applying for real as unknown. A skipped resource that already exists
+is stepped over with the outputs already in state, which stay known, so this
+is a condition of a stack part of which has never been applied rather than of
+every targeted run. The engine accepts unknown inputs on the resources it
+skips creating, which is why degrading the input is the right answer rather
+than failing the run.
+
+Where the resource consuming the unknown is itself targeted, the engine
+refuses the update by name — `Resource 'A' depends on 'B' which was was not
+specified in --target list`, doubled word and all — naming the URN to add.
+The refusal is graph-based rather than value-based: it fires on the
+dependency edge, whatever the input holds. What the abort restores is that
+the registration reaches the engine at all, carrying the edge `resolve`
+records before it aborts.
+
+A third case is neither skipped nor refused. The stack's own resource is
+never outside a target set, so an unknown that reaches a `pulumi.export` is
+accepted and written to state as Pulumi's unknown sentinel — the literal
+string `04da6b54-80e4-46f7-96ec-b56ff0331ba9`. `pulumi stack output` returns
+it, and a `StackReference` reader receives it as a known value rather than as
+an absence. So a targeted apply leaves every export that depends on a
+resource the run skips creating poisoned until the rest of the stack is
+applied, and nothing between the two runs may read one (§3.1).
 
 ## 2. Integration with `putils`
 

@@ -6,6 +6,17 @@
     [framework/pulumi.md](../framework/pulumi.md) §1 and §2, and the
     implementation is `src/putils/`. Where this text and that document
     disagree, the document is right.
+*   **Built otherwise, 2026-09-05:** the abort does not ask which kind of run
+    it is in. `resolve` raises `UnknownValueException` whenever an awaited
+    value is unknown and `async_output` degrades to an unknown output, in a
+    preview and in an update alike — an unknown is a property of the value,
+    and a `--target`ed update leaves the resources it skips creating unknown
+    to a program applying for real. §4.2's "outside dry-run the exception is
+    never raised" and the hard re-raise it describes are both gone, and §4's
+    diagram branch, §5's thinner-DAG caveat, §6's cells that scope the abort
+    to a preview and every other place that scopes unknown-safety to one
+    (§4.1's closing paragraph, §5a) read the same way.
+    [framework/pulumi.md](../framework/pulumi.md) §1.2 carries it.
 *   **Author:** Jetski & pfyu
 *   **Created:** 2026-06-01
 *   **Updated:** 2026-07-02 (Rev 2: per-input redesign, supersedes the
