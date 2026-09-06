@@ -155,6 +155,19 @@ deleted with its reason recorded where the next reader meets it:
 otherwise "deleted because it could not fail" and "deleted by mistake"
 leave the same diff behind.
 
+**A seam that reaches every row stands in for the content pin — for the
+fields it carries, and no others.** It has to be content itself: the
+other side written out by hand rather than derived from the census, as
+the gateway's services are, held name by name and address by address
+against the configuration the device serves. Where one does stand in,
+the census's entry in `tests/test_conventions.py` says which suite
+carries it and which fields, so that finding a census's pin stays one
+lookup and so a golden file — which goes when its own subject goes —
+takes a written claim with it instead of orphaning one silently. A field
+no substitute carries is written out here whatever else covers the row:
+a table with one field pinned and the field beside it bare reads as
+covered and is not.
+
 **A census's pins and invariants live in `tests/test_conventions.py`** —
 the suite that mirrors the package the censuses are declared in —
 whatever program reads the census, and never in a suite named for one of

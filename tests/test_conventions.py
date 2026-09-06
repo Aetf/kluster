@@ -101,6 +101,16 @@ def test_a_fixed_vips_two_families_carry_the_same_host_number() -> None:
         assert v4_host == v6_host
 
 
+# The gateway census's content is pinned outside this file, by hand and row by
+# row: `test_device_services` restates every bridged service's name and address
+# in `ADDRESSES`, and `tests/data/gw-config-caddyfile` transcribes the
+# configuration the device serves today, which is where each legacy row's label
+# and upstream are held. A service's `artifact` is reached separately, through
+# the image repository names `test_physical_stack` pins. Both of those go when
+# the device does, and this note is what has to move with them. A legacy row's
+# retirement wave is carried by none of them.
+
+
 def test_every_bridged_service_sits_on_the_container_vlan() -> None:
     """The unit places a service by injecting this address with the VLAN's prefix.
 
