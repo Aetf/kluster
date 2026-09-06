@@ -117,8 +117,7 @@ class CloudNetwork(Component):
         # Parented, which is how an invoke inherits a provider: given a parent
         # it signs with that parent's, and given neither it would fall to the
         # default one — which this program disables.
-        services = await oci.core.get_services_output(opts=pulumi.InvokeOptions(parent=self)).future()
-        assert services is not None
+        services = await resolve(oci.core.get_services_output(opts=pulumi.InvokeOptions(parent=self)))
         for service in services.services:
             if 'Object Storage' in service.name:
                 return service
