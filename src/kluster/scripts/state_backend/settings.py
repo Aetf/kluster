@@ -71,8 +71,12 @@ REBOOT_WINDOW_MINUTES = 60
 #: Created by the provision script rather than by Pulumi, for the same reason
 #: the VCN is: the dumps must have somewhere to land before Pulumi exists.
 B2_BUCKET = 'kluster-state-backend'
+
+#: The prefix the bucket's lifecycle rule governs and the appliance uploads
+#: under. What the uploader's *key* is confined to is `b2.dumps`, where every
+#: other B2 role is stated too; it reads the same `conventions` entry, so the
+#: grant and the retention cannot come apart.
 B2_PREFIX = conventions.STATE_DUMP_PREFIX
-B2_DUMP_KEY_NAME = 'kluster-state-dump'
 
 #: Retention is a bucket lifecycle rule, which is what keeps the uploader's
 #: key free of any delete capability (storage.md §4).

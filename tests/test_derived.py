@@ -860,6 +860,14 @@ def b2_api_fake(monkeypatch: pytest.MonkeyPatch) -> b2_api.FakeApi:
     fake = b2_api.FakeApi()
     monkeypatch.setattr(b2.requests, 'get', fake.get)
     monkeypatch.setattr(b2.requests, 'post', fake.post)
+    # Every B2 mint proves the account before it writes, so the fake platform
+    # has to be the account `conventions` records for the ordinary path to be
+    # the one under test.
+    monkeypatch.setattr(
+        conventions,
+        'B2_ACCOUNT',
+        conventions.B2Account(region=conventions.B2_ACCOUNT.region, account_id=b2_api.ACCOUNT_ID),
+    )
     return fake
 
 

@@ -26,9 +26,10 @@ from typing import Any
 
 import pytest
 import requests
-from b2_api import FakeApi, Key
+from b2_api import ACCOUNT_ID, FakeApi, Key
 from memory_kit import MemoryKit
 
+from kluster import conventions
 from kluster.scripts.credentials import b2, entries, masters, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
@@ -38,9 +39,12 @@ PASSWORD = 'kit-password'
 SEED_ENTRY = entries.SEEDS['b2'].entry
 
 BUCKET = 'kluster-state'
-PREFIX = 'dumps'
+
+#: The bucket's lifecycle rule and the uploader's key are confined to the same
+#: prefix, and the one home for it is `conventions` -- so a suite that made one
+#: up would be driving a bucket the key it mints cannot write into.
+PREFIX = conventions.STATE_DUMP_PREFIX
 RETENTION_DAYS = 30
-DUMP_KEY_NAME = 'kluster-state-dump'
 
 
 @pytest.fixture
@@ -49,6 +53,23 @@ def api(monkeypatch: pytest.MonkeyPatch) -> FakeApi:
     monkeypatch.setattr(b2.requests, 'get', fake.get)
     monkeypatch.setattr(b2.requests, 'post', fake.post)
     return fake
+
+
+def _record_account(patch: pytest.MonkeyPatch) -> None:
+    """Make the fake platform's account the one `conventions` records.
+
+    Every mint here proves the account before it writes, so a suite driving a
+    fake account has to be that account for the ordinary path to be the one
+    under test. A function as well as a fixture because the call measurement
+    the fault sweep rests on runs at import, where no fixture has run yet.
+    """
+    patch.setattr(conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id=ACCOUNT_ID))
+
+
+@pytest.fixture(autouse=True)
+def recorded_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recorded account, for every test but the ones that say otherwise."""
+    _record_account(monkeypatch)
 
 
 @pytest.fixture
@@ -205,6 +226,95 @@ def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxSto
         session.delete_key(doomed.key_id)
 
 
+# -- the account check ------------------------------------------------------
+
+
+def _elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`conventions` recording an account that is not the one the seed reaches."""
+    monkeypatch.setattr(
+        conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id='some-other-account')
+    )
+
+
+def _unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`conventions` recording no account at all, as a fresh installation does."""
+    monkeypatch.setattr(conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002'))
+
+
+def _mints(api: FakeApi) -> int:
+    return api.calls.count('b2_create_key')
+
+
+def test_a_seed_in_another_account_mints_nothing_at_all(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    before = _mints(api)
+    _elsewhere(monkeypatch)
+
+    # Both accounts are named, because which of the two is stale -- a kit
+    # re-seeded elsewhere, or an identifier written down wrong -- is the
+    # operator's question and neither one alone answers it.
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+
+    # The account is knowable from the authorization, which writes nothing, so
+    # the refusal costs nothing. Held against `conventions` after the mint
+    # instead, the same run would refuse and leave a live key behind in an
+    # account this installation does not own -- recorded nowhere, and so known
+    # to nobody who could revoke it.
+    assert _mints(api) == before
+    assert not api.named(b2.MANAGEMENT.name)
+
+
+def test_an_account_root_from_another_account_creates_no_seed(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.create_seed(root=_root(api), seeds=kit, seed_entry=SEED_ENTRY)
+
+    # The first B2 credential of a bring-up is the one whose account is worth
+    # the most: everything else here is minted from it.
+    assert _mints(api) == 0
+    assert not kit.has(SEED_ENTRY)
+
+
+def test_a_rotation_in_another_account_deletes_nothing(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_id = _seeded(api, kit)
+    stranger = api.add_key(b2.SEED.name)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.rotate_seed(kit, seed_entry=SEED_ENTRY)
+
+    # A rotation's second act is to delete every other key of the seed's name.
+    # Run against an account this installation does not own, that is a sweep
+    # through somebody else's keys.
+    assert api.named(b2.SEED.name) == sorted([key_id, stranger.key_id])
+    assert kit.get(SEED_ENTRY, attribute='UserName') == key_id
+
+
+def test_an_installation_that_records_no_account_is_refused_and_told_which_one_to_record(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    before = _mints(api)
+    _unrecorded(monkeypatch)
+
+    # A missing fact is a refusal rather than a skip: waved through, the check
+    # would be absent exactly where nothing has ever pinned the account down.
+    # The message carries the identifier, because recording it is the one-line
+    # commit that clears the refusal.
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*account_id'):
+        _ = b2.mint_management(kit, seed_entry=SEED_ENTRY)
+
+    assert _mints(api) == before
+
+
 # -- the management key -----------------------------------------------------
 
 
@@ -304,11 +414,22 @@ def test_a_retention_someone_changed_is_put_back(api: FakeApi, kit: KdbxStore) -
     assert api.buckets[bucket_id]['lifecycleRules'][0]['daysFromUploadingToHiding'] == RETENTION_DAYS
 
 
+def test_the_uploader_keeps_the_name_the_running_appliance_s_key_carries() -> None:
+    """The name is not free to change, which is why it is written down once.
+
+    Retirement matches on it and so does the currency check, so a key the
+    account already holds under the old name would read as "not the intended
+    one" -- a box rebuilt for a rename -- while the key itself outlived every
+    sweep that was supposed to reach it.
+    """
+    assert b2.DUMPS_NAME == 'kluster-state-dump'
+
+
 def test_the_dump_key_is_confined_to_one_prefix_of_one_bucket(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
 
-    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
 
     minted = api.keys[key_id]
     assert (minted.capabilities, minted.bucket_id, minted.name_prefix) == (
@@ -321,7 +442,7 @@ def test_the_dump_key_is_confined_to_one_prefix_of_one_bucket(api: FakeApi, kit:
 def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    minted = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    minted = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id))
     key_id, key = minted.key_id, minted.key
 
     uploader = b2.Session.authorize(key_id, key)
@@ -337,24 +458,47 @@ def test_the_dump_key_can_write_and_nothing_else(api: FakeApi, kit: KdbxStore) -
 def test_minting_a_dump_key_retires_the_one_the_old_box_held(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    previous = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    previous = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
 
-    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
 
     # The box's copy cannot be read back, so a replacement box means a
     # replacement key and the old one is spent.
-    assert api.named(DUMP_KEY_NAME) == [key_id]
+    assert api.named(b2.DUMPS_NAME) == [key_id]
     assert previous not in api.keys
 
 
+def test_the_dump_key_retires_nothing_until_the_credential_has_been_delivered(api: FakeApi, kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    previous = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
+
+    pending = b2.mint_dump_key(session, bucket_id=bucket_id)
+
+    # The order every mint in this package has: the successor's secret is
+    # disclosed once, so between here and the caller's push it exists in this
+    # process alone, and the push is a box being launched with it inside the
+    # Ignition. Retired here, a launch that then failed would leave the bucket
+    # with no uploader key at all.
+    # Asserted against the account rather than against the new key's id,
+    # because reading that id is delivering it.
+    standing = api.named(b2.DUMPS_NAME)
+    assert previous in standing
+    assert len(standing) == 2
+
+    current = _delivered(pending)
+
+    assert api.named(b2.DUMPS_NAME) == [current.key_id]
+
+
 def _current(session: b2.Session, key_id: str, bucket_id: str) -> bool:
-    return b2.dump_key_is_current(session, key_id, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    return b2.dump_key_is_current(session, key_id, bucket_id=bucket_id)
 
 
 def test_the_key_the_box_holds_is_the_intended_one(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
 
     assert _current(session, key_id, bucket_id)
 
@@ -394,7 +538,7 @@ def test_a_key_that_is_no_longer_what_the_box_needs_is_not_current(
 ) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
 
     mutate(api, api.keys[key_id])
 
@@ -413,7 +557,7 @@ def test_a_box_that_records_no_key_is_not_current(api: FakeApi, kit: KdbxStore) 
 def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: KdbxStore) -> None:
     _ = _seeded(api, kit)
     session, bucket_id = _bucket(api, kit)
-    key_id = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME).key_id
+    key_id = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id)).key_id
     api.page_limit = 2
     for _ in range(5):
         _ = api.add_key('unrelated')
@@ -431,7 +575,7 @@ def test_an_account_larger_than_one_page_is_listed_whole(api: FakeApi, kit: Kdbx
 def test_a_listed_key_missing_a_field_is_refused_naming_the_entry() -> None:
     answer = {
         'keys': [
-            {'applicationKeyId': 'key-1', 'keyName': DUMP_KEY_NAME, 'capabilities': ['writeFiles']},
+            {'applicationKeyId': 'key-1', 'keyName': b2.DUMPS_NAME, 'capabilities': ['writeFiles']},
             {'applicationKeyId': 'key-2', 'capabilities': ['writeFiles']},
         ]
     }
@@ -532,7 +676,7 @@ class Faulty:
 
 
 #: The names the register mints under, and the invariant below counts.
-MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, DUMP_KEY_NAME)
+MANAGED = (b2.SEED.name, b2.MANAGEMENT.name, b2.DUMPS_NAME)
 
 
 def _kit_never_lies(kit: KdbxStore, api: FakeApi) -> None:
@@ -587,8 +731,11 @@ def _provision(api: FakeApi, kit: KdbxStore) -> None:
     """The state-backend bring-up stage: converge the bucket, mint the key."""
     session = b2.Session.from_entry(kit, SEED_ENTRY)
     bucket_id = b2.ensure_bucket(session, BUCKET, prefix=PREFIX, retention_days=RETENTION_DAYS)
-    if not b2.dump_key_is_current(session, '', bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME):
-        _ = b2.mint_dump_key(session, bucket_id=bucket_id, prefix=PREFIX, name=DUMP_KEY_NAME)
+    if not b2.dump_key_is_current(session, '', bucket_id=bucket_id):
+        # Delivered, not merely minted: a bare `mint_dump_key` retires nothing
+        # by design, so a stage that stopped there would sweep part of the
+        # calls and read the accumulation it leaves behind as healthy.
+        _ = _delivered(b2.mint_dump_key(session, bucket_id=bucket_id))
 
 
 Stage = Callable[[FakeApi, KdbxStore], None]
@@ -602,6 +749,7 @@ def _calls_made(operation: Stage, *, prepared: bool, monkeypatch: pytest.MonkeyP
     """
     api = FakeApi()
     kit = MemoryKit()
+    _record_account(monkeypatch)
     faulty = Faulty(api).attach(monkeypatch)
     if prepared:
         _create(api, kit)
