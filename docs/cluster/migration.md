@@ -66,13 +66,15 @@ owns sequencing, data movement, and teardown.
     apply, which lands the container services and with them the ZT container; commit
     the gateway's roster entry, carrying the node id that container
     mints, and apply again, which authorizes the member at the address
-    the routes have named as their next hop since the first apply;
-    unset the knob and apply once more, which dials over the overlay
-    and is thereby the verification. Step by step, and why each step is
-    one: physical/gateway.md §2.5. The device is already running the
-    layout gw-config built, so the first of those applies opens with a
-    cutover window that moves the live container state under the
-    declared paths — procedure, verification and rollback:
+    the routes already name as their next hop — they ride the overlay
+    network resource, which the first of those applies leaves to the
+    run that applies the rest of the stack (physical/gateway-cutover.md
+    §5); unset the knob and apply once more, which dials over the
+    overlay and is thereby the verification. Step by step, and why each
+    step is one: physical/gateway.md §2.5. The device is already
+    running the layout gw-config built, so the first of those applies
+    opens with a cutover window that moves the live container state
+    under the declared paths — procedure, verification and rollback:
     physical/gateway-cutover.md. `dns` up: zones + estate records
     imported wholesale (records still pointing at `archvps.hosts`; the
     import census also drops dead weight — `abacus.hosts`, its ZT
