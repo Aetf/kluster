@@ -90,7 +90,7 @@ Cite the document and leave the number where the members are.
 **When a change makes a claim false, sweep for the claim, not for the
 identifier that moved.** Searching for the symbol finds call sites; the
 sentence that asserted something about them is prose, and only a search
-for the claim itself finds it. Three things keep that search from being
+for the claim itself finds it. Five things keep that search from being
 open-ended:
 
 -   **Anchor the pattern on the claim's nouns, not on its predicates.**
@@ -99,6 +99,21 @@ open-ended:
     this repository's own fixed terms. A proximity match between two
     nouns, with no verb in it at all, is the form that survives
     whatever voice the target happens to be written in.
+-   **The operator between those nouns is `.{0,N}`**, matched over text
+    whose whitespace has been collapsed first, or under `re.S` where it
+    has not:
+
+        state backend.{0,120}B2
+
+    `\W{0,N}` is the trap. `\W` matches a *single* non-word character,
+    so the run spans punctuation and whitespace and **cannot cross an
+    intervening word**: over `state backend exists. Mints the B2
+    management key`, the pattern above matches and
+    `state backend\W{0,120}B2` returns nothing. The weak form reads as
+    "these two terms within a hundred and twenty characters of each
+    other", which is what a proximity sweep means and not what it does.
+    The naming rule below does not catch it either: a reader handed the
+    pattern reads the intent rather than the defect.
 -   **Make a second pass for closure operators near those nouns** —
     "nowhere else", "only", "never", "no other", "and nothing else". A
     change that adds an exception leaves the affirmative form merely
@@ -109,6 +124,18 @@ open-ended:
 -   **A sweep that found nothing names the patterns it used**, in the
     pull request or the commit message. "It appears nowhere else in the
     repository" is not a result a reviewer can falsify.
+-   **A pattern that has never fired is not evidence when it reports
+    nothing, and it is exercised in both directions.** Before a clean
+    sweep is read as an absence, run the pattern against a string that
+    must match — the claim as some document actually words it — and
+    confirm it fires; then against a passage the claim is absent from,
+    and confirm it stays silent. The first direction separates "the
+    claim is gone" from "the pattern could never reach it". The second
+    is what makes a hit attributable to the claim rather than to a
+    pattern that would fire anywhere: a mistyped noun leaves `.{0,120}`
+    to do the work, passes the positive check on its own, and turns the
+    sweep into a page of hits to read by eye — a degradation nothing
+    else in the run announces.
 
 **Every pass is newline-insensitive.** Prose here is soft-wrapped, so
 the break falls wherever the wrap puts it, and the line a line-oriented
