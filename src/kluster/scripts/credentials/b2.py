@@ -32,6 +32,7 @@ from typing import Any
 
 import requests
 
+from ... import conventions
 from . import masters, payload
 from .delivery import Delivery
 from .kdbx import KdbxStore
@@ -94,11 +95,6 @@ class Role:
     bucket_id: str | None = None
     name_prefix: str | None = None
 
-    @classmethod
-    def for_dumps(cls, *, name: str, bucket_id: str, prefix: str) -> Role:
-        """The uploader's role: write-only, and confined to one prefix of one bucket."""
-        return cls(name=name, capabilities=DUMP_CAPABILITIES, bucket_id=bucket_id, name_prefix=f'{prefix}/')
-
     def body(self, account_id: str) -> dict[str, Any]:
         """The role as `b2_create_key` takes it.
 
@@ -140,6 +136,27 @@ class Role:
 #: key per role is the invariant a re-run restores.
 SEED = Role(name='kluster-seed', capabilities=CAPABILITIES)
 MANAGEMENT = Role(name='kluster-management', capabilities=CAPABILITIES)
+
+#: What the uploader is called, on the same terms as the two names above.
+DUMPS_NAME = 'kluster-state-dump'
+
+
+def dumps(bucket_id: str) -> Role:
+    """The uploader's role: write-only, and confined to the dump prefix of one bucket.
+
+    A function where the two above are values, because a confined role is not
+    complete until B2 has assigned the bucket an id -- and the bucket id is the
+    only part of it B2 decides. The name and the prefix are this repository's,
+    so they are stated here beside the account-wide roles rather than handed in
+    by whoever is minting: a caller that could name the key could mint one this
+    module's own retirement does not match.
+    """
+    return Role(
+        name=DUMPS_NAME,
+        capabilities=DUMP_CAPABILITIES,
+        bucket_id=bucket_id,
+        name_prefix=f'{conventions.STATE_DUMP_PREFIX}/',
+    )
 
 
 @dataclass(frozen=True)
@@ -411,21 +428,50 @@ def retire_others(session: Session, role: Role, *, keep: str) -> None:
     done -- an authorization token is a token *of a key*, so a session that
     deletes its own key cannot delete the next one.
 
-    Every caller here but one runs this only once the successor is written
-    down somewhere durable: the seed rows once it is in the kit,
-    `mint_management` once the caller's push has returned (`delivery.py`).
-
-    `mint_dump_key` is the exception, and it is one. It is a §3 mint that
-    retires inline, because its only caller lives outside these scripts and
-    the signature is that caller's. It is safe where it stands rather than
-    correct by construction -- the caller reaches it only after the box that
-    held the predecessor has been terminated, so there is no live consumer to
-    strand -- and Aetf/kluster-ops#285 tracks closing the gap.
+    Every caller runs this only once the successor is written down somewhere
+    durable: the seed rows once it is in the kit, and each mint once the
+    caller's push has returned (`delivery.py`).
     """
     for existing in session.keys():
         if existing.name == role.name and existing.key_id != keep:
             log.info('deleting superseded %s %s', role.name, existing.key_id)
             session.delete_key(existing.key_id)
+
+
+def verify_account(account_id: str) -> None:
+    """Hold the account a seed authorizes as against the one `conventions` records.
+
+    The account is a fact rather than a credential, so it has one home
+    (`conventions.B2_ACCOUNT`) and a mint copies nothing: the seed belongs to
+    whichever account the operator made it in, and all that is left is to prove
+    that account is this installation's. The two ways it can fail to be are the
+    ways the fact goes stale -- a kit re-seeded from another B2 account, and an
+    identifier written down wrong -- and both would leave live keys in an
+    account nothing here manages.
+
+    Both accounts are named, because which of the two is stale is the
+    operator's question and neither one alone answers it.
+
+    An installation that has recorded no account is refused rather than waved
+    through, and the refusal carries the identifier to record: skipping the
+    check where the fact is missing is exactly the state that lets a mint run
+    against any account at all.
+    """
+    intended = conventions.B2_ACCOUNT.account_id
+    if intended is None:
+        raise CredentialRejected(
+            f'this B2 seed authorizes as the account {account_id}, and `conventions.B2_ACCOUNT` records no '
+            'account to hold it against: record it as the `account_id` of `conventions.B2_ACCOUNT` and commit '
+            'that line, then re-run — until the account is written down, nothing here can tell this one from '
+            'the account a kit seeded somewhere else would mint in'
+        )
+    if account_id != intended:
+        raise CredentialRejected(
+            f'this B2 seed authorizes as {account_id}, but `conventions.B2_ACCOUNT` records {intended} as the '
+            'account this installation backs up into: one of the two is stale, and minting here would leave a '
+            'live key in an account nothing here manages'
+        )
+    log.info('the seed authorizes as %s, which is the account `conventions` records', account_id)
 
 
 def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
@@ -437,8 +483,13 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
 
     Needed once at bring-up, and again only if the seed is lost — routine
     rotation is `rotate_seed`, which never touches the account root.
+
+    The account is proven before the first key exists, as it is for every mint
+    here: an account root typed in from the wrong console would otherwise put
+    this installation's whole B2 chain somewhere nothing records.
     """
     session = Session.authorize(root[masters.B2_ACCOUNT_ID], root[masters.B2_KEY])
+    verify_account(session.account_id)
     minted = _mint_verified(session, SEED)
     seeds.put(seed_entry, minted.app_key.key_id, minted.app_key.key)
     # Stored first, retired second: an interrupted run leaves a key the kit does
@@ -458,8 +509,13 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     predecessor came from. A whole-kit rotation writes a *new* file (§4.2) and
     the retired one must stay exactly as it was, so it passes the successor
     explicitly rather than letting this edit the kit it is reading.
+
+    The account is held against `conventions` before any of it, because the
+    rotation's second act is to delete every other key of the seed's name: a
+    kit re-seeded from another account would sweep that account's keys.
     """
     session = Session.from_entry(store, seed_entry)
+    verify_account(session.account_id)
     previous = store.get(seed_entry, attribute='UserName')
 
     minted = _mint_verified(session, SEED)
@@ -483,8 +539,14 @@ def mint_management(store: KdbxStore, *, seed_entry: str) -> Delivery[AppKey]:
     after the caller's push and not before it (`delivery.py`, and the
     register's §4 for why). The closure carries the *seed's* session because
     the seed signs the deletions and is not among the keys being deleted.
+
+    The account is proven before anything is created, so a seed belonging to an
+    account this installation does not own is refused while the refusal still
+    costs nothing. Checked afterward it would leave a live key behind in that
+    foreign account, recorded nowhere and known to nobody who could revoke it.
     """
     session = Session.from_entry(store, seed_entry)
+    verify_account(session.account_id)
     minted = _mint_verified(session, MANAGEMENT)
     return Delivery.of(minted.app_key, lambda: retire_others(session, MANAGEMENT, keep=minted.app_key.key_id))
 
@@ -540,14 +602,14 @@ def ensure_bucket(session: Session, name: str, *, prefix: str, retention_days: i
     return created.bucket_id
 
 
-def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix: str, name: str) -> bool:
-    """Whether `key_id` is still the write-only key this bucket and prefix want.
+def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str) -> bool:
+    """Whether `key_id` is still the write-only key this bucket wants.
 
     The appliance's copy of the secret cannot be read back, so "is the box
     holding the right credential" is answered by identity: a key that is gone
     (deleted in the console, superseded by another mint) or one whose scope no
-    longer matches the settings is not the intended key, and the only way to
-    put the intended one on the box is to build a new box.
+    longer matches the role is not the intended key, and the only way to put
+    the intended one on the box is to build a new box.
 
     What "the intended key" means is the role the mint below is given, asked of
     a listing rather than restated: the two cannot drift apart into a box that
@@ -555,25 +617,25 @@ def dump_key_is_current(session: Session, key_id: str, *, bucket_id: str, prefix
     """
     if not key_id:
         return False
-    role = Role.for_dumps(name=name, bucket_id=bucket_id, prefix=prefix)
+    role = dumps(bucket_id)
     return any(role.describes(existing) for existing in session.keys() if existing.key_id == key_id)
 
 
-def mint_dump_key(session: Session, *, bucket_id: str, prefix: str, name: str) -> AppKey:
-    """A write-only key confined to one prefix of one bucket."""
-    role = Role.for_dumps(name=name, bucket_id=bucket_id, prefix=prefix)
+def mint_dump_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
+    """A write-only key confined to the dump prefix of one bucket.
+
+    The retirement comes back with the key rather than happening here, so it
+    runs after the caller's push and not before it (`delivery.py`, and the
+    register's §4 for why) -- the same order every mint in this package has.
+    The push for this credential is the box: B2 discloses an application key's
+    secret once, at creation, so the only way it reaches the appliance is the
+    Ignition the appliance boots with.
+
+    The closure retires as `session`, the credential that minted the key rather
+    than the key itself: a write-only key carries no `deleteKeys` and could
+    retire nothing, its predecessor least of all.
+    """
+    role = dumps(bucket_id)
     minted = session.create_key(role)
-    # Retired by the minter rather than by the new key: a write-only key
-    # carries no `deleteKeys` and could not retire anything, its predecessor
-    # least of all.
-    #
-    # And retired *here*, unlike every other §3 mint, which hands the
-    # retirement to its caller so that it runs after the push (`delivery.py`).
-    # The signature belongs to a caller outside these scripts. That caller
-    # reaches this only after terminating the box that held the predecessor, so
-    # nothing live is stranded and a run that dies before the new box exists
-    # leaves a key the next run retires by name; Aetf/kluster-ops#285 tracks
-    # making the shape uniform anyway.
-    retire_others(session, role, keep=minted.key_id)
     log.info('minted %s (%s)', role.name, minted.key_id)
-    return minted
+    return Delivery.of(minted, lambda: retire_others(session, role, keep=minted.key_id))

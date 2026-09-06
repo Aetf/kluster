@@ -22,6 +22,7 @@ from memory_kit import MemoryKit
 
 from kluster import conventions
 from kluster.scripts.credentials import escrow, oci_iam, oci_slot, pki, workstation
+from kluster.scripts.credentials.delivery import Delivery
 from kluster.scripts.state_backend import cli, config, provision, settings
 from kluster.scripts.state_backend.state import StateError
 
@@ -223,6 +224,7 @@ class _Recorder:
         self.dump_key_current: bool = dump_key_current
         self.dump_fails: bool = dump_fails
         self.minted: int = 0
+        self.retired: int = 0
         self.terminated: int = 0
         self.launched: int = 0
         self.launched_metadata: dict[str, str] = {}
@@ -232,7 +234,9 @@ class _Recorder:
         #: dropped on the way down and nothing would notice.
         self.bundles: list[Path] = []
         #: What the run did to the running box, in the order it did it. The
-        #: dump is only worth anything before the termination.
+        #: dump is only worth anything before the termination, and the dump
+        #: key's predecessor is only spent safely after the box that replaces
+        #: the one holding it exists.
         self.order: list[str] = []
 
 
@@ -280,9 +284,14 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             recorder.bundles.append(bundle_dir)
             recorder.order.append('dump')
 
-        def mint(*_args: object, **_kwargs: object) -> b2.AppKey:
+        def mint(*_args: object, **_kwargs: object) -> Delivery[b2.AppKey]:
             recorder.minted += 1
-            return b2.AppKey(key_id='key-id', key='key-secret')
+
+            def retire() -> None:
+                recorder.retired += 1
+                recorder.order.append('retire')
+
+            return Delivery.of(b2.AppKey(key_id='key-id', key='key-secret'), retire)
 
         def find(*_args: object, **_kwargs: object) -> Any:
             if not recorder.instance_exists:
@@ -299,6 +308,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         ) -> str:
             recorder.launched += 1
             recorder.launched_metadata = _built_from(digests, dump_key_id=dump_key_id, expiry=server_cert_expiry)
+            recorder.order.append('launch')
             return 'ocid1.instance.new'
 
         monkeypatch.setattr(b2.Session, 'from_entry', staticmethod(_returning(object())))
@@ -540,7 +550,7 @@ def test_a_box_is_dumped_before_it_is_terminated(converge: Any) -> None:
 
     assert _run() == PENDING
 
-    assert recorder.order == ['dump', 'terminate']
+    assert recorder.order == ['dump', 'terminate', 'launch', 'retire']
     # And it is the artefact `state-backend restore` takes, under the name the
     # appliance's own objects carry, so the playbook's next step names a file
     # that is already there.
@@ -560,6 +570,54 @@ def test_a_dump_that_fails_leaves_the_box_standing(converge: Any) -> None:
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
 
 
+def test_the_uploader_is_confined_to_the_prefix_the_bucket_retires() -> None:
+    """The grant and the retention are two statements that must agree.
+
+    The bucket's lifecycle rule is what keeps the dump history from growing
+    forever, and it governs one prefix; the key the appliance holds is confined
+    to a prefix of its own. Uploads under a prefix the rule does not name would
+    be kept for good, so the two read one home rather than two settings.
+    """
+    from kluster.scripts.credentials import b2
+
+    assert b2.dumps('bucket-id').name_prefix == f'{settings.B2_PREFIX}/'
+
+
+def test_the_dump_key_s_predecessor_is_retired_only_once_the_new_box_exists(converge: Any) -> None:
+    """The order every mint in the credentials package has, on this one too.
+
+    Launching the box is the dump key's push: B2 discloses an application
+    key's secret once, so the successor exists in this process alone until the
+    Ignition carrying it has been handed to OCI. Retired before that, a launch
+    that then failed would leave the account holding no key for this bucket at
+    all -- and the predecessor, which the next run could at least have swept by
+    name, already gone.
+    """
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+
+    assert _run() == PENDING
+
+    assert recorder.order.index('retire') > recorder.order.index('launch')
+    assert (recorder.minted, recorder.retired) == (1, 1)
+
+
+def test_a_launch_that_fails_leaves_the_superseded_dump_key_standing(
+    converge: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What the order above buys, stated as the failure it prevents."""
+    stale = dict(CURRENT) | {'butane': 'zzzz'}
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(stale))
+    converge(recorder)
+    monkeypatch.setattr(provision, 'ensure_instance', _returning_raise('the shape has no capacity'))
+
+    with pytest.raises(RuntimeError, match='the shape has no capacity'):
+        _ = _run()
+
+    assert (recorder.minted, recorder.retired) == (1, 0)
+
+
 def test_no_dump_replaces_a_box_that_cannot_be_dumped(converge: Any) -> None:
     # An unreachable box is what the rebuild path is the diagnosis for
     # (state-backend.md §6), and it is the one box no dump can be taken of.
@@ -569,7 +627,7 @@ def test_no_dump_replaces_a_box_that_cannot_be_dumped(converge: Any) -> None:
 
     assert _run(dump=False) == PENDING
 
-    assert (recorder.order, recorder.terminated, recorder.launched) == (['terminate'], 1, 1)
+    assert (recorder.order, recorder.terminated, recorder.launched) == (['terminate', 'launch', 'retire'], 1, 1)
 
 
 def test_a_certificate_inside_the_renewal_margin_is_drift(converge: Any) -> None:

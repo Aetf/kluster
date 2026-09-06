@@ -116,14 +116,32 @@ class CloudflareAccount:
 
 @dataclass(frozen=True)
 class B2Account:
-    """The backup account.
+    """The backup account, under the facts everything here needs of it.
 
-    Its region is an account property rather than a setting: it does not change
-    while the account exists, and no B2 API returns it in the form its
+    The **region** is an account property rather than a setting: it does not
+    change while the account exists, and no B2 API returns it in the form its
     S3-compatible endpoint is spelled with.
+
+    The **account id** is what every application key is created under, and it
+    is a fact rather than a credential, on the same side of that split as the
+    tenancy OCID and the Cloudflare account above: it names the account rather
+    than opening it, so it lives here in the clear and every B2 mint holds the
+    seed it was handed against it before it creates a key
+    (`scripts/credentials/b2.py`).
+
+    An installation that has not recorded it yet has a region and no account
+    id. That is the state an unrecorded compartment above is in, and it is
+    resolved the same way: `b2_authorize_account` answers with the identifier,
+    so a mint that runs without one refuses, prints what the seed authorized as,
+    and the edit that records it here is one line to commit. Refusing is what
+    the absence has to mean — a mint that skipped the check instead would
+    create keys in whatever account the kit happens to hold a seed for.
     """
 
     region: str
+    #: `None` until the identifier is recorded, which is a state rather than a
+    #: gap: see the class docstring.
+    account_id: str | None = None
 
 
 #: The appliance's compartment is the tenancy's original one: it was made by

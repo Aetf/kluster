@@ -210,13 +210,7 @@ def _rebuild_reasons(
 
     recorded = provision.instance_config(existing)
     reasons: list[str] = []
-    if not b2.dump_key_is_current(
-        session,
-        recorded.dump_key_id,
-        bucket_id=bucket_id,
-        prefix=settings.B2_PREFIX,
-        name=settings.B2_DUMP_KEY_NAME,
-    ):
+    if not b2.dump_key_is_current(session, recorded.dump_key_id, bucket_id=bucket_id):
         # The box cannot be handed a new key without being rebuilt: the
         # secret only exists inside the Ignition it booted with.
         held = recorded.dump_key_id or 'none recorded'
@@ -232,6 +226,50 @@ def _rebuild_reasons(
     if expiring is not None:
         reasons.append(expiring)
     return reasons
+
+
+def _launch_box(
+    clients: provision.OciClients,
+    roots: config.Roots,
+    *,
+    dump_key: b2.AppKey,
+    placement: provision.Placement,
+    nsg_id: str,
+    reserved: provision.ReservedAddress,
+    bucket_id: str,
+) -> str:
+    """Render this commit's machine around `dump_key` and launch it. Returns the instance id.
+
+    The push half of the dump key's delivery: the key's only consumer is the
+    box, and the box comes into being holding it, because B2 discloses an
+    application key's secret once and a box launched without it can never be
+    handed one afterwards.
+    """
+    log.info('rendering the Ignition config for %s', reserved.address)
+    # One machine, rendered once: the Ignition the box boots with and the
+    # expiry recorded beside it have to describe the same certificate, and
+    # a second `config.machine` call would issue a second one.
+    built = config.machine(
+        roots,
+        address=reserved.address,
+        dump_key_id=dump_key.key_id,
+        dump_key=dump_key.key,
+        bucket_id=bucket_id,
+    )
+    ignition = config.render_ignition(built)
+    log.info('[6/7] converging the custom image — a release not imported yet takes the better part of an hour')
+    image_id = provision.ensure_image(clients)
+    log.info('[7/7] launching the instance')
+    return provision.ensure_instance(
+        clients,
+        subnet_id=placement.subnet_id,
+        nsg_id=nsg_id,
+        image_id=image_id,
+        ignition=ignition,
+        digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key.key_id, bucket_id=bucket_id),
+        dump_key_id=dump_key.key_id,
+        server_cert_expiry=config.expires_at(built),
+    )
 
 
 def _provision(
@@ -324,35 +362,21 @@ def _provision(
             # the nightly dump silently, until it next fires. The key's lifetime
             # is the instance's.
             log.info('minting the dump key the new box will hold')
-            dump_key = b2.mint_dump_key(
-                session, bucket_id=bucket_id, prefix=settings.B2_PREFIX, name=settings.B2_DUMP_KEY_NAME
-            )
-            log.info('rendering the Ignition config for %s', reserved.address)
-            # One machine, rendered once: the Ignition the box boots with and the
-            # expiry recorded beside it have to describe the same certificate, and
-            # a second `config.machine` call would issue a second one.
-            built = config.machine(
-                roots,
-                address=reserved.address,
-                dump_key_id=dump_key.key_id,
-                dump_key=dump_key.key,
-                bucket_id=bucket_id,
-            )
-            ignition = config.render_ignition(built)
-            log.info('[6/7] converging the custom image — a release not imported yet takes the better part of an hour')
-            image_id = provision.ensure_image(clients)
-            log.info('[7/7] launching the instance')
-            instance_id = provision.ensure_instance(
-                clients,
-                subnet_id=placement.subnet_id,
-                nsg_id=nsg_id,
-                image_id=image_id,
-                ignition=ignition,
-                digests=config.digests(
-                    roots, address=reserved.address, dump_key_id=dump_key.key_id, bucket_id=bucket_id
-                ),
-                dump_key_id=dump_key.key_id,
-                server_cert_expiry=config.expires_at(built),
+            pending = b2.mint_dump_key(session, bucket_id=bucket_id)
+            # Launching the box is this credential's push, so it runs through
+            # `deliver` and the predecessor is retired only once the box holding
+            # the successor exists -- the order every mint in that package has
+            # (`credentials/delivery.py`).
+            _, instance_id = pending.deliver(
+                lambda dump_key: _launch_box(
+                    clients,
+                    roots,
+                    dump_key=dump_key,
+                    placement=placement,
+                    nsg_id=nsg_id,
+                    reserved=reserved,
+                    bucket_id=bucket_id,
+                )
             )
         provision.attach_reserved_ip(clients, instance_id=instance_id, public_ip_id=reserved.id)
 
