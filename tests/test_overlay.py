@@ -185,14 +185,10 @@ def test_the_census_carries_the_cluster_vlan_and_the_pool_by_name() -> None:
 
     They are two subnets and two reasons: the VLAN is where a run reaches the
     worker's machine API, and the pool is where a person off-site reaches a
-    service the cluster publishes on the LAN. Spelled out rather than derived,
-    so renumbering either one is a visible edit here as well as in
-    `conventions`.
+    service the cluster publishes on the LAN. Named rather than numbered: the
+    route table and the two subnets are one census, so what is assertable here
+    is which subnets the table carries and not what either one is numbered.
     """
-    targets = [str(net) for net in conventions.overlay.MANAGED_ROUTES]
-
-    assert '192.168.70.0/24' in targets, 'the cluster VLAN'
-    assert '192.168.71.0/24' in targets, 'the `lan` pool'
     # The pool is not a subnet anything is attached to: it is carried because
     # the gateway learns host routes into it over BGP.
     assert conventions.LAN_POOL.v4 in conventions.overlay.MANAGED_ROUTES

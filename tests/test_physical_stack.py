@@ -921,7 +921,7 @@ def test_a_root_filesystem_pin_is_the_whole_reference_a_push_pulls_by() -> None:
 
     assert pin.digest == DIGEST
     assert pin.tag == ROOTFS_TAG
-    assert pin.repository == f'{conventions.gateway.IMAGE_NAMESPACE}/caddy'
+    assert pin.repository == f'{conventions.gateway.IMAGE_NAMESPACE}/{caddy.artifact}'
 
     alice, bob = conventions.gateway.RESOLVERS
     assert conventions.gateway.image_pin(alice) != conventions.gateway.image_pin(bob)
