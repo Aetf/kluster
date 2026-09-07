@@ -44,7 +44,7 @@ import os
 import re
 import secrets
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from kluster.lib import config
@@ -793,10 +793,13 @@ class Vault:
 
     The pairing is a type rather than two arguments because every read needs
     both, and a reader that has the directory but not the key has nothing.
+
+    The identity does not print: it is the recovery key, which opens every
+    ciphertext in the registry the other half names.
     """
 
     registry: Registry
-    identity: str
+    identity: str = field(repr=False)
 
     @classmethod
     def open(cls, kit: KdbxStore, registry: Registry | None = None, *, entry: str = RECOVERY_ENTRY) -> Vault:

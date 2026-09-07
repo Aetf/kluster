@@ -15,6 +15,31 @@ import pytest
 from kluster.lib import config
 
 
+def test_text_keeps_a_non_empty_string() -> None:
+    assert config.text('quiet-brook', 'the `state` stack output `password`') == 'quiet-brook'
+
+
+def test_text_names_the_type_and_never_the_value() -> None:
+    """The refusal is logged by the command that was pushing the value."""
+    secret = {'ciphertext': 'A-LIVE-SECRET'}
+
+    with pytest.raises(TypeError) as refused:
+        _ = config.text(secret, 'the `state` stack output `password`')
+
+    # A stack output exported in the wrong shape is still a credential, and
+    # `slots.sync` logs what this raises -- so naming the value would put it in
+    # the run log of the command whose whole job was to keep it out of one.
+    assert 'the `state` stack output `password` must be a non-empty string, and is dict' in str(refused.value)
+    assert 'A-LIVE-SECRET' not in str(refused.value)
+
+
+def test_text_tells_an_empty_string_apart_from_the_wrong_type() -> None:
+    # Naming the type rather than the value would otherwise collapse the two
+    # into "and is str", which is the one thing an operator cannot act on.
+    with pytest.raises(TypeError, match='must be a non-empty string, and is empty'):
+        _ = config.text('', 'the `state` stack output `password`')
+
+
 def test_strings_keeps_a_list_of_strings() -> None:
     assert config.strings(['alice', 'bob'], 'the alert recipients') == ('alice', 'bob')
 

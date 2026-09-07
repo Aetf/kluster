@@ -27,7 +27,7 @@ from inside a mint.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import requests
@@ -167,10 +167,13 @@ class AppKey:
     pair a caller is free to hand over the other way round. B2 discloses the
     secret half once, at creation, which is why nothing here can recover from
     getting them the wrong way.
+
+    The id prints and the key does not: the id is what an operator matches
+    against a B2 console listing, and the key is the credential itself.
     """
 
     key_id: str
-    key: str
+    key: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -294,11 +297,16 @@ def _created_bucket(answer: object) -> Bucket:
 
 @dataclass(frozen=True)
 class Session:
-    """An authorized B2 API session."""
+    """An authorized B2 API session.
+
+    The authorization token does not print. It is short-lived rather than
+    permanent, which lowers the stakes without changing them: for the hours it
+    is valid it is the account, and a transcript outlives that.
+    """
 
     account_id: str
     api_url: str
-    token: str
+    token: str = field(repr=False)
 
     @classmethod
     def authorize(cls, key_id: str, key: str) -> Session:

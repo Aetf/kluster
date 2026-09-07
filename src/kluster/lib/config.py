@@ -28,9 +28,19 @@ def text(value: object, what: str) -> str:
     The single-value case of `strings`, for the places a structured answer
     would otherwise be coerced into one silently — a `None` that becomes the
     four characters `null`, an object that becomes its JSON.
+
+    **The refusal names the type and never the value.** The one caller is the
+    slot map reading a stack output on its way into a GitHub secret
+    (`credentials.slots.StateRead`), which logs what this raises, so an export
+    that came out in the wrong shape would otherwise put a credential into the
+    run log of the command that was pushing it. What the operator has to fix is
+    the export's shape, which the type is, and `what` already names which
+    output it was.
     """
-    if not isinstance(value, str) or not value:
-        raise TypeError(f'{what} must be a non-empty string, and is {value!r}')
+    if not isinstance(value, str):
+        raise TypeError(f'{what} must be a non-empty string, and is {type(value).__name__}')
+    if not value:
+        raise TypeError(f'{what} must be a non-empty string, and is empty')
     return value
 
 
@@ -39,7 +49,10 @@ def strings(value: object, what: str) -> tuple[str, ...]:
 
     The whole list is described in the refusal rather than the offending entry
     alone: a configured list is short, an operator reads it as one value, and
-    what they have to correct is the line they wrote.
+    what they have to correct is the line they wrote. That it prints the value
+    where `text` prints only the type is deliberate: the lists that arrive this
+    way are public by construction — alert recipients, the public keys that may
+    log in to an appliance — and none of them reaches a secret.
     """
     if not isinstance(value, list):
         raise TypeError(f'{what} must be a list, not {type(value).__name__}')

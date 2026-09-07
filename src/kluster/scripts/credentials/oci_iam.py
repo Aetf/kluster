@@ -72,7 +72,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import oci
@@ -298,9 +298,10 @@ class KeyPair:
 
     Two PEM strings that a signature would not distinguish: carried together
     so that no caller can pass the private half where the public one belongs.
+    The same asymmetry decides what prints: the public half, and not the other.
     """
 
-    private_pem: str
+    private_pem: str = field(repr=False)
     public_pem: str
 
 
@@ -1189,12 +1190,14 @@ class SeedRow:
     """The three parts of the seed row that are stored (§2).
 
     A record rather than three strings in an order: two of them are OCIDs of
-    different kinds, and nothing downstream would notice them swapped.
+    different kinds, and nothing downstream would notice them swapped. The two
+    OCIDs print, because a refusal that names them is how an operator tells
+    which kit is open; the signing key does not.
     """
 
     tenancy: str
     user: str
-    private_key: str
+    private_key: str = field(repr=False)
 
 
 def load_seed(store: KdbxStore, entry: str) -> SeedRow:
@@ -1276,7 +1279,20 @@ def adopt_domain(
     tenancy's domains is an administrator's call and the seed's policy does
     not include it -- which is exactly why rotation warns rather than doing
     this by itself.
+
+    The root it is handed is held against the recorded account first, because
+    the URL this writes is the whole of the command's effect and a root naming
+    another tenancy is what a hand-typed repair gets wrong.
     """
+    # Above the authorization rather than merely above the write: a root
+    # pointed at another account would otherwise have that account's identity
+    # domains listed -- an administrator's call in a tenancy nothing here
+    # manages -- before anything refused. §4.3 of `docs/credentials.md`
+    # documents this command as the repair for a tenancy whose deletions are
+    # refused, so it is run when something has already gone wrong, which is the
+    # worst moment to accept a wrong account in silence.
+    verify_adopted_tenancy(root[masters.OCI_TENANCY])
+
     iam = Iam.authorize(
         root[masters.OCI_TENANCY], root[masters.OCI_USER], root[masters.OCI_PRIVATE_KEY], connect=connect
     )
@@ -1423,8 +1439,9 @@ class ApiKey:
     #: The user OCID the key signs as.
     user: str
     #: The PEM, which exists here and in the slot this is delivered to, and
-    #: nowhere else -- never in the kit (§1 rule 2).
-    private_key: str
+    #: nowhere else -- never in the kit (§1 rule 2). Not in the repr either,
+    #: which is the same rule applied to a transcript.
+    private_key: str = field(repr=False)
 
     @property
     def region(self) -> str:
@@ -1457,6 +1474,37 @@ def verify_tenancy(tenancy: str) -> None:
             'an account the stack does not act in'
         )
     log.info('the seed signs for %s, which is the tenancy `conventions` records', tenancy)
+
+
+def verify_adopted_tenancy(tenancy: str) -> None:
+    """Adoption's form of `verify_tenancy`, held against the account root in hand.
+
+    A separate refusal because it is protecting something else and so has
+    something else to say. `adopt_domain` creates no IAM principal and uploads
+    no key, so nothing is stranded in a foreign account; what a mis-pointed run
+    leaves is the kit's own OCI row carrying a foreign tenancy's
+    identity-domain URL, accepted at the time and wrong from then on. Every
+    later rotation then mints its successor in the tenancy the row names and
+    addresses the retirement of the predecessor at the other tenancy's
+    self-service endpoint, so the seed user accumulates keys it cannot retire
+    until the three-key quota refuses the next mint.
+
+    Both accounts are named, because which of the two is stale -- a root typed
+    for another tenancy, or an OCID recorded wrong -- is the operator's
+    question and neither one alone answers it. The seed's own row is not
+    consulted here: it is held against the same `conventions` fact by every
+    command that spends it, so proving both against the constant is what makes
+    them agree with each other.
+    """
+    intended = conventions.OCI_TENANCY.tenancy_ocid
+    if tenancy != intended:
+        raise CredentialRejected(
+            f'this account root signs for {tenancy}, but `conventions.OCI_TENANCY` records {intended} as the '
+            'account this program declares into: one of the two is stale, and recording the identity domain of '
+            'the first on the kit would leave a row whose successors are minted in one tenancy and whose '
+            'predecessors are retired through another'
+        )
+    log.info('the account root signs for %s, which is the tenancy `conventions` records', tenancy)
 
 
 def ensure_compartment(iam: Iam, consumer: str, *, override: str | None = None) -> str:
