@@ -160,13 +160,18 @@ class Roots:
 
 @dataclass(frozen=True)
 class ClientBundle:
-    """What an operator or CI needs to reach the backend."""
+    """What an operator or CI needs to reach the backend.
+
+    The certificates print and the private key does not. A certificate is
+    public by construction — it is what the box is shown — while the key is
+    what authenticates as this bundle's role for as long as the leaf is valid.
+    """
 
     name: str
     address: str
     ca_cert: bytes
     cert: bytes
-    key: bytes
+    key: bytes = field(repr=False)
 
     def url(self) -> str:
         """The connection string: everything about the backend, nothing about this machine.
@@ -221,8 +226,10 @@ class Digested(enum.Enum):
     """How one field of the machine enters the digest map the box carries.
 
     The converge compares a running box to this commit component by component
-    (`digests`), and three fields cannot be compared as their value: two are
-    certificates that are re-issued on every render, and two are secrets.
+    (`digests`), and some fields cannot be compared as their value: the
+    certificates are re-issued on every render, and the secrets must not be
+    digested at all. `NEVER` is therefore the enum's name for "this field is a
+    secret", which is why it decides the repr as well as the digest.
     """
 
     #: The value itself, JSON-encoded. The default, and the safe one.
@@ -231,7 +238,8 @@ class Digested(enum.Enum):
     AUTHORITY = 'authority'
     #: A certificate, by subject and SANs only — "what does this box answer as".
     LEAF = 'leaf'
-    #: Not compared at all.
+    #: Not compared at all, because the value is a secret: its digest would
+    #: travel in cloud metadata and its repr would travel in a transcript.
     NEVER = 'never'
 
 
@@ -239,10 +247,14 @@ def _digested(how: Digested = Digested.VALUE) -> Any:
     """Declare a `Machine` field's digest treatment beside the field itself.
 
     The rule travels with the name it applies to, so renaming a field cannot
-    leave a rule pointing at nothing — which for the two `NEVER` fields would
-    mean putting a secret's digest into cloud metadata.
+    leave a rule pointing at nothing — which for a `NEVER` field would mean
+    putting a secret's digest into cloud metadata.
+
+    A `NEVER` field is kept out of the repr by the same declaration, so a
+    secret added to this record later is covered by saying the one thing its
+    author has to say anyway rather than by remembering a second annotation.
     """
-    return field(metadata={'digest': how})
+    return field(metadata={'digest': how}, repr=how is not Digested.NEVER)
 
 
 @dataclass(frozen=True)

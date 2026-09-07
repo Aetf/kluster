@@ -50,6 +50,7 @@ exist for it.
 
 from __future__ import annotations
 
+import dataclasses
 import getpass
 import logging
 import os
@@ -157,10 +158,16 @@ class Root:
 
 @dataclass(frozen=True)
 class Credential:
-    """One account root's values, held for the length of one run."""
+    """One account root's values, held for the length of one run.
+
+    The values do not print. This is the most powerful credential this program
+    ever holds -- the account itself, not something minted under it -- and the
+    register beside it names every field, so a repr that says which root this
+    is has said everything a reader needs.
+    """
 
     root: Root
-    values: dict[str, str]
+    values: dict[str, str] = dataclasses.field(repr=False)
 
     def __getitem__(self, name: str) -> str:
         value = self.values.get(name)

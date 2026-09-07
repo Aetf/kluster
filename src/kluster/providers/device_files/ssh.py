@@ -44,7 +44,7 @@ import asyncio
 import shlex
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum, unique
 from typing import Protocol, cast, final
 
@@ -226,11 +226,15 @@ class Device:
     arrive from resource inputs, and neither has a default: an unset credential
     must fail to build a device rather than quietly fall back on whatever the
     runner's home directory holds.
+
+    Only `private_key` is kept out of the repr. A host key is a public key --
+    printing it is how a mismatch is diagnosed -- and everything else here is
+    an address; the client credential is the one field a `%r` must not spend.
     """
 
     host: str
     username: str
-    private_key: str
+    private_key: str = field(repr=False)
     host_key: str
     port: int = 22
 

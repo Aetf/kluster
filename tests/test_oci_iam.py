@@ -615,13 +615,13 @@ def tenancy() -> Tenancy:
 def recorded_tenancy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the fake tenancy the account `conventions` records.
 
-    `create_seed`, `rotate_seed` and `mint_api_key` each prove the tenancy
-    before they create anything, so a suite driving a fake account has to be
-    that account for the ordinary path to be the one under test. (`adopt_domain`
-    does not, which is its own gap rather than a fact about this fixture.) The
-    tests that want the two to disagree say so for themselves; the call
-    measurement in the fault sweep, which runs at import where no fixture has,
-    says so for itself too.
+    Every OCI command in this module proves the tenancy before it acts --
+    `create_seed`, `rotate_seed` and `mint_api_key` before they create
+    anything, `adopt_domain` before it authorizes -- so a suite driving a fake
+    account has to be that account for the ordinary path to be the one under
+    test. The tests that want the two to disagree say so for themselves; the
+    call measurement in the fault sweep, which runs at import where no fixture
+    has, says so for itself too.
     """
     with_tenancy_ocid(monkeypatch, TENANCY)
 
@@ -1448,6 +1448,31 @@ def test_the_repair_reads_the_domain_with_the_account_root(kit: KdbxStore, root:
     # keys from then on.
     assert url == DOMAIN_URL
     assert oci_iam.load_domain(kit, SEED_ENTRY) == DOMAIN_URL
+
+
+def test_adopting_a_domain_from_an_unrecorded_tenancy_records_nothing(
+    kit: KdbxStore, root: masters.Credential, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sealed = SealedIdentity()
+    _ = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=Tenancy(identity=sealed))
+    with_tenancy_ocid(monkeypatch, ELSEWHERE)
+    tenancy = Tenancy(identity=_same_tenancy(sealed))
+
+    # Both accounts are named, because which of the two is stale -- a root
+    # typed for another tenancy, or an OCID recorded wrong -- is the operator's
+    # question and neither one alone answers it.
+    with pytest.raises(oci_iam.CredentialRejected, match=f'{TENANCY}.*{ELSEWHERE}'):
+        _ = oci_iam.adopt_domain(kit, seed_entry=SEED_ENTRY, root=root, connect=tenancy)
+
+    # This command's whole effect is the URL it records, so the row is what a
+    # refusal has to leave untouched -- a foreign one written here would be
+    # accepted at the time and would split every later rotation between two
+    # tenancies. Held above the authorization besides, so the account root is
+    # never carried into a tenancy this installation does not manage and that
+    # tenancy's identity domains are never listed.
+    assert entries.OCI_DOMAIN_ATTRIBUTE not in kit.attributes(SEED_ENTRY)
+    assert tenancy.connections == []
+    assert tenancy.domain_connections == []
 
 
 def test_the_tenancys_domains_come_back_as_records(tenancy: Tenancy, root: masters.Credential) -> None:

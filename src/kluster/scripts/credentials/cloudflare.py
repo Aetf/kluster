@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 from urllib.parse import urlencode
 
@@ -154,10 +154,13 @@ class Token:
     Two indistinguishable strings, so they travel together rather than as a
     pair a caller is free to hand over the other way round. Cloudflare
     discloses the value once, at creation, and the id is what retires it.
+
+    The id prints and the value does not: the id is what an operator matches
+    against a Cloudflare console listing, and the value is the credential.
     """
 
     token_id: str
-    value: str
+    value: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -274,9 +277,13 @@ def _permission_groups(answer: object) -> tuple[PermissionGroup, ...]:
 
 @dataclass(frozen=True)
 class Session:
-    """An authorized Cloudflare API session, and the token it authorized with."""
+    """An authorized Cloudflare API session, and the token it authorized with.
 
-    token: str
+    The token does not print. Unlike B2's, it does not expire: a Cloudflare
+    token in a transcript is live until somebody retires it.
+    """
+
+    token: str = field(repr=False)
     token_id: str
 
     @classmethod
@@ -486,7 +493,9 @@ class ZoneToken:
     """
 
     token_id: str
-    value: str
+    #: Not in the repr, for the reason `Token.value` is not: this is the same
+    #: credential, on its way to the slot that will hold it.
+    value: str = field(repr=False)
     account_id: str
     zone_ids: dict[str, str]
 
