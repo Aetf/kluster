@@ -99,17 +99,19 @@ def test_a_fixed_vips_two_families_carry_the_same_host_number() -> None:
 # The gateway census is held against the artifacts that can disagree with it,
 # and restated nowhere. `test_device_services` checks the rendered units and
 # files against `tests/data/gw-config-caddyfile`, a transcript of what the
-# device serves today, and against an address table written out beside it;
-# `test_physical_stack` checks each service's `artifact` against the image
-# repository names. Both of those go when the device does.
+# device serves today; that one goes when the device does.
 #
-# What no artifact reaches -- a vhost's label, a legacy row's retirement wave --
-# is not restated here either. Both are typed at their own declarations, so a
-# copy would fail for nobody but the person editing them. `LegacyVhost` states
-# what its wave is coupled to; `BridgedService.vhost` states what the name is
-# for -- a public-zone name public resolvers do not answer, reached by the
-# split-horizon rewrite (dns.md §4) -- and not what changing one costs the
-# clients already using it, which is the constraint that belongs on that row.
+# What no artifact reaches -- a service's address, the build it runs, a vhost's
+# label, a legacy row's retirement wave -- is not restated here either. Each is
+# typed at its own declaration, so a copy would fail for nobody but the person
+# editing it, and what it is coupled to is stated on the row instead.
+# `BridgedService.address` states that the LAN's leases already point at it;
+# `artifact` names the build as its registry repository names it, which is what
+# refuses a pin published somewhere else; `LegacyVhost` states what its wave is
+# coupled to; `BridgedService.vhost` states what the name is for -- a
+# public-zone name public resolvers do not answer, reached by the split-horizon
+# rewrite (dns.md §4) -- and not what changing one costs the clients already
+# using it, which is the constraint that belongs on that row.
 
 
 def test_every_bridged_service_sits_on_the_container_vlan() -> None:

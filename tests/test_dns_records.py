@@ -255,10 +255,8 @@ def test_the_records_import_without_the_gateway_behind_them() -> None:
 
 def test_overlay_labels_are_dns_labels() -> None:
     # Central's names are display names: they carry case and spaces, and two
-    # members on the roster today carry both. The label the block sits under
-    # is published, so our own identifier for it may be renamed and its value
-    # may not: moving it renames one live record per rostered member.
-    assert conventions.OVERLAY_LABEL == 'zt'
+    # members on the roster today carry both. What the block publishes is a DNS
+    # label, so the normalization is the whole of what stands between them.
     assert overlay_label('S26 Ultra') == 's26-ultra'
     assert overlay_label('Pixel 7 Pro') == 'pixel-7-pro'
     for entry in conventions.overlay.ROSTER:

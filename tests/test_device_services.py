@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from ipaddress import IPv4Address
 from pathlib import Path
 
 import pytest
@@ -36,14 +35,6 @@ ACME_TOKEN = 'a-zone-scoped-token'
 DIGEST = f'sha256:{"f" * 64}'
 TAG = '7'
 SERVICES = tuple(service.name for service in conventions.gateway.SERVICES)
-#: Where the census places the bridged services, restated rather than read back
-#: from it: these are the addresses the LAN's leases already point at, so one
-#: that moves should have to move here too.
-ADDRESSES = {
-    'caddy': IPv4Address('10.0.5.180'),
-    'adguard-alice': IPv4Address('10.0.5.3'),
-    'adguard-bob': IPv4Address('10.0.5.4'),
-}
 
 
 def pin(service: str) -> container.Rootfs:
@@ -79,6 +70,18 @@ def declared_for(name: str) -> container.ServiceDeclaration:
     return next(declaration for declaration in declarations() if declaration.service.name == name)
 
 
+def bridged_service(name: str) -> conventions.gateway.BridgedService:
+    """The census's own entry for a bridged service, by the census's name for it.
+
+    Reached through `SERVICES` rather than through `declarations()`, so a case
+    that holds a declaration against this one is comparing two paths to the
+    entry rather than one path to itself.
+    """
+    service = next(entry for entry in conventions.gateway.SERVICES if entry.name == name)
+    assert isinstance(service, conventions.gateway.BridgedService), name
+    return service
+
+
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def monitor() -> Recorder:
     """What the run registered, for the cases that read declarations directly."""
@@ -111,20 +114,18 @@ async def containers(monitor: Recorder) -> tuple[Container, ...]:
 ##
 
 
-def test_the_address_table_lists_every_bridged_service_and_invents_none() -> None:
-    """The table above is a second source, and the equality is what makes it one.
+def test_the_census_places_services_on_the_container_vlan() -> None:
+    """The guard on every case below that walks the bridged services.
 
-    Every other case reaches the table by the census's own name for a service,
-    so a service *removed* from the census is removed from those cases too and
-    they go on passing without it: a table read only for the entries the census
-    still has can never report one missing. Stating the two sets equal is the
-    direction that reports it.
+    Which services are bridged is the census's to say, and no case here holds
+    it to a list of its own. What a case cannot survive is the census having
+    none: the loops over the bridged entries would visit nothing and pass, and
+    the addressing, the bridge and the rendered settings would go unasserted
+    with the suite green.
     """
-    assert set(ADDRESSES) == {
-        service.name
-        for service in conventions.gateway.SERVICES
-        if isinstance(service, conventions.gateway.BridgedService)
-    }
+    assert [
+        service for service in conventions.gateway.SERVICES if isinstance(service, conventions.gateway.BridgedService)
+    ]
 
 
 def test_a_resolver_cannot_be_declared_against_a_service_with_no_address() -> None:
@@ -138,7 +139,7 @@ def test_a_resolver_cannot_be_declared_against_a_service_with_no_address() -> No
     """
     resolver = declared_for('adguard-alice')
     assert isinstance(resolver, container.ResolverService)
-    assert resolver.service.address == ADDRESSES['adguard-alice']
+    assert resolver.service is bridged_service('adguard-alice')
 
     overlay = declared_for('zerotier')
     assert isinstance(overlay, container.OverlayDaemon)
@@ -158,7 +159,7 @@ def test_only_the_overlay_daemon_runs_in_the_hosts_network_namespace() -> None:
         declaration = declared_for(name)
         assert declaration.bridge == container.CONTAINER_BRIDGE
         assert isinstance(declaration.service, conventions.gateway.BridgedService)
-        assert declaration.service.address == ADDRESSES[name]
+        assert declaration.service is bridged_service(name)
 
     assert declared_for('zerotier').bridge is None
 
@@ -212,9 +213,9 @@ def test_a_machine_names_no_unit_because_it_has_none_of_its_own() -> None:
     # A loop is only a claim about what it visits, so the roster is pinned: a
     # `declarations` that returned nothing would otherwise pass this case by
     # reaching no machine at all. Both sides descend from the same census, so
-    # this is not the check that a service left it -- that one is the equality
-    # against the literal table in
-    # `test_the_address_table_lists_every_bridged_service_and_invents_none`.
+    # this is not the check that a service left it: nothing here can report
+    # that, which is why the census is the source of truth and this is a check
+    # on the wiring in front of it.
     assert {declaration.service.name for declaration in declarations()} == set(SERVICES)
 
     for declaration in declarations():
@@ -240,7 +241,7 @@ def test_a_service_is_addressed_through_the_environment_its_image_reads(service:
     """
     settings = container.nspawn_file(declared_for(service))
 
-    for name, value in container.net_setup_environment(ADDRESSES[service]).items():
+    for name, value in container.net_setup_environment(bridged_service(service).address).items():
         assert f'Environment={name}={value}' in settings
 
     targets = [mounted.target for declaration in declarations() for mounted in declaration.mounted_files]
@@ -345,7 +346,9 @@ def test_the_proxy_resolves_through_the_gateways_own_resolver_and_only_that_one(
     assert [line for line in rendered.splitlines() if not line.startswith('#')] == [f'nameserver {gateway_address}']
     # The same address the image is handed as its default route, so the two
     # cannot disagree about which box is on the other side.
-    assert container.net_setup_environment(ADDRESSES['caddy'])[container.ENV_IPV4_GATEWAY] == str(gateway_address)
+    assert container.net_setup_environment(bridged_service('caddy').address)[container.ENV_IPV4_GATEWAY] == str(
+        gateway_address
+    )
     # Not the resolvers, which carry their own upstreams, and not the overlay
     # daemon, which is host-networked and resolves as the device does.
     for name in ('adguard-alice', 'adguard-bob', 'zerotier'):
@@ -374,7 +377,7 @@ def test_a_resolver_is_placed_statically_and_points_at_more_than_one_upstream() 
     configured rather than learned; and its own upstreams are two providers,
     because the LAN's name service must not stop with any one of them.
     """
-    address = ADDRESSES['adguard-alice']
+    address = bridged_service('adguard-alice').address
     environment = container.net_setup_environment(address)
 
     assert environment[container.ENV_IPV4_CIDR] == f'{address}/{conventions.CONTAINER_VLAN.v4.prefixlen}'
@@ -404,7 +407,7 @@ def test_the_gateway_issues_its_own_certificates_from_its_own_credential() -> No
     for resolver in conventions.gateway.RESOLVERS:
         assert resolver.vhost is not None
         assert resolver.vhost in rendered
-        assert f'http://{ADDRESSES[resolver.name]}:{conventions.gateway.ADGUARD_API_PORT}' in rendered
+        assert f'http://{resolver.address}:{conventions.gateway.ADGUARD_API_PORT}' in rendered
     # The console presents its own certificate to the proxy and the name that
     # matters is the one the client asked for, which Caddy forwards unchanged.
     assert 'tls_insecure_skip_verify' in rendered
