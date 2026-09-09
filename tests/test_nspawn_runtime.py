@@ -1,17 +1,32 @@
-"""The nspawn runtime, asserted against Pulumi's mock provider.
+"""The nspawn runtime: what it declares, and what its convergers do to a device.
 
 Nothing here contacts a device, and nothing here knows what a container
 service is: the runtime is the framework, so what is exercised is what it does
-for *a* machine. Which file lands where, what runs after one lands, what the
-two rendered convergers do to a device that has nothing on it, and what a
+for *a* machine. Which file lands where, what runs after one lands, and what a
 rollback moves.
 
-The renderers are plain functions over plain data, so most cases read their
-output directly; the component is declared once against mocks, which is where a
-wiring mistake would surface.
+`40-machines.sh` is exercised by **running it**, against a directory tree this
+module builds and a `systemctl` it can read back. That is the tier the change
+this file covers needs: the script is handed no machines, so every claim about
+which machines it acts on is a claim about what it finds on a disk, and reading
+the rendered text back would only restate the template. The cases therefore
+disagree with the declaration on purpose — a tree with no settings, a settings
+file that went away under a running machine, a half-written file a push
+abandoned — because that is the device state the operator meets and no
+declaration describes it.
+
+The other renderers are plain functions over plain data, so those cases read
+their output directly; the component is declared once against mocks, which is
+where a wiring mistake would surface.
 """
 
 from __future__ import annotations
+
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import final
 
 import pulumi
 import pytest
@@ -20,9 +35,11 @@ from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
 from kluster.components.gateway import nspawn, persistence
-from kluster.components.gateway.nspawn import Machine, NspawnRuntime, Placement
+from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
+from kluster.lib import templates
 from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, Connection, DeviceFile, marker_path
+from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
 
 NAME = 'runtime'
@@ -34,23 +51,9 @@ MECHANISM = 'mechanism'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
-#: Two machines, one of them with an initial state: enough to render every
-#: branch of the converger, and named so that neither is a service of this
-#: repository's own.
-PLAIN = Machine(
-    name='plain',
-    stamped=(nspawn.nspawn_path('plain'), marker_path(nspawn.rootfs_path('plain'))),
-    initial_state=None,
-)
-GIVEN_STATE = Machine(
-    name='stateful',
-    stamped=(nspawn.nspawn_path('stateful'), marker_path(nspawn.rootfs_path('stateful'))),
-    initial_state=Placement(
-        source=nspawn.machine_file('stateful', 'initial.yaml'),
-        destination=f'{nspawn.state_path("stateful")}/live.yaml',
-    ),
-)
-MACHINES = (GIVEN_STATE, PLAIN)
+#: A machine to declare files for, named so that it is not a service of this
+#: repository's own: the runtime knows no service and neither does this suite.
+MACHINE = 'plain'
 
 
 class Workload(Component, pulumi_type='test:gateway:Workload'):
@@ -63,7 +66,7 @@ class Workload(Component, pulumi_type='test:gateway:Workload'):
 
     def __init__(self, name: str, *, runtime: NspawnRuntime, opts: pulumi.ResourceOptions | None = None) -> None:
         super().__init__(name, opts=opts)
-        self.dropin: DeviceFile = runtime.dropin(PLAIN.name, bridge='br5', opts=self.child_opts())
+        self.dropin: DeviceFile = runtime.dropin(MACHINE, bridge='br5', opts=self.child_opts())
         self.register_outputs({})
 
 
@@ -89,7 +92,7 @@ async def mechanism(monitor: Recorder) -> DevicePersistence:
 async def runtime(mechanism: DevicePersistence) -> NspawnRuntime:
     """The runtime on that mechanism, declared once."""
     async with declaring():
-        framework = NspawnRuntime(NAME, mechanism=mechanism, machines=MACHINES)
+        framework = NspawnRuntime(NAME, mechanism=mechanism)
     return framework
 
 
@@ -330,11 +333,14 @@ def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
 
     Everything a machine is lives in one directory, so a mounted file called
     `rootfs` or `stamp` would be the tree or the content stamp — and whichever
-    was written last would decide what the machine booted.
+    was written last would decide what the machine booted. `initial-state` is
+    the one whose collision is silent rather than loud: the converger would
+    copy a mounted file into a state directory that has never held any and go
+    on running.
     """
     assert nspawn.machine_file('plain', 'Caddyfile') == f'{nspawn.machine_path("plain")}/Caddyfile'
 
-    for reserved in ('rootfs', 'rootfs.digest', 'state', 'stamp', 'plain.nspawn'):
+    for reserved in ('rootfs', 'rootfs.digest', 'state', 'stamp', 'initial-state', 'plain.nspawn'):
         with pytest.raises(ValueError, match='nspawn runtime keeps'):
             _ = nspawn.machine_file('plain', reserved)
 
@@ -345,124 +351,660 @@ def test_a_machine_keeps_no_file_whose_name_the_runtime_already_uses() -> None:
         _ = nspawn.machine_file('plain', f'other{nspawn.NSPAWN_SUFFIX}')
 
 
+def test_a_machine_keeps_no_file_the_content_stamp_cannot_see() -> None:
+    """A hidden name is delivered, read by the container, and never stamped.
+
+    The stamp covers the machine's directory as the shell globs it, and a glob
+    skips leading-dot names — so a mounted file called `.env` would be pushed,
+    bound in, and changing it would restart nothing. That failure is silent
+    where the others here are loud, which is why the name is refused at the one
+    place a caller can be held to a name at all.
+    """
+    with pytest.raises(ValueError, match='content stamp cannot see'):
+        _ = nspawn.machine_file('plain', '.env')
+
+    assert nspawn.machine_file('plain', 'resolv.conf') == f'{nspawn.machine_path("plain")}/resolv.conf'
+
+
 ##
 ## What the convergers say
 ##
 
 
-def test_the_machine_set_carries_no_order() -> None:
-    """Which machine moves when is a fact about a push, not about the device.
+@final
+@dataclass(frozen=True)
+class _MachinesRendering:
+    """What `40-machines.sh.j2` reads, spelled again so a test can aim it at a tree.
 
-    At boot no apply is in flight and no session rides anything the device
-    runs, so there is nothing for a start order to protect. The set is sorted
-    so that the file is a function of which machines are declared rather than
-    of the order a caller listed them in.
+    The production renderer points every one of these at the device's own
+    paths; a case here points them at a temporary directory instead, which is
+    what makes running the real script possible without a device.
     """
-    script = nspawn.machines_script(MACHINES)
-    declared = next(line for line in script.splitlines() if line.startswith('DECLARED='))
 
-    assert declared == 'DECLARED="plain stateful"'
-    assert nspawn.machines_script(MACHINES) == nspawn.machines_script((PLAIN, GIVEN_STATE))
+    cluster: str
+    machines_root: str
+    live_machines_dir: str
+    unit_template: str
+    rootfs: str
+    state: str
+    stamp: str
+    initial_state: str
+    nspawn_suffix: str
+    marker_suffix: str
+    staging_suffix: str
 
 
-def test_the_link_names_the_root_filesystem_and_not_the_machine_directory() -> None:
-    """What systemd boots is a tree, and the machine's directory is not one.
+@final
+@dataclass(frozen=True)
+class _Device:
+    """A device the converger can be run against: its two directories and a systemd.
 
-    Linking the directory would hand nspawn a root filesystem containing the
-    machine's settings, its state and its stamp — the layout would be visible
-    inside the container, and the state would be inside the tree the next push
-    replaces whole.
+    `commands` is what the fake `systemctl` appends every invocation to, and
+    `active` is the set of units it believes are running — a directory, so the
+    script's own `systemctl restart` is what puts a unit in it and the case can
+    read afterwards whether a machine was bounced. `failing` holds the units
+    whose start is to fail.
     """
-    script = nspawn.machines_script(MACHINES)
 
-    assert f'root=$MACHINES/$machine/{nspawn.ROOTFS}' in script
-    assert f'LIVE={nspawn.LIVE_MACHINES_DIR}' in script
-    assert 'ln -s "$root" "$link"' in script
+    script: Path
+    machines: Path
+    live: Path
+    commands: Path
+    complaints: Path
+    active: Path
+    failing: Path
+    tools: Path
 
 
-def test_a_machine_is_restarted_only_when_something_that_defines_it_changed() -> None:
+SYSTEMCTL = """#!/bin/sh
+echo "$*" >>{commands}
+verb=$1
+shift
+case "$verb" in
+    is-active)
+        [ "$1" = --quiet ] && shift
+        [ -e {active}/"$1" ]
+        exit $?
+        ;;
+    is-enabled)
+        exit 1
+        ;;
+    restart | start)
+        [ ! -e {failing}/"$1" ] || exit 1
+        : >{active}/"$1"
+        exit 0
+        ;;
+    disable)
+        [ "$1" = --now ] && shift
+        rm -f {active}/"$1"
+        exit 0
+        ;;
+esac
+exit 0
+"""
+
+
+@pytest.fixture
+def device(tmp_path: Path) -> _Device:
+    """The converger rendered against a tree, with a systemd that can be read back."""
+    box = _Device(
+        script=tmp_path / nspawn.MACHINES_SCRIPT,
+        machines=tmp_path / 'machines',
+        live=tmp_path / 'live',
+        commands=tmp_path / 'commands',
+        complaints=tmp_path / 'complaints',
+        active=tmp_path / 'active',
+        failing=tmp_path / 'failing',
+        tools=tmp_path / 'tools',
+    )
+    for directory in (box.machines, box.active, box.failing, box.tools):
+        directory.mkdir()
+
+    systemctl = box.tools / 'systemctl'
+    _ = systemctl.write_text(
+        SYSTEMCTL.format(commands=box.commands, active=box.active, failing=box.failing), encoding='utf-8'
+    )
+    systemctl.chmod(0o755)
+
+    _ = box.script.write_text(
+        templates.render(
+            persistence.TEMPLATE_PACKAGE,
+            f'templates/{nspawn.MACHINES_SCRIPT}.j2',
+            _MachinesRendering(
+                cluster=conventions.CLUSTER_NAME,
+                machines_root=str(box.machines),
+                live_machines_dir=str(box.live),
+                unit_template=nspawn.UNIT_TEMPLATE,
+                rootfs=nspawn.ROOTFS,
+                state=nspawn.STATE,
+                stamp=nspawn.STAMP,
+                initial_state=nspawn.INITIAL_STATE,
+                nspawn_suffix=nspawn.NSPAWN_SUFFIX,
+                marker_suffix=nspawn.MARKER_SUFFIX,
+                staging_suffix=STAGING_SUFFIX,
+            ),
+        ),
+        encoding='utf-8',
+    )
+    return box
+
+
+def declare(
+    device: _Device,
+    machine: str,
+    *,
+    settings: str | None = 'machine\n',
+    tree: bool = True,
+    files: dict[str, str] | None = None,
+    seeds: dict[str, str] | None = None,
+) -> Path:
+    """Put a machine on the device, the way a push leaves one.
+
+    Every part is optional because the states a push passes through are what
+    the converger has to survive: a directory whose settings have not landed
+    yet, one whose tree has not, one whose settings were taken away by the
+    delete that retired it.
+    """
+    directory = device.machines / machine
+    directory.mkdir(exist_ok=True)
+    if settings is not None:
+        _ = (directory / f'{machine}{nspawn.NSPAWN_SUFFIX}').write_text(settings, encoding='utf-8')
+    if tree:
+        (directory / nspawn.ROOTFS).mkdir(exist_ok=True)
+        _ = (directory / f'{nspawn.ROOTFS}{nspawn.MARKER_SUFFIX}').write_text('sha256:one\n', encoding='utf-8')
+    for name, content in (files or {}).items():
+        _ = (directory / name).write_text(content, encoding='utf-8')
+    for name, content in (seeds or {}).items():
+        seed = directory / nspawn.INITIAL_STATE / name
+        seed.parent.mkdir(parents=True, exist_ok=True)
+        _ = seed.write_text(content, encoding='utf-8')
+    return directory
+
+
+def converge(device: _Device, *, environment: dict[str, str] | None = None) -> tuple[int, list[str]]:
+    """Run the converger once, and read back what it asked of systemd.
+
+    What it wrote to the boot log's error stream is kept beside that, because
+    on this device the log is the whole of what an unattended boot reports.
+    """
+    device.commands.unlink(missing_ok=True)
+    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+        ['/bin/bash', str(device.script)],  # noqa: S607 -- the shell the device's own scripts name
+        env={'PATH': f'{device.tools}:/usr/bin:/bin', **(environment or {})},
+        capture_output=True,
+        check=False,
+        # A converger that does not return is the failure this bounds: the
+        # device runs it from the boot chain, where waiting forever and doing
+        # nothing look the same from outside.
+        timeout=30,
+    )
+    _ = device.complaints.write_bytes(completed.stderr)
+    recorded = device.commands.read_text(encoding='utf-8').split('\n') if device.commands.exists() else []
+    return completed.returncode, [line for line in recorded if line]
+
+
+def started(commands: list[str]) -> set[str]:
+    """The machines the converger restarted, by name."""
+    return {
+        line.removeprefix(f'restart {nspawn.UNIT_TEMPLATE}').removesuffix('.service')
+        for line in commands
+        if line.startswith('restart ')
+    }
+
+
+def test_the_converger_is_told_no_machines_and_finds_them_anyway(device: _Device) -> None:
+    """The whole of the change: what exists is what is on the disk.
+
+    The rendered script names no machine — there is no list in it to fall out
+    of step with the declarations, and adding a service rewrites none of it —
+    and two machines that were never mentioned to it are linked, enabled and
+    started because their directories are there.
+    """
+    _ = declare(device, 'alice')
+    _ = declare(device, 'bob')
+
+    status, commands = converge(device)
+
+    assert 'alice' not in device.script.read_text(encoding='utf-8')
+    assert status == 0
+    assert started(commands) == {'alice', 'bob'}
+    for machine in ('alice', 'bob'):
+        assert (device.live / machine).resolve() == device.machines / machine / nspawn.ROOTFS
+        assert f'enable {nspawn.UNIT_TEMPLATE}{machine}.service' in commands
+
+
+def test_a_device_with_no_machines_on_it_converges_to_nothing(device: _Device) -> None:
+    """The first push of a device delivers the framework before anything runs on it.
+
+    So an empty machines root is a legitimate state and not an error — the
+    converger is on the box before any service is, and it is also the state a
+    factory reset leaves.
+    """
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+    assert device.live.is_dir()
+
+
+def test_a_directory_with_no_settings_file_is_not_a_machine(device: _Device) -> None:
+    """A tree alone cannot make one, which is what bounds what a leftover can do.
+
+    The settings file is what `30-nspawn-units.sh` mirrors on, so making it the
+    same test here keeps the two convergers from disagreeing about what exists.
+    A directory holding only a tree is a machine whose first push has not
+    finished or one whose delete has — and starting either would boot a
+    container on the template unit's defaults, which for a bridged machine is a
+    virtual ethernet pair attached to nothing.
+    """
+    _ = declare(device, 'partial', settings=None)
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+    assert not (device.live / 'partial').exists()
+
+
+def test_a_machine_whose_settings_went_away_is_retired_and_its_tree_cannot_bring_it_back(
+    device: _Device,
+) -> None:
+    """The delete that stops declaring a machine is what retires it on the device.
+
+    Removing a `Container` deletes its files, and the settings file going is
+    the event: the machine is disabled and unlinked on that hook, and stays
+    that way on every boot afterwards even though the tree its artifact left
+    behind is still on the disk. A converger that took a tree for a machine
+    would restart a service the declaration no longer holds, once, at the next
+    firmware update — with nothing to connect the two.
+    """
+    directory = declare(device, 'alice')
+    _ = converge(device)
+
+    (directory / f'alice{nspawn.NSPAWN_SUFFIX}').unlink()
+    status, commands = converge(device)
+
+    assert status == 0
+    assert f'disable --now {nspawn.UNIT_TEMPLATE}alice.service' in commands
+    assert not (device.live / 'alice').exists()
+    assert (directory / nspawn.ROOTFS).is_dir(), 'the tree is exactly what is left behind'
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+    assert not (device.live / 'alice').exists()
+
+
+def test_a_machine_whose_tree_has_not_landed_is_skipped_and_its_siblings_are_not(device: _Device) -> None:
+    """Every file of a machine runs this script, and the tree lands last.
+
+    So the settings of a machine being created arrive at a converger that
+    cannot start it yet. That is not an error and it is not a reason to leave
+    the rest of the device unconverged: the tree's own delivery is what starts
+    that machine, and until then its sibling converges normally.
+    """
+    _ = declare(device, 'arriving', tree=False)
+    _ = declare(device, 'settled')
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'settled'}
+    assert not (device.live / 'arriving').exists()
+
+
+def test_a_converged_machine_is_left_alone_by_the_next_run(device: _Device) -> None:
     """Otherwise every push would restart the machine carrying its own session.
 
-    The content stamp is a checksum over the machine's stamped set, and the
-    converger compares before acting; an unchanged stamp and an active unit
-    mean there is nothing to do.
+    The converger runs as the hook of every file of every machine, so a run
+    that found work where there is none would bounce the whole device on each
+    of them.
     """
-    script = nspawn.machines_script(MACHINES)
+    _ = declare(device, 'alice', files={'Caddyfile': 'one\n'})
+    _ = converge(device)
 
-    for path in GIVEN_STATE.stamped:
-        assert path in script
-    assert f'stamp=$MACHINES/$machine/{nspawn.STAMP}' in script
-    assert 'cksum' in script
-    assert 'systemctl is-active --quiet "$unit"' in script
-    assert 'systemctl restart "$unit"' in script
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
 
 
-def test_every_declared_machine_gets_a_state_directory() -> None:
-    """A bind whose source is missing is a machine that refuses to start.
+def test_a_machine_is_restarted_when_a_file_it_mounts_changes(device: _Device) -> None:
+    """The content stamp covers the machine's directory, so the change is seen.
 
-    The writable state is bound into every machine here, and nothing else on
-    the device creates that directory: a machine that has never run would
-    otherwise fail its first start, and the machine that has never run is the
-    last one of the cutover push.
+    Nothing tells the converger which files those are — a machine that mounts
+    one more file needs no push of this script — and the file's content is what
+    decides, so a file rewritten to what it already said restarts nothing.
     """
-    script = nspawn.machines_script(MACHINES)
+    directory = declare(device, 'alice', files={'Caddyfile': 'one\n'})
+    _ = converge(device)
 
-    assert f'mkdir -p "$MACHINES/$machine/{nspawn.STATE}"' in script
-    assert script.index(f'mkdir -p "$MACHINES/$machine/{nspawn.STATE}"') < script.index(
-        'install_initial_state "$machine"'
+    _ = (directory / 'Caddyfile').write_text('two\n', encoding='utf-8')
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}
+
+
+def test_a_stamp_covers_the_settings_and_the_pin_as_well_as_what_is_mounted(device: _Device) -> None:
+    """Those two are what every machine has, and each is a reason to restart one.
+
+    The digest marker is how a new root filesystem reaches the stamp at all —
+    the tree is represented by the marker beside it, because walking a root
+    filesystem to learn it has not changed costs more than the restart it would
+    save — so a machine that skipped it would take a new image and go on
+    running the old one until something else moved.
+    """
+    directory = declare(device, 'alice', settings='left\n')
+    _ = converge(device)
+
+    _ = (directory / f'alice{nspawn.NSPAWN_SUFFIX}').write_text('right\n', encoding='utf-8')
+    _, commands = converge(device)
+    assert started(commands) == {'alice'}
+
+    _ = (directory / f'{nspawn.ROOTFS}{nspawn.MARKER_SUFFIX}').write_text('sha256:two\n', encoding='utf-8')
+    _, commands = converge(device)
+    assert started(commands) == {'alice'}
+
+
+def test_a_stamp_is_a_sequence_and_not_a_bag(device: _Device) -> None:
+    """Two files that traded contents are a machine that changed, and it says so.
+
+    A checksum over a set that ignored order would call this machine unchanged
+    — which is why the order is fixed in the script rather than left to
+    whatever a walk returns.
+    """
+    directory = declare(device, 'alice', settings='left\n', files={'Caddyfile': 'right\n'})
+    _ = converge(device)
+
+    _ = (directory / f'alice{nspawn.NSPAWN_SUFFIX}').write_text('right\n', encoding='utf-8')
+    _ = (directory / 'Caddyfile').write_text('left\n', encoding='utf-8')
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}
+
+
+def test_the_converger_reads_what_is_a_file_and_walks_past_what_is_not(device: _Device) -> None:
+    """It runs at boot, unattended, so it may not meet anything that waits.
+
+    The stamp is taken over the machine's directory, and a converger that read
+    whatever it found there would open a named pipe and block until a writer
+    that is not coming arrives — leaving a device that boots, starts nothing,
+    and reports nothing. Anything that is not a regular file is skipped, which
+    keeps it out of the stamp as well.
+    """
+    directory = declare(device, 'alice', files={'Caddyfile': 'one\n'})
+    _ = converge(device)
+
+    os.mkfifo(directory / 'nobody-writes-here')
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+
+
+def test_the_two_files_every_machine_has_are_read_by_kind_like_the_rest(device: _Device) -> None:
+    """Naming a file is not knowing what is at that path.
+
+    The settings file and the digest marker are the two the converger reaches
+    for by name rather than by walking, and a converger that read them because
+    it knew their names would wait forever on a named pipe at either — the same
+    hazard the walk is already guarded against, at the two paths most likely to
+    be mid-delivery.
+    """
+    directory = declare(device, 'alice')
+    marker = directory / f'{nspawn.ROOTFS}{nspawn.MARKER_SUFFIX}'
+    marker.unlink()
+    os.mkfifo(marker)
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}, 'a machine whose marker is unreadable still converges'
+
+
+def test_a_named_pipe_wearing_the_stamps_name_is_taken_away_rather_than_read(device: _Device) -> None:
+    """The stamp is the one name under a machine that is the script's own.
+
+    Nothing declares it and nothing but this script writes it, so whatever else
+    is at that path is debris. Reading around it would not be enough — the
+    write that follows a restart blocks on a named pipe exactly as the read
+    does — so it is removed, and the run ends with a stamp the next run can
+    compare against.
+    """
+    directory = declare(device, 'alice')
+    os.mkfifo(directory / nspawn.STAMP)
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}
+    assert (directory / nspawn.STAMP).is_file()
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set(), 'the stamp it wrote is the one it reads back'
+
+
+def test_a_directory_wearing_the_stamps_name_is_taken_away_too(device: _Device) -> None:
+    """Otherwise every write fails and the machine is restarted on every run.
+
+    A converger that removed only the kinds it could read past would leave this
+    one to bounce a machine forever — including, on a push, the machine
+    carrying the deployment's own session.
+    """
+    directory = declare(device, 'alice')
+    (directory / nspawn.STAMP).mkdir()
+
+    _ = converge(device)
+    status, commands = converge(device)
+
+    assert status == 0
+    assert (directory / nspawn.STAMP).is_file()
+    assert started(commands) == set()
+
+
+def test_a_link_wearing_the_stamps_name_is_taken_away_and_its_target_left_alone(device: _Device) -> None:
+    """A link is the kind that answers for a file that is somewhere else.
+
+    `-e` and `-f` both follow one, so a link is what would pass a kind test and
+    still send the write it guards to a path this script never named. It goes
+    the way the other debris goes, and what it pointed at is not this script's
+    to touch.
+    """
+    directory = declare(device, 'alice')
+    elsewhere = device.machines.parent / 'not-ours'
+    _ = elsewhere.write_text('somebody else\n', encoding='utf-8')
+    (directory / nspawn.STAMP).symlink_to(elsewhere)
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == {'alice'}
+    assert not (directory / nspawn.STAMP).is_symlink()
+    assert elsewhere.read_text(encoding='utf-8') == 'somebody else\n'
+
+
+def test_a_machine_is_a_settings_file_and_not_a_path_that_answers(device: _Device) -> None:
+    """What sits at the settings path decides whether there is a machine there.
+
+    Anything that is not a regular file there is a machine the push has not
+    finished with or never wrote, so it is not started and its unit is not
+    enabled — and the converger does not read it on the way to deciding that.
+    """
+    directory = declare(device, 'alice')
+    (directory / f'alice{nspawn.NSPAWN_SUFFIX}').unlink()
+    os.mkfifo(directory / f'alice{nspawn.NSPAWN_SUFFIX}')
+
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+    assert not (device.live / 'alice').exists()
+
+
+def test_a_healthy_device_gives_the_boot_log_nothing_to_read(device: _Device) -> None:
+    """Nobody watches this box, so what it prints is what a later reader has.
+
+    Every part of a machine's directory that is not a file — the tree, the
+    trees a push parks beside it, the state, the seeds — is walked past rather
+    than read, so a converged device is silent and anything on that stream is a
+    device that needs somebody.
+    """
+    _ = declare(device, 'alice', files={'Caddyfile': 'one\n'}, seeds={'AdGuardHome.yaml': 'listen\n'})
+    (device.machines / 'alice' / f'{nspawn.ROOTFS}{SUPERSEDED_SUFFIX}').mkdir()
+
+    status, _ = converge(device)
+
+    assert status == 0
+    assert device.complaints.read_text(encoding='utf-8') == ''
+
+    status, _ = converge(device)
+
+    assert status == 0
+    assert device.complaints.read_text(encoding='utf-8') == ''
+
+
+@pytest.mark.skipif(
+    not Path('/usr/lib/locale/en_US.utf8').exists() and not Path('/usr/lib/locale/locale-archive').exists(),
+    reason='no second locale on this box to collate against',
+)
+def test_the_stamp_does_not_move_with_the_locale_the_script_was_started_in(device: _Device) -> None:
+    """The device runs this from systemd at boot and over a session at push time.
+
+    Those two environments carry different locales, and collation is what
+    decides the order a glob comes back in: `_beta` sorts after `Caddyfile` in
+    one and before it in the other. A stamp that moved with it would bounce
+    every machine on the device on each alternation between the two.
+    """
+    _ = declare(device, 'alice', files={'Caddyfile': 'one\n', '_beta': 'two\n'})
+    _ = converge(device, environment={'LC_ALL': 'C'})
+
+    status, commands = converge(device, environment={'LC_ALL': 'en_US.utf8'})
+
+    assert status == 0
+    assert started(commands) == set()
+
+
+def test_a_stamp_ignores_a_write_a_push_has_in_flight_or_abandoned(device: _Device) -> None:
+    """A push writes to a staged name and renames; the machines are pushed in parallel.
+
+    So one machine's converger hook runs while another machine's file is
+    part-written, and a run that counted the staged name would stamp a machine
+    differently depending on when it was taken — restarting services for a
+    neighbour's write. The same file is what a push that died mid-write leaves
+    behind, and it must not become a reason to bounce anything either.
+    """
+    directory = declare(device, 'alice', files={'Caddyfile': 'one\n'})
+    _ = converge(device)
+
+    _ = (directory / f'Caddyfile{STAGING_SUFFIX}').write_text('half\n', encoding='utf-8')
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+
+
+def test_a_machine_that_has_never_run_is_given_what_its_initial_state_holds(device: _Device) -> None:
+    """The seed lands where the declaration put it, and nothing carries a mapping.
+
+    What the converger copies is the shape of the machine's initial-state
+    directory onto its state directory, so a nested path is delivered as one —
+    and the state directory exists either way, because it is a bind source and
+    nspawn refuses to start a machine whose bind source is missing.
+    """
+    directory = declare(device, 'alice', seeds={'AdGuardHome.yaml': 'listen\n', 'nested/other.yaml': 'deep\n'})
+    _ = declare(device, 'bob')
+
+    status, _ = converge(device)
+
+    assert status == 0
+    assert (directory / nspawn.STATE / 'AdGuardHome.yaml').read_text(encoding='utf-8') == 'listen\n'
+    assert (directory / nspawn.STATE / 'nested' / 'other.yaml').read_text(encoding='utf-8') == 'deep\n'
+    assert (device.machines / 'bob' / nspawn.STATE).is_dir(), 'a machine with no seed still gets the bind source'
+
+
+def test_a_machine_that_has_run_keeps_its_own_state_and_is_not_bounced_for_the_seed(device: _Device) -> None:
+    """The software behind it rewrites those files the moment it accepts a change.
+
+    Emptiness of the state directory is the test rather than the absence of a
+    file: a resolver that took a rewrite through its API owns the file it
+    rewrote. And the seed is out of the content stamp by where it sits, so
+    re-declaring one — a listen address that moved, a template that changed —
+    is not a reason to restart an instance that has already made it its own.
+    """
+    directory = declare(device, 'alice', seeds={'AdGuardHome.yaml': 'listen\n'})
+    _ = converge(device)
+    _ = (directory / nspawn.STATE / 'AdGuardHome.yaml').write_text('rewritten by the instance\n', encoding='utf-8')
+
+    _ = (directory / nspawn.INITIAL_STATE / 'AdGuardHome.yaml').write_text('listen elsewhere\n', encoding='utf-8')
+    status, commands = converge(device)
+
+    assert status == 0
+    assert started(commands) == set()
+    assert (directory / nspawn.STATE / 'AdGuardHome.yaml').read_text(encoding='utf-8') == (
+        'rewritten by the instance\n'
     )
 
 
-def test_a_machine_is_given_its_initial_state_only_while_its_state_is_empty() -> None:
-    """The software behind it rewrites the file the moment it accepts a change.
+def test_something_at_the_live_name_that_is_not_this_programs_link_is_refused(device: _Device) -> None:
+    """A machine of that name already exists on the box, and it is not ours.
 
-    So the initial state is delivered under a name the software does not read,
-    and it is copied in only when the machine has never run. Emptiness is the
-    test rather than the absence of the file: a machine that has run once owns
-    everything in there.
+    Replacing it would take a container away from whoever put it there, so the
+    converger says so and fails the run instead — and the failure reaches the
+    apply, because the exit status is carried out to the hook.
     """
-    script = nspawn.machines_script(MACHINES)
+    _ = declare(device, 'alice')
+    device.live.mkdir()
+    (device.live / 'alice').mkdir()
 
-    assert GIVEN_STATE.initial_state is not None
-    assert GIVEN_STATE.initial_state.source in script
-    assert GIVEN_STATE.initial_state.destination in script
-    assert f'[ -z "$(ls -A "$MACHINES/$1/{nspawn.STATE}" 2>/dev/null)" ] || return 0' in script
-    assert PLAIN.name not in script.split('install_initial_state() {')[1].split('}')[0]
+    status, commands = converge(device)
+
+    assert status == 1
+    assert started(commands) == set()
 
 
-def test_the_converger_converges_a_device_that_has_nothing_on_it() -> None:
-    """This is the firmware-update case, and the first-push case.
+def test_a_live_link_that_points_outside_the_machines_root_is_not_retired(device: _Device) -> None:
+    """Anything under the live directory that is not ours stays where it is.
 
-    The script is written before the trees it describes, so a machine whose
-    root filesystem has not landed yet is skipped rather than fatal — and a
-    machine no longer declared is disabled and unlinked, which is what keeps
-    the device from accumulating every service it ever ran.
+    The retirement pass is the one place this script deletes something, so what
+    it may consider is bounded by where the link points rather than by what it
+    is called.
     """
-    script = nspawn.machines_script(MACHINES)
+    device.live.mkdir()
+    elsewhere = device.live.parent / 'elsewhere'
+    elsewhere.mkdir()
+    (device.live / 'stranger').symlink_to(elsewhere)
 
-    assert '[ -d "$root" ] || continue' in script
-    # Both halves: a machine started without the settings 30 mirrors would come
-    # up on the template unit's defaults, which for a bridged machine is an
-    # interface attached to nothing — and the gate would then pass on it.
-    assert f'[ -e "$MACHINES/$machine/$machine{nspawn.NSPAWN_SUFFIX}" ] || continue' in script
-    assert 'systemctl disable --now' in script
-    assert 'machines: retiring $machine' in script
-    # Only links into the machines root are candidates for retirement: anything
-    # else under the live directory is somebody else's container.
-    assert 'case "$(readlink "$link")" in' in script
+    status, commands = converge(device)
+
+    assert status == 0
+    assert (device.live / 'stranger').is_symlink()
+    assert not [line for line in commands if line.startswith('disable')]
 
 
-def test_a_machine_that_failed_to_start_fails_the_script() -> None:
+def test_a_machine_that_failed_to_start_fails_the_run_and_leaves_its_stamp_unwritten(device: _Device) -> None:
     """The converger is a hook as well as a boot script, and a hook reports.
 
     A machine that could not be started is the one thing this script learns
-    that nothing else on the device would report, so its exit status carries
-    it out to the apply.
+    that nothing else on the device would report. Its stamp stays unwritten, so
+    the next run has the work to do again rather than believing it done — and
+    the machines beside it are converged regardless, because one broken service
+    is not a reason to leave the device half configured.
     """
-    script = nspawn.machines_script(MACHINES)
+    broken = declare(device, 'alice')
+    _ = declare(device, 'bob')
+    _ = (device.failing / nspawn.machine_unit('alice')).write_text('', encoding='utf-8')
 
-    assert 'failed=1' in script
-    assert script.rstrip().endswith('exit "$failed"')
+    status, commands = converge(device)
+
+    assert status == 1
+    assert started(commands) == {'alice', 'bob'}
+    assert not (broken / nspawn.STAMP).exists()
+    assert (device.machines / 'bob' / nspawn.STAMP).exists()
 
 
 def test_the_settings_mirror_removes_what_has_no_source() -> None:
@@ -594,8 +1136,9 @@ def test_no_machine_is_declared_a_unit_of_its_own(monitor: Recorder) -> None:
 def test_the_runtime_declares_no_machine_of_its_own(monitor: Recorder) -> None:
     """The framework is not a workload: it fills nothing under a machine.
 
-    What a machine holds is the workload's, which is why the runtime is handed
-    a set of machines rather than the components that own them.
+    What a machine holds is the workload's, and the runtime is told nothing
+    about which workloads there are — so a device running one service and a
+    device running five get the same files from this component.
     """
     written = [
         str(declaration.inputs['path'])
@@ -606,19 +1149,6 @@ def test_the_runtime_declares_no_machine_of_its_own(monitor: Recorder) -> None:
     assert written == []
 
 
-def test_the_declared_machines_are_the_ones_the_runtime_was_given(monitor: Recorder) -> None:
-    """The converger acts on the set it was handed and invents nothing.
-
-    A machine in the script that no component declares is a machine the device
-    would try to start and never find a tree for; one missing from it is a
-    machine nothing ever starts.
-    """
-    script = monitor.inputs_of(f'{MECHANISM}-on-boot-{nspawn.MACHINES_SCRIPT}')['content']
-    declared = next(line for line in str(script).splitlines() if line.startswith('DECLARED='))
-
-    assert set(declared.removeprefix('DECLARED="').rstrip('"').split()) == {machine.name for machine in MACHINES}
-
-
 def test_the_settings_converger_is_declared_before_the_machine_converger(monitor: Recorder) -> None:
     """Numeric order in the boot directory is what expresses the dependency.
 
@@ -627,19 +1157,6 @@ def test_the_settings_converger_is_declared_before_the_machine_converger(monitor
     """
     assert nspawn.NSPAWN_UNITS_SCRIPT < nspawn.MACHINES_SCRIPT
     assert monitor.inputs_of(f'{MECHANISM}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}')['mode'] == persistence.SCRIPT_MODE
-
-
-@pytest.mark.asyncio
-async def test_a_machine_named_by_nobody_is_not_declared() -> None:
-    """The runtime with no machines is a device with a framework and no workloads.
-
-    That is a legitimate state — the first push of a device delivers the
-    framework before anything runs on it — so it renders rather than refuses.
-    """
-    script = nspawn.machines_script(())
-
-    assert 'DECLARED=""' in script
-    assert 'no machine on this device owns its own configuration' in script
 
 
 def test_the_pieces_of_one_machine_are_all_under_its_own_directory() -> None:
@@ -655,6 +1172,7 @@ def test_the_pieces_of_one_machine_are_all_under_its_own_directory() -> None:
     assert nspawn.nspawn_path('plain') == f'{directory}/plain.nspawn'
     assert nspawn.stamp_path('plain') == f'{directory}/stamp'
     assert marker_path(nspawn.rootfs_path('plain')) == f'{directory}/rootfs.digest'
+    assert nspawn.initial_state_path('plain', 'AdGuardHome.yaml') == f'{directory}/initial-state/AdGuardHome.yaml'
 
 
 @pytest.mark.asyncio

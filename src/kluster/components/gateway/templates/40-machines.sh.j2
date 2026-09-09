@@ -1,17 +1,23 @@
 #!/bin/bash
 # Managed by the {{ cluster }} physical stack. Local edits are overwritten.
 #
-# Converge every declared machine under {{ machines_root }}: link the root
-# filesystem where systemd resolves a machine name, make sure its state
-# directory exists, install an initial state into one that has never held any,
-# and (re)start a machine whose definition moved. Runs at boot, when nothing
-# else is present, and again as the post-apply hook of every file a machine is
-# made of -- so the recovery path is the path every push exercises.
+# Converge every machine under {{ machines_root }}: link the root filesystem
+# where systemd resolves a machine name, make sure its state directory exists,
+# install an initial state into one that has never held any, and (re)start a
+# machine whose definition moved. Runs at boot, when nothing else is present,
+# and again as the post-apply hook of every file a machine is made of -- so the
+# recovery path is the path every push exercises.
 #
-# The machine set below is unordered. Which machine is actuated when is a
-# push-time constraint -- the one carrying the deployment's own session goes
-# last -- and it is expressed in the deployment's dependency graph, where the
-# session is. At boot there is no session to sever and nothing to order.
+# **This script carries no list of machines.** What machines exist is what the
+# push left on the disk, so the script and the declaration cannot disagree, and
+# a machine reaches the device in one act -- its files -- rather than in two
+# that may arrive out of order. Every per-machine fact below is derived the
+# same way, from that machine's own directory.
+#
+# The set it finds is unordered. Which machine is actuated when is a push-time
+# constraint -- the one carrying the deployment's own session goes last -- and
+# it is expressed in the deployment's dependency graph, where the session is.
+# At boot there is no session to sever and nothing to order.
 #
 # systemctl on systemd's own template unit rather than machinectl: the two
 # produce the identical machines.target.wants symlink and unit start, and
@@ -21,43 +27,89 @@
 
 set -u
 
+# The stamp is a checksum over a sequence of files, so the order a glob comes
+# back in is load-bearing. Collation is what decides that order, and this script
+# runs both from systemd at boot and over a session whose locale is the
+# operator's -- two environments that would otherwise stamp one unchanged
+# machine two different ways and bounce it on every alternation.
+export LC_ALL=C
+
 MACHINES={{ machines_root }}
 LIVE={{ live_machines_dir }}
-DECLARED="{{ machines | map(attribute='name') | join(' ') }}"
 
-# The stamped set: every file whose content defines a machine. The content
-# stamp is a checksum over exactly these, which is how a restart is decided
-# without asking the machine anything about itself.
-stamped_set() {
-    case "$1" in
-{%- for machine in machines %}
-        {{ machine.name }}) stamped="{{ machine.stamped | join(' ') }}" ;;
-{%- endfor %}
-        *) stamped="" ;;
-    esac
-    echo "$stamped"
+# What makes a directory under $MACHINES a machine is its settings file, named
+# for the machine. That is the same fact 30-nspawn-units.sh mirrors on, so the
+# two convergers cannot disagree about what exists, and it is the narrowest
+# thing that can be true of a directory the push has finished with: a tree with
+# no settings beside it is either a machine whose first push has not landed yet
+# or the leftovers of one that was removed, and neither is something to start.
+#
+# A regular file and not merely something at that path: everything this script
+# reads it decides by kind (`stamp_read`), and starting a machine whose
+# settings are a directory or a device node would hand systemd-nspawn a
+# configuration nobody wrote.
+declared() {
+    [ -f "$MACHINES/$1/$1{{ nspawn_suffix }}" ]
 }
 
-# Place a machine's own configuration into a state directory that has never
-# held one. Emptiness is the test rather than the absence of the file: a
-# machine that has run once owns everything in there, including the file it
-# rewrote when it accepted a change through its own API.
+# The contents of the stamped set, in a fixed order: the settings file, the
+# digest marker naming the published tree the root filesystem came from, and
+# then every other regular file the machine's directory holds -- which is what
+# that machine mounts. Emitted as one byte stream, because that stream is what
+# the checksum is taken over and a name that changed would otherwise not show.
+#
+# What it leaves out, and why each one:
+#   - the stamp, which is what this is compared against;
+#   - a staged write ({{ staging_suffix }}), which a push has in flight while
+#     it writes and leaves behind when it dies mid-write. Files of *other*
+#     machines are written while this runs, so a stamp that counted one would
+#     depend on when it was taken;
+#   - everything that is not a regular file: the tree itself, the trees a push
+#     and a rollback park beside it, the writable state, and the initial state.
+#     That last one is deliberate rather than incidental -- a machine that has
+#     run once owns its state, and a change to what it was seeded with is never
+#     a reason to bounce it.
+#
+# Every read this script makes goes through this one function, the two files
+# named outright and the stamp itself as much as the ones a glob finds. The
+# kind is what decides and never the name, because the kind that must not be
+# read is the one nothing here would create: `cat` on a named pipe waits for a
+# writer that is not coming, and this script runs at boot with nobody watching
+# it.
+stamp_read() {
+    [ -f "$1" ] || return 0
+    cat "$1" 2>/dev/null
+}
+
+stamped_content() {
+    md=$MACHINES/$1
+    stamp_read "$md/$1{{ nspawn_suffix }}"
+    stamp_read "$md/{{ rootfs }}{{ marker_suffix }}"
+    for mf in "$md"/*; do
+        case "${mf##*/}" in
+            "$1{{ nspawn_suffix }}" | {{ rootfs }}{{ marker_suffix }} | {{ stamp }} | *{{ staging_suffix }}) continue ;;
+        esac
+        stamp_read "$mf"
+    done
+}
+
+# Place a machine's initial state into a state directory that has never held
+# any. What lands where is the shape of {{ initial_state }}/ itself, so a
+# machine is seeded with whatever the declaration put in there and this script
+# holds no mapping that could disagree with it. The directory is also what
+# keeps an initial state out of the stamped set above and out of reach of the
+# names the machine mounts.
+#
+# Emptiness of the state directory is the test rather than the absence of a
+# file: a machine that has run once owns everything in there, including the
+# file it rewrote when it accepted a change through its own API.
 install_initial_state() {
-    source=""
-    destination=""
-    case "$1" in
-{%- for machine in machines if machine.initial_state %}
-        {{ machine.name }}) source={{ machine.initial_state.source }}; destination={{ machine.initial_state.destination }} ;;
-{%- else %}
-        # no machine on this device owns its own configuration
-{%- endfor %}
-    esac
-    [ -n "$destination" ] || return 0
-    [ -e "$source" ] || return 0
-    [ -z "$(ls -A "$MACHINES/$1/{{ state }}" 2>/dev/null)" ] || return 0
+    seed=$MACHINES/$1/{{ initial_state }}
+    target=$MACHINES/$1/{{ state }}
+    [ -d "$seed" ] || return 0
+    [ -z "$(ls -A "$target" 2>/dev/null)" ] || return 0
     echo "machines: initial state for $1"
-    mkdir -p "$(dirname "$destination")"
-    cp "$source" "$destination"
+    cp -R "$seed/." "$target/"
 }
 
 mkdir -p "$LIVE"
@@ -65,7 +117,10 @@ mkdir -p "$LIVE"
 systemctl is-enabled machines.target >/dev/null 2>&1 || systemctl enable machines.target
 
 # Retire what is no longer declared. Only links into the machines root are
-# candidates: anything else under $LIVE is somebody else's container.
+# candidates: anything else under $LIVE is somebody else's container. A machine
+# is retired when its settings file goes, which is the same delete that takes
+# it out of /etc/systemd/nspawn -- so a leftover tree cannot keep a removed
+# machine running, and cannot bring one back on the next boot either.
 for link in "$LIVE"/*; do
     [ -L "$link" ] || continue
     case "$(readlink "$link")" in
@@ -73,27 +128,28 @@ for link in "$LIVE"/*; do
         *) continue ;;
     esac
     machine=$(basename "$link")
-    case " $DECLARED " in
-        *" $machine "*) continue ;;
-    esac
+    declared "$machine" && continue
     echo "machines: retiring $machine"
     systemctl disable --now "{{ unit_template }}$machine.service" || true
     rm -f "$link"
 done
 
 failed=0
-for machine in $DECLARED; do
-    root=$MACHINES/$machine/{{ rootfs }}
-    # What is declared *and* has landed, in both halves: a push writes this
-    # script before the files it describes, so a machine with no root
-    # filesystem, or none of the settings 30-nspawn-units.sh has just mirrored,
+for dir in "$MACHINES"/*/; do
+    [ -d "$dir" ] || continue
+    machine=${dir%/}
+    machine=${machine##*/}
+
+    # What has landed, in both halves: a machine with no settings is not a
+    # machine (`declared`), and one whose root filesystem has not arrived yet
     # is one this run has nothing to do about -- not an error, and not a reason
     # to leave the rest unconverged. Starting a machine whose settings are
     # missing would be worse than skipping it: nspawn would boot it with the
     # template unit's defaults, which for a bridged machine is a virtual
     # ethernet pair attached to nothing.
+    declared "$machine" || continue
+    root=${dir}{{ rootfs }}
     [ -d "$root" ] || continue
-    [ -e "$MACHINES/$machine/$machine{{ nspawn_suffix }}" ] || continue
 
     link=$LIVE/$machine
     if [ -e "$link" ] && [ ! -L "$link" ]; then
@@ -114,12 +170,29 @@ for machine in $DECLARED; do
     # machine whose bind source is missing -- so the directory exists for every
     # machine, whether or not anything is ever placed in it. A machine that has
     # never run has nothing to create it otherwise.
-    mkdir -p "$MACHINES/$machine/{{ state }}"
+    mkdir -p "${dir}{{ state }}"
     install_initial_state "$machine"
 
-    stamp=$MACHINES/$machine/{{ stamp }}
-    want=$(cat $(stamped_set "$machine") 2>/dev/null | cksum)
-    have=$(cat "$stamp" 2>/dev/null || echo none)
+    # Unlike everything else under a machine, this name is the script's own:
+    # nothing declares it and nothing but this line and the write below puts
+    # anything there. So whatever else is wearing it is debris and is taken
+    # away rather than read around -- a read guard alone would leave the write
+    # to block on the same named pipe, and a directory there would fail every
+    # write and restart the machine on every run forever.
+    #
+    # A link is asked about first and separately, the way every write in the
+    # push's own provider asks: `-e` and `-f` follow one, so a link is the one
+    # kind that answers for something that is not at this path at all, and the
+    # write would land wherever it pointed.
+    stamp=${dir}{{ stamp }}
+    if [ -L "$stamp" ] || { [ -e "$stamp" ] && [ ! -f "$stamp" ]; }; then
+        rm -rf "$stamp"
+    fi
+    want=$(stamped_content "$machine" | cksum)
+    # No stamp reads as nothing, which no checksum equals -- so a machine whose
+    # stamp has never been written, or whose stamp was just removed as debris,
+    # is a machine to start.
+    have=$(stamp_read "$stamp")
     if [ "$want" = "$have" ] && systemctl is-active --quiet "$unit"; then
         continue
     fi

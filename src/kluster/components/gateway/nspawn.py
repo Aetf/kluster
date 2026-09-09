@@ -15,10 +15,21 @@ machines/<name>/
     rootfs/                 the tree systemd-nspawn boots, unpacked from the pin
     rootfs.digest           which published artifact that tree came from
     state/                  the writable state, bind-mounted into the container
+    initial-state/          what a state directory that has never held any is given
     <name>.nspawn           the machine's settings, mirrored into /etc/systemd/nspawn
     stamp                   what the converger last acted on
-    <other files>           whatever the machine mounts or is given as initial state
+    <other files>           whatever the machine mounts
 ```
+
+**That directory is the whole of what the runtime knows about a machine**, and
+the set of machines is the set of such directories that hold a settings file.
+Neither converger is given a list: a list would be a second statement of what
+the `Container` declarations already say, delivered separately from the files
+it describes, and the two would disagree for exactly as long as it took the
+push to deliver both. So a machine reaches the device in one act, and what a
+leftover directory can do is bounded by what the layout says about it — a tree
+with no settings beside it is not a machine, which is what keeps a removed
+service from coming back on the next boot.
 
 Two scripts converge it, both delivered through the persistence layer because
 both manipulate systemd's own configuration:
@@ -32,7 +43,9 @@ both manipulate systemd's own configuration:
     never held one, and restarts a machine when something that defines it
     changed. It runs at boot with nothing else present, and again as the
     post-apply hook of every file a machine is made of, so the recovery path is
-    the path every apply exercises.
+    the path every apply exercises. What it acts on it reads off the disk:
+    which machines exist, what each one's content stamp covers, and what a
+    machine that has never run is seeded with.
 
 **The machine set is unordered.** Which machine is actuated when is a push-time
 constraint — the machine carrying the deployment's own session must go last —
@@ -68,7 +81,6 @@ from __future__ import annotations
 import fnmatch
 import shlex
 import string
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, final
 
@@ -79,12 +91,14 @@ from kluster.components.gateway import persistence
 from kluster.components.gateway.persistence import DevicePersistence
 from kluster.lib import templates
 from kluster.providers.device_files.provider import SUPERSEDED_SUFFIX, DeviceDirectory, DeviceFile, marker_path
+from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
 
 __all__ = (
     'LIVE_MACHINES_DIR',
     'LIVE_NSPAWN_DIR',
     'MACHINES',
+    'INITIAL_STATE',
     'MACHINES_SCRIPT',
     'MACHINE_DROPIN',
     'MARKER_SUFFIX',
@@ -102,9 +116,8 @@ __all__ = (
     'UNIT_TEMPLATE',
     'WATCHDOG_UNIT',
     'WATCHDOG_WORKER',
-    'Machine',
     'NspawnRuntime',
-    'Placement',
+    'initial_state_path',
     'interface_device_unit',
     'machine_dropin',
     'machine_file',
@@ -200,12 +213,22 @@ STATE = 'state'
 STAMP = 'stamp'
 NSPAWN_SUFFIX = '.nspawn'
 
+#: The directory a machine's initial state is delivered into, and the reason it
+#: is a directory rather than a file beside the ones the machine mounts. Two
+#: things follow from the separation, and the converger needs both: what lands
+#: where inside the state directory is the shape of this one, so no mapping has
+#: to be carried alongside it; and everything under it is out of the content
+#: stamp by construction, which is what a machine that has already made those
+#: files its own requires — the stamp covers the machine's *directory*, and a
+#: seed left in there would be one more file to bounce a running service for.
+INITIAL_STATE = 'initial-state'
+
 #: Those same names as the glob patterns a machine's own file is refused by.
 #: One list, so what `machine_file` refuses and what its refusal names cannot
 #: disagree. `rootfs*` covers the tree and the digest beside it; `*.nspawn` is
 #: every settings name and not only this machine's, because the mirror keys the
 #: live directory by machine name.
-RESERVED_NAMES = (STATE, STAMP, f'{ROOTFS}*', f'*{NSPAWN_SUFFIX}')
+RESERVED_NAMES = (STATE, STAMP, INITIAL_STATE, f'{ROOTFS}*', f'*{NSPAWN_SUFFIX}')
 
 #: What the push appends to a tree's path for the marker naming the pin that
 #: tree came from. Taken from the provider that writes it rather than restated,
@@ -244,6 +267,17 @@ def stamp_path(machine: str) -> str:
     return f'{machine_path(machine)}/{STAMP}'
 
 
+def initial_state_path(machine: str, into: str) -> str:
+    """Where a file the machine is seeded with is delivered, named for where it lands.
+
+    `into` is the path inside the machine's state directory, and it is also the
+    path inside `initial-state/`: the converger copies the one tree onto the
+    other, so the declaration decides where a seed ends up and no mapping
+    travels beside the file to be disagreed with.
+    """
+    return f'{machine_path(machine)}/{INITIAL_STATE}/{into}'
+
+
 def machine_unit(machine: str) -> str:
     """The unit that runs the machine: systemd's template, instanced by name."""
     return f'{UNIT_TEMPLATE}{machine}.service'
@@ -270,8 +304,28 @@ def machine_file(machine: str, name: str) -> str:
     settings-file name is refused and not just this machine's, because the
     mirror keys the live directory by machine name — a second one here would be
     installed under a name that names another machine, or removed as stale in
-    the same run that installed it.
+    the same run that installed it. `initial-state` is refused for the sharper
+    reason: it is the one name in there the converger reads as a *kind* rather
+    than as content, so a mounted file wearing it would be copied into a state
+    directory that has never held any.
+
+    **A leading dot is refused too, and its failure is the quiet one.** The
+    content stamp covers the machine's directory as the shell globs it, and a
+    glob skips leading-dot names — so such a file would be delivered, bound
+    into the container, and never once restart the machine that reads it. The
+    refusal belongs here rather than in the script because of where each one
+    fails: a name refused at declaration fails loudly at preview, before
+    anything reaches the device, while a script taught to see the file would
+    leave the mistake to surface as a service that quietly does not restart. A
+    machine's own files are also the one place a caller can be held to a name
+    at all.
     """
+    if name.startswith('.'):
+        raise ValueError(
+            f'{name!r} would sit in {machine_path(machine)} where the content stamp cannot see it: '
+            f'the converger walks that directory with a glob, which skips leading-dot names, so the file '
+            f'would be delivered and would never restart the machine that reads it'
+        )
     if any(fnmatch.fnmatchcase(name, pattern) for pattern in RESERVED_NAMES):
         raise ValueError(
             f'{name!r} is a name the nspawn runtime keeps under {machine_path(machine)}: '
@@ -332,38 +386,6 @@ def machine_hook(machine: str, path: str, *, rollback: bool) -> str:
 
 
 # ---------------------------------------------------------------------------
-# What the runtime converges
-# ---------------------------------------------------------------------------
-
-
-@final
-@dataclass(frozen=True)
-class Placement:
-    """Where a machine's initial state is delivered from, and where it lands."""
-
-    source: str
-    destination: str
-
-
-@final
-@dataclass(frozen=True)
-class Machine:
-    """One machine as the runtime deals with it, whatever image it runs.
-
-    The runtime knows a machine by its name, by the paths whose contents decide
-    that it must be restarted, and by the initial state it is given where it
-    has one. What the machine *is* — its image, its addressing, what it mounts — is
-    the workload's business and never reaches here.
-    """
-
-    name: str
-    #: The paths the machine's content stamp covers. A change to any of them is
-    #: what makes `40-machines.sh` restart it, and nothing else does.
-    stamped: tuple[str, ...]
-    initial_state: Placement | None
-
-
-# ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
 
@@ -382,7 +404,16 @@ class _NspawnUnitsParams:
 @final
 @dataclass(frozen=True)
 class _MachinesParams:
-    """What `40-machines.sh.j2` reads, with the machines as an unordered set."""
+    """What `40-machines.sh.j2` reads: the layout, and the names it reads it by.
+
+    Every one of these is a piece of `machines/<name>/`, because the layout is
+    the whole of what the converger is told — which machines exist and what
+    each one is made of are read off the device rather than rendered in. The
+    two suffixes belong to the push rather than to the layout and are here for
+    the same reason the rollback's are (`_RollbackParams`): the content stamp
+    has to skip what a write leaves behind while it is in flight, and a suffix
+    that disagreed with the one the provider writes would skip nothing.
+    """
 
     cluster: str
     machines_root: str
@@ -391,8 +422,10 @@ class _MachinesParams:
     rootfs: str
     state: str
     stamp: str
+    initial_state: str
     nspawn_suffix: str
-    machines: tuple[Machine, ...]
+    marker_suffix: str
+    staging_suffix: str
 
 
 @final
@@ -478,13 +511,23 @@ def nspawn_units_script() -> str:
     )
 
 
-def machines_script(machines: Sequence[Machine]) -> str:
+def machines_script() -> str:
     """The boot-chain script that links, stamps and starts the machines.
 
-    The set is sorted here, so the file the device holds is a function of which
-    machines are declared rather than of the order a caller listed them in.
-    That the order carries no meaning is the point: the one ordering constraint
-    there is belongs to the push, which has a dependency graph to say it in.
+    It takes no machines, and the file it renders names none: what exists is
+    the set of directories under the custom root that hold a settings file, and
+    every per-machine fact the script needs — what the content stamp covers,
+    what a machine that has never run is seeded with — is a shape of that
+    machine's own directory. A rendered list would be the same statement the
+    `Container` declarations already make, delivered as a separate file that
+    lands before or after the files it describes, and a device that held the
+    old list and the new files would act on neither.
+
+    What that costs is that a directory is authority, so the layout has to make
+    a half-delivered or abandoned one harmless. It does: a machine is its
+    settings file, which is the last thing a delete takes away and one of the
+    first a push puts down, and a tree without one is skipped rather than
+    started.
     """
     return templates.render(
         persistence.TEMPLATE_PACKAGE,
@@ -497,8 +540,10 @@ def machines_script(machines: Sequence[Machine]) -> str:
             rootfs=ROOTFS,
             state=STATE,
             stamp=STAMP,
+            initial_state=INITIAL_STATE,
             nspawn_suffix=NSPAWN_SUFFIX,
-            machines=tuple(sorted(machines, key=lambda machine: machine.name)),
+            marker_suffix=MARKER_SUFFIX,
+            staging_suffix=STAGING_SUFFIX,
         ),
     )
 
@@ -555,16 +600,16 @@ class NspawnRuntime(Component):
         name: str,
         *,
         mechanism: DevicePersistence,
-        machines: Sequence[Machine],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
-        """Declare the runtime, with `machines` as the set `40-machines.sh` converges.
+        """Declare the runtime, which knows of no machine in particular.
 
-        The set arrives as data rather than as the workload components, which is
-        what keeps the two sides acyclic: the gateway builds a `Machine` and a
-        `Container` from the same declaration, so a stamped set cannot name a
-        file no resource declares, and neither component has to exist before the
-        other.
+        There is no machine set here, and there is nothing to keep one in step
+        with: what machines exist is what `Container` declarations put on the
+        disk, and both convergers read that. So the runtime is declarable before
+        any service is, a service is added or removed by declaring or not
+        declaring it, and no file this component writes has to be pushed again
+        when the roll of services changes.
         """
         super().__init__(name, opts=opts)
         self._packages: DeviceFile = mechanism.packages
@@ -579,9 +624,7 @@ class NspawnRuntime(Component):
         self.nspawn_units: DeviceFile = mechanism.on_boot_script(
             NSPAWN_UNITS_SCRIPT, nspawn_units_script(), opts=self.child_opts()
         )
-        self.machines: DeviceFile = mechanism.on_boot_script(
-            MACHINES_SCRIPT, machines_script(machines), opts=self.child_opts()
-        )
+        self.machines: DeviceFile = mechanism.on_boot_script(MACHINES_SCRIPT, machines_script(), opts=self.child_opts())
         # The rollback the health gate takes when a machine does not come up. It
         # is a converger of nothing, so it has no hook of its own; what it needs
         # is to be on the device before a hook can reach for it.
