@@ -156,18 +156,23 @@ def test_the_device_keeps_accepting_the_key_this_program_dials_with(monitor: Con
 def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: Controller) -> None:
     """A fifth service is a change to this component's signature.
 
-    The set the runtime converges and the set of components that fill those
-    machines are the same set, taken from the same declarations, so neither can
-    name a machine the other does not.
+    The converger is given no roll of machines, so the machines this device has
+    are the directories under the machines root that this component fills —
+    which makes the claim one about paths rather than about a line in a script.
+    Both directions matter: a census entry with no directory is a service the
+    device never runs, and a directory under there with no census entry behind
+    it is a machine the converger would find and start.
     """
+    root = f'{nspawn.MACHINES}/'
     trees = {str(image.inputs['root']) for image in monitor.of_type('pulumi-python:dynamic/device:Artifact')}  # noqa: S105 -- a type, not a credential
-    declared = str(monitor.inputs_of(f'{NAME}-persistence-on-boot-{nspawn.MACHINES_SCRIPT}')['content'])
-    machines = next(line for line in declared.splitlines() if line.startswith('DECLARED='))
+    written = {
+        str(declaration.inputs['path']).removeprefix(root).split('/')[0]
+        for declaration in monitor.of_type('pulumi-python:dynamic/device:File')
+        if str(declaration.inputs.get('path', '')).startswith(root)
+    }
 
     assert trees == {nspawn.rootfs_path(service.name) for service in conventions.gateway.SERVICES}
-    assert set(machines.removeprefix('DECLARED="').rstrip('"').split()) == {
-        service.name for service in conventions.gateway.SERVICES
-    }
+    assert written == {service.name for service in conventions.gateway.SERVICES}
 
 
 def test_the_type_token_the_cutover_targets_by_is_the_one_the_runbook_spells() -> None:

@@ -26,7 +26,7 @@ from kluster.components.gateway import container, nspawn, persistence
 from kluster.components.gateway.container import Container
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
-from kluster.providers.device_files.provider import Connection, marker_path
+from kluster.providers.device_files.provider import Connection
 
 NAME = 'kluster'
 HOST = str(conventions.overlay.UDM)
@@ -93,11 +93,7 @@ async def containers(monitor: Recorder) -> tuple[Container, ...]:
         mechanism = DevicePersistence(
             f'{NAME}-persistence', connection=connection, packages=NspawnRuntime.REQUIRED_PACKAGES
         )
-        runtime = NspawnRuntime(
-            f'{NAME}-nspawn',
-            mechanism=mechanism,
-            machines=tuple(container.machine(declaration) for declaration in declarations()),
-        )
+        runtime = NspawnRuntime(f'{NAME}-nspawn', mechanism=mechanism)
         built = tuple(
             Container(
                 f'{NAME}-{declaration.service.name}',
@@ -616,90 +612,71 @@ def test_the_names_typed_by_hand_redirect_to_the_name_that_has_a_certificate() -
 ##
 
 
-def test_a_machine_is_restarted_only_when_something_it_reads_changed() -> None:
-    """Otherwise every deployment would restart the machine carrying the session.
+def machine_files(monitor: Recorder, service: str) -> set[str]:
+    """Every path this component declares inside one machine's directory.
 
-    The content stamp is a checksum over the machine's stamped set — its
-    settings, the digest marker beside its root filesystem tree, and every file
-    bound into the container — and the converger compares before acting. The
-    tree is represented by its marker rather than by itself: walking a root
-    filesystem to learn it has not changed would cost more than the restart it
-    avoids.
+    Read off what was registered rather than off the declaration that produced
+    it: what reaches the device is the resources, and the converger acts on the
+    directory those resources fill.
     """
-    caddy = declared_for('caddy')
-    script = nspawn.machines_script([container.machine(declaration) for declaration in declarations()])
-
-    assert caddy.stamped_set == (
-        nspawn.nspawn_path('caddy'),
-        marker_path(nspawn.rootfs_path('caddy')),
-        *(container.mounted_path('caddy', mounted) for mounted in caddy.mounted_files),
-    )
-    for path in caddy.stamped_set:
-        assert path in script
-
-
-def stamped_arms(script: str) -> dict[str, set[str]]:
-    """What the rendered converger checksums, per machine, read back out of it.
-
-    The stamped set reaches the device as one shell `case` arm per machine, and
-    that text is the only thing the device acts on — so the case is read as the
-    device reads it rather than through the property that produced it.
-    """
+    directory = f'{nspawn.machine_path(service)}/'
     return {
-        machine: set(paths.split())
-        for machine, paths in re.findall(r'^\s*([\w.-]+)\) stamped="([^"]*)" ;;$', script, re.MULTILINE)
-    }
-
-
-def test_the_stamped_sets_are_the_children_and_nothing_else(
-    containers: tuple[Container, ...], monitor: Recorder
-) -> None:
-    """A stamp cannot name a file no resource declares, or miss one that does.
-
-    The converger is rendered from the same declarations the containers are
-    built from, so what the device checksums for a machine is exactly the files
-    that machine's component declares — no extra path a hand-written case arm
-    could add, and none dropped. Set equality both ways is the whole claim: a
-    path in the script that belongs to no child is a restart nothing can
-    trigger, and a child's file missing from the script is a change the device
-    never notices.
-    """
-    arms = stamped_arms(nspawn.machines_script([container.machine(declaration) for declaration in declarations()]))
-
-    assert arms == {name: set(child.stamped_set) for name, child in zip(SERVICES, containers, strict=True)}
-    # And every declared path is a file some child of this component owns.
-    declared_paths = {
-        declaration.inputs['path']
+        str(declaration.inputs['path'])
         for declaration in monitor.of_type('pulumi-python:dynamic/device:File')
-        if 'path' in declaration.inputs
+        if str(declaration.inputs.get('path', '')).startswith(directory)
     }
-    marker_paths = {marker_path(nspawn.rootfs_path(name)) for name in SERVICES}
-    assert set().union(*arms.values()) <= declared_paths | marker_paths
 
 
-def test_a_resolvers_own_configuration_is_installed_once_and_then_left_alone() -> None:
+def test_what_the_converger_will_stamp_is_the_files_this_component_declares(monitor: Recorder) -> None:
+    """A stamp cannot cover a file no resource declares, or miss one that does.
+
+    Nothing is rendered into the converger any more: it stamps the machine's
+    *directory* — the settings, the digest marker beside the tree, and every
+    other regular file sitting directly in there
+    (`test_nspawn_runtime.test_a_stamp_covers_the_settings_and_the_pin_as_well_as_what_is_mounted`).
+    So what this suite decides is which files this component puts where, and
+    the two halves compose: everything a machine reads is directly in its
+    directory and is therefore stamped, and the one thing that must not be
+    stamped is under `initial-state/` and therefore is not.
+    """
+    for declaration in declarations():
+        service = declaration.service.name
+        seed = declaration.initial_state
+        written = machine_files(monitor, service)
+        seeded = {
+            path for path in written if path.startswith(f'{nspawn.machine_path(service)}/{nspawn.INITIAL_STATE}/')
+        }
+
+        assert written - seeded == {
+            nspawn.nspawn_path(service),
+            *(container.mounted_path(service, mounted) for mounted in declaration.mounted_files),
+        }, service
+        assert seeded == (set() if seed is None else {nspawn.initial_state_path(service, seed.into)}), service
+
+
+def test_a_resolvers_own_configuration_is_installed_once_and_then_left_alone(monitor: Recorder) -> None:
     """The instance rewrites the file the moment the `dns` stack adds a rewrite.
 
-    So the initial state is delivered under a name the instance does not read,
-    and the converger copies it into the working directory only while that
-    directory is empty — which is the state of a machine the device has never
-    run, and never the state of one that has been running. It is not in the
-    stamped set either: a change to it can never be a reason to restart an
-    instance that has already made the file its own.
+    So the seed is delivered into a directory of the machine's that holds
+    nothing else, and the converger copies that directory onto the working
+    directory only while the working directory is empty — which is the state of
+    a machine the device has never run, and never the state of one that has
+    been running. Being in there is also what keeps it out of the content
+    stamp: a change to it can never be a reason to restart an instance that has
+    already made the file its own.
     """
     alice = declared_for('adguard-alice')
     initial = alice.initial_state
     assert initial is not None
-    assert initial.name == container.ADGUARD_INITIAL_STATE != 'AdGuardHome.yaml'
     assert declared_for('caddy').initial_state is None, 'caddy owns nothing it is given'
 
-    delivered = nspawn.machine_file('adguard-alice', initial.name)
-    assert delivered not in alice.stamped_set
-
-    placement = container.machine(alice).initial_state
-    assert placement is not None
-    assert placement.source == delivered
-    assert placement.destination == f'{nspawn.state_path("adguard-alice")}/AdGuardHome.yaml'
+    # The path it is delivered at is the path it lands at, one directory over:
+    # the converger copies the machine's initial-state directory onto its state
+    # directory, and the state directory is bound at the working directory the
+    # instance is started with. That the copy happens only once, and only into
+    # an empty directory, is `test_nspawn_runtime`'s -- it runs the script.
+    delivered = str(monitor.inputs_of(f'{NAME}-adguard-alice-initial-state')['path'])
+    assert delivered == nspawn.initial_state_path('adguard-alice', container.ADGUARD_CONFIG)
 
 
 def test_a_resolver_is_bound_at_the_working_directory_its_image_is_started_with() -> None:
@@ -746,8 +723,8 @@ def test_every_piece_of_a_machine_lands_in_that_machines_directory(monitor: Reco
 
     assert monitor.inputs_of(f'{NAME}-caddy-nspawn')['path'] == nspawn.nspawn_path('caddy')
     assert monitor.inputs_of(f'{NAME}-caddy-image')['root'] == nspawn.rootfs_path('caddy')
-    assert monitor.inputs_of(f'{NAME}-adguard-alice-initial-state')['path'] == nspawn.machine_file(
-        'adguard-alice', container.ADGUARD_INITIAL_STATE
+    assert monitor.inputs_of(f'{NAME}-adguard-alice-initial-state')['path'] == nspawn.initial_state_path(
+        'adguard-alice', container.ADGUARD_CONFIG
     )
 
 
@@ -840,7 +817,7 @@ async def test_the_tree_lands_last_so_the_machine_starts_once_with_everything(
     for mounted in caddy.mounted_files.values():
         assert str(await mounted.urn.future()) in settings
 
-    alice = next(child for child in containers if child.stamped_set[0] == nspawn.nspawn_path('adguard-alice'))
+    alice = next(child for child in containers if child.unit_name == nspawn.machine_unit('adguard-alice'))
     assert alice.initial_state is not None
     assert str(await alice.initial_state.urn.future()) in monitor.depends_on(f'{NAME}-adguard-alice-image')
 
@@ -894,14 +871,17 @@ async def test_a_machine_is_started_by_a_unit_that_already_carries_its_drop_in(
 
 
 def test_a_drop_in_is_no_reason_to_restart_a_machine(monitor: Recorder) -> None:
-    """The stamped set decides when a machine is bounced, and this is not in it.
+    """The stamp covers the machine's directory, and a drop-in is not in it.
 
-    A drop-in takes effect on the reload its own delivery does, so putting it in
-    the stamped set would trade a reload for a restart of the container — and
-    for the machine carrying the deployment's session, that is the session.
+    A drop-in takes effect on the reload its own delivery does, so stamping it
+    would trade a reload for a restart of the container — and for the machine
+    carrying the deployment's session, that is the session. What keeps it out
+    is where it goes: a drop-in is a statement about a systemd unit, so it
+    lives in the unit store the persistence layer owns and never under the
+    machine.
     """
     for service in SERVICES:
-        assert monitor.inputs_of(dropin_of(service))['path'] not in declared_for(service).stamped_set
+        assert monitor.inputs_of(dropin_of(service))['path'] not in machine_files(monitor, service)
 
 
 def test_a_root_filesystem_travels_as_a_pin_and_never_as_bytes(monitor: Recorder) -> None:

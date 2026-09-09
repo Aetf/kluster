@@ -40,14 +40,7 @@ import pulumi
 
 from kluster import conventions
 from kluster.components.gateway.access import AuthorizedKeys, PublicKey
-from kluster.components.gateway.container import (
-    CaddyService,
-    Container,
-    OverlayDaemon,
-    ResolverService,
-    Rootfs,
-    machine,
-)
+from kluster.components.gateway.container import CaddyService, Container, OverlayDaemon, ResolverService, Rootfs
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.components.gateway.persistence import DevicePersistence
 from kluster.components.gateway.routing import RoutingSession, SiteRouting
@@ -117,8 +110,6 @@ class Gateway(Component):
             username=conventions.gateway.SSH_USER,
         )
 
-        declarations = (caddy, *resolvers, overlay_daemon)
-
         # The mechanism under everything else on the device: what puts the
         # customization back after a firmware update, and the way the layers
         # above deliver a script, an executable, a unit or a directory. The
@@ -131,16 +122,12 @@ class Gateway(Component):
             packages=NspawnRuntime.REQUIRED_PACKAGES,
             opts=self.child_opts(),
         )
-        # The framework the services run on, handed the same declarations the
-        # services are built from: what the converger acts on and what the
-        # components declare are then one statement, and neither side has to
-        # exist before the other.
-        self.runtime = NspawnRuntime(
-            f'{name}-nspawn',
-            mechanism=self.persistence,
-            machines=tuple(machine(declaration) for declaration in declarations),
-            opts=self.child_opts(),
-        )
+        # The framework the services run on, told nothing about them. What
+        # machines exist is what the `Container` declarations below put on the
+        # disk, and both convergers read that off the device -- so this
+        # component's files are the same on a gateway running one service and
+        # on one running five, and adding a service pushes none of them again.
+        self.runtime = NspawnRuntime(f'{name}-nspawn', mechanism=self.persistence, opts=self.child_opts())
         self.containers: tuple[Container, ...] = tuple(
             Container(
                 f'{name}-{declaration.service.name}',

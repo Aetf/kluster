@@ -4,7 +4,8 @@ A workload on the nspawn runtime (`nspawn`), and everything it is made of lives
 in that machine's own directory under the custom root: the root filesystem
 unpacked from its pin, its settings file, the configuration the image reads,
 the writable state bind-mounted into it, and — where the software behind it
-rewrites its own configuration — one initial-state file.
+rewrites its own configuration — an initial state, in a directory of its own so
+that what seeds a service and what the service reads never share a name.
 
 **A service is declared by its own type.** What a service *is* — where it keeps
 state, which device nodes it needs, which environment its image reads — is a
@@ -49,11 +50,11 @@ from kluster import conventions
 from kluster.components.gateway import nspawn
 from kluster.components.gateway.nspawn import NspawnRuntime
 from kluster.lib import templates
-from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile, marker_path
+from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile
 from putils import Component
 
 __all__ = (
-    'ADGUARD_INITIAL_STATE',
+    'ADGUARD_CONFIG',
     'ADGUARD_INSTALL',
     'ADGUARD_STATE',
     'ADGUARD_UPSTREAMS',
@@ -88,7 +89,6 @@ __all__ = (
     'ServiceDeclaration',
     'adguard_initial_state',
     'caddyfile',
-    'machine',
     'mounted_path',
     'net_setup_environment',
     'nspawn_file',
@@ -112,9 +112,12 @@ SECRET_MODE = '0600'
 ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.com/dns-query')
 
 #: The resolvers' own working directory, bind-mounted from the device so that a
-#: digest bump replaces the software and keeps the configuration; and the name
-#: the initial state is delivered under, which is deliberately not the name the
-#: instance reads, so that delivering one can never overwrite the other.
+#: digest bump replaces the software and keeps the configuration; and the file
+#: inside it the instance is started against, which is what an initial state is
+#: named for — a seed is delivered under the path it lands at, in a directory
+#: of the machine's that holds nothing else (`nspawn.INITIAL_STATE`), so the
+#: live file and the seed are separated by *where* they sit rather than by two
+#: spellings of one name.
 #:
 #: The working directory is the image's, not a path of this program's choosing:
 #: the resolver is started with `-w /data/adguard -c /data/adguard/AdGuardHome.yaml`
@@ -123,7 +126,7 @@ ADGUARD_UPSTREAMS = ('https://dns.quad9.net/dns-query', 'https://dns.cloudflare.
 #: disposable and the configuration durable, so the bind lands on the state half.
 ADGUARD_STATE = '/data/adguard'
 ADGUARD_INSTALL = '/opt/AdGuardHome'
-ADGUARD_INITIAL_STATE = 'AdGuardHome.initial.yaml'
+ADGUARD_CONFIG = 'AdGuardHome.yaml'
 
 #: Where caddy looks for its configuration and where it keeps what it must not
 #: lose. Both are directories the image names through the environment rather than
@@ -251,12 +254,16 @@ class InitialState:
     afterwards; it is not bind-mounted and it is not in the content stamp,
     because a change to it can never be a reason to restart something that has
     already made the file its own.
+
+    One name and not two: what keeps a seed from overwriting the live file is
+    the directory it is delivered into (`nspawn.initial_state_path`), which
+    holds nothing but seeds and is the shape the converger copies. So the name
+    here is the path the file lands at inside the state directory, and the
+    device needs to be told nothing else about it.
     """
 
-    #: The name it is delivered under, deliberately not the name the software
-    #: reads, so that delivering one can never overwrite the live file.
-    name: str
-    #: The name it is installed as, inside the service's state directory.
+    #: Where it lands, relative to the service's state directory — and equally
+    #: where it is delivered, relative to the machine's initial-state directory.
     into: str
     content: pulumi.Input[str]
 
@@ -316,26 +323,6 @@ class ContainerDeclaration[S: conventions.gateway.ContainerService]:
     def unit_name(self) -> str:
         """The unit that runs this service, which is systemd's own template."""
         return nspawn.machine_unit(self.service.name)
-
-    @property
-    def stamped_set(self) -> tuple[str, ...]:
-        """The paths the machine's content stamp covers (rfc-002 §4.2).
-
-        The settings file, the digest marker of the root filesystem tree, and
-        every file the container mounts: change one of them and the converger
-        restarts the machine, change nothing and it does not.
-
-        The root filesystem is represented by the marker beside it rather than
-        by the tree itself: walking a root filesystem to notice it is unchanged
-        would cost more than the restart it saves. The artifact resource writes
-        that marker before it runs the converger, which is what makes it a
-        change the converger can see.
-        """
-        return (
-            nspawn.nspawn_path(self.service.name),
-            marker_path(nspawn.rootfs_path(self.service.name)),
-            *(mounted_path(self.service.name, mounted) for mounted in self.mounted_files),
-        )
 
 
 @dataclass(frozen=True)
@@ -446,11 +433,7 @@ class ResolverService(BridgedDeclaration):
         # `into` is relative to the state directory, which is bind-mounted at
         # `ADGUARD_STATE` -- so the file lands at exactly the path the instance
         # is started with.
-        return InitialState(
-            name=ADGUARD_INITIAL_STATE,
-            into='AdGuardHome.yaml',
-            content=adguard_initial_state(self.service.address),
-        )
+        return InitialState(into=ADGUARD_CONFIG, content=adguard_initial_state(self.service.address))
 
 
 @final
@@ -501,29 +484,6 @@ def mounted_path(service: str, mounted: MountedFile) -> str:
     place.
     """
     return nspawn.machine_file(service, mounted.name)
-
-
-def machine(declaration: ServiceDeclaration) -> nspawn.Machine:
-    """One service as the runtime converges it, from what the gateway declared.
-
-    The runtime is handed this rather than the component, which is what keeps
-    the two sides acyclic while leaving one source for both: the same
-    declaration produces the machine the converger acts on and the files the
-    component declares, so a stamped set cannot name a file no resource
-    declares.
-    """
-    service = declaration.service.name
-    initial = declaration.initial_state
-    return nspawn.Machine(
-        name=service,
-        stamped=declaration.stamped_set,
-        initial_state=None
-        if initial is None
-        else nspawn.Placement(
-            source=nspawn.machine_file(service, initial.name),
-            destination=f'{nspawn.state_path(service)}/{initial.into}',
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -800,9 +760,12 @@ class Container(Component):
     """One container service on the device, and every file that defines it.
 
     It owns its root filesystem artifact, its settings file, the files it mounts
-    and its initial state — all of them in the machine's own directory — and it
-    exposes the two facts a reader needs of it: the unit that runs the machine,
-    and the stamped set its content stamp covers.
+    and its initial state — all of them in the machine's own directory — and
+    that directory is also the whole of what the device is told: the converger
+    carries no roll of machines and no per-machine case, so declaring this
+    component is what makes the machine exist and dropping it is what retires
+    one (`nspawn.machines_script`). The one fact it exposes is the unit that
+    runs the machine.
 
     **Every file of the machine runs the runtime's hook once it lands**, which
     converges the machine and then holds it to having come up (`nspawn`). It is
@@ -842,7 +805,6 @@ class Container(Component):
         child = self.child_opts(depends_on=[*runtime.convergers, *after])
 
         self.unit_name: str = declaration.unit_name
-        self.stamped_set: tuple[str, ...] = declaration.stamped_set
 
         self.mounted_files = {
             mounted.name: DeviceFile(
@@ -859,17 +821,21 @@ class Container(Component):
             for mounted in declaration.mounted_files
         }
         initial = declaration.initial_state
+        # Under the machine's initial-state directory rather than beside the
+        # files it mounts: that is what keeps a seed out of the content stamp,
+        # which covers the machine's directory itself, and what lets the
+        # converger place it without being told where it goes.
         self.initial_state: DeviceFile | None = (
             None
             if initial is None
             else DeviceFile(
                 f'{name}-initial-state',
                 connection=connection,
-                path=nspawn.machine_file(service, initial.name),
+                path=nspawn.initial_state_path(service, initial.into),
                 content=initial.content,
                 mode=CONFIG_MODE,
                 owner=owner,
-                hook=runtime.hook(service, nspawn.machine_file(service, initial.name)),
+                hook=runtime.hook(service, nspawn.initial_state_path(service, initial.into)),
                 opts=child,
             )
         )
