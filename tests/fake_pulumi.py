@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from kluster.scripts.credentials.pulumi_config import SlotRefused
+
 
 @dataclass
 class RecordedPulumi:
@@ -38,7 +40,13 @@ class RecordedPulumi:
             case ['config', 'set', key, value, '--stack', _]:
                 self.config[key] = value
                 return ''
-            case ['config', 'get', key, '--stack', _]:
+            case ['config', 'get', key, '--stack', name]:
+                if key not in self.config:
+                    # What the real CLI does with a key the stack has no value
+                    # for: exit non-zero, which `run_pulumi` turns into this.
+                    # A `KeyError` here instead would make a caller's own
+                    # refusal untestable.
+                    raise SlotRefused(f'`pulumi config get {key}` failed: missing required configuration variable')
                 return ('tampered' if self.corrupts else self.config[key]) + '\n'
             case unknown:  # pragma: no cover - an invocation the slot is not meant to make
                 raise AssertionError(f'unexpected pulumi invocation {unknown}')

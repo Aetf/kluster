@@ -29,12 +29,13 @@ timeout 60 mise x uv -- uv run pytest
 
 ### 1.1 A test process holds no credentials in its environment
 
-`mise.toml` materializes the operator's account-root token into
-`GITHUB_TOKEN`, the state passphrase into `PULUMI_CONFIG_PASSPHRASE` and the
-backend URL into `PULUMI_BACKEND_URL`, out of files rather than out of the
-caller — so each wins over anything set on the command line, and a `pytest`
-run started the way above carries live credentials whether the suite wants
-them or not. That matters because **Pulumi prints a resource's inputs when an
+`mise.toml` materializes the state passphrase into
+`PULUMI_CONFIG_PASSPHRASE` and the backend URL into `PULUMI_BACKEND_URL`, out
+of files rather than out of the caller — so each wins over anything set on the
+command line — and an operator's shell may export an account root besides,
+which is the third layer of the chain that finds one (credentials.md §2). A
+`pytest` run started the way above therefore carries live credentials whether
+the suite wants them or not. That matters because **Pulumi prints a resource's inputs when an
 assertion about it fails, and a provider's inputs include its credential**:
 the first failing assertion in a suite that declares a provider renders
 whatever the environment was holding into the report.
@@ -60,7 +61,7 @@ above that one.
     sets has to fall in one of the two sets, which is what makes a new one a
     decision somebody takes rather than an omission nobody sees.
 -   **A suite that needs a value asks for a fake one by name**, with
-    `root_credentials.fake_credentials('GITHUB_TOKEN')` as a context manager,
+    `root_credentials.fake_credentials('KLUSTER_B2_KEY')` as a context manager,
     or `root_credentials.fake(name)` for the value on its own. The value is
     derived from the variable, so a value that does reach a diff identifies
     what it stood in for and says that it opens nothing. A name that carries
@@ -70,9 +71,11 @@ above that one.
     layer answered — where the literal in view is the point and a derived
     value would hide it (`style/python.md`, "Not too DRY").
 -   **A suite that needs one and does not ask** meets whatever the code under
-    test raises for an unset variable. `kluster.stacks.github` is the worked
-    example: it refuses by name rather than authenticating as nobody, so the
-    failure says which credential was missing.
+    test raises for an unset variable, which names the variable it wanted.
+    Nothing this masks reaches a stack program any more: a provider credential
+    is a secret in its own stack's configuration (credentials.md §1 rule 6),
+    which a suite supplies with `pulumi.runtime.set_all_config` and which this
+    mechanism has no part in.
 
 **The environment is one of three channels, and only it is closed.** An
 account root is looked up in the desktop secret store, then in a file under

@@ -171,7 +171,42 @@ def environment(
     return pulumi_config.BackendEnvironment(
         passphrase=vault.recover(escrow.PASSPHRASE),
         url=url.read_text().strip() if url is not None else None,
+        apart=_apart(vault),
     )
+
+
+def _apart(vault: escrow.Vault) -> dict[str, str]:
+    """The passphrase of every stack that is not on the estate's, by stack name.
+
+    **Walked from `pulumi_config.APART`, not from a list beside it.** That
+    census already answers "which stacks are encrypted apart, and from which
+    register row", and its values are row names, which `escrow.rows()` turns
+    into the labels this recovers — so the two cannot disagree about which
+    stacks there are. A second list here would fail *closed* rather than open,
+    since a stack it forgot would refuse by name rather than fall back to the
+    estate passphrase, but it would refuse telling an operator to run a
+    `generate` they have already run, which is a bad half hour.
+
+    An escrow with no generation yet is left out rather than raised on, which
+    is the state a machine is in between the row being declared and the
+    operator running its `generate`. Leaving it out is what makes the refusal
+    the one `BackendEnvironment.variables` gives — which names the stack and
+    the command — instead of an escrow error naming a label, raised here while
+    building an environment most commands never point at that stack anyway.
+
+    A row the escrow register does not carry is the one thing raised on: that
+    is not a machine missing a value, it is `APART` naming a row that does not
+    exist, and it would otherwise read as the absent-generation case forever.
+    """
+    labels = escrow.rows()
+    found: dict[str, str] = {}
+    for stack, row in pulumi_config.APART.items():
+        label = labels[row].name
+        try:
+            found[stack] = vault.recover(label)
+        except escrow.EscrowError as exc:
+            log.debug('no %s in the escrow yet (%s); the %s stack will refuse by name', label, exc, stack)
+    return found
 
 
 def require_member(only: str | None) -> None:

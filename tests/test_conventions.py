@@ -30,6 +30,7 @@ from ipaddress import IPv6Network
 from pathlib import Path
 
 from kluster import conventions
+from kluster.scripts.credentials import pulumi_config
 
 # --------------------------------------------------------------------------
 # The site, zone, gateway and cloud censuses.
@@ -580,3 +581,58 @@ def test_no_workflow_identifies_an_account_by_id() -> None:
     reached = {workflow.name for workflow in _workflows() if AUTHOR_BY_ID.search(workflow.read_text())}
 
     assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
+
+
+#: How a workflow step points a `pulumi` command at one stack. Both spellings,
+#: because `-s` and `--stack` are the same flag and a census that knew only the
+#: long one would be blind to the short.
+PULUMI_STACK_FLAG = re.compile(r'(?:--stack[=\s]+|-s\s+)([\w.-]+)')
+
+
+def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> None:
+    """The stack CI may not run, held against what CI actually contains.
+
+    What keeps the forge's admin token out of CI is not that the token is hard
+    to reach -- it is a config secret in a committed file like any other -- but
+    that its stack is encrypted under a passphrase no Environment holds *and*
+    that no job names it. Either alone is one accident from gone, so both are
+    held: this case, and the slot map's own (`tests/test_slots.py`).
+
+    A `preview` would be as bad as an `up`. Reading that stack's config at all
+    means holding its passphrase, and a workflow that held it would have it in
+    an Environment -- which is the partition being defended (ci.md §3).
+
+    **This census reads literal flags**, so a stack named through an
+    expression -- `--stack ${{ matrix.stack }}`, with the name added to a
+    matrix list -- passes it. Widening it to the text is impractical rather
+    than merely unwritten: every workflow says `github` many times over
+    through `${{ github.* }}`, so a census over the word would be noise. What
+    catches that spelling is the other half of the pair, and it catches it at
+    run time rather than at review time: the job's Environment holds the
+    estate passphrase alone, so the run dies `error: incorrect passphrase`
+    with nothing of that stack's config in reach. This case is the cheap,
+    early half of a guard whose expensive half cannot be evaded.
+    """
+    apart = set(pulumi_config.APART)
+    named = [
+        f'{workflow.name}: {match.group(0)}'
+        for workflow in _workflows()
+        if 'pulumi' in (text := workflow.read_text())
+        for match in PULUMI_STACK_FLAG.finditer(text)
+        if match.group(1) in apart
+    ]
+
+    assert named == [], f'a workflow runs `pulumi` against a stack encrypted apart from the estate: {named}'
+
+
+def test_the_stack_encrypted_apart_is_the_one_the_forge_program_declares() -> None:
+    """The two censuses name the same stack rather than agreeing by spelling.
+
+    `pulumi_config.APART` is what makes a `credentials` run reach for the right
+    passphrase; the case above is what keeps CI away from that stack. Both are
+    about the program that declares the forge, and a rename moving one and not
+    the other would leave a green suite and an unguarded stack.
+    """
+    from kluster.stacks import github
+
+    assert set(pulumi_config.APART) == {github.STACK}

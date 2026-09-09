@@ -23,13 +23,14 @@ tool is its subprocess.
 The value is handed over on **standard input**, never as an argument, so a
 credential never appears in the process table of a shared machine. The token
 goes in the subprocess environment and is set explicitly rather than inherited:
-`gh` reads `GH_TOKEN` before `GITHUB_TOKEN`, and this repository's own
-`mise.toml` materializes the second from a workstation slot -- so a run that set
-neither could authenticate as whichever value the ambient shell happened to
-carry.
+`gh` reads `GH_TOKEN` before `GITHUB_TOKEN`, and an operator's shell may well
+carry one of them for their own account -- so a run that set neither could
+authenticate as whichever value that shell happened to hold.
 
 **Who fills these, and why it is neither the stack nor CI.** The pusher
-authenticates as the `github` account root (`masters.py`) from the workstation.
+authenticates as the GitHub admin token, read back from the `github` stack's
+committed configuration where the stack that declares the forge also reads it
+(`devices.py`), from the workstation.
 The `github` stack declares the *structure* -- which repositories exist, which
 Environments, which of them a reviewer gates -- and is applied by hand a few
 times a year, while the values here rotate on their own cadence and some of them
@@ -90,17 +91,16 @@ def _why(completed: sp.CompletedProcess[str]) -> str:
     if 'HTTP 404' in detail:
         return f'{last} - no such repository or Environment; the `github` stack declares them'
     if 'HTTP 401' in detail or 'HTTP 403' in detail:
-        return f'{last} - the GitHub account root was refused; it needs `repo` scope on that repository'
+        return f'{last} - the GitHub admin token was refused; it needs `repo` scope on that repository'
     return last
 
 
 def run_gh(args: Sequence[str], *, token: str, stdin: str | None) -> str:
-    """Run one `gh` command as the account root, returning its standard output.
+    """Run one `gh` command as the admin token, returning its standard output.
 
     Both token variables are set: `gh` prefers `GH_TOKEN`, and leaving
     `GITHUB_TOKEN` alone would let whatever the shell already exported decide
-    who this run is -- which inside this checkout is the very value `mise.toml`
-    materializes from a workstation slot.
+    who this run is.
     """
     environment = {**os.environ, 'GH_TOKEN': token, 'GITHUB_TOKEN': token}
     try:
@@ -159,7 +159,7 @@ class Slot:
 
 @dataclass(frozen=True)
 class Forge:
-    """The forge's secret store, as the account root that may write it."""
+    """The forge's secret store, as the admin token that may write it."""
 
     token: str
     run: Runner = run_gh

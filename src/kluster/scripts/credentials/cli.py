@@ -117,27 +117,41 @@ _ORDER = """when to run what:
          config, which is then committed like the one above. The first also
          creates that stack's compartment where it does not exist yet, and
          prints the OCID to record in conventions and commit.
-    7. credentials derived unifi record
+    7. credentials derived github-passphrase generate
+         The github stack's own config passphrase, before anything reads or
+         writes that stack's config. Stage 4's command on a second row, and
+         separate from it for the one reason the row exists: this value goes
+         to no CI Environment, so the stack holding the forge's admin token is
+         unreadable by anything CI can start. A machine without it does not
+         fall back to the estate passphrase -- every command that would touch
+         that stack refuses by name.
+    8. credentials derived unifi record
        credentials derived adguard record
        credentials derived zerotier record
-         The three credentials no API here mints: each is made in the
+       credentials derived github-admin record
+         The credentials no API here mints: each is made in the
          console that checks it, so the command prints the steps that
          create it, takes the value without echoing it, and writes it
          into the stack config that reads it -- physical for the UniFi
-         key and the ZeroTier Central token, dns for the AdGuard login.
-         Those files are then committed.
-    8. credentials derived github-dispatch-key record
+         key and the ZeroTier Central token, dns for the AdGuard login,
+         github for the admin token the forge is declared with.
+         Those files are then committed. The GitHub one is last of these
+         because stage 10 authenticates as it, and it needs stage 7.
+    9. credentials derived github-dispatch-key record
        credentials derived github-trigger-key record
          The two GitHub App private keys. Each is generated on its own App
          page -- shown once, and created by no API -- so the command prints
          the steps and escrows what they produce. Nothing reads either one
          yet: the workflows that mint an installation token from a key are
          not built, so the escrow copy is the whole of the delivery for now.
-    9. credentials derived sync
+   10. credentials derived sync
          The GitHub secrets CI reads, for the rows whose value lives
          somewhere else and is copied into a slot. Run it again whenever one
          of those values moves; a row it cannot fill yet says which slot is
-         waiting on what.
+         waiting on what. It authenticates as the admin token stage 8
+         recorded, read back out of the github stack's config -- which needs
+         stage 7's passphrase. It pushes the estate passphrase into every
+         Environment and the github one into none.
 
   on a workstation that develops without the kit
     Copy the .credentials directory from a machine that has one: the
@@ -305,7 +319,9 @@ def build_parser() -> argparse.ArgumentParser:
     # repository opens: each is looked up through one chain -- desktop secret
     # store, token file, environment variable, prompt (`masters.py`). This
     # subject is how they get onto a machine, and the only thing that writes
-    # them.
+    # them. Only the accounts a *script* authenticates as are here: a console
+    # credential the system can hold instead is a §3 row delivered to its
+    # stack (`devices.py`), not a root.
     root_subject = subjects.add_parser(
         'root',
         help='the credentials the provider accounts themselves are administered with',
@@ -817,8 +833,9 @@ def build_parser() -> argparse.ArgumentParser:
             description=(
                 'Print the steps that create this credential, take each of its values without echoing a '
                 f"secret, and write them into the {device.stack} stack's committed config, reading them "
-                'back to prove the push landed. Rotating it is the same command with a fresh value from '
-                'the same console. Commit the config afterwards.'
+                'back to prove the push landed. Then commit the config. Rotating it is the whole of the '
+                'same sequence with a fresh value from the same console, and one step more: delete the '
+                'superseded credential where it was made, which nothing here can do for you.'
             ),
         )
         for field in device.fields:
@@ -980,7 +997,9 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     return KdbxStore.from_env(args.kdbx)
 
 
-def _stack(args: argparse.Namespace, store: KdbxStore, name: str) -> pulumi_config.Stack:
+def _stack(
+    args: argparse.Namespace, store: KdbxStore, name: str, registry: escrow.Registry | None = None
+) -> pulumi_config.Stack:
     """The config slot a derived row is pushed into.
 
     Opened with the same two variables a `pulumi` run needs, recovered with the
@@ -992,24 +1011,38 @@ def _stack(args: argparse.Namespace, store: KdbxStore, name: str) -> pulumi_conf
     one row has a stack to choose: the zones token is scoped to zones and can
     be delivered anywhere, while a row whose credential is named after its
     consumer can only be delivered to that consumer (`derived`).
+
+    `registry` reaches the escrow the passphrase is recovered from, and is
+    passed by a caller that already holds one so that a run with
+    `--escrow-dir` opens the directory it was pointed at rather than the
+    default beside it.
     """
     return pulumi_config.Stack(
         name=name,
         directory=pulumi_config.project_dir(),
-        env=lifecycle.environment(store, args.bundle_dir).variables(),
+        environment=lifecycle.environment(store, args.bundle_dir, registry),
     )
 
 
 def _sync_context(args: argparse.Namespace, store: KdbxStore, registry: escrow.Registry) -> slots.Context:
     """What `derived sync` may reach for, with everything slow left unopened.
 
-    The token is fetched up front because every push needs it and the chain
-    that finds it may have to ask (`masters.py`); the kit's escrow and the state
-    backend are passed as openers, so pushing the one typed-in row asks for
-    neither and a row recovered from escrow never reaches for a backend.
+    The token is fetched up front because every push needs it, and it comes out
+    of the `github` stack's committed configuration, where it lives for the
+    stack that declares the forge (`devices.py`) — one home, read by both.
+    Reading it opens the state backend, which is why this is the point the
+    passphrase and the bundle are needed at; the kit's escrow and a second
+    backend connection are passed as openers, so pushing the one typed-in row
+    asks for neither and a row recovered from escrow never reaches for a
+    backend.
     """
     return slots.Context(
-        forge=github_secrets.Forge(token=lifecycle.root(masters.GITHUB, input)[masters.GITHUB_ADMIN_TOKEN]),
+        forge=github_secrets.Forge(
+            token=devices.borrow(
+                devices.DEVICES[devices.GITHUB_ADMIN],
+                stack=_stack(args, store, derived.GITHUB_STACK, registry),
+            )
+        ),
         open_vault=lambda: escrow.Vault.open(store, registry),
         open_environment=lambda: lifecycle.environment(store, args.bundle_dir, registry),
     )

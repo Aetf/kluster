@@ -2,14 +2,15 @@
 
 `docs/credentials.md` §2 puts the account roots deliberately outside the seed
 kit — they are a precondition of the system rather than a credential it
-manages, and they have no designed rotate-on-compromise path. Three of them
-are nonetheless *used* from the workstation: minting the OCI seed needs a
-credential with more reach than any seed has, re-seeding B2 after a total loss
-needs the account master key, and the `github` stack is applied with an
-account-scoped token that can edit the protections guarding `main`
-(framework/github.md §1). Cloudflare is not among them — the platform refuses
-to let any token mint a token that carries token permissions, so its seed is
-made in the dashboard and there is nothing left for a root to do.
+manages, and they have no designed rotate-on-compromise path. Two of them are
+nonetheless *used* from the workstation: minting the OCI seed needs a
+credential with more reach than any seed has, and re-seeding B2 after a total
+loss needs the account master key. Cloudflare, GitHub and ZeroTier are not
+among them. A root is here only when a *script* has to authenticate as the
+account itself; where the account's console makes a credential the system can
+hold instead, that credential is a §3 row delivered to the stack that reads it
+(`devices.py`), and the console login behind it stays in the personal estate
+where nothing reaches for it.
 
 Handing those over is what this module is. **One acquisition chain serves every
 root**, in this order, first hit wins:
@@ -17,8 +18,8 @@ root**, in this order, first hit wins:
 1.  the **desktop secret store**, where `credentials root <root> remember`
     puts it;
 2.  the root's **token file**, a workstation slot (`workstation.py`) — the
-    layer a non-interactive reader can use, which is how `mise.toml`
-    materializes `GITHUB_TOKEN` for a `pulumi` run;
+    layer a machine with no desktop secret store falls back to, which is what
+    makes `remember` mean something on a headless box;
 3.  the root's **environment variable**, which is how CI and a one-off shell
     hand a value in without writing it anywhere;
 4.  a **console prompt**, which names the credential and how it is created.
@@ -112,11 +113,6 @@ class Field:
     #: closed set, so that a misspelling cannot fall through to the echoing
     #: branch and print a credential on the operator's terminal.
     kind: Literal['secret', 'identifier', 'file'] = 'secret'
-    #: Whether a tool reads the file layer without asking anybody — today,
-    #: `mise.toml` building a `pulumi` run's environment. `remember` keeps
-    #: these in the file rather than the secret store, because a template can
-    #: open neither a keyring nor a prompt.
-    materialized: bool = False
 
     def ask(self, prompt: Prompt, title: str) -> str:
         match self.kind:
@@ -181,7 +177,6 @@ class Credential:
 #: can drift into a `KeyError`.
 OCI = 'oci'
 B2 = 'b2'
-GITHUB = 'github'
 
 #: The field names other modules read a loaded root by. Same reason: the
 #: register below and the code that indexes a `Credential` share one spelling
@@ -191,7 +186,6 @@ OCI_USER = 'user'
 OCI_PRIVATE_KEY = 'private-key'
 B2_ACCOUNT_ID = 'account-id'
 B2_KEY = 'key'
-GITHUB_ADMIN_TOKEN = 'token'
 
 ROOTS: dict[str, Root] = {
     root.member: root
@@ -249,33 +243,6 @@ ROOTS: dict[str, Root] = {
                     env='KLUSTER_B2_ACCOUNT_ID',
                 ),
                 Field(B2_KEY, 'the master application key', file='b2.key', env='KLUSTER_B2_KEY'),
-            ),
-        ),
-        Root(
-            member=GITHUB,
-            title='GitHub admin token',
-            console=(
-                'github.com → Settings → Developer settings → Personal access\n'
-                '  tokens → Tokens (classic) → Generate new token, scope `repo`.\n'
-                "  It administers this account's repositories — branch protection,\n"
-                '  rulesets, Environments and their gates — which is why the\n'
-                '  `github` stack is applied from the workstation and never by CI\n'
-                '  (framework/github.md §1), and why nothing mints it: it is an\n'
-                '  account root from the personal estate, pushed to no slot.'
-            ),
-            fields=(
-                # The one field a tool reads on its own: `mise.toml` turns the
-                # file into `GITHUB_TOKEN` for `pulumi up -s github`, and `gh`
-                # picks the same variable up inside this directory. The
-                # variable name is the provider's rather than this repo's for
-                # exactly that reason.
-                Field(
-                    GITHUB_ADMIN_TOKEN,
-                    'the admin personal access token',
-                    file='github.token',
-                    env='GITHUB_TOKEN',
-                    materialized=True,
-                ),
             ),
         ),
     )
@@ -354,16 +321,11 @@ def load(root: Root, prompt: Prompt) -> Credential:
 def _keep(root: Root, field: Field, value: str) -> None:
     """Put one field where its readers can reach it — one layer, not two.
 
-    A field a *tool* reads on its own goes to its file: a mise template can
-    open neither a keyring nor a prompt, and a second copy in the secret store
-    would be exposure bought for nothing. Everything else goes to the secret
-    store, which is the layer a script can use and a backup cannot copy —
-    falling back to the file on a machine that has no store at all, so
-    `remember` means something on a headless box too.
+    The secret store is that layer: it is the one a script can use and a backup
+    cannot copy. The file beside it is a fallback rather than a second home,
+    for a machine that has no store at all, so `remember` means something on a
+    headless box too.
     """
-    if field.materialized:
-        _ = workstation.write(workstation.root_path(field.file), value)
-        return
     try:
         kdbx.store(_account(root, field), value)
     except Exception as exc:  # noqa: BLE001 - any backend failure is "no store here"

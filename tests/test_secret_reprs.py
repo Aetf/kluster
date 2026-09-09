@@ -106,7 +106,7 @@ CENSUS: dict[type, Census] = {
     escrow.Vault: Census('registry identity', secret='identity'),
     escrow.WorkstationSlot: Census('path read_by'),
     masters.Credential: Census('root values', secret='values'),
-    masters.Field: Census('name describes file env kind materialized'),
+    masters.Field: Census('name describes file env kind'),
     masters.Root: Census('member title console fields'),
     oci_iam.ApiKey: Census('tenancy user private_key', secret='private_key'),
     oci_iam.Domain: Census('client url'),

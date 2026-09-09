@@ -36,6 +36,17 @@ class SlotRefused(RuntimeError):
     """A slot would not take the value — the push failed, so nothing consumed it."""
 
 
+class PassphraseMissing(SlotRefused):
+    """A stack encrypted apart from the estate, on a machine holding no passphrase for it.
+
+    Its own type because it is the one refusal here that is about the *machine*
+    rather than about the stack's contents, and a caller that dresses a refusal
+    up in its own words has to let this one through unchanged: "the credential
+    is not in the config" and "this machine cannot read that config at all" send
+    an operator to different places.
+    """
+
+
 class Runner(Protocol):
     """How a `pulumi` invocation is made. Substituted in tests."""
 
@@ -83,26 +94,67 @@ def project_dir() -> Path:
 BACKEND_URL_ENV = 'PULUMI_BACKEND_URL'
 PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 
+#: The stack whose committed configuration is encrypted apart from the rest.
+GITHUB_STACK = 'github'
+
+#: Every stack that is **not** on the estate passphrase, and the register row
+#: (§3) the one it *is* on comes from. A census rather than a consequence of
+#: whatever a run happened to recover: a stack named here and handed no
+#: passphrase of its own is refused *here*, by name, instead of being run under
+#: the estate's — which `pulumi` would answer with `error: incorrect
+#: passphrase`, a refusal that names neither the stack nor the fix and arrives
+#: at the far end of whatever command was in progress.
+#:
+#: The value is the row rather than a sentence about it, so the refusal below
+#: composes the command and a test can follow the row into the slot map. That
+#: is what holds this honest: a stack cannot be taken off the estate passphrase
+#: without a register row that generates and escrows one.
+APART: Mapping[str, str] = {GITHUB_STACK: 'github-passphrase'}
+
 
 @dataclass(frozen=True)
 class BackendEnvironment:
     """What this machine can tell a `pulumi` run about the state backend.
 
-    A closed pair rather than a mapping, because the key set is closed and
+    A closed shape rather than a mapping, because the key set is closed and
     because a caller reads the URL by name — a workstation without a client
     bundle has no URL, and that is a state to be handled rather than a key
-    that happens to be missing from a bag. `variables()` is the one place the
-    pair becomes the environment a process is started with, so an absent half
+    that happens to be missing from a bag. `variables()` is the one place it
+    becomes the environment a process is started with, so an absent half
     is an absent variable rather than an empty one.
+
+    **`variables` takes the stack it is building an environment for**, because
+    `PULUMI_CONFIG_PASSPHRASE` is process-global while this installation has
+    more than one: the `github` stack's configuration is encrypted under a
+    passphrase of its own, which reaches no CI Environment and is what confines
+    that stack to the workstation (credentials.md §2.2). A caller therefore
+    cannot build "the environment" — only the environment for a named stack —
+    and `Stack` derives it from its own name so that no call site can pair one
+    stack with another's passphrase.
     """
 
     passphrase: str | None = None
     url: str | None = None
+    #: Stacks whose config is encrypted under a passphrase of their own, by
+    #: stack name. A stack absent from here takes the estate's. A mapping and
+    #: not a second field, so adding another such stack is a row rather than a
+    #: branch — and so `apart` is the whole answer to "which stacks are not on
+    #: the estate passphrase", which a test can read.
+    apart: Mapping[str, str] = field(default_factory=dict[str, str])
 
-    def variables(self) -> dict[str, str]:
+    def variables(self, stack: str) -> dict[str, str]:
+        passphrase = self.apart.get(stack)
+        if passphrase is None and (row := APART.get(stack)) is not None:
+            raise PassphraseMissing(
+                f"the {stack} stack's configuration is encrypted under a passphrase of its own and this "
+                f'machine holds none: run `credentials derived {row} generate`, or `credentials derived '
+                f'{row} recover` on a machine that already holds the kit. The estate passphrase is '
+                f'deliberately not used here — every CI Environment holds that one, and this stack is the '
+                f'one nothing in CI may read (framework/github.md §1).'
+            )
         values: dict[str, str] = {}
-        if self.passphrase is not None:
-            values[PASSPHRASE_ENV] = self.passphrase
+        if (chosen := passphrase or self.passphrase) is not None:
+            values[PASSPHRASE_ENV] = chosen
         if self.url is not None:
             values[BACKEND_URL_ENV] = self.url
         return values
@@ -110,14 +162,33 @@ class BackendEnvironment:
 
 @dataclass(frozen=True)
 class Stack:
-    """One stack's committed configuration, as a slot that takes values."""
+    """One stack's committed configuration, as a slot that takes values.
+
+    The environment every invocation runs with is derived **here**, from this
+    stack's own name, rather than handed in ready-made. That is the whole
+    guard against the trap `BackendEnvironment` describes: a passphrase is
+    process-global, so a caller that built the variables itself could hand
+    this one another stack's, and a `pulumi` run under the wrong passphrase is
+    a class of bug worth making unreachable rather than merely unlikely.
+
+    It would not be a *silent* bug — `encryptionsalt` is a verifier, so
+    `pulumi` answers `error: incorrect passphrase` and exits non-zero without
+    touching the file — but the refusal names neither the stack nor the fix,
+    and a run that fails at the far end of a bring-up is expensive to read.
+    """
 
     name: str
     directory: Path
-    #: What `BackendEnvironment.variables()` produced, which the caller derives
-    #: from the kit rather than expecting in the ambient environment.
-    env: Mapping[str, str] = field(default_factory=dict[str, str])
+    #: What this machine can say about the state backend, which the caller
+    #: derives from the kit rather than expecting in the ambient environment.
+    #: The stack's own passphrase is picked out of it by name below.
+    environment: BackendEnvironment = field(default_factory=lambda: BackendEnvironment())
     run: Runner = run_pulumi
+
+    @property
+    def env(self) -> Mapping[str, str]:
+        """The variables a `pulumi` run against *this* stack is started with."""
+        return self.environment.variables(self.name)
 
     def _pulumi(self, *args: str, stdin: str | None = None) -> str:
         return self.run([*args], cwd=self.directory, env=self.env, stdin=stdin)

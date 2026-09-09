@@ -1,9 +1,9 @@
-# All three are secrets in the sense that matters here -- the passphrase
-# decrypts every stack's config, the URL names a client key, the token
-# administers the forge -- so mise does not echo them back in `mise env` or a
-# task's command line. This list is variable names; the files they are read
-# from are covered by .gitignore instead.
-redactions = ["PULUMI_CONFIG_PASSPHRASE", "PULUMI_BACKEND_URL", "GITHUB_TOKEN"]
+# All three are secrets in the sense that matters here -- one passphrase
+# decrypts the estate's config and state, the other decrypts the `github`
+# stack's config, and the URL names a client key -- so mise does not echo them
+# back in `mise env` or a task's command line. This list is variable names; the
+# files they are read from are covered by .gitignore instead.
+redactions = ["PULUMI_CONFIG_PASSPHRASE", "KLUSTER_GITHUB_PASSPHRASE", "PULUMI_BACKEND_URL"]
 
 # Pinned, not `latest`: CI installs from this file, so a floating version is a
 # breaking upgrade that lands without a PR, a preview, or a way to bisect it.
@@ -23,12 +23,33 @@ age = "1.3.1"
 
 # What a `pulumi` run needs that no template can compute: the state
 # passphrase, recovered from its escrow ciphertext (docs/credentials.md
-# §2.2); the backend URL and the three files of the client bundle it connects
-# with; and the `github` stack's admin token, an account root from the
-# personal estate.
-# Each is read from its **workstation slot** -- a git-ignored file under
-# `.credentials/`, written by a `credentials` or `state-backend` command
-# (credentials.md §1 rule 6).
+# §2.2), and the backend URL and the three files of the client bundle it
+# connects with. Each is read from its **workstation slot** -- a git-ignored
+# file under `.credentials/`, written by a `credentials` or `state-backend`
+# command (credentials.md §1 rule 6).
+#
+# No provider credential is among them, the `github` stack's admin token
+# included: each of those is a secret in its own stack's committed
+# configuration, which the program reads for itself with a passphrase
+# (credentials.md §3).
+#
+# **Which** passphrase is not something this file can decide, and that is why
+# the `github` one below is exported under a name of its own rather than as
+# `PULUMI_CONFIG_PASSPHRASE`. That variable is process-global -- `pulumi` reads
+# one value per invocation -- while the `github` stack's config is encrypted
+# apart from the estate's, so the right value depends on the `-s` a command has
+# not been given yet. Every `credentials` command resolves it from the stack it
+# is acting on (`pulumi_config.Stack`); a `pulumi` an operator runs by hand
+# against that stack is the one caller this file can help, and it is helped by
+# having the value under a name to pass in:
+#
+#     PULUMI_CONFIG_PASSPHRASE="$KLUSTER_GITHUB_PASSPHRASE" pulumi preview -s github
+#
+# Getting that wrong is not silent: `encryptionsalt` is a verifier, so `pulumi`
+# answers `error: incorrect passphrase` and exits non-zero having written
+# nothing. Note that `PULUMI_CONFIG_PASSPHRASE_FILE` is no use here -- `pulumi`
+# prefers `PULUMI_CONFIG_PASSPHRASE` whenever it is set, including when it is
+# set to the empty string, and this file always sets it.
 #
 # Every one of them falls back to whatever is already in the environment
 # rather than to an empty string: CI passes them in as Environment secrets,
@@ -39,8 +60,8 @@ age = "1.3.1"
 #
 # The second branch of each is the pre-`.credentials/` location, kept so a
 # workstation that predates the move keeps working without being touched.
-# TODO(kluster-ops#34): delete those branches, and the two stale entries in
-# .gitignore, once every workstation has been converged.
+# TODO(kluster-ops#34): delete those branches, and the pre-`.credentials/`
+# entries in .gitignore, once every workstation has been converged.
 [env]
 PULUMI_CONFIG_PASSPHRASE = """
 {%- set slot = [config_root, '.credentials/pulumi.passphrase'] | join_path -%}
@@ -99,6 +120,19 @@ PGSSLCERT = """
 {{- env.PGSSLCERT | default(value="") -}}
 {%- endif -%}
 """
+# The `github` stack's own passphrase (credentials.md §3), under its own name
+# because it must never become the ambient `PULUMI_CONFIG_PASSPHRASE`: that one
+# is in every CI Environment, and this stack is the one nothing in CI may read.
+# `credentials derived github-passphrase generate` (or `... recover`) writes the
+# slot. No pre-`.credentials/` branch, because this slot never had another home.
+KLUSTER_GITHUB_PASSPHRASE = """
+{%- set slot = [config_root, '.credentials/github.passphrase'] | join_path -%}
+{%- if slot is file -%}
+{{- read_file(path=slot) | trim -}}
+{%- else -%}
+{{- env.KLUSTER_GITHUB_PASSPHRASE | default(value="") -}}
+{%- endif -%}
+"""
 PGSSLKEY = """
 {%- set slot = [config_root, '.credentials/state-backend'] | join_path -%}
 {%- set moved = [env.HOME, '.config/kluster/state-backend'] | join_path -%}
@@ -110,21 +144,5 @@ PGSSLKEY = """
 {{- [moved, 'client.key'] | join_path -}}
 {%- else -%}
 {{- env.PGSSLKEY | default(value="") -}}
-{%- endif -%}
-"""
-# The token file is one layer of the account-root chain (credentials.md §2):
-# `credentials root github remember` writes it, and this materializes it for
-# apply time because a provider reads a variable and not a keyring. Note that
-# `gh` reads this variable too: inside this directory it will act as the admin
-# token.
-GITHUB_TOKEN = """
-{%- set slot = [config_root, '.credentials/roots/github.token'] | join_path -%}
-{%- set moved = [config_root, '.github.token'] | join_path -%}
-{%- if slot is file -%}
-{{- read_file(path=slot) | trim -}}
-{%- elif moved is file -%}
-{{- read_file(path=moved) | trim -}}
-{%- else -%}
-{{- env.GITHUB_TOKEN | default(value="") -}}
 {%- endif -%}
 """

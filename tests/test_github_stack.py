@@ -20,10 +20,10 @@ from typing import Any
 import pulumi
 import pytest
 import pytest_asyncio
-import root_credentials
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
+from kluster.scripts.credentials import devices
 from kluster.components.forge import LABEL_COLOR, ManagedRepository
 from kluster.stacks import github as program
 
@@ -36,9 +36,10 @@ LABEL = 'github:index/issueLabel:IssueLabel'
 MANAGED_REPOSITORY = 'kluster:components:forge:ManagedRepository'
 PROVIDER = 'pulumi:providers:github'
 
-#: Not the operator's: the test process holds no credential at all
-#: (`root_credentials`), so this suite asks for a fake one by name.
-TOKEN = root_credentials.fake(program.TOKEN_VARIABLE)
+#: Not the operator's: the token this stack opens with is a secret in its own
+#: committed configuration, and a suite sets a stand-in that says as much if it
+#: ever reaches a diff.
+TOKEN = 'a-fake-github-admin-token-that-opens-nothing'
 
 #: How a secret arrives on the wire: Pulumi's special-signature key, carrying
 #: the signature that means "secret", beside the value itself.
@@ -95,11 +96,11 @@ class Forge(Recorder):
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def stack() -> AsyncGenerator[Forge]:
     """The whole program, declared once: every case below reads the same run."""
-    with root_credentials.fake_credentials(program.TOKEN_VARIABLE):
-        monitor = await run_with(Forge(), stack='github')
-        async with declaring():
-            await program.main()
-        yield monitor
+    pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})
+    monitor = await run_with(Forge(), stack='github')
+    async with declaring():
+        await program.main()
+    yield monitor
 
 
 def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
@@ -257,40 +258,57 @@ def test_the_provider_is_built_here_and_signs_every_resource(stack: Forge) -> No
     assert f'::{conventions.CLUSTER_NAME}-github::' in signed.pop()
 
 
-def test_the_token_reaches_the_provider_from_the_environment_and_marked_secret(stack: Forge) -> None:
-    """The credential the provider opens with is the variable's value, and state never sees it.
+def test_the_token_reaches_the_provider_from_this_stacks_config_and_marked_secret(stack: Forge) -> None:
+    """The credential the provider opens with is the config key's value, and state never sees it.
 
     Two claims in one line, because they fail the same way. The program reads
-    the variable itself rather than leaving the SDK to find it, and the
-    marking that keeps an account root out of state in the clear is the
-    generated provider's own -- so this is what would notice a release that
-    stopped applying it, before a state file did.
+    the key itself rather than leaving the SDK to find one, and the marking
+    that keeps the token out of state in the clear is the generated provider's
+    own -- so this is what would notice a release that stopped applying it,
+    before a state file did.
     """
     assert stack.by_name(PROVIDER)[f'{conventions.CLUSTER_NAME}-github']['token'] == SECRET | {'value': TOKEN}
 
 
-@pytest.mark.asyncio
-async def test_a_run_without_the_token_refuses_by_name() -> None:
-    """The absence of the credential is what keeps this stack from being applied by accident.
+def test_the_config_key_is_this_projects_own_rather_than_the_providers() -> None:
+    """Bare, so `pulumi.Config()` resolves it against this project's namespace.
 
-    So it has to be a refusal that names the variable, not a run that
-    authenticates as nobody and discovers it on the first write.
+    A `github:` key would be the provider package's ambient configuration,
+    which this repository has removed everywhere else and which reads as
+    something no reviewer can distinguish from it (`stacks/dns.py`).
     """
-    # What this takes away is the fake `stack` asked for, not the operator's
-    # credential -- the process holds none of those at all
-    # (`root_credentials`), so unsetting it here restores the default rather
-    # than departing from it. Unset rather than left absent because `stack` is
-    # autouse and its block is open around this case too, and `raising` is
-    # left at its default so that a suite that stopped asking for a fake would
-    # fail here instead of passing for the wrong reason.
-    with pytest.MonkeyPatch.context() as patched:
-        patched.delenv(program.TOKEN_VARIABLE)
+    assert ':' not in program.ADMIN_TOKEN
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_the_token_refuses_by_name_and_names_what_fills_it() -> None:
+    """An unconfigured stack must stop before it declares anything.
+
+    `pulumi_github` would otherwise authenticate as nobody and discover the
+    absence on its first write. The refusal also names the command that fills
+    the key, because the checkout most likely to meet it is one whose stack
+    file predates the key -- an operator part-way across the crossing
+    (credentials.md §3), for whom `pulumi config set` is the wrong answer.
+    """
+    # `stack` is autouse and module-scoped, so the configuration this takes
+    # away has to go back whatever happens here: a failed assertion would
+    # otherwise run every later case in the module against an empty config.
+    try:
+        pulumi.runtime.set_all_config({})
         monitor = await run_with(Forge(), stack='github')
 
-        with pytest.raises(ValueError, match=program.TOKEN_VARIABLE):
+        with pytest.raises(ValueError, match=program.ADMIN_TOKEN) as refusal:
             await program.main()
 
-    assert monitor.declared == [], 'the refusal must come before anything is declared'
+        # Read off the register rather than typed here: renaming the row moves
+        # both copies, where a hand-written literal would go on matching a
+        # message that had stopped naming a command that exists
+        # (`docs/style/testing.md`).
+        record = f'credentials derived {devices.DEVICES[devices.GITHUB_ADMIN].member} record'
+        assert record in str(refusal.value)
+        assert monitor.declared == [], 'the refusal must come before anything is declared'
+    finally:
+        pulumi.runtime.set_all_config({f'kluster:{program.ADMIN_TOKEN}': TOKEN})
 
 
 def test_each_repository_keeps_the_urn_it_was_declared_at(stack: Forge) -> None:
