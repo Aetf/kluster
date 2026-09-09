@@ -383,14 +383,24 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     lands in. A GitHub Actions secret — in an Environment of this
     repository, in the ops repository, or repository-wide — is one of
     that map's channels, pushed through `gh secret set` as the GitHub
-    account root. Neither of the other two candidates can hold the job:
+    admin token, which the pusher reads out of the `github` stack's
+    committed configuration (credentials.md §3). Neither of the other
+    two candidates can hold the job:
     the `github` stack declares the *structure* the secrets sit in and
     runs a few times a year, while some of these values are generated
     in Pulumi state after it last ran; and a workflow that could write
     its own Environment's secrets could rewrite the partition
     confining it, which is the one property the partition exists to
-    have. The partition above is therefore also the map's shape —
-    `PULUMI_CONFIG_PASSPHRASE` and the state-backend bundle in every
+    have. That is why the credential which writes them — the GitHub
+    admin token — sits in the one stack whose configuration is **not**
+    encrypted under the passphrase these Environments carry
+    (credentials.md §1 rule 6): every Environment holding that
+    passphrase means every Environment could otherwise read that
+    stack's config, and the ungated pull-request Environments make
+    "every Environment" reach as far as "anybody who can push a
+    branch" (github.md §1).
+    The partition above is therefore also the map's shape —
+    the estate `PULUMI_CONFIG_PASSPHRASE` and the state-backend bundle in every
     Environment because every job runs a `pulumi` command,
     `ZEROTIER_IDENTITY` only in the Environments of the identity
     domain it belongs to (physical/gateway.md §2.6).
@@ -640,8 +650,8 @@ the appliance fails differently again, with
 
 One artifact of the logs invites a blank secret where there is none.
 The runner prints each step's inherited environment, and in it
-`GITHUB_TOKEN`, `PULUMI_BACKEND_URL`, `PULUMI_CONFIG_PASSPHRASE` and
-the three `PGSSL*` variables are all blank — in every job, including
+`PULUMI_BACKEND_URL`, `PULUMI_CONFIG_PASSPHRASE` and the three
+`PGSSL*` variables are all blank — in every job, including
 the ones that go on to reach the backend. That listing is a snapshot
 `mise-action` took before the bundle was materialized, frozen into the
 job's environment; `mise x` re-resolves them from the checkout's

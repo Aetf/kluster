@@ -1,11 +1,12 @@
 """What a test process may see of the operator's credentials in its environment: nothing.
 
-`mise.toml` materializes the account-root token into `GITHUB_TOKEN` for every
-process it starts, and it does so from a file rather than from the caller, so
-it wins over anything set on the command line. A `pytest` run started the way
-AGENTS.md requires therefore carries a live account root whether the suite
-wants one or not, and the same holds for the passphrase that decrypts every
-stack's config and the backend URL that names a client key.
+`mise.toml` materializes the passphrases that decrypt this installation's
+committed configuration and its state, and the backend URL that names a client
+key, into every process it starts, and it does so from a file rather than from
+the caller, so each wins over anything set on the command line. An account root arrives the same way where an operator's
+shell exports one, which is the third layer of the chain that finds them. A
+`pytest` run started the way AGENTS.md requires therefore carries live
+credentials whether the suite wants them or not.
 
 That is only a hazard because Pulumi prints a resource's inputs when an
 assertion about it fails, and a provider's inputs include its credential: the
@@ -18,7 +19,7 @@ import, before any test module is imported, and every suite in the process
 runs with the variables below absent. A suite that needs a value asks for a
 fake one by name through `fake_credentials`; a suite that needs one and does
 not ask gets whatever the code under test raises for an unset variable, which
-names the variable it wanted -- `kluster.stacks.github` is the worked example.
+names the variable it wanted.
 
 **The environment is one of three channels, and this module closes only it.**
 `masters._find` consults the desktop secret store, then a file under the
@@ -54,11 +55,18 @@ if TYPE_CHECKING:
 #: cannot be forgotten by the next person to declare a provider.
 ROOT_VARIABLES = frozenset(field.env for root in masters.ROOTS.values() for field in root.fields)
 
-#: The other two variables `mise.toml` lists under `redactions`: the
-#: passphrase that decrypts every stack's config, and the backend URL, which
-#: names a client key. They are not account-root fields, so the register above
-#: does not carry them, and they are secrets on exactly the same terms.
-BACKEND_VARIABLES = frozenset({'PULUMI_CONFIG_PASSPHRASE', 'PULUMI_BACKEND_URL'})
+#: The variables `mise.toml` lists under `redactions` that are not account-root
+#: fields: the passphrase that decrypts the estate's config and state, the one
+#: that decrypts the `github` stack's config, and the backend URL, which names a
+#: client key. The register above does not carry them, and they are secrets on
+#: exactly the same terms.
+BACKEND_VARIABLES = frozenset(
+    {
+        'PULUMI_CONFIG_PASSPHRASE',
+        'KLUSTER_GITHUB_PASSPHRASE',
+        'PULUMI_BACKEND_URL',
+    }
+)
 
 #: What `strip` removes and `fake` will stand in for.
 MASKED = ROOT_VARIABLES | BACKEND_VARIABLES

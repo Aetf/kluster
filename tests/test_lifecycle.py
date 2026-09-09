@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from kluster.scripts.credentials import age, entries, escrow, lifecycle, masters, workstation
+from kluster.scripts.credentials import age, entries, escrow, lifecycle, masters, pulumi_config, workstation
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
 
 PASSWORD = 'kit-password'
@@ -233,3 +233,55 @@ def test_a_missing_bundle_still_yields_the_passphrase(
     # The appliance not existing yet is the normal case during bring-up.
     assert found.passphrase
     assert found.url is None
+
+
+@needs_age
+def test_the_environment_carries_a_passphrase_for_every_stack_encrypted_apart(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    """The joint between the census and the recovery, exercised end to end.
+
+    `pulumi_config.APART` says which stacks are off the estate passphrase and
+    which register row each one's own comes from; this is what turns that into
+    values a `pulumi` run can be started with. A version that walked its own
+    list instead would fail *closed* -- the stack it forgot refuses rather than
+    running under the estate passphrase -- but it would refuse telling an
+    operator to run a `generate` they have already run, and nothing else in the
+    suite reaches `apart` through this function at all.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    generated = {
+        stack: escrow.generate(registry, escrow.rows()[row].name) for stack, row in pulumi_config.APART.items()
+    }
+    assert generated, 'nothing to exercise: no stack is encrypted apart from the estate'
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+
+    assert found.apart == generated
+    # And each reaches the stack it belongs to rather than the estate's, which
+    # is the whole of what a caller gets out of this.
+    for stack, passphrase in generated.items():
+        assert found.variables(stack)[pulumi_config.PASSPHRASE_ENV] == passphrase
+    assert found.passphrase is not None and found.passphrase not in generated.values()
+
+
+@needs_age
+def test_a_stack_encrypted_apart_whose_escrow_is_empty_is_left_for_the_refusal(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path
+) -> None:
+    """The state a machine is in between the row being declared and its `generate`.
+
+    Raising here would name a label while building an environment most commands
+    never point at that stack anyway; leaving it out lets the refusal come from
+    the place that knows which stack was asked for and names the row to run.
+    """
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
+
+    found = lifecycle.environment(kit, tmp_path / 'absent', registry)
+
+    assert found.apart == {}
+    for stack, row in pulumi_config.APART.items():
+        with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {row} generate'):
+            _ = found.variables(stack)

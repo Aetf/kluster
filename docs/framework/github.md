@@ -32,44 +32,90 @@ gate that guards `physical`.
 So **no workflow touches this stack at all**, drift detection
 included: the weekly `drift` matrix carries the four stacks CI
 deploys and not this one (ci.md §3). Drift in the forge is read the
-way an apply is prepared — `pulumi preview --refresh -s github` on the
-machine that already holds the token — which is why leaving the stack
-out of CI costs no freshness check, only the schedule of one.
+way an apply is prepared — a `pulumi preview --refresh -s github` on
+the machine that holds this stack's passphrase, which no job does —
+which is why leaving the stack out of CI costs no freshness check, only
+the schedule of one.
 
-The credential itself is an account-root-scoped token from the
-personal estate (credentials.md §2), used on the operator machine and
-minted by nothing in this repository. It is one of that section's
-account roots and is acquired through the same chain as the rest:
-`credentials root github remember` puts it on a machine, and because
-the reader is a template rather than a script, the layer it lands in is
-the token file — `.credentials/roots/github.token`, from which
-`mise.toml` materializes `GITHUB_TOKEN`, falling back to the
-environment. That paste is the only way the value ever arrives: the
-state passphrase is random too, but it is escrowed, so a machine that
-lost it runs one `recover` and has it back, while this token has no
-copy anywhere the scripts can reach and must come from the personal
-estate each time. Its absence is what stops this stack from being
-applied by accident.
+The credential itself is **a provider credential like every other one
+here**, and it lives where the rest of them live: a secret in this
+stack's committed configuration, `githubAdminToken` in
+`Pulumi.github.yaml` (credentials.md §3). What makes it unlike the
+Cloudflare or OCI credentials beside it is only how the value is
+obtained. GitHub publishes no API that creates a personal access token,
+so no seed mints it and no command can rotate it unattended: it is made
+on the account's own settings page, `credentials derived github-admin
+record` takes it from there into the stack file, and a rotation is that
+console visit plus that command plus deleting the superseded token on
+the same page. It is not an account root — the account root is the
+GitHub login behind that page, which stays in the personal estate and
+which nothing in this repository opens.
 
 **The token is read at the line that builds the provider, and a run
-without it stops there.** `pulumi_github` falls back to `GITHUB_TOKEN`
-by itself and, failing that, runs *anonymously* — so a provider left
-to configure itself turns a missing credential into a write refused
-partway through an apply rather than into a refusal. The stack program
-reads the variable and refuses by name when it is unset. What keeps the
-value out of state in the clear is the generated provider, which marks
-this input secret itself; a case over the declaration pins that rather
-than the program wrapping it a second time. `Pulumi.github.yaml`
+without it stops there.** `pulumi_github` falls back to a `GITHUB_TOKEN`
+in the environment by itself and, failing that, runs *anonymously* — so
+a provider left to configure itself turns a missing credential into a
+write refused partway through an apply rather than into a refusal. The
+stack program requires the config key and refuses by name when it is
+absent, naming the command that fills it. What keeps the value out of
+state in the clear is the generated provider, which marks this input
+secret itself; a case over the declaration pins that rather than the
+program wrapping it a second time. `Pulumi.github.yaml`
 carries `pulumi:disable-default-providers: [github]`, which is the same
 conversion for a resource that misses the explicit provider: an error
 rather than a silent fallback.
 
-That the token comes from the environment rather than from stack
-configuration is this credential's own design, which is the
-not-escrowed case of the credential-store rule in
-[style/pulumi.md](../style/pulumi.md). Escrowing it would remove the
-property the paragraph above rests on, that a machine which does not
-already hold the token cannot apply this stack.
+**This stack's configuration is encrypted apart from the rest of the
+estate, and that is what keeps CI away from the token.** The estate
+passphrase is an Environment secret in *every* Environment, because
+every job runs a `pulumi` command — so a config secret under that
+passphrase is readable by anything CI can start. That is a wider set
+than it sounds: `dns`, `k8s-base` and `apps` are `ANY_BRANCH` and
+ungated by design, since `preview.yml` runs them on pull-request
+branches, and on a `pull_request` event the workflow definitions come
+from the pull request's own branch. **Anybody who can push a branch to
+this repository could therefore write a workflow that claims one of
+those Environments and prints whatever that passphrase opens** — no
+merge, no review, no automerge. Under the estate passphrase, that would
+include a token which can delete the branch protection guarding `main`,
+and ci.md §3's partition — that no workflow may hold the credential
+which writes its own Environment's secrets — would be a statement about
+nothing.
+
+So the `github` stack has a **passphrase of its own**
+(credentials.md §3): generated, escrowed to the kit like the estate's,
+written to a workstation slot, and pushed to no Environment at all.
+`Pulumi.github.yaml` is as public as any other stack file and its
+ciphertext is committed; what is not public is the key, and no job has
+it.
+
+Two mechanisms hold that, because either alone is one accident from
+gone, and each has a test: no workflow points a `pulumi` command at this
+stack (a census over `.github/workflows/`, the same idiom the label and
+author censuses use), and the register row for this passphrase reaches
+no GitHub secret (a case over the slot map). A `preview` would be as bad
+as an `up`: reading this stack's config at all means holding the
+passphrase, and a workflow that held it would have it in an Environment.
+
+**`PULUMI_CONFIG_PASSPHRASE` is process-global, so "a passphrase per
+stack" is a property of how a stack is invoked.** Every `credentials`
+command resolves it from the stack it is acting on, in one place — a
+`Stack` derives its own environment from its own name, so no call site
+can pair one stack with another's passphrase. For a `pulumi` run by
+hand, `mise.toml` exports the value as `KLUSTER_GITHUB_PASSPHRASE` and
+the invocation passes it in:
+
+    PULUMI_CONFIG_PASSPHRASE="$KLUSTER_GITHUB_PASSPHRASE" pulumi preview -s github
+
+Getting it wrong is not silent. `encryptionsalt` is a verifier, so
+`pulumi` answers `error: incorrect passphrase`, exits non-zero and
+writes nothing — for a read and for a write alike. (The one operation
+that would re-key a stack quietly is a `config set --secret` against a
+file with *no* salt, which is why credentials.md §4.2 forbids deleting
+that line.) A `credentials` run on a machine holding no passphrase for
+this stack refuses one step earlier still, naming the stack and the
+command that fills it, rather than letting `pulumi` refuse at the far
+end of whatever was in progress.
 
 ## 2. What the plan permits today
 

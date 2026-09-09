@@ -29,9 +29,10 @@ MISE = Path(__file__).parent.parent / 'mise.toml'
 def test_this_process_environment_holds_none_of_the_operators_credentials() -> None:
     """The property the whole mechanism exists for, asserted where it matters.
 
-    `mise.toml` materializes the account-root token for every process it
-    starts, so on an operator workstation this fails the moment `conftest`
-    stops stripping -- and it fails here, naming the variable, rather than in
+    `mise.toml` materializes the state passphrase and the backend URL for every
+    process it starts, and an operator shell may export an account root
+    besides, so on a workstation this fails the moment `conftest` stops
+    stripping -- and it fails here, naming the variable, rather than in
     whichever suite next declares a provider and renders the value into a
     failed assertion.
     """
@@ -48,7 +49,7 @@ def test_stripping_takes_the_credentials_and_leaves_the_rest() -> None:
     the mask has to be a named set rather than a heuristic over names that
     look secret.
     """
-    environment = {'GITHUB_TOKEN': 'ghp_a_live_looking_token', 'PATH': '/usr/bin', 'HOME': '/home/nobody'}
+    environment = {'KLUSTER_B2_KEY': 'a-live-looking-master-key', 'PATH': '/usr/bin', 'HOME': '/home/nobody'}
 
     root_credentials.strip(environment)
 
@@ -78,7 +79,7 @@ def test_every_field_of_every_account_root_is_masked() -> None:
     assert declared <= root_credentials.MASKED
     # Non-empty, so that a register this stopped being able to read could not
     # satisfy the line above by covering nothing.
-    assert 'GITHUB_TOKEN' in declared
+    assert 'KLUSTER_B2_KEY' in declared
 
 
 def test_every_variable_mise_sets_is_masked_or_deliberately_not() -> None:
@@ -108,7 +109,7 @@ def test_the_variables_left_unmasked_carry_paths_rather_than_values() -> None:
 
 def test_a_fake_credential_names_the_variable_it_stands_in_for() -> None:
     """A value that turns up in a diff should identify itself, and say it opens nothing."""
-    assert root_credentials.fake('GITHUB_TOKEN') == 'a-fake-github-token-that-opens-nothing'
+    assert root_credentials.fake('KLUSTER_B2_KEY') == 'a-fake-kluster-b2-key-that-opens-nothing'
 
 
 def test_a_name_that_carries_no_credential_cannot_be_faked() -> None:
@@ -125,8 +126,8 @@ def test_a_fake_credential_lasts_exactly_as_long_as_the_block() -> None:
     holding. Whatever a broken mask let through would otherwise be printed by
     the case whose subject is that nothing gets printed.
     """
-    with root_credentials.fake_credentials('GITHUB_TOKEN') as values:
-        matches = os.environ.get('GITHUB_TOKEN') == values['GITHUB_TOKEN']
+    with root_credentials.fake_credentials('KLUSTER_B2_KEY') as values:
+        matches = os.environ.get('KLUSTER_B2_KEY') == values['KLUSTER_B2_KEY']
         assert matches, 'the block did not put its fake value in place'
 
     present = sorted(name for name in root_credentials.MASKED if name in os.environ)

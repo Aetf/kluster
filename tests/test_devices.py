@@ -25,6 +25,7 @@ from kluster.scripts.credentials.kdbx import KdbxError
 UNIFI = devices.DEVICES['unifi']
 ADGUARD = devices.DEVICES['adguard']
 ZEROTIER = devices.DEVICES['zerotier']
+GITHUB_ADMIN = devices.DEVICES[devices.GITHUB_ADMIN]
 
 
 def refuses(prompt: str) -> str:
@@ -32,9 +33,20 @@ def refuses(prompt: str) -> str:
     raise AssertionError(f'nothing plain should have been asked for, and this was: {prompt}')
 
 
+#: What a machine that holds every passphrase can tell a `pulumi` run. The
+#: `github` stack is encrypted apart from the estate (`pulumi_config.APART`),
+#: so a helper that left it out would have every case about that stack failing
+#: on the passphrase instead of on its subject.
+FULLY_EQUIPPED = pulumi_config.BackendEnvironment(
+    passphrase='an-estate-passphrase',
+    apart={stack: f'a-{stack}-passphrase' for stack in pulumi_config.APART},
+)
+
+
 def stack(name: str) -> tuple[pulumi_config.Stack, RecordedPulumi]:
     runner = RecordedPulumi()
-    return pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), run=runner), runner
+    slot = pulumi_config.Stack(name=name, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED, run=runner)
+    return slot, runner
 
 
 @pytest.fixture
@@ -276,3 +288,119 @@ def test_the_delivery_names_the_file_to_commit(typed: None, caplog: pytest.LogCa
     # A push that stopped at `pulumi config set` would leave the credential
     # live on the device and invisible to everyone else's checkout.
     assert f'commit Pulumi.{ADGUARD.stack}.yaml' in caplog.text
+
+
+def test_a_row_read_back_answers_with_what_was_delivered(typed: None) -> None:
+    """The one row a command authenticates with, out of the stack that holds it.
+
+    `credentials derived sync` pushes every GitHub secret as the admin token,
+    and it takes it from the same place the `github` stack does rather than
+    from a copy of its own — one credential, one home (credentials.md §3).
+    """
+    slot, _ = stack(GITHUB_ADMIN.stack)
+    _ = devices.deliver(GITHUB_ADMIN, stack=slot)
+
+    assert devices.borrow(GITHUB_ADMIN, stack=slot) == 'a-typed-secret'
+
+
+def test_reading_back_a_stack_that_has_no_such_key_names_the_command_that_fills_it() -> None:
+    """The mid-crossing state: a checkout whose stack file predates the key.
+
+    `pulumi`'s own refusal says to run `pulumi config set`, which would put the
+    credential in the process table and skip the read-back every config slot is
+    delivered with. Naming the `record` command is what keeps the answer in the
+    error rather than in a second investigation.
+    """
+    slot, _ = stack(GITHUB_ADMIN.stack)
+
+    with pytest.raises(pulumi_config.SlotRefused, match=f'credentials derived {GITHUB_ADMIN.member} record'):
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+
+def test_a_row_that_reads_back_empty_is_refused_rather_than_handed_on() -> None:
+    """An empty credential authenticates as nobody, and fails somewhere else.
+
+    A slot emptied by hand is the way this happens; passing it on would make
+    the failure a provider's refusal in whatever command borrowed it.
+    """
+    slot, runner = stack(GITHUB_ADMIN.stack)
+    runner.config[GITHUB_ADMIN.fields[0].key] = '  '
+
+    with pytest.raises(pulumi_config.SlotRefused, match='empty'):
+        _ = devices.borrow(GITHUB_ADMIN, stack=slot)
+
+
+def test_a_row_of_several_secrets_has_no_single_value_to_authenticate_with() -> None:
+    """`borrow` answers "what does this authenticate as", which a pair cannot.
+
+    A row with two secrets would have to say which, and the caller asking is
+    asking for *the* credential — so the refusal is the honest answer rather
+    than a choice made silently.
+    """
+    slot, _ = stack(ADGUARD.stack)
+
+    with pytest.raises(KdbxError, match='no single value'):
+        _ = devices.borrow(ADGUARD, stack=slot)
+
+
+def test_a_stack_encrypted_apart_refuses_on_a_machine_that_holds_no_passphrase_for_it() -> None:
+    """The trap the per-stack passphrase creates, closed where it is created.
+
+    `PULUMI_CONFIG_PASSPHRASE` is process-global, so "a different passphrase
+    for one stack" is a property of how that stack is invoked. Left to
+    `pulumi`, the wrong one is answered with `error: incorrect passphrase` --
+    loud, but naming neither the stack nor the fix, and arriving at the far end
+    of whatever command was running. This refusal comes first and names both.
+    """
+    runner = RecordedPulumi()
+    bare = pulumi_config.Stack(
+        name=GITHUB_ADMIN.stack,
+        directory=pulumi_config.project_dir(),
+        environment=pulumi_config.BackendEnvironment(passphrase='an-estate-passphrase'),
+        run=runner,
+    )
+
+    # The row is read off the census that decides it rather than typed here: a
+    # rename moves both, where a literal would go on matching a message that
+    # had stopped naming a command that exists (`docs/style/testing.md`).
+    fills = pulumi_config.APART[GITHUB_ADMIN.stack]
+    with pytest.raises(pulumi_config.PassphraseMissing, match=f'credentials derived {fills} generate'):
+        _ = devices.borrow(GITHUB_ADMIN, stack=bare)
+
+    # And the estate passphrase is not quietly used instead, which is the whole
+    # point: that value is in every CI Environment.
+    assert runner.invocations == []
+
+
+def test_a_machine_that_cannot_decrypt_the_stack_is_not_told_the_credential_is_missing() -> None:
+    """Two states, two answers. `borrow` dresses one refusal in its own words and not this one.
+
+    "Run `record` to put the token there" sends an operator to the GitHub UI;
+    what they actually need is the passphrase that opens the stack they would
+    be writing into.
+    """
+    bare = pulumi_config.Stack(
+        name=GITHUB_ADMIN.stack,
+        directory=pulumi_config.project_dir(),
+        environment=pulumi_config.BackendEnvironment(passphrase='an-estate-passphrase'),
+        run=RecordedPulumi(),
+    )
+
+    with pytest.raises(pulumi_config.SlotRefused) as refusal:
+        _ = devices.borrow(GITHUB_ADMIN, stack=bare)
+
+    assert f'credentials derived {GITHUB_ADMIN.member} record' not in str(refusal.value)
+
+
+def test_a_stack_on_the_estate_passphrase_is_handed_that_one() -> None:
+    """The other half: only the stacks the census names are apart."""
+    equipped = pulumi_config.Stack(
+        name=devices.DNS_STACK, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED
+    )
+    apart = pulumi_config.Stack(
+        name=GITHUB_ADMIN.stack, directory=pulumi_config.project_dir(), environment=FULLY_EQUIPPED
+    )
+
+    assert devices.DNS_STACK not in pulumi_config.APART
+    assert equipped.env[pulumi_config.PASSPHRASE_ENV] == 'an-estate-passphrase'
+    assert apart.env[pulumi_config.PASSPHRASE_ENV] == f'a-{GITHUB_ADMIN.stack}-passphrase'

@@ -21,7 +21,7 @@ import keyring.backends.fail
 import keyring.errors
 import pytest
 
-from kluster.scripts.credentials import kdbx, masters, workstation
+from kluster.scripts.credentials import devices, kdbx, masters, workstation
 from kluster.scripts.credentials.kdbx import KdbxError
 
 
@@ -127,17 +127,22 @@ def test_every_field_names_its_file_and_its_variable() -> None:
     assert all(variables) and len(set(variables)) == len(variables)
 
 
-def test_the_github_admin_token_is_a_root_like_the_others() -> None:
-    # It used to stand outside: a hand-written file and a mise template, with
-    # no `master` subcommand and no place in the register's own machinery.
-    root = masters.ROOTS['github']
+def test_a_root_is_only_an_account_a_script_authenticates_as() -> None:
+    """The membership rule, which is what keeps a provider credential out of here.
 
-    assert [field.name for field in root.fields] == ['token']
-    # mise materializes this one for `pulumi up -s github`, and a template can
-    # open neither a keyring nor a prompt -- so the file layer is where
-    # `remember` puts it.
-    assert root.field('token').env == 'GITHUB_TOKEN'
-    assert root.field('token').materialized
+    A console credential the system can hold instead belongs to §3 and is
+    delivered into the stack that reads it (`devices.py`); it is a root only
+    where a script has to act as the account itself. The GitHub admin token is
+    the worked example of the wrong side of that line -- it is a provider
+    credential, so it lives in the `github` stack's config and nowhere here --
+    and a root re-added for it would give one credential two homes.
+    """
+    assert set(masters.ROOTS) == {masters.OCI, masters.B2}
+    # Symbolically: the GitHub admin token is a row of the console-made
+    # register and not a field of any root. Naming its config key here instead
+    # would only restate the line that declares it.
+    assert devices.GITHUB_ADMIN in devices.DEVICES
+    assert not any(devices.GITHUB_ADMIN.startswith(member) for member in masters.ROOTS)
 
 
 def test_a_remembered_root_is_read_without_asking(store: MemoryKeyring, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,22 +249,6 @@ def test_a_half_written_file_is_treated_as_absent(headless: None, monkeypatch: p
     assert credential['key'] == 'master-key'
 
 
-def test_a_materialized_root_is_kept_in_its_file_where_a_template_can_read_it(
-    store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr('getpass.getpass', _answers('ghp_token'))
-
-    _ = masters.remember(masters.ROOTS['github'], _refuse)
-
-    slot = local / 'roots' / 'github.token'
-    assert slot.read_text() == 'ghp_token\n'
-    assert slot.stat().st_mode & 0o777 == 0o600
-    # One layer, not two: a second copy in the secret store would be exposure
-    # bought for nothing, since no script reads this root interactively.
-    assert store.items == {}
-    assert masters.load(masters.ROOTS['github'], _refuse)['token'] == 'ghp_token'
-
-
 def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
     headless: None, local: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -277,14 +266,18 @@ def test_remember_falls_back_to_the_file_where_there_is_no_secret_store(
 def test_forget_removes_the_token_file_as_well_as_the_store_entry(
     store: MemoryKeyring, local: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr('getpass.getpass', _answers('ghp_token'))
-    _ = masters.remember(masters.ROOTS['github'], _refuse)
+    monkeypatch.setattr('getpass.getpass', _answers('master-key'))
+    _ = masters.remember(masters.ROOTS['b2'], _answers('account-id'))
+    # Both writable layers carry something, which is what makes the assertions
+    # below distinguish a `forget` that clears one from a `forget` that clears
+    # the machine: `remember` used the store, so the file is written here.
+    _ = workstation.write(workstation.root_path('b2.key'), 'master-key')
 
-    masters.forget(masters.ROOTS['github'])
+    masters.forget(masters.ROOTS['b2'])
 
     # Forgetting a root leaves nothing behind on the machine; the environment
     # layer is the caller's shell and not this command's to unset.
-    assert not (local / 'roots' / 'github.token').exists()
+    assert not (local / 'roots' / 'b2.key').exists()
     assert store.items == {}
 
 

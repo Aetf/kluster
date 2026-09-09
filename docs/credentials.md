@@ -61,15 +61,17 @@ facts about them.
     non-interactively afterward — by `mise.toml` building a `pulumi`
     run's environment, or by a script that must not stop to ask. It is
     the channel for what CI holds as an Environment secret and a
-    workstation needs anyway: the Pulumi passphrase, the state
-    backend's `operator` bundle, the `github` stack's admin token.
-    Deliberately not the desktop secret store, which is where account
-    roots go (§2) — a root is interactive and rare, so a store that
-    asks a session to unlock suits it, while these are read on *every*
-    `pulumi` run by a template that can neither prompt nor unlock a
-    keyring. A slot holds only what a command can write again — the
-    passphrase is recovered from escrow, the bundle re-issued, the
-    token re-pasted — so losing one costs a command and never a
+    workstation needs anyway: the Pulumi passphrase and the state
+    backend's `operator` bundle. Deliberately not the desktop secret
+    store, which is where account roots go (§2) — a root is interactive
+    and rare, so a store that asks a session to unlock suits it, while
+    these are read on *every* `pulumi` run by a template that can
+    neither prompt nor unlock a keyring. **No provider credential is
+    here**: each of those is a config secret in the stack that reads it,
+    which is the channel below and the reason a `pulumi` run needs no
+    prepared shell beyond the passphrase. A slot holds only what a
+    command can write again — the passphrase is recovered from escrow,
+    the bundle re-issued — so losing one costs a command and never a
     credential.
 
     The two Pulumi channels are separate rows because their exposure
@@ -80,9 +82,22 @@ facts about them.
     Postgres and never enters git, which makes it the stronger of the
     two and the right home for what a program *generates* (Talos
     machine secrets, ZeroTier identities, restic repository
-    passwords). One passphrase protects both, and that passphrase is
-    escrowed to the kit's recovery key (§2.2) — so either channel
-    opens from the kit and from nothing else.
+    passwords). Both channels are protected by the *estate*
+    passphrase, escrowed to the kit's recovery key (§2.2) — so either
+    channel opens from the kit and from nothing else.
+
+    **One stack is encrypted apart: `github`.** Its config secret is
+    the admin token that can switch off the protections guarding
+    `main`, and the estate passphrase is in every CI Environment
+    because every job runs a `pulumi` command — so a config secret
+    under *that* passphrase is readable by anything CI can start,
+    which for the ungated pull-request Environments means anybody who
+    can push a branch here. The `github` stack therefore has a
+    passphrase of its own (§3), escrowed like the estate's and
+    delivered to no Environment at all. The channel is unchanged and
+    so is its exposure: `Pulumi.github.yaml` is committed, and its
+    ciphertext is public. What differs is that the key opening it is
+    held by the workstation and the kit alone.
 7.  **Provisioning is scripted.** Minting and distributing a
     credential is an executable procedure — a `credentials`
     subcommand (§4), never a documented sequence of console clicks.
@@ -110,31 +125,34 @@ them, and every seed below is minted through a console exactly once
 and self-reproduces from then on. They live in the operator's personal
 estate — its own database, its own succession — and the seed kit
 borrows them at two moments only: first bring-up, and re-seeding after
-a total seed loss. The GitHub admin token the `github` stack applies
-with (framework/github.md §1) belongs to this class rather than to
-either tier below: it is an account root used from the workstation,
-minted by no seed and pushed by no command. It reaches its workstation
-slot (§4.4) the way every account root reaches a machine — through
-`credentials root github remember`, which is a paste rather than a
-mint — and that is exactly why that stack is not something CI runs.
+a total seed loss.
 
-Three of them are nonetheless *used* from the workstation. Two by a
+**A root is the account itself, never a credential made inside it.**
+Where an account's console can create a credential the system is able to
+hold — a token, an API key, an admin login — that credential is a §3 row
+delivered into the slot its consumer reads, and only the login that made
+it stays here. The GitHub admin token the `github` stack declares the
+forge with is that case, and is a §3 row delivered by `credentials
+derived github-admin record`; so is the ZeroTier Central API token. What
+is a root is the GitHub account itself, which no §3 row can replace and
+which nothing in this repository opens.
+
+Two of them are nonetheless *used* from the workstation, both by a
 script, because the seeds they mint cannot be minted by anything
 smaller: an OCI API key belonging to a user who may manage users,
 groups and policies in the tenancy, and the B2 account master key,
-which re-seeds B2 after a total loss. The third by a provider — the
-GitHub admin token, which a `pulumi up -s github` reaches for. (Cloudflare
+which re-seeds B2 after a total loss. (Cloudflare
 has no such root: its only job would have been minting the seed, and
 the platform forbids that. A token minted through the API may not carry
 token-management permissions, so nothing can mint a credential of the
 seed's own class.)
 
-**One acquisition chain serves all three**, consulted per field rather
+**One acquisition chain serves both**, consulted per field rather
 than per root, first hit wins:
 
 1.  the **desktop secret store**, one credential at a time;
 2.  the root's **token file**, a workstation slot (§1 rule 6) — the
-    layer a non-interactive reader can use;
+    layer a machine with no desktop secret store falls back to;
 3.  the root's **environment variable**, which is how CI or a one-off
     shell hands a value in without writing it anywhere;
 4.  a **console prompt**, which names the credential and prints how it
@@ -146,13 +164,10 @@ recorded in the register itself (`masters.py`) rather than being
 conventions a reader has to reconstruct.
 
 `credentials root <name> remember` is the only thing that ever writes
-a root, and which layer it writes follows from who reads it. A root a
-*script* asks for goes to the secret store, so a value that can stay
+a root, and it writes the secret store, so a value that can stay
 out of the filesystem does — falling back to the token file on a machine
 that has no store at all, which is what makes `remember` meaningful on a
-headless box. The GitHub token goes to its file, because what reads it
-is a `mise.toml` template that can open neither a keyring nor a prompt;
-a second copy in the store would be exposure bought for nothing.
+headless box.
 `credentials root ls` says which roots this machine holds and which
 layer each came from, printing no values, and `credentials root <name>
 forget` removes both writable layers. Neither the personal estate
@@ -280,7 +295,8 @@ itself is self-service (§4.3).
     separately. Without it a successor can open every seed and still not
     reach the Cloudflare seed's console-only rotation, replace the
     console-made credentials §3 carries — the ZeroTier Central token,
-    the two GitHub App keys — or re-seed after a total loss.
+    the GitHub admin token, the two GitHub App keys — or re-seed after a
+    total loss.
 -   **Opened twice in a system's life**: at bring-up (§4.1) and at
     rotation (§4.2) — plus the yearly offline day, which opens one kit
     and verifies it against §2's table. It is emphatically **not** a
@@ -317,6 +333,7 @@ issued under a superseded CA.
 | Label | Escrowed secret | Origin |
 | --- | --- | --- |
 | `pulumi/passphrase` | Pulumi state passphrase | Generated |
+| `github/passphrase` | The `github` stack's own config passphrase (§3) | Generated |
 | `alertmanager/read` | Bearer token the issue-sync poller presents (§3) | Generated |
 | `state-backend/ca` | State-backend CA private key | Generated |
 | `backup/age/<generation>` | age identity for pg_dump encryption | Generated |
@@ -453,7 +470,8 @@ cell would say `pending` to an operator already being served.
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (pending) | Alert producer step |
 | GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (pending) | Weekly drift trigger |
 | ZT CI member identities (`ci-physical`, `ci-dns`) | generated in-state (`zerotier_identity`) | One per identity domain, `ci`-tagged and flow-rule-confined (gateway.md §2.3) | CI env | CI per-run join |
-| Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
+| Pulumi state passphrase | generated, escrowed as `pulumi/passphrase` | Decrypts state secrets, and the config secrets of every stack but `github` | escrow · CI env (all stacks) · workstation slot | every `pulumi` run |
+| `github` stack passphrase | generated, escrowed as `github/passphrase` | Decrypts the `github` stack's config secrets and nothing else | escrow · workstation slot | a `pulumi` run against `github`, and the `credentials` commands that reach that stack's config |
 | State-backend CA | generated, escrowed as `state-backend/ca` | Issues every certificate below | escrow (private half) · on-box and every bundle (the certificate) | certificate issuance |
 | State-backend certificates (server, `ci`, `operator`) | issued from the CA, keys generated at issuance and never escrowed | postgres:// mTLS | on-box (server) · CI env · workstation slot (the `operator` bundle) | Pulumi state access |
 | age backup identity | generated, escrowed as `backup/age/<generation>` | Decrypts state-backend pg_dumps | escrow · on-box (public half, a Butane recipient) | micro cron, a restore run from the kit |
@@ -465,6 +483,7 @@ cell would say `pending` to an operator already being served.
 | UniFi API key | Dedicated local admin | Network API | Pulumi config secret | `physical` |
 | AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
+| GitHub admin token | Made in the GitHub UI (no token API) | This account's repositories — branch protection, rulesets, Environments and their gates: `repo`, the narrowest scope that covers them | Pulumi config secret (`githubAdminToken`) | `github`, and `credentials derived sync`, which pushes every GitHub secret as it |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (pending) · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo Environment (`drill`; pending) | Drill workflows |
@@ -553,7 +572,7 @@ service user — so the only act on this side is the paste into
 `physical`'s config. Rotating either is generating the pair, putting
 the public half where that automation reads it, and that paste.
 
-**Three more are made in the console that checks them.** The UniFi API
+**Some are made in the console that checks them.** The UniFi API
 key and the AdGuard admin login belong to the appliances themselves: the
 controller mints a key for a dedicated local admin and shows it once,
 and AdGuard Home has no scoped API at all, so its admin account *is* the
@@ -567,23 +586,66 @@ account (physical/gateway.md §1.1). The ZeroTier Central token is the
 same shape one layer out: Central publishes no token API, so an account
 token made in its web console is what `physical` authenticates with,
 as broad as the account it belongs to because Central offers nothing
-narrower. None of the three is minted here, so
+narrower. **The GitHub admin token is the fourth**, and the same shape
+again: GitHub publishes no API that creates a personal access token, so
+one made on the account's own settings page is what the `github` stack
+declares the forge with. It is a **classic** token scoped `repo`, which
+is the narrowest that scope list offers, and the excess it carries
+beyond branch protection, rulesets, Environments and their gates is the
+row's own residual. A fine-grained token's `Administration` permission
+would be narrower still, and the reason this row is not one is the ops
+repository: a fine-grained token is scoped to repositories of a single
+owner and this stack declares two, one of them private, so the classic
+token is what covers the pair with one credential rather than two whose
+rotations could drift apart. None of them is minted here, so
 `credentials derived <row> record` (§4) is the delivery
 alone: the console steps, the value, the stack config that reads it. The
 consumer decides which stack — `physical` drives the UDM's Network API
-and the overlay's Central account, `dns` writes the AdGuard rewrites —
-and nothing is recorded beside the token: which network the account
-administers here is an identity rather than a setting, so it is a
-constant in `conventions`, and the controller's own address is not
-recorded either, because it is the overlay address the roster assigns,
-stated once in `conventions` and derived everywhere it is dialed.
+and the overlay's Central account, `dns` writes the AdGuard rewrites,
+`github` declares the forge — and nothing is recorded beside the token.
+Which network the account administers here is an identity rather than a
+setting, so it is a constant in `conventions`; the controller's own
+address is not recorded either, because it is the overlay address the
+roster assigns, stated once in `conventions` and derived everywhere it
+is dialed; and the GitHub account the admin token administers is
+`conventions.forge` for the same reason.
 
-Each of the three rotates by being made again in the same console and
-re-recorded, which is why none of them is a seed: they mint nothing, so
-there is nothing for the kit to hold or to reproduce. What guarantees a
-lost one can be replaced is the account or appliance behind it — the
-Central account is one of the account roots §2 keeps out of the kit, and
-the two appliances are the installation's own.
+**Rotation is a console visit plus a re-run, and the program does no
+half of the first.** Each is made again in the same console — a new
+UniFi key on the admin's page, a new Central token, a new personal
+access token on the tokens page — `credentials derived <row> record`
+delivers it, the stack file is committed, and the superseded credential
+is deleted in the same visit. What the command does is the delivery and
+its proof: it encrypts the value into the stack's committed
+configuration and decrypts it again to show the slot holds what was
+handed over. Of the three steps a minted row's `mint` performs, it does
+none — and the reasons differ, which matters because only one of them is
+a wall. **Creating and retiring are API absences**: no endpoint of
+these platforms makes a personal access token, a UniFi key, a Central
+token or an AdGuard login, or deletes one, so a console visit is the
+whole of both. **Verifying is a decision.** Any authenticated call is a
+verification, and for the GitHub row a cheap one exists — a classic
+token's scopes come back in the `X-OAuth-Scopes` header of any request —
+so what stands in for it is chosen rather than forced: the first
+`pulumi preview -s github` authenticates as the token, against the real
+account, and shows what it would change, which is a stronger proof than
+a scope string and is a step the operator takes anyway. If a `record`
+that failed fast were ever worth more than that, this is the row where
+adding the check is cheap, and this sentence is what says so. That the
+platforms mint nothing is also why none of them is a seed: they
+mint nothing, so there is nothing for the kit to hold or to reproduce.
+What guarantees a lost one can be replaced is the account or appliance
+behind it — the Central and GitHub accounts are among the account roots
+§2 keeps out of the kit, and the two appliances are the installation's
+own.
+
+**The GitHub admin token is read back as well as read.** It is the one
+row of this shape with a second consumer: `credentials derived sync`
+authenticates to the forge as it before pushing any GitHub secret
+(ci.md §3), and it takes it out of the `github` stack's configuration
+rather than from a copy of its own. One credential, one home — which is
+also why `sync` needs the state backend reachable and the passphrase in
+hand, as every other command that reads a config secret does.
 
 **Two more are made in a console and read by a workflow.** Each
 single-purpose GitHub App has a private key generated on its own settings
@@ -628,7 +690,6 @@ name.
 | `credentials root <name> remember` | Once per machine and root, before a bring-up or a re-seed that needs it. Keeps one account root (§2) where its readers reach it. Skipping it costs a prompt, not a failure. |
 | `credentials root ls` | Which roots this machine holds, and which layer of the chain each comes from. Prints no values. |
 | `credentials root <name> forget` | Removes one root from the secret store and from its token file. |
-| `credentials root github remember` | Once per workstation that applies the `github` stack. Writes the token file `mise.toml` turns into `GITHUB_TOKEN`; nothing in this repository can recreate the value, so this is where it enters. |
 | `credentials kit bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
 | `credentials kit bootstrap --only <member>` | One seed was lost. Re-creates that row alone. `--only recovery` is also the repair path for a kit that predates the escrow: creating that row writes the recovery key (§2.2) into the kit and `escrow/RECIPIENTS` into the checkout. It refuses a kit that already holds a live recovery key, because every ciphertext opens with that one and nothing else. |
 | `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. Every provider row holds its account against what `conventions` records before its first write: the OCI create, against the tenancy its account root names, ahead of the group, user, membership and policy it would otherwise leave standing there; the Cloudflare adopt, against the accounts the console-made token can see, while the operator is still on the dashboard page that fixes a token made in the wrong one; and the B2 create, against the account its master key authorizes as, before the seed every later B2 credential descends from exists. The recovery keypair is not a provider credential at all. |
@@ -637,6 +698,7 @@ name.
 | `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records — this being the first place in a bring-up that check can fire. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
 | `state-backend provision` | After the kit and the appliance's key exist; every stack needs the backend before it can act. |
 | `credentials derived pulumi-passphrase generate` | After the state backend exists. The state passphrase (§2.2) is generated, its ciphertext committed and its workstation slot (§4.4) written in one act, so `mise.toml` puts it into the environment of every later `pulumi` run and the backend URL comes from the bundle beside it — a `pulumi` command needs no prepared shell. The general form of this verb is below. |
+| `credentials derived github-passphrase generate` | Before anything reads or writes the `github` stack's config, and once per installation. Generates that stack's own passphrase, commits its ciphertext and writes its workstation slot (§4.4) in one act — the same shape as the row above, differing in the one thing it exists for: it reaches no CI Environment, so nothing CI can start can read `Pulumi.github.yaml`. A second workstation runs `credentials derived github-passphrase recover` instead. Re-running `generate` files a *new* generation and does **not** re-encrypt the stack; rotating it is §4.2. |
 | `credentials derived cloudflare-zones mint [--stack <name>]` | After the kit and the state backend exist. Mints the zone-scoped Cloudflare token (§3) from the seed and writes it into the `dns` stack's config, under the one key the stack reads; the stack file is then committed. The account the zones live in is not written beside it — that is `conventions.CLOUDFLARE_ACCOUNT`, and the mint holds the account it is about to mint in against it, before it creates anything. Re-running it rotates that token. It is the only row that takes a `--stack` (default `dns`): what each of the others mints is named after its row and its mint retires everything else of that name, so a delivery aimed at another stack would revoke the real one's live credential on the way to filling that stack's slot. |
 | `credentials derived cloudflare-gateway-acme mint` | After the kit and the state backend exist. Mints the gateway's own ACME token (§3) from the same seed, scoped to the zones its vhosts are served under, and writes it into the `physical` stack's config secret; the stack file is then committed, and the stack writes the token onto the device. Which stack takes it is not a choice — the token is named after the row and minting retires every other token of that name. The account is held against `conventions.CLOUDFLARE_ACCOUNT` before the token is created, as it is for the zones row: the check belongs to the mint, so no row can be the one that forgets it. Re-running it rotates that token. |
 | `credentials derived oci-physical mint` | After the state backend exists. The same mint for the `physical` stack, into that stack's config secrets; the stack file is then committed. It also creates that stack's compartment where the tenancy has none, and prints the `OCID` to record in `conventions` and commit. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records. |
@@ -644,12 +706,13 @@ name.
 | `credentials derived unifi record` | After the state backend exists, and after the controller has minted a key for its dedicated local admin — which the command prints the steps for. Takes the key without echoing it, into the `physical` stack's config; the stack file is then committed. The controller's address is not recorded beside it, being the overlay address `conventions` assigns. Re-running it is how a replaced key is delivered. |
 | `credentials derived adguard record` | The same, for the admin login both AdGuard instances answer to, into the `dns` stack's config — the stack that writes the split-horizon rewrites. |
 | `credentials derived zerotier record` | The same again, for the ZeroTier Central API token, into the `physical` stack's config — which network of that account is this installation's overlay is a constant in `conventions` rather than a value recorded beside the token. Central publishes no token API, so a token created in its web console and re-recorded here is the whole of a rotation; the superseded one is deleted in the same console. |
+| `credentials derived github-admin record` | Once per installation, and again on each rotation, for the GitHub admin token — into the `github` stack's config, which is where both the stack and `credentials derived sync` read it. Nothing in this repository can create the value: GitHub publishes no API that makes a personal access token, so a token generated on the account's settings page and recorded here is the whole of a rotation, and the superseded one is deleted on the same page. It runs before `derived sync`, which authenticates as it. |
 | `credentials derived github-dispatch-key record` / `credentials derived github-trigger-key record` | After the kit exists, and after the App's page has generated a private key — which the command prints the steps for. Takes the key on standard input and escrows it as the row's next generation, so a re-run with a key already on file changes nothing and a re-run with a fresh one is the rotation. `--from-kit` reads it out of the entry a kit that still carries the key as a seed row holds, instead of from standard input. |
 | `credentials derived ls` | Any time, with or without a kit. Prints the slot map (below): every §3 credential, where its value comes from, and every slot it lands in, the ones still waiting on a consumer included. It reads a checked-in file, so it needs no token, no kit and no network. |
 | `credentials derived sync [--only <row>] [--bundle-dir <path>]` | Once during bring-up, and again whenever one of those values moves or a slot is lost. Copies into their GitHub secrets the rows whose value lives somewhere else — read back out of a stack's state, recovered from the escrow, or typed in because the slot is its only storage — resolve, push, verify, per row. A row born into its slot is out of scope and is passed over; naming one is refused, pointing at the `mint` that owns it. `--only` addresses one row, and is what replaces a value that was typed in. |
 | `credentials derived <row> recover [--generation <n>] [--stdout]` | Reading an escrowed secret back out. `derived pulumi-passphrase recover` is the common one: it fills the passphrase slot (§4.4) so `mise.toml` finds it and a local preview needs no offline database; `--stdout` prints instead of writing, for a pipe into another machine. `--generation` opens an older one — the certificate issued under a superseded CA, the dump written under a superseded age identity — where the default is the newest. |
 | `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
-| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — today only `pulumi-passphrase` does, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
+| `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the two passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
 | `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
 | `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. |
 | `credentials kit rewrap` | The resume and repair path for that re-wrap: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. A rotation interrupted part way, or a ciphertext added while the file already named the successor, is what it is for; an ordinary kit rotation never calls it. |
@@ -956,25 +1019,41 @@ that puts a value there.
     command, and re-running one rotates that row. The OCI row creates the
     `physical` stack's compartment on its first run and prints the `OCID`,
     which is recorded in `conventions` and committed with the rest.
-7.  `credentials derived unifi record`,
-    `credentials derived adguard record` and
-    `credentials derived zerotier record` — the three §3 rows whose
+7.  `credentials derived github-passphrase generate` — the `github`
+    stack's own passphrase, before anything reads or writes that stack's
+    config. It is stage 5's command on a second row, and it is separate
+    from stage 5 for the one reason the row exists: this value goes to no
+    Environment, so the stack whose config carries the forge's admin token
+    is unreadable by anything CI can start (§1 rule 6). A machine that
+    skips it does not silently fall back to the estate passphrase —
+    every command that would touch that stack refuses by name.
+8.  `credentials derived unifi record`,
+    `credentials derived adguard record`,
+    `credentials derived zerotier record` and
+    `credentials derived github-admin record` — the §3 rows whose
     credential is made in the console that checks it rather than minted
     here. Each prints the steps that create it, takes the value, and
     writes it into the config of the stack that reads it, which is then
-    committed like the rows above.
-8.  `credentials derived github-dispatch-key record` and
+    committed like the rows above. The GitHub one is last of these
+    because stage 10 authenticates as it, and it needs stage 7 to have
+    run.
+9.  `credentials derived github-dispatch-key record` and
     `credentials derived github-trigger-key record` — the two GitHub App
     private keys, each generated on its own App's settings page and
     escrowed here. No stack authenticates with either, so the ciphertext
     is the delivery for now, and it is a file to commit; the workflow that
     mints an installation token from a key arrives with its own repository
     secret (§3).
-9.  `credentials derived sync` — the GitHub secrets CI reads, for the §3
+10. `credentials derived sync` — the GitHub secrets CI reads, for the §3
     rows whose value lives somewhere else (§4). Last, because a row read
     out of a stack needs that stack to have run; a row it cannot fill yet
     says which slot is waiting on what, and the same command run again
-    fills it.
+    fills it. It authenticates as the GitHub admin token stage 8
+    recorded, read back out of the `github` stack's configuration, so a
+    run before that stage refuses by naming the command that fills it —
+    and before stage 7, by naming the passphrase that opens it. It
+    pushes the estate passphrase into every Environment and the `github`
+    one into none, which is the partition ci.md §3 rests on.
 
 A stage that fails is re-run; nothing is parked. Once the last one is
 done, the kit goes back in its envelope.
@@ -1103,6 +1182,48 @@ the Alertmanager token, the recipient swap that state-backend.md §5
 describes for an age generation. The recovery key is not involved,
 and no other row moves.
 
+**A passphrase is the row whose consumer is a file in this repository**,
+and adopting a new generation of one is a re-encryption rather than a
+restart. `credentials derived github-passphrase generate` files the next
+generation and writes the slot; what it does *not* do is rewrite
+`Pulumi.github.yaml`, which is still encrypted under the predecessor and
+whose `encryptionsalt` still verifies that one. The adoption is
+`pulumi stack change-secrets-provider passphrase -s github`, run with the
+predecessor in `PULUMI_CONFIG_PASSPHRASE` and the successor typed at its
+prompt: it decrypts every secret the stack holds and writes them back
+under a fresh salt, in place, and the file is then committed. Until it
+runs, the slot and the stack file disagree and every command against
+that stack answers `error: incorrect passphrase` — loud, and repaired by
+finishing the adoption or by putting the predecessor back.
+
+**The stack's *state* carries a salt of its own, and it is rewritten by
+the next `up` rather than by that command.** A first run under a new
+passphrase therefore meets state whose secrets-provider salt names the
+old one, and succeeds — but only because that state holds no secret
+*values* to decrypt; the `up` then writes the state's salt afresh. Where
+a secret does exist there the mismatch is loud in its own way —
+`failed to decrypt: incorrect passphrase`, the state's own salt being a
+verifier checked when a secret is read — so the case this glosses over is
+a refusal and never a corruption. The estate passphrase adopts the same
+way, plus a `derived sync` to re-push it to every Environment.
+
+**Never repair that disagreement by deleting `encryptionsalt`.** With no
+salt, `pulumi config set --secret` writes a *new* one from whatever
+passphrase is in the environment and re-keys the stack silently — the
+one operation on this path that does not announce itself, and the way a
+stack encrypted apart quietly rejoins the estate passphrase. Done with
+ciphertext still in the file, it is worse than silent: the values left
+behind were encrypted to the superseded key and the new salt verifies
+the new one, so they decrypt under **neither** passphrase and the file
+looks intact. It is safe
+in exactly one case, which is why the crossing that introduced this row
+used it: a stack file that holds no ciphertext at all has nothing to
+lose. `Pulumi.github.yaml` is that file today — it carries no
+`encryptionsalt` at all, and a comment at its head says why — so the
+first `credentials derived github-admin record` derives the salt from
+the passphrase in hand rather than checking against one that names the
+estate's.
+
 **A value that already exists is imported rather than replaced.**
 `credentials derived <row> import` escrows what a slot or a predecessor
 already holds as that row's next generation. That is how a kit written
@@ -1159,7 +1280,8 @@ never a hunt for per-machine environment wiring:
 | --- | --- | --- |
 | `kit.kdbx` | The seed kit (§2.1), on the workstation that holds one. Not a slot — the offline store, whose canonical copies are the two envelopes. `$KLUSTER_KDBX` overrides the path, for a kit on removable media. | `credentials kit bootstrap` |
 | `pulumi.passphrase` | The state passphrase (§2.2), kept here because `mise.toml` reads it from a file on every `pulumi` run: a template can neither prompt nor open a kit. | `credentials derived pulumi-passphrase generate`, `credentials derived pulumi-passphrase recover` |
-| `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain. Today `github.token` is the one a tool reads. | `credentials root <name> remember` |
+| `github.passphrase` | The `github` stack's own passphrase (§2.2), which opens that stack's config and nothing else. Here for the same reason and read the same way, under its own variable: `PULUMI_CONFIG_PASSPHRASE` is process-global, so which passphrase is right depends on the `-s` a command carries. | `credentials derived github-passphrase generate`, `credentials derived github-passphrase recover` |
+| `roots/<root>.<field>` | An account root's token file — the second layer of §2's chain, written only on a machine with no desktop secret store. No tool reads one on its own; a `credentials` run does, when a mint asks for the root. | `credentials root <name> remember` |
 | `state-backend/` | The `operator` client bundle: CA, certificate, key, and the connection string for the appliance they authenticate against — which names the appliance and none of the files. The key is `0600`, which libpq insists on. | `state-backend provision`, `state-backend bundle operator` |
 | `oci/state-backend/` | The appliance provisioner's own OCI key (§3): an SDK configuration file plus the `0600` PEM it names. An SDK configuration rather than a shape of this repository's own, because the SDK is the whole of the reader. The compartment it acts in is not here — that is a convention its reader shares (§3). | `credentials derived oci-state-backend mint` |
 
@@ -1173,24 +1295,29 @@ irreplaceable in the envelopes rather than here; every other entry is
 recovered, re-issued or re-pasted by the command in the right-hand column,
 so a lost `.credentials/` costs a few commands and no credential.
 
-`mise.toml` reads this directory — the passphrase, the backend URL, the
-three `PGSSL*` variables naming the bundle beside it, and the GitHub
-token — falling back to whatever the environment already holds. **CI
+`mise.toml` reads this directory — the passphrase, the backend URL and
+the three `PGSSL*` variables naming the bundle beside it — falling back
+to whatever the environment already holds. It reads no provider
+credential at all, because none is here: each is a config secret in the
+stack that reads it, which the program opens with the passphrase this
+directory carries. **CI
 walks the same path rather than a parallel one.** The four Environment
 secrets that carry the `ci` bundle (`PULUMI_BACKEND_URL`,
 `PULUMI_BACKEND_CA`, `PULUMI_BACKEND_CERT`, `PULUMI_BACKEND_KEY`) are
 file contents, not variables a job reads: a composite action writes them
 into the checkout's `state-backend/` slot before any `pulumi` runs, and
 the same template resolves them there exactly as it does here. Only the
-passphrase and the token reach a job as environment. Because each is
+passphrase reaches a job as environment. Because each is
 read by template rather than by a program, nothing on that path can
 prompt: that is the whole reason these are files and not secret-store
 entries (§1 rule 6).
 
 **Moving to another workstation** is copying the directory (`rsync -a`),
 minus `kit.kdbx` unless that machine is meant to hold the kit — one
-copy in place of the mixture of an `rsync` under `~/.config`, a piped
-passphrase and a handwritten token file that it replaces. **The client
+copy in place of the mixture of an `rsync` under `~/.config` and a piped
+passphrase that it replaces. A second workstation needs nothing more to
+apply any stack: every provider credential travels in the committed
+stack files, which the passphrase in this directory opens. **The client
 bundle travels as it is, wherever the second checkout sits**: its
 connection string names the appliance and no file at all
 (`postgres://<role>@<ip>:5432/…?sslmode=verify-full`), and the three
@@ -1207,12 +1334,16 @@ absolute path into this checkout. A checkout at a different path
 re-runs `credentials derived oci-state-backend mint` on a machine that
 holds the kit.
 
-Three of these slots had other homes before, and every old location is
+Some of these slots had other homes before, and every old location is
 still read — the bundle and the appliance's OCI configuration by
-`credentials`, with a warning naming the move; the passphrase and token
-files by `mise.toml`, silently, because a template has no way to warn. A
+`credentials`, with a warning naming the move; the passphrase file by
+`mise.toml`, silently, because a template has no way to warn. A
 workstation that predates the move therefore keeps working untouched, and
 converges by running the commands above once. The fallbacks are marked in
 the code and in `.gitignore` for deletion (`kluster-ops#34`, and
 `kluster-ops#41` for the OCI one, whose predecessor is a hand-made
 configuration under `~/.config` rather than a minted credential at all).
+A machine that predates the GitHub token's move to the `github` stack's
+configuration is the one case where an old location is **not** read: the
+token file it holds is inert, and deleting it is the last step of that
+crossing.

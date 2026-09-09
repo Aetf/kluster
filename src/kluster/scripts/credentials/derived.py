@@ -41,6 +41,15 @@ log = logging.getLogger(__name__)
 #: the zones token is delivered into.
 ZONES_STACK = 'dns'
 
+#: The stack that declares the forge itself, and therefore the slot the GitHub
+#: admin token is delivered into. Nothing here mints that token -- it is made by
+#: hand in the GitHub UI (`devices.py`) -- but the stack it is delivered to is
+#: named beside the others, because a stack name spelled in two modules is a
+#: stack name that can drift. Taken from `pulumi_config`, which is where the
+#: name has to be anyway: that module carries the census of stacks encrypted
+#: apart from the estate passphrase, and this is the one on it.
+GITHUB_STACK = pulumi_config.GITHUB_STACK
+
 #: The zones the gateway may answer a DNS-01 challenge in, and the whole of its
 #: token's scope.
 #:

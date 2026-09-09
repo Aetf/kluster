@@ -124,14 +124,14 @@ def test_a_real_subprocess_receives_the_value_and_the_token(tmp_path: Path, monk
     # run must authenticate as what it was handed, not as what it inherited.
     monkeypatch.setenv('GITHUB_TOKEN', 'the-ambient-token')
 
-    _ = github_secrets.run_gh(['secret', 'set', 'PULUMI_CONFIG_PASSPHRASE'], token='the-account-root', stdin=SECRET)
+    _ = github_secrets.run_gh(['secret', 'set', 'PULUMI_CONFIG_PASSPHRASE'], token='the-admin-token', stdin=SECRET)
 
     written = record.read_text()
     assert 'args:secret set PULUMI_CONFIG_PASSPHRASE' in written
     # Both names, because `gh` prefers `GH_TOKEN` and reads `GITHUB_TOKEN` when
     # it is absent — leaving either alone would let the shell decide who this is.
-    assert 'gh-token:the-account-root' in written
-    assert 'github-token:the-account-root' in written
+    assert 'gh-token:the-admin-token' in written
+    assert 'github-token:the-admin-token' in written
     assert f'stdin:{SECRET}' in written
 
 
@@ -139,7 +139,7 @@ def test_a_refusal_says_where_an_operator_would_fix_it(tmp_path: Path, monkeypat
     _plant(tmp_path, REFUSING_GH, monkeypatch)
 
     with pytest.raises(SlotRefused, match='no such repository or Environment'):
-        _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-account-root', stdin=None)
+        _ = github_secrets.run_gh(['secret', 'list', '--repo', REPOSITORY], token='the-admin-token', stdin=None)
 
 
 def test_a_missing_tool_says_so_rather_than_raising_an_os_error(
@@ -150,7 +150,7 @@ def test_a_missing_tool_says_so_rather_than_raising_an_os_error(
     monkeypatch.setenv('PATH', str(empty))
 
     with pytest.raises(SlotRefused, match='is not installed'):
-        _ = github_secrets.run_gh(['secret', 'list'], token='the-account-root', stdin=None)
+        _ = github_secrets.run_gh(['secret', 'list'], token='the-admin-token', stdin=None)
 
 
 def test_the_child_keeps_the_ambient_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -162,6 +162,6 @@ def test_the_child_keeps_the_ambient_environment(tmp_path: Path, monkeypatch: py
     record = tmp_path / 'record'
     monkeypatch.setenv('RECORD', str(record))
 
-    _ = github_secrets.run_gh(['secret', 'list'], token='the-account-root', stdin=None)
+    _ = github_secrets.run_gh(['secret', 'list'], token='the-admin-token', stdin=None)
 
     assert record.is_file()

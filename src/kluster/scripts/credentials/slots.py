@@ -40,9 +40,9 @@ business of that command:
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
     are made in the console that checks them and delivered by a command of
-    their own (the UniFi key, the AdGuard login and the ZeroTier Central token,
-    `devices.py`), and some are installed by another tracker's automation
-    entirely (the UDM and libvirt SSH identities, §3).
+    their own (the UniFi key, the AdGuard login, the ZeroTier Central token and
+    the GitHub admin token, `devices.py`), and some are installed by another
+    tracker's automation entirely (the UDM and libvirt SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.
     There is one: the overlay network's id, which a workflow can only pass as a
@@ -88,7 +88,7 @@ from ... import conventions
 from ...lib import config
 from ..state_backend import config as appliance
 from ..state_backend import settings as appliance_settings
-from . import derived, devices, escrow, pki, pulumi_config
+from . import derived, devices, escrow, pki, pulumi_config, workstation
 from .github_secrets import Forge, Slot
 from .pulumi_config import SlotRefused
 
@@ -330,7 +330,11 @@ class Context:
         return self._environment
 
     def stack(self, name: str) -> pulumi_config.Stack:
-        return pulumi_config.Stack(name=name, directory=self.project, env=self.environment.variables(), run=self.runner)
+        # The environment goes in whole and the stack picks its own passphrase
+        # out of it by name (`pulumi_config.Stack`), so a row delivered to a
+        # stack encrypted apart from the estate cannot be run under the wrong
+        # one from here.
+        return pulumi_config.Stack(name=name, directory=self.project, environment=self.environment, run=self.runner)
 
 
 class Source(ABC):
@@ -886,6 +890,17 @@ ROWS: dict[str, Row] = {
             *_every_environment('PULUMI_CONFIG_PASSPHRASE'),
         ),
     ),
+    escrow.row_name(escrow.GITHUB_PASSPHRASE): Row(
+        register='`github` stack passphrase',
+        source=Derived(escrow.GITHUB_PASSPHRASE),
+        # **No GitHub secret, and that absence is the row.** Every Environment
+        # holds the estate passphrase because every job runs a `pulumi`
+        # command; this one exists so that the `github` stack's config -- the
+        # admin token that can unguard `main` -- is readable by nothing CI can
+        # start. A sink added here would undo the whole row, so a test holds it
+        # empty (ci.md §3).
+        targets=(EscrowCopy(escrow.GITHUB_PASSPHRASE), WorkstationSlot(workstation.GITHUB_PASSPHRASE)),
+    ),
     'state-backend-ca': Row(
         register='State-backend CA',
         source=Derived(escrow.CA),
@@ -961,6 +976,7 @@ ROWS: dict[str, Row] = {
     'unifi': _device('unifi'),
     'adguard': _device('adguard'),
     'zerotier': _device('zerotier'),
+    devices.GITHUB_ADMIN: _device(devices.GITHUB_ADMIN),
     'alertmanager-read': Row(
         register='Alertmanager read token',
         source=Derived(escrow.ALERTMANAGER),

@@ -29,6 +29,7 @@ from kluster.lib.workstation import DIRECTORY, WorkstationError, directory, repo
 __all__ = (
     'BUNDLE',
     'DIRECTORY',
+    'GITHUB_PASSPHRASE',
     'KIT',
     'LEGACY_BUNDLE_DIR',
     'PASSPHRASE',
@@ -36,6 +37,7 @@ __all__ = (
     'WorkstationError',
     'bundle_dir',
     'directory',
+    'github_passphrase_path',
     'kit_path',
     'passphrase_path',
     'repo_root',
@@ -51,6 +53,13 @@ KIT = 'kit.kdbx'
 #: The Pulumi state passphrase, recovered from the escrow (§2.2) and cached
 #: here so a local `pulumi preview` needs neither the kit nor an eval.
 PASSPHRASE = 'pulumi.passphrase'
+
+#: The `github` stack's own passphrase (§2.2), which encrypts that one stack's
+#: committed configuration and nothing else. A second file rather than a second
+#: value in the first, because the property it exists for is that it reaches no
+#: CI Environment: a value nobody can push is easier to keep unpushed than a
+#: field of a value everybody gets.
+GITHUB_PASSPHRASE = 'github.passphrase'
 
 #: The account roots' file layer (`masters.py`), one file per field.
 ROOTS = 'roots'
@@ -71,6 +80,10 @@ def kit_path() -> Path:
 
 def passphrase_path() -> Path:
     return directory() / PASSPHRASE
+
+
+def github_passphrase_path() -> Path:
+    return directory() / GITHUB_PASSPHRASE
 
 
 def root_path(name: str) -> Path:

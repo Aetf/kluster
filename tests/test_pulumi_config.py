@@ -86,7 +86,7 @@ def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:
 
 
 @pytest.fixture
-def live_stack(tmp_path: Path) -> pulumi_config.Stack:
+def live_stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> pulumi_config.Stack:
     """A stack in a throwaway project on a file backend, driven by the real CLI."""
     if shutil.which('pulumi') is None:
         pytest.skip('the pinned pulumi CLI is not on PATH')
@@ -95,17 +95,19 @@ def live_stack(tmp_path: Path) -> pulumi_config.Stack:
     _ = (project / 'Pulumi.yaml').write_text(f'name: {PROJECT}\nruntime: nodejs\ndescription: slot probe\n')
     state = tmp_path / 'state'
     state.mkdir()
+    # A home of its own: nothing here may touch the operator's own credentials
+    # file or their selected stack. It goes in the ambient environment because
+    # it is not part of what a `credentials` run knows -- `run_pulumi` overlays
+    # the stack's own variables on whatever is already there.
+    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     return pulumi_config.Stack(
         name=STACK,
         directory=project,
-        # A home of its own: nothing here may touch the operator's own
-        # credentials file or their selected stack.
-        env={
-            'PULUMI_HOME': str(tmp_path / 'home'),
-            'PULUMI_BACKEND_URL': state.as_uri(),
-            'PULUMI_CONFIG_PASSPHRASE': 'probe-passphrase',
-            'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        },
+        # The passphrase and the URL go in as the shape a `credentials` run
+        # builds, so the probe exercises the resolution the real callers use:
+        # the stack picks its own passphrase out of this by its own name.
+        environment=pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri()),
     )
 
 

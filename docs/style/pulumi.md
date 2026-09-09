@@ -48,17 +48,16 @@ packages it builds providers for, which turns a forgotten one into an
 error rather than a silent fallback. See
 [rfc-002](../rfc/rfc-002-src-layout-and-the-gateway.md) §8.
 
-**Which store that credential comes from is the credential's own
-design.** Stack configuration is the usual answer, and it is the store
-the paragraph above licenses a component to read for itself. A
-credential that is deliberately not escrowed — escrow is
-[credentials.md](../credentials.md) §2.2, and only durable roots are
-escrowed — comes from the environment instead, so that a machine which
-does not already hold it cannot apply that stack at all: today the
-`github` stack's account-root token
-([framework/github.md](../framework/github.md) §1). The store is a
-property of the credential; the read site is the rule above, and does
-not move with the credential.
+**Stack configuration is where a provider credential lives**, and it is
+the store the paragraph above licenses a component to read for itself.
+Every one of them is there, however the value was obtained: minted from
+a seed, or made by hand in a console because the platform publishes no
+API that makes one — the `github` stack's admin token
+([framework/github.md](../framework/github.md) §1) is that second case,
+and it is a config secret like the rest. How a credential is *obtained*
+is the credential's own design and belongs in
+[credentials.md](../credentials.md) §3; where it is *read* is the rule
+above, and neither moves with the other.
 
 **Cross-component facts flow through parameters; cross-stack decisions
 flow through `conventions`.** StackReference is the exception and each

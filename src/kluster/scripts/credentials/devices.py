@@ -1,6 +1,6 @@
-"""The device credentials (docs/credentials.md §3): made in a console, delivered to a stack.
+"""The hand-made credentials (docs/credentials.md §3): made in a console, delivered to a stack.
 
-Three of §3's rows are neither minted from a seed nor generated and escrowed.
+Some of §3's rows are neither minted from a seed nor generated and escrowed.
 The credential is made in the console that checks it — the appliance's own, or
 the provider's where the provider publishes no API for making one — and this
 side of the system only delivers it:
@@ -11,12 +11,22 @@ side of the system only delivers it:
     has no scoped API at all (the security audit's M6), so the account both
     instances carry is what a rewrite call authenticates as;
 -   the **ZeroTier Central API token**, which Central mints only in its own
-    web console and scopes to the whole account.
+    web console and scopes to the whole account;
+-   the **GitHub admin token**, a personal access token created in the GitHub
+    UI, which is what the `github` stack declares the forge with and what
+    `credentials derived sync` pushes every GitHub secret as.
 
-None of the three is a seed: a seed is a credential that mints successors
+None of them is a seed: a seed is a credential that mints successors
 (`entries.py`), and each of these mints nothing. Losing one costs a console
 visit and a re-run of its `record` command, which is also the whole of its
 rotation.
+
+**A row here is a provider credential like any other**, and lives where every
+other provider credential of this installation lives: the committed
+configuration of the stack that reads it (credentials.md §1 rule 6). What
+separates these from the minted rows is only how the value is obtained — a
+person creates it, so a rotation is a console visit and a re-run rather than
+one command — and that difference is in the source, not in the slot.
 
 A row here is therefore a console instruction plus a push, and the command's
 shape follows: print the steps that create the credential, take the value
@@ -35,8 +45,8 @@ being an address rather than a credential.
 **Which stack takes a row is not an argument.** The credential authenticates
 against one thing, and the stack that talks to that thing is the only consumer
 there is: `physical` drives the UDM's Network API and the overlay's Central
-account, and `dns` writes the split-horizon rewrites on the AdGuard pair
-(declarative/dns.md §3).
+account, `dns` writes the split-horizon rewrites on the AdGuard pair
+(declarative/dns.md §3), and `github` declares the forge.
 
 §3's other pasted row — the UDM SSH key and the libvirt identity — has no
 member here, because there are no console steps to print for it: nobody
@@ -73,6 +83,12 @@ STDIN = '-'
 #: and `dns` are spelled.
 PHYSICAL_STACK = derived.PHYSICAL_STACK
 DNS_STACK = derived.ZONES_STACK
+GITHUB_STACK = derived.GITHUB_STACK
+
+#: The row whose value is read back as well as delivered (`borrow`). Named
+#: because a caller indexes `DEVICES` by it, and a member spelled in two places
+#: is a member that can drift into a `KeyError`.
+GITHUB_ADMIN = 'github-admin'
 
 
 @dataclass(frozen=True)
@@ -230,6 +246,29 @@ DEVICES: dict[str, Device] = {
             ),
             fields=(Field('api-token', 'zerotierApiToken', 'the token the console showed once'),),
         ),
+        Device(
+            member=GITHUB_ADMIN,
+            register='GitHub admin token',
+            title='the GitHub admin token',
+            stack=GITHUB_STACK,
+            holds='the admin token the forge is declared with',
+            console=(
+                'github.com → Settings → Developer settings → Personal access\n'
+                '  tokens → Tokens (classic) → Generate new token, scope `repo`.\n'
+                '  GitHub publishes no API that creates a personal access token, so\n'
+                '  this page is the only thing that can make one and nothing here\n'
+                '  can mint a successor: re-running this command with a token made\n'
+                '  there is the whole of a rotation, and the superseded token is\n'
+                '  deleted on the same page.\n'
+                "  It administers this account's repositories — branch protection,\n"
+                '  rulesets, Environments and their gates — which is as narrow as\n'
+                '  the scope list goes, and why no workflow names the `github`\n'
+                '  stack at all (framework/github.md §1).\n'
+                '  Which account it belongs to is not asked for: that is\n'
+                '  `conventions.forge.ACCOUNT`, and the stack declares against it.'
+            ),
+            fields=(Field('token', 'githubAdminToken', 'the personal access token'),),
+        ),
     )
 }
 
@@ -281,4 +320,45 @@ def deliver(
     return tuple(field.key for field in values)
 
 
-__all__ = ('DEVICES', 'STDIN', 'Device', 'Field', 'announce', 'deliver')
+def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
+    """One row's single secret, read back out of the stack that holds it.
+
+    The other direction of `deliver`, for the one thing a row here is used for
+    besides being read by its stack: `credentials derived sync` authenticates
+    to the forge as the GitHub admin token before it pushes anything
+    (`github_secrets.py`), and the token's home is this stack's committed
+    configuration like any other provider credential.
+
+    Restricted to a single-secret row, because a caller that authenticates with
+    one wants *the* credential and not a bag: a row with two would have to say
+    which, and none of the rows that has two is read back at all.
+
+    A stack that has no such key is the mid-crossing state — a checkout whose
+    stack file predates the row — so the refusal names the command that fills
+    it rather than passing `pulumi`'s own message on, which says to set the key
+    by hand. A machine that cannot decrypt that stack *at all* is a different
+    state with a different answer, and its refusal travels unchanged.
+    """
+    secrets = [field for field in device.fields if field.secret]
+    if len(secrets) != 1:
+        raise KdbxError(f'{device.title} is {len(secrets)} secrets, so there is no single value to authenticate with')
+    try:
+        value = stack.get(secrets[0].key).strip()
+    except pulumi_config.PassphraseMissing:
+        # Not this row's problem and not this row's answer: the machine cannot
+        # decrypt that stack at all, and the refusal already says what to run.
+        raise
+    except pulumi_config.SlotRefused as exc:
+        raise pulumi_config.SlotRefused(
+            f"{device.title} is not in the {device.stack} stack's configuration: "
+            f'`credentials derived {device.member} record` is what puts it there ({exc})'
+        ) from exc
+    if not value:
+        raise pulumi_config.SlotRefused(
+            f'{device.title} decrypts to an empty value in the {device.stack} stack; '
+            f're-run `credentials derived {device.member} record`'
+        )
+    return value
+
+
+__all__ = ('DEVICES', 'GITHUB_ADMIN', 'STDIN', 'Device', 'Field', 'announce', 'borrow', 'deliver')

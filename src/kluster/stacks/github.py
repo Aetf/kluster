@@ -8,12 +8,12 @@ load-bearing. Declared, it can be drift-checked, reviewed and rebuilt.
 
 **Applied from the operator's machine, never from CI.** The credential this
 stack needs can change branch protection and environment gates -- that is,
-it can switch off the things that guard `main`. Handing it to a workflow
+it can switch off the things that guard `main`. Handing that to a workflow
 would mean anything that merges to `main` can also unguard `main`, which
-undoes the partition ci.md §3 exists to create. The trade is cheap: the
-forge changes a few times a year, while the credential would sit in CI
-permanently. CI may still *preview* this stack to detect drift; it may not
-apply it.
+undoes the partition ci.md §3 exists to create. What holds the line is that
+no workflow names this stack at all, drift detection included (github.md §1);
+the trade is cheap, because the forge changes a few times a year while a
+workflow that ran this would sit in CI permanently.
 
 The Apps themselves are console-created (their private keys are §3 rows,
 escrowed rather than held in the seed kit — credentials.md), and their
@@ -31,8 +31,6 @@ the provider, the two entries, and the parameters that are neither.
 """
 
 from __future__ import annotations
-
-import os
 
 import pulumi
 import pulumi_github as github
@@ -52,15 +50,32 @@ from kluster.components.forge import ManagedRepository
 #: rather than reading this matrix (github.md §3).
 REQUIRED_CHECKS = ('checks', 'changes')
 
-#: Where the provider's credential is read from. It is an account root held in
-#: the personal estate, materialized into the environment by `mise.toml` out of
-#: the operator machine's token file (github.md §1) -- deliberately *not* stack
-#: configuration, because its absence is what stops this stack from being
-#: applied by accident, and an escrowed copy would remove that.
-TOKEN_VARIABLE = 'GITHUB_TOKEN'
+#: Where the provider's credential is read: this stack's own committed
+#: configuration, at the line that builds the provider it opens and nowhere
+#: else (rfc-002 §8.1). Bare, and therefore in this project's namespace rather
+#: than the provider package's, for the reason the zones token's key is
+#: (`stacks/dns.py`): a `github:` entry in a committed stack file is
+#: indistinguishable from the ambient configuration this repository has removed
+#: everywhere else.
+#:
+#: The token is hand-made in the GitHub UI and this repository mints no
+#: successor for it, which decides how it gets here but not where it lives:
+#: `credentials derived github-admin record` takes it from that console into
+#: this file, the same delivery every other provider credential of this
+#: installation has (credentials.md §3).
+ADMIN_TOKEN = 'githubAdminToken'
+
+#: This program's own stack, named because two things outside it are about
+#: this stack by name: the census of stacks encrypted apart from the estate
+#: passphrase, and the workflow census that holds CI away from it
+#: (github.md §1). A literal in either of those would agree with this one by
+#: spelling rather than by construction.
+STACK = 'github'
 
 
 async def main() -> None:
+    config = pulumi.Config()
+
     # One provider for both repositories: they are two trees declared against
     # one account, which is what a stack program owns rather than a component.
     # The token is read here, at the line that builds the provider it opens,
@@ -68,7 +83,7 @@ async def main() -> None:
     provider = github.Provider(
         f'{conventions.CLUSTER_NAME}-github',
         owner=conventions.forge.ACCOUNT.login,
-        token=_token(),
+        token=_token(config),
     )
     on_github = pulumi.ResourceOptions(providers=[provider])
 
@@ -94,26 +109,27 @@ async def main() -> None:
     pulumi.export('ops_repository', ops.repository.full_name)
 
 
-def _token() -> str:
-    """The account-root token, out of the environment.
+def _token(config: pulumi.Config) -> pulumi.Output[str]:
+    """The admin token, out of this stack's committed configuration.
 
-    Read here rather than left to the SDK, which is not only style:
-    `pulumi_github` falls back to this same variable and, failing that, runs
-    **anonymously**, so a missing token is not a refusal but a run that
-    authenticates as nobody and fails partway through on the first write.
-    Refusing by name turns that into a stop before anything is declared.
+    Required rather than left to the SDK, which is not only style:
+    `pulumi_github` falls back to a `GITHUB_TOKEN` in the environment and,
+    failing that, runs **anonymously**, so an unconfigured stack is not a
+    refusal but a run that authenticates as nobody and fails partway through on
+    the first write. A missing key stops the run before anything is declared.
 
-    Handed over in the clear. What keeps an account root out of state is the
-    generated provider, which marks this input secret itself; a second
-    wrapping here would read as the mechanism without being it, and would
-    leave the case that pins the property passing over a provider release that
-    had stopped applying it.
+    The refusal names the command that fills the key, because the state it is
+    most likely to meet is a checkout whose `Pulumi.github.yaml` predates this
+    key: Pulumi's own message says to run `pulumi config set`, which would put
+    the credential in the process table and skip the read-back every other
+    config slot is delivered with.
     """
-    token = os.environ.get(TOKEN_VARIABLE)
-    if not token:
+    try:
+        return config.require_secret(ADMIN_TOKEN)
+    except pulumi.ConfigMissingError as exc:
         raise ValueError(
-            f'{TOKEN_VARIABLE} is unset, so this run would authenticate as nobody and fail on its first '
-            f'write. The `github` stack is applied from the operator machine with an account-root token '
-            f'that `credentials root github remember` puts in place (framework/github.md §1).'
-        )
-    return token
+            f"{ADMIN_TOKEN} is not in this stack's configuration, so this run would authenticate as nobody "
+            f'and fail on its first write. The `github` stack is applied from the operator machine with an '
+            f'admin token that `credentials derived github-admin record` takes from the GitHub UI into '
+            f'Pulumi.github.yaml (credentials.md §3).'
+        ) from exc

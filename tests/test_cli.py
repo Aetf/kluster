@@ -200,10 +200,13 @@ class Dispatch:
             (cli.masters, 'stored', {}),
             (cli.masters, 'remember', []),
             (cli.masters, 'forget', None),
-            # The account root a push authenticates as. A value rather than
-            # `None`, because the GitHub sink reads one field out of it before
-            # it can build the forge it pushes through.
-            (cli.lifecycle, 'root', masters.Credential(root=masters.ROOTS['github'], values={'token': 'a-token'})),
+            # The account root a mint borrows.
+            (cli.lifecycle, 'root', masters.Credential(root=masters.ROOTS['oci'], values={'tenancy': 'ocid1.a'})),
+            # The admin token a push authenticates as. A value rather than
+            # `None`, because the GitHub sink builds the forge it pushes
+            # through out of it, and it is read from the `github` stack's
+            # committed config rather than from a root (`devices.py`).
+            (cli.devices, 'borrow', 'a-token'),
             (cli.slots, 'describe', iter(())),
             (cli.slots, 'sync', []),
             (cli.oci_iam, 'rotate_seed', 'fingerprint'),

@@ -73,6 +73,15 @@ ROOT_FILES = frozenset({RECIPIENTS_FILE, 'README.md'})
 FIRST = 1
 
 PASSPHRASE = 'pulumi/passphrase'
+
+#: The `github` stack's own passphrase, which decrypts that stack's committed
+#: configuration and nothing else. Filed under the stack it belongs to rather
+#: than beside the estate's passphrase, because what makes it a separate row is
+#: exactly that it is not the estate's: it reaches no CI Environment, which is
+#: what confines the admin token in that stack's config to the workstation
+#: (framework/github.md §1).
+GITHUB_PASSPHRASE = 'github/passphrase'
+
 CA = 'state-backend/ca'
 ALERTMANAGER = 'alertmanager/read'
 BACKUP = 'backup/age'
@@ -346,6 +355,18 @@ def register() -> dict[str, Label]:
             slot=WorkstationSlot(
                 path=workstation.passphrase_path,
                 read_by='mise.toml reads it from there on every pulumi run',
+            ),
+        ),
+        Label(
+            GITHUB_PASSPHRASE,
+            "the `github` stack's own config passphrase, held by no CI job",
+            Generated(_token),
+            # Read on a `pulumi ... -s github` the operator runs by hand, and
+            # by the `credentials` commands that reach that stack's config
+            # (credentials.md §4.4).
+            slot=WorkstationSlot(
+                path=workstation.github_passphrase_path,
+                read_by='mise.toml exports it as KLUSTER_GITHUB_PASSPHRASE, for a `pulumi ... -s github`',
             ),
         ),
         Label(CA, "the state-backend CA's private key", Generated(pki.generate_ca_key), shape=PRIVATE_KEY),

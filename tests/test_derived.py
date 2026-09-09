@@ -184,7 +184,7 @@ def test_a_re_run_rotates_the_row_and_leaves_one_live_token(
 
 
 @pytest.fixture
-def live_project(tmp_path: Path) -> tuple[pulumi_config.Stack, str]:
+def live_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pulumi_config.Stack, str]:
     """A stack in a throwaway project driven by the real CLI, and the project's name.
 
     The name is deliberately not this repository's: what the test pins is that
@@ -199,15 +199,18 @@ def live_project(tmp_path: Path) -> tuple[pulumi_config.Stack, str]:
     _ = (project / 'Pulumi.yaml').write_text(f'name: {name}\nruntime: nodejs\ndescription: namespace probe\n')
     state = tmp_path / 'state'
     state.mkdir()
+    # A home of its own, in the ambient environment: it is not part of what a
+    # `credentials` run knows, and `run_pulumi` overlays the stack's own
+    # variables on whatever is already there.
+    monkeypatch.setenv('PULUMI_HOME', str(tmp_path / 'home'))
+    monkeypatch.setenv('PULUMI_SKIP_UPDATE_CHECK', 'true')
     stack = pulumi_config.Stack(
         name=STACK,
         directory=project,
-        env={
-            'PULUMI_HOME': str(tmp_path / 'home'),
-            'PULUMI_BACKEND_URL': state.as_uri(),
-            'PULUMI_CONFIG_PASSPHRASE': 'probe-passphrase',
-            'PULUMI_SKIP_UPDATE_CHECK': 'true',
-        },
+        # The passphrase and the URL go in as the shape a `credentials` run
+        # builds, so the probe exercises the resolution the real callers use:
+        # the stack picks its own passphrase out of this by its own name.
+        environment=pulumi_config.BackendEnvironment(passphrase='probe-passphrase', url=state.as_uri()),
     )
     return stack, name
 

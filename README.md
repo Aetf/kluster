@@ -70,12 +70,12 @@ On a machine that holds the kit, `credentials derived pulumi-passphrase recover`
 writes the passphrase slot itself, and `state-backend bundle operator --address
 <ip>` writes the bundle.
 
-The `github` stack additionally needs `GITHUB_TOKEN`, which `mise.toml` reads
-from `.credentials/roots/github.token`. That one is an account root rather than
-a credential this repository mints: nothing here can recreate it, which is
-deliberate -- that stack is applied by hand and never by CI. `credentials
-root github remember` is how the value from the personal estate gets into
-the slot.
+No provider credential is in that directory: each is a secret in the committed
+configuration of the stack that reads it, which the passphrase above opens. The
+`github` stack's admin token is the one nothing here can mint -- GitHub
+publishes no API that creates a personal access token -- so it is made on the
+account's settings page and `credentials derived github-admin record` takes it
+from there into `Pulumi.github.yaml` (docs/credentials.md §3).
 
 The console scripts — `credentials`, `state-backend`, `update_crds` — are the
 operator-side half of the installation; each one's `--help` is written to say
