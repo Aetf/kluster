@@ -66,6 +66,7 @@ from kluster.conventions.cluster import (
     KUBEPRISM_PORT,
     LB_POOL_LABEL,
     LOCAL_PATH_ROOT,
+    MANAGEMENT_PORTS,
     POD_CIDR_V4,
     POD_CIDR_V6,
     POOL_INTERNET,
@@ -77,6 +78,7 @@ from kluster.conventions.cluster import (
     SERVICE_CIDR_V4,
     SERVICE_CIDR_V6,
     UDM_ASN,
+    ManagementPorts,
 )
 from kluster.conventions.dns import (
     ALL_ZONES,
@@ -165,6 +167,7 @@ __all__ = (
     'LAN_POOL',
     'LB_POOL_LABEL',
     'LOCAL_PATH_ROOT',
+    'MANAGEMENT_PORTS',
     'NODE_BOOT_VOLUME_GB',
     'NODE_MEMORY_GB',
     'NODE_OCPUS',
@@ -208,6 +211,7 @@ __all__ = (
     'Compartment',
     'CompartmentMissing',
     'FollowsDedicatedVip',
+    'ManagementPorts',
     'NodeVolumeEntry',
     'OciTenancy',
     'PhysicalOutputs',

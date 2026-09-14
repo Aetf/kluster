@@ -181,6 +181,10 @@ def test_ingress_defaults_to_block_and_enumerates_host_ports_only() -> None:
 
     opened = {port for rule in rules[1:] for port in rule['portSelector']['ports']}
     assert opened == set(talos.HOST_PORTS)
+    # Among them the two the balancer forwards, from the same structure: an
+    # opening the firewall lost would leave a listener forwarding to a port
+    # the nodes drop.
+    assert set(conventions.MANAGEMENT_PORTS) <= opened
     # Service ports are answered by the BPF datapath before nftables sees
     # them, so an app port here would be a cross-stack leak.
     assert not opened & {port for port, _ in conventions.PUBLIC_PORT_CENSUS}

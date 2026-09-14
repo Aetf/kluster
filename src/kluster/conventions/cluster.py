@@ -1,8 +1,9 @@
-"""Inside the cluster: its address ranges, its routing session, its pools, its storage classes."""
+"""Inside the cluster: its address ranges, its management ports, its routing session, its pools, its storage classes."""
 
 from __future__ import annotations
 
 from ipaddress import IPv4Network, IPv6Network
+from typing import NamedTuple
 
 from kluster.conventions.identity import LABEL_DOMAIN
 
@@ -14,8 +15,38 @@ POD_CIDR_V6 = IPv6Network('fd00:10:244::/56')
 SERVICE_CIDR_V4 = IPv4Network('10.96.0.0/12')
 SERVICE_CIDR_V6 = IPv6Network('fd00:10:96::/112')
 
+
+class ManagementPorts(NamedTuple):
+    """The two APIs the cluster is managed through, which three declarations agree on.
+
+    Both terminate on the nodes themselves and belong to the cluster rather
+    than to any workload. The balancer forwards each to every control plane,
+    the node firewall opens each to the internet, and the cluster endpoint the
+    machine configuration names is the balancer's address on the Kubernetes
+    one -- so the endpoint, the backend set and the opening are one structure,
+    and none of them can name a port the others do not. Iterating it yields
+    the set the balancer and the firewall enumerate.
+    """
+
+    kubernetes: int
+    """kube-apiserver, a hostNetwork static pod: the cluster endpoint's port.
+
+    Talos's default `localAPIServerPort`, which this installation leaves
+    unset -- the number is upstream's, and editing it here moves the
+    listener, the opening and the endpoint but not the server.
+    """
+    talos: int
+    """apid, the machine API, on the port Talos fixes it at and exposes no knob for.
+
+    Day 1 and every configuration change go over it.
+    """
+
+
+MANAGEMENT_PORTS = ManagementPorts(kubernetes=6443, talos=50000)
+
 #: KubePrism — the node-local kube-apiserver front the Cilium datapath uses
-#: (there is no kube-proxy to fall back on).
+#: (there is no kube-proxy to fall back on). Node-local, so it is neither a
+#: management port above nor a public one below.
 KUBEPRISM_PORT = 7445
 
 #: BGP (cluster-infra.md §2). The UDM's FRR is AS 65000; the cluster peers

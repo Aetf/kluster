@@ -13,9 +13,11 @@ node through scheduling constraints declared beside the workload
 (architecture.md §3.2). Block volumes are a separate capability, attached per
 entry of the fleet's volume table (`storage`).
 
-Listeners are not a fixed list. The management ports live here because they
-belong to the cluster rather than to any service; a service's listener is
-declared beside the service that needs it.
+Listeners are not a fixed list. The management listeners are declared here
+because the ports belong to the cluster rather than to any service -- they are
+`conventions.MANAGEMENT_PORTS`, which the node firewall opens and the cluster
+endpoint names from the same structure; a service's listener is declared
+beside the service that needs it.
 
 The load balancer is a component of its own because the dependency runs
 through it: a node's machine configuration names the cluster endpoint, which
@@ -32,11 +34,8 @@ from typing import Any
 import pulumi
 import pulumi_oci as oci
 
+from kluster import conventions
 from putils import Component, async_output, resolve
-
-#: Talos' API and the Kubernetes API. Both are cluster-level, both terminate
-#: on the nodes themselves, and neither belongs to a workload.
-MANAGEMENT_PORTS: tuple[int, ...] = (6443, 50000)
 
 #: How the two families are told apart in the balancer's address list. The
 #: separator decides it for every literal OCI hands back — an IPv4 literal
@@ -82,7 +81,7 @@ class NodeLoadBalancer(Component):
                 health_checker=oci.networkloadbalancer.BackendSetHealthCheckerArgs(protocol='TCP', port=port),
                 opts=self.child_opts(),
             )
-            for port in MANAGEMENT_PORTS
+            for port in conventions.MANAGEMENT_PORTS
         }
 
         self.listeners = [
@@ -95,7 +94,7 @@ class NodeLoadBalancer(Component):
                 protocol='TCP',
                 opts=self.child_opts(),
             )
-            for port in MANAGEMENT_PORTS
+            for port in conventions.MANAGEMENT_PORTS
         ]
 
         self.register_outputs({})
@@ -232,7 +231,7 @@ class CloudNodes(Component):
                 port=port,
                 opts=self.child_opts(),
             )
-            for port in MANAGEMENT_PORTS
+            for port in conventions.MANAGEMENT_PORTS
             for node, instance in sorted(self.instances.items())
         ]
 

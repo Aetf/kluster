@@ -28,7 +28,6 @@ from oci_conventions import with_compartment, with_tenancy_ocid
 from kluster import conventions
 from kluster.components import homelab
 from kluster.components.backup import BackupBucket
-from kluster.components.cloud import nodes
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Gateway, access, nspawn, persistence
 from kluster.components.gateway.container import CaddyService
@@ -119,6 +118,14 @@ class Installation(Recorder):
     right line and reaches the right resource.
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: The arguments each machine configuration was rendered from. An
+        #: invoke's arguments survive nowhere else, and two of them are read
+        #: back: the cluster endpoint, the one place the Kubernetes API port is
+        #: written as a URL, and the patches carrying the firewall's openings.
+        self.configurations: list[dict[str, Any]] = []
+
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         match args.typ:
             case 'oci:Core/vcn:Vcn':
@@ -166,6 +173,7 @@ class Installation(Recorder):
             case 'oci:Identity/getFaultDomains:getFaultDomains':
                 return {'faultDomains': [{'name': f'FAULT-DOMAIN-{n}'} for n in (1, 2, 3)]}
             case 'talos:machine/getConfiguration:getConfiguration':
+                self.configurations.append(dict(cast('dict[str, Any]', args.args)))
                 return {'machineConfiguration': 'machine: {}'}
             case 'talos:client/getConfiguration:getConfiguration':
                 return {'talosConfig': TALOSCONFIG}
@@ -783,9 +791,57 @@ async def test_the_worker_is_configured_through_the_cluster_endpoint(setup: Inst
     worker = setup.inputs_of(f'{conventions.CLUSTER_NAME}-{conventions.HOMELAB_NODE}-config')
     assert worker['node'] == str(conventions.HOMELAB_NODE_IPV4)
     assert worker['endpoint'] == LB_ADDRESS
-    # And the balancer forwards that port, or the endpoint above is a closed
-    # door: the machine API is one of the two management ports it listens on.
-    assert 50000 in nodes.MANAGEMENT_PORTS
+    # And the balancer forwards the machine API, or the endpoint above is a
+    # closed door: the port is one of the two it declared a listener on.
+    assert conventions.MANAGEMENT_PORTS.talos in listener_ports(setup)
+
+
+def listener_ports(setup: Installation) -> set[int]:
+    """The ports the balancer declared a listener on, out of the run."""
+    return {int(inputs['port']) for inputs in setup.by_name(LISTENER).values()}
+
+
+@pytest.mark.asyncio
+async def test_the_cluster_endpoint_names_a_port_the_balancer_forwards_and_the_nodes_open(
+    setup: Installation,
+) -> None:
+    """One structure, three declarations: the endpoint, the listener, the opening.
+
+    The endpoint every machine configuration names is the balancer's address on
+    the Kubernetes API port. That port is worth nothing unless the balancer
+    forwards it and the nodes accept it, and the three are declared in three
+    places -- this program, the balancer component, the Talos firewall patch --
+    so what is held is that the run's own declarations agree, read off the
+    run: the URL's port is among the listeners, and among the firewall's
+    openings. The scheme is the earned literal: the machine configuration
+    takes an HTTPS URL, and a bare address here is a cluster that never
+    forms.
+    """
+    async with declaring():
+        await physical.main()
+
+    assert setup.configurations, 'no machine configuration was rendered'
+    for configuration in setup.configurations:
+        endpoint = str(configuration['clusterEndpoint'])
+        parts = urlsplit(endpoint)
+        assert parts.scheme == 'https', endpoint
+        assert parts.hostname == LB_ADDRESS, endpoint
+        assert parts.port in listener_ports(setup), endpoint
+        assert parts.port in firewall_openings(configuration), endpoint
+
+
+def firewall_openings(configuration: dict[str, Any]) -> set[int]:
+    """Every port one machine's ingress firewall opens, out of its rendered patches."""
+    documents = [json.loads(str(patch)) for patch in cast('list[Any]', configuration['configPatches'])]
+    return {
+        int(port)
+        for document in documents
+        if document.get('kind') == 'NetworkRuleConfig'
+        for port in document['portSelector']['ports']
+    }
+
+
+LISTENER = 'oci:NetworkLoadBalancer/listener:Listener'
 
 
 #: The instance id the mock answers a node's declaration with, which is how an
