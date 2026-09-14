@@ -20,6 +20,12 @@ uv = "0.11.26"
 # that actually runs there -- a test holds the two equal.
 age = "1.3.1"
 "aqua:coreos/butane" = "0.29.0"
+# The prose checker AGENTS.md's gate runs over every markdown file, and the
+# one gate tool no registry carries: it is pinned straight to its GitHub
+# release, whose `linux-x64` archive bundles the Java it runs on, so a runner
+# needs no JDK beside it. Both `ltex-cli-plus` and the `ltex-ls-plus` server
+# the editors speak to come from this one archive.
+"github:ltex-plus/ltex-ls-plus" = "18.7.0"
 
 # What a `pulumi` run needs that no template can compute: the state
 # passphrase, recovered from its escrow ciphertext (docs/credentials.md
