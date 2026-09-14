@@ -130,14 +130,11 @@ def _adopt_pasted_seed(seed: entries.Seed, *, into: KdbxStore, rotated: Sequence
             return cloudflare.adopt_seed(token=token, seeds=into, seed_entry=seed.entry)
         except CredentialRejected as exc:
             log.error('%s: refused, and nothing was stored: %s', seed.title, exc)
-            # Said in so many words because one refusal's text names that
-            # command: run while `rotate` waits here, it would record the
-            # new token in the retired kit (Aetf/kluster-ops#347).
-            log.warning(
-                'fix it on the dashboard page and paste the new token at this prompt -- no other command is run '
-                'while `rotate` waits, and `credentials seed cloudflare create` would put it in the retired kit '
-                '-- or Ctrl-C to stop'
-            )
+            # The paste at this prompt is the only command the operator is
+            # given: no refusal names one (`require_zone_visibility` says why),
+            # and `seed cloudflare create` run while `rotate` waits here would
+            # record the new token in the retired kit.
+            log.warning('fix it on the dashboard page and paste the new token at this prompt, or Ctrl-C to stop')
 
 
 def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore, entry: str) -> None:
