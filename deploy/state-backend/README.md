@@ -165,5 +165,8 @@ that has lost its state, which is what a replaced box holds until its restore
 random at creation, their only stored copies the ciphertexts under `escrow/`,
 which the kit's recovery key opens — and lands in B2 under a prefix whose
 lifecycle rule enforces retention. Recovery is
-a re-provision followed by `pg_restore` of the newest object — the same path
-the quarterly drill exercises, which is why nothing about it is improvised.
+a re-provision followed by `pg_restore` of the newest object — the path the
+quarterly drill is designed to exercise (docs/physical/state-backend.md §7.3).
+Nothing has exercised it yet: no drill has run, and the restore has never run
+against a live box, so until a rehearsal on a scratch instance has been
+through it the path is assumed broken rather than known to work.

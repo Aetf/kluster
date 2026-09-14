@@ -931,9 +931,18 @@ ROWS: dict[str, Row] = {
     ),
     'drill-age-identity': Row(
         register='Drill age identity',
-        source=Minted('state-backend provision'),
-        targets=(OnBox('the public half, the third Butane recipient'),),
-        pending={'ops-repo Environment': _OPS_UNBUILT},
+        source=Minted(
+            'state-backend provision',
+            unbuilt='`provision` mints the CA and the escrowed backup generations (`Roots.labels()`) and no drill label',
+        ),
+        # No targets: the public half is to be the third Butane recipient, but
+        # the recipients a provision run writes are the escrowed generations
+        # alone (`config.age_recipients`), so no Butane file carries it.
+        pending={
+            'ops-repo Environment': _OPS_UNBUILT,
+            'on-box': 'the recipients a provision run renders are the escrowed backup generations alone, so no '
+            'Butane file carries a third',
+        },
     ),
     'restic-passwords': Row(
         register='restic repo passwords',

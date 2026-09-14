@@ -120,8 +120,9 @@ the VPS empties progressively):
     thread-dashboard (quadlet → cluster).
 -   **Wave C — homelab heavy + the GPU window**: the vfio-pci cutover
     (drain → bind → hostdev → reboot, physical/homelab-host.md §3) runs at the head
-    of this wave, then immich (CNPG via the drilled barman restore; NAS
-    media PVs re-point in place; ML/thumbnail caches re-derive) and
+    of this wave, then immich (CNPG via the barman restore of §3 — a
+    path this cluster has not drilled; NAS media PVs re-point in place;
+    ML/thumbnail caches re-derive) and
     jellyfin+shoko (NAS re-point + config PVC copy; **verify the
     TVs' path — IoT → media-VIP allow — before its DNS re-points**,
     physical/gateway.md §4.2). syncthing-nas
@@ -163,7 +164,7 @@ git history.
 
 | Kind | Technique |
 | --- | --- |
-| CNPG databases | barman restore into the new cluster — the drilled path, not dump/restore reinvention |
+| CNPG databases | barman restore into the new cluster, not dump/restore reinvention. The drill that stands behind this path is the legacy cluster's: its quarterly `immich-restore-drill` CronJob recovers a scratch cluster (`immich-db-restore`) from the same barman backup, on the legacy operator and against the legacy bucket. That is evidence the backup restores, not that a restore has run on this cluster — none has (operations.md §4) |
 | Legacy local-path PVCs | one-off rsync/tar over SSH into the target PVC (VolSync takes over *after* landing) |
 | NAS-backed data | **no movement** — PVs re-point at the same datasets; the NAS backup regime is untouched |
 | Legacy shared-JuiceFS data (VPS syncthing/dav) | **no copy** — the new replica reseeds via the syncthing protocol from syncthing-nas |
