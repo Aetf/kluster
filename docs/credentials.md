@@ -1194,7 +1194,12 @@ check to the pre-flight** as well as to its own rotation, and until it
 does, a kit rotation refuses it by name. A row with no account check
 is left where it is: a console-made token does not exist until the
 walk reaches its row, so one the dashboard made wrong is refused there,
-after the rows before it have rotated.
+after the rows before it have rotated — and, because the operator is
+on the page that fixes it, asked for again rather than raised — an
+empty paste included. Ctrl-C or end of input at that prompt stops the
+run, and the refusal that stops it says which rows the successor
+holds, that their predecessors in the retired kit no longer work, and
+that the console row and every row after it are not rotated.
 
 Nothing beyond the kit is touched. The §3 credentials minted from
 the retired seeds keep working, and each is replaced by re-running its

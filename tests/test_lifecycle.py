@@ -21,6 +21,7 @@ import requests
 from b2_api import ACCOUNT_ID as B2_ACCOUNT
 from b2_api import FakeApi as B2Api
 from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
+from cloudflare_api import MINTING_POLICY
 from cloudflare_api import FakeApi as CloudflareApi
 from cloudflare_api import console_seed
 from oci_conventions import with_tenancy_ocid
@@ -30,6 +31,7 @@ from kluster import conventions
 from kluster.scripts.credentials import (
     age,
     b2,
+    cloudflare,
     entries,
     escrow,
     lifecycle,
@@ -55,6 +57,21 @@ def _answers(*values: str) -> Callable[[str], str]:
         if not remaining:
             raise AssertionError('the run asked more questions than expected')
         return remaining.pop(0)
+
+    return prompt
+
+
+def _pastes(*values: str | type[BaseException]) -> Callable[[str], str]:
+    """`_answers` for a hidden prompt, where an answer may be the keystroke that ends it."""
+    remaining = list(values)
+
+    def prompt(_message: str) -> str:
+        if not remaining:
+            raise AssertionError('the run asked more questions than expected')
+        answer = remaining.pop(0)
+        if isinstance(answer, str):
+            return answer
+        raise answer
 
     return prompt
 
@@ -304,6 +321,108 @@ def test_a_refusal_knowable_in_advance_rotates_nothing(
     assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
     assert not successor.exists()
     assert whole.console_visits == []
+
+
+def _wrong_template(dashboard: CloudflareApi) -> str:
+    """A console-made token from the template as the dashboard offers it: zone work, no minting."""
+    return dashboard.add('kluster-seed', [{**MINTING_POLICY, 'permission_groups': [{'id': 'g'}]}])
+
+
+@needs_age
+def test_a_refused_paste_at_the_console_row_is_asked_again(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A Cloudflare token the dashboard made wrong is re-asked for, not raised.
+
+    The token does not exist before the walk reaches its row, so no pre-flight
+    can see it, and by then the recovery and OCI rows have retired their
+    predecessors -- a refusal there would strand a run nothing resumes. The
+    operator is on the page that fixes it, so the walk says why and asks
+    again; the row is written once, with the token that was accepted.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    accepted = console_seed(whole.dashboard)
+    monkeypatch.setattr('getpass.getpass', _answers(_wrong_template(whole.dashboard), accepted))
+
+    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+
+    assert rotated == list(entries.SEEDS)
+    assert successor.get(entries.SEEDS['cloudflare'].entry) == accepted
+    assert successor.get(entries.SEEDS['cloudflare'].entry, attribute='UserName') == whole.dashboard.values[accepted]
+    # The refusal names what the paste lacked, while the operator can still act on it.
+    assert any(cloudflare.MINTING_PERMISSION in record.message for record in caplog.records)
+    # And the walk went on: the row after the console one rotated as usual.
+    assert whole.b2_api.named(b2.SEED.name) == [successor.get(entries.SEEDS['b2'].entry, attribute='UserName')]
+
+
+@needs_age
+def test_a_transport_failure_at_the_console_row_is_raised_not_asked_again(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-ask boundary is `CredentialRejected` and nothing wider: no dashboard page fixes the network."""
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    monkeypatch.setattr('getpass.getpass', _answers(console_seed(whole.dashboard)))
+    routed = requests.get
+
+    def unreachable(url: str, **request: Any) -> requests.Response:
+        if url.startswith(cloudflare.API):
+            raise requests.ConnectionError('the network')
+        return routed(url, **request)
+
+    monkeypatch.setattr(requests, 'get', unreachable)
+
+    with pytest.raises(requests.ConnectionError):
+        _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+
+    assert not successor.has(entries.SEEDS['cloudflare'].entry)
+
+
+@needs_age
+@pytest.mark.parametrize('stop', [EOFError, KeyboardInterrupt], ids=['end-of-input', 'ctrl-c'])
+def test_stopping_at_the_paste_says_what_each_kit_holds(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stop: type[BaseException],
+) -> None:
+    """Ctrl-C or end of input at the paste is the stop, and the error says where that leaves things.
+
+    An empty paste is not: it is asked again, like a refused one. The rows
+    before the console one have rotated and are in the successor; the console
+    row itself and every row after it are not. That is the state a re-run
+    does not resume from, so the message is the only thing that tells the
+    operator -- and it arrives as the error the command prints, not as a
+    traceback.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    monkeypatch.setattr('getpass.getpass', _pastes(_wrong_template(whole.dashboard), '', stop))
+
+    with pytest.raises(KdbxError, match=r'holds recovery, oci.*does not hold cloudflare.*no row after it') as caught:
+        _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+
+    assert isinstance(caught.value.__cause__, stop)
+    # The two consequences §4.2 promises the message says, held word for
+    # word: what the retired kit can no longer do, and what was not done.
+    assert 'holds recovery, oci, whose predecessors in the retired kit no longer work' in str(caught.value)
+    assert 'does not hold cloudflare, whose row in the retired kit this run did not touch' in str(caught.value)
+    assert 'no row after it was rotated' in str(caught.value)
+    # Before the row: rotated, with the OCI user's one key the successor's.
+    assert successor.has(entries.SEEDS['recovery'].entry)
+    assert whole.tenancy.identity.keys[whole.user_id] == [
+        oci_iam.fingerprint(oci_iam.load_seed(successor, entries.SEEDS['oci'].entry).private_key)
+    ]
+    # The row itself and the one after it: untouched in both kits and at the platform.
+    assert not successor.has(entries.SEEDS['cloudflare'].entry)
+    assert not successor.has(entries.SEEDS['b2'].entry)
+    assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
 
 
 def test_a_self_reproducing_family_with_no_account_check_is_refused_before_the_walk(kit: KdbxStore) -> None:
