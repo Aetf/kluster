@@ -128,15 +128,18 @@ _ORDER = """when to run what:
     8. credentials derived unifi record
        credentials derived adguard record
        credentials derived zerotier record
+       credentials derived bgp record
        credentials derived github-admin record
          The credentials no API here mints: each is made in the
-         console that checks it, so the command prints the steps that
-         create it, takes the value without echoing it, and writes it
-         into the stack config that reads it -- physical for the UniFi
-         key and the ZeroTier Central token, dns for the AdGuard login,
-         github for the admin token the forge is declared with.
-         Those files are then committed. The GitHub one is last of these
-         because stage 10 authenticates as it, and it needs stage 7.
+         console that checks it -- or drawn by hand, for the BGP session
+         password no console makes -- so the command prints the steps
+         that create it, takes the value without echoing it, and writes
+         it into the stack config that reads it -- physical for the UniFi
+         key, the ZeroTier Central token and the BGP session password,
+         dns for the AdGuard login, github for the admin token the forge
+         is declared with. Those files are then committed. The GitHub one
+         is last of these because stage 10 authenticates as it, and it
+         needs stage 7.
     9. credentials derived github-dispatch-key record
        credentials derived github-trigger-key record
          The two GitHub App private keys. Each is generated on its own App

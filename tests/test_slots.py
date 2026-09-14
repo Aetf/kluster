@@ -20,9 +20,10 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import get_args
+from typing import cast, get_args
 
 import pytest
+import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from fake_gh import RecordedGh
@@ -47,6 +48,9 @@ ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLO
 CI_DNS_IDENTITY = conventions.PHYSICAL_OUTPUTS.ci_identity['ci-dns']
 
 PASSPHRASE = 'a-recovered-passphrase'
+
+PHYSICAL_STACK = slots.PHYSICAL_STACK
+DNS_STACK = slots.DNS_STACK
 
 #: The appliance this workstation's own bundle points at, which is where the
 #: `ci` certificate's address comes from. A documentation range, so nothing
@@ -488,10 +492,103 @@ def test_a_device_row_advertises_the_keys_its_own_command_writes() -> None:
 
         # The map is built from the device table rather than restating it, for
         # the reason the minted rows import their key names: two descriptions
-        # of one delivery are two things to keep in step.
+        # of one delivery are two things to keep in step. The config keys are
+        # held exactly; a row may carry the device the stack writes the value
+        # on to beside them, and that channel is the map's to name.
         assert row.register == device.register
-        assert row.targets == tuple(slots.PulumiConfig(device.stack, field.key) for field in device.fields)
+        written = tuple(target for target in row.targets if isinstance(target, slots.PulumiConfig))
+        assert written == tuple(slots.PulumiConfig(device.stack, field.key) for field in device.fields)
         assert f'credentials derived {member} record' in row.source.describe()
+
+
+def test_the_session_password_row_names_the_device_and_the_sealed_copy_it_waits_on() -> None:
+    row = slots.ROWS[devices.BGP]
+
+    # Two ends to one session: the gateway's is written onto the device by the
+    # stack that reads the key, and the worker's is a SealedSecret nothing can
+    # seal until the controller arrives. A row saying only "config secret"
+    # would read as a credential the gateway never holds.
+    assert slots.DeviceSecret("the routing daemon's configuration") in row.targets
+    assert set(row.pending) == {'SealedSecret'}
+
+
+#: `secure:` keys in a committed stack file that authenticate nothing, each with
+#: the reason it is encrypted anyway. Every other `secure:` key is a credential,
+#: and a credential is a slot-map row (§1 rule 3); an entry here is the one
+#: way a key stays out of the map, and it needs a sentence saying why the value
+#: opens nothing.
+NOT_CREDENTIALS: Mapping[str, str] = {
+    'budgetAlertRecipients': (
+        'the addresses the cloud budget alerts go to -- personal mailboxes kept out of a public '
+        'repository, not a value anything authenticates with'
+    ),
+}
+
+
+def committed_secrets() -> dict[str, set[str]]:
+    """Every `secure:` key in every committed `Pulumi.<stack>.yaml`, by stack, in the map's own key form.
+
+    Read out of the files rather than listed, for the reason §3 is read out of
+    the document: the point is that what the stack files hold and what the map
+    delivers are two descriptions of one inventory. The project's own
+    namespace is stripped because `pulumi config set` on a bare key adds it
+    and `PulumiConfig.key` is bare; a `secure:` key in any other namespace is
+    left whole, so it fails as unmapped rather than being mistaken for a bare
+    one (rfc-002 §8.1 puts no credential of this repository in a provider's
+    namespace).
+    """
+    project = pulumi_config.project_dir()
+    prefix = f'{yaml.safe_load((project / "Pulumi.yaml").read_text())["name"]}:'
+    found: dict[str, set[str]] = {}
+    for path in sorted(project.glob('Pulumi.*.yaml')):
+        stack = path.name.removeprefix('Pulumi.').removesuffix('.yaml')
+        config = cast('dict[str, object]', yaml.safe_load(path.read_text()).get('config') or {})
+        found[stack] = {
+            key.removeprefix(prefix) for key, value in config.items() if isinstance(value, dict) and 'secure' in value
+        }
+    return found
+
+
+def test_every_committed_config_secret_is_a_slot_map_target() -> None:
+    committed = committed_secrets()
+    # Spelled out so that a glob or a parse that stopped matching cannot make
+    # the comparison below pass by finding nothing to compare.
+    assert set(committed) >= {PHYSICAL_STACK, DNS_STACK}
+    assert committed[PHYSICAL_STACK]
+
+    delivered = {
+        (target.stack, target.key)
+        for row in slots.ROWS.values()
+        for target in row.targets
+        if isinstance(target, slots.PulumiConfig)
+    }
+    unmapped = sorted(
+        f'{stack}: {key}'
+        for stack, keys in committed.items()
+        for key in keys
+        if (stack, key) not in delivered and key not in NOT_CREDENTIALS
+    )
+
+    # A ciphertext in a committed stack file that no row delivers is a
+    # credential the register cannot see: it reached the stack by some hand
+    # `derived ls` does not print, and nothing says what rotates it. The
+    # register interlock above cannot catch it, because a credential absent
+    # from both the document and the map is invisible to a test holding the
+    # two equal -- this is the third description, the one the stack reads.
+    assert unmapped == []
+
+
+def test_the_exemptions_are_committed_and_not_delivered() -> None:
+    committed = {key for keys in committed_secrets().values() for key in keys}
+    delivered = {
+        target.key for row in slots.ROWS.values() for target in row.targets if isinstance(target, slots.PulumiConfig)
+    }
+
+    # An exemption names a key the files actually hold, or it is a sentence
+    # about nothing; and one the map delivers as well is a credential wearing
+    # a note that says it is not one.
+    assert set(NOT_CREDENTIALS) <= committed
+    assert set(NOT_CREDENTIALS).isdisjoint(delivered)
 
 
 def test_no_device_field_is_delivered_into_the_committed_file_in_the_clear() -> None:

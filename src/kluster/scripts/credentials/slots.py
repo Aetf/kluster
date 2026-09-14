@@ -40,9 +40,10 @@ business of that command:
 -   **manual** -- a value this system does not produce. Some are pasted from a
     console (the Home Assistant webhook, whose slot is its only storage), some
     are made in the console that checks them and delivered by a command of
-    their own (the UniFi key, the AdGuard login, the ZeroTier Central token and
-    the GitHub admin token, `devices.py`), and some are installed by another
-    tracker's automation entirely (the UDM and libvirt SSH identities, §3).
+    their own (the UniFi key, the AdGuard login, the ZeroTier Central token,
+    the GitHub admin token and the gateway's BGP session password,
+    `devices.py`), and some are installed by another tracker's automation
+    entirely (the UDM and libvirt SSH identities, §3).
 -   **decided** -- not a credential at all, but a constant this repository
     holds in `conventions` that a continuous-integration job needs beside one.
     There is one: the overlay network's id, which a workflow can only pass as a
@@ -203,9 +204,12 @@ class WorkstationSlot:
 class DeviceSecret:
     """A secret delivered to the gateway device as a file, beside its nspawn units (physical/gateway.md §1).
 
-    Part of §1 rule 6's closed set, and addressed by no row: the gateway's own
-    secrets travel in the `physical` stack's configuration, and the provider
-    that owns the device writes them onto it.
+    Part of §1 rule 6's closed set, and the second channel of every row whose
+    consumer is the device itself: such a secret travels in the `physical`
+    stack's configuration, which is the channel a row names first, and the
+    provider that owns the device writes it onto the device from there. A row
+    names both, because a reader of the register asking "where does this value
+    sit" is owed the file on the device as much as the ciphertext in git.
     """
 
     what: str
@@ -721,21 +725,26 @@ def _every_environment(name: str) -> tuple[Slot, ...]:
     return _github(name, tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments))
 
 
-def _device(member: str) -> Row:
-    """A §3 row whose credential is made in a console and typed in (`devices.py`).
+def _device(member: str, *, onward: tuple[Channel, ...] = (), pending: Mapping[str, str] | None = None) -> Row:
+    """A §3 row whose credential is typed in and delivered into a stack's config (`devices.py`).
 
     Built from that module's table rather than restated here, so the keys this
     map advertises are the keys the command writes -- the same rule the minted
     rows follow by importing their key names.
+
+    `onward` is where the stack carries the value after reading it -- the
+    device, for a secret the gateway holds a copy of -- and `pending` is what
+    the register promises for the row beyond that and nothing addresses yet.
+    Most device rows have neither: the stack reads the credential out of its
+    own committed configuration and authenticates with it there, so the keys
+    are the whole of the row.
     """
     device = devices.DEVICES[member]
-    # No `pending`: the stack reads the credential out of its own committed
-    # configuration, so the register names no channel for it that is missing.
-    # A device row's slots are the keys below and nothing else.
     return Row(
         register=device.register,
         source=Manual(device.title, device.console, command=f'credentials derived {device.member} record'),
-        targets=tuple(PulumiConfig(device.stack, field.key) for field in device.fields),
+        targets=(*(PulumiConfig(device.stack, field.key) for field in device.fields), *onward),
+        pending=pending if pending is not None else {},
     )
 
 
@@ -826,8 +835,12 @@ ROWS: dict[str, Row] = {
         # One key, and no CI Environment secret beside it: this is not a
         # credential a job authenticates with but a value the `physical`
         # program writes onto the device, and the program reads it out of the
-        # committed configuration wherever it runs.
-        targets=(PulumiConfig(PHYSICAL_STACK, derived.GATEWAY_ACME_KEY),),
+        # committed configuration wherever it runs. The device is therefore the
+        # row's second channel (`components/gateway/container.py`).
+        targets=(
+            PulumiConfig(PHYSICAL_STACK, derived.GATEWAY_ACME_KEY),
+            DeviceSecret("caddy's token file"),
+        ),
     ),
     derived.B2_MANAGEMENT_ROW: Row(
         register='B2 management key',
@@ -840,10 +853,10 @@ ROWS: dict[str, Row] = {
     'b2-writer': Row(
         register='B2 writer keys',
         source=Minted('the `physical` stack, from the B2 seed', unbuilt='the prefix-scoped keys are not declared'),
-        targets=(
-            SealedSecret('the VolSync, CNPG barman and etcd-snapshot repository keys'),
-            OnBox("the micro cron's key"),
-        ),
+        # The appliance's cron is not among the consumers: the key it uploads
+        # dumps with is `writeFiles` alone, which is the dump-key row below and
+        # not a writer key.
+        targets=(SealedSecret('the VolSync, CNPG barman and etcd-snapshot repository keys'),),
         pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'b2-dump': Row(
@@ -989,6 +1002,20 @@ ROWS: dict[str, Row] = {
     'adguard': _device('adguard'),
     'zerotier': _device('zerotier'),
     devices.GITHUB_ADMIN: _device(devices.GITHUB_ADMIN),
+    devices.BGP: _device(
+        devices.BGP,
+        # The stack reads the password out of its configuration and renders it
+        # into the routing daemon's configuration on the device
+        # (`components/gateway/routing.py`); the worker's end of the same
+        # session reads it from a SealedSecret that does not exist yet.
+        onward=(DeviceSecret("the routing daemon's configuration"),),
+        pending={
+            'SealedSecret': (
+                "the worker's end of the session is Cilium's BGPv2 `authSecretRef`, and the controller "
+                'that would open the sealed copy arrives with `k8s-base`, so no manifest path exists'
+            )
+        },
+    ),
     'alertmanager-read': Row(
         register='Alertmanager read token',
         source=Derived(escrow.ALERTMANAGER),

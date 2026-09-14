@@ -465,9 +465,9 @@ cell would say `pending` to an operator already being served.
 | OCI API key (state backend) | OCI seed key | The same shape, over the appliance's own compartment | workstation slot (§4.4) | `state-backend provision` |
 | Cloudflare token (zones) | CF seed token | DNS edit, this installation's zones only | Pulumi config secret | `dns`, `apps` |
 | Cloudflare token (DNS-01) | CF seed token | `_acme-challenge` edit only | SealedSecret | cert-manager |
-| Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) | the gateway's caddy, written onto the device by `physical` |
+| Cloudflare token (gateway ACME) | CF seed token | DNS edit on the zones the gateway's own vhosts are served under | Pulumi config secret (`physical`) · device secret (caddy's token file) | the gateway's caddy, written onto the device by `physical` |
 | B2 management key | B2 seed key | Bucket/key/lifecycle admin, **no file capabilities** | Pulumi config secret | `physical` |
-| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret (pending) · on-box | restic/barman, ops-repo workflow, micro cron |
+| B2 writer keys | B2 seed key (via `physical`) | Prefix-scoped, `list+read+write`, **no `deleteFiles`** — deletes degrade to lifecycle-purged hides (audit H4): VolSync, CNPG barman, etcd snapshots | SealedSecret · ops-repo secret (pending) | restic/barman, ops-repo workflow |
 | B2 dump key (micro) | B2 seed key | `writeFiles` alone, dump prefix | on-box (Ignition) | state-backend pg_dump timer |
 | GitHub App key (dispatch) | Made on the App's own page (no key API) | Signs a JWT for that App alone, which mints an 8 h installation token carrying contents:write on `kluster-ops` | escrow as `github/dispatch-key` · `kluster` repository secret (pending) | Alert producer step |
 | GitHub App key (trigger) | Made on the App's own page (no key API) | The same, for an 8 h token carrying actions:write on `kluster` | escrow as `github/trigger-key` · ops-repo secret (pending) | Weekly drift trigger |
@@ -486,6 +486,7 @@ cell would say `pending` to an operator already being served.
 | AdGuard API credentials | AdGuard admin (no scoped API — audit M6) | alice/bob rewrite API | Pulumi config secret | `dns` rewrites |
 | ZeroTier Central API token | Made in the Central console (no token API) | The whole Central account: the installation's network, its members and its flow rules | Pulumi config secret (`zerotierApiToken`; the network id beside it is a constant in `conventions`, not a secret) | `physical` |
 | GitHub admin token | Made in the GitHub UI (no token API) | This account's repositories — branch protection, rulesets, Environments and their gates: `repo`, the narrowest scope that covers them | Pulumi config secret (`githubAdminToken`) | `github`, and `credentials derived sync`, which pushes every GitHub secret as it |
+| BGP session password | Drawn by the operator (no console makes it; `credentials derived bgp record` delivers it) | One BGP session, the gateway↔worker peering (cluster-infra.md §2): an MD5 password both ends are configured with | Pulumi config secret (`gatewayBgpPassword`) · device secret (the routing daemon's configuration) · SealedSecret (Cilium's `authSecretRef`; pending) | `physical`, which writes it onto the device; Cilium BGPv2 on the worker |
 | Alertmanager read token | generated, escrowed as `alertmanager/read` | `GET /api/v2/alerts` only, by HTTPRoute method+path+header match | escrow · ops-repo secret (pending) · Pulumi config secret (the HTTPRoute's match, rendered with that route; pending) | Issue-sync poller |
 | HA webhook URL/ID | Home Assistant | One notify endpoint | SealedSecret (pending) · ops-repo secret (pending) · `kluster` repository secret (`HAOS_DEPLOY_WEBHOOK_URL`, the interim deploy-failure channel, ci.md §3) | alertmanager, dispatch handler, the deploy chain's `notify-failure` job |
 | Drill-environment credentials | OCI seed key, B2 seed key | Drill compartment; dump-prefix read-only | ops-repo Environment (`drill`; pending) | Drill workflows |
@@ -1031,12 +1032,14 @@ that puts a value there.
     every command that would touch that stack refuses by name.
 8.  `credentials derived unifi record`,
     `credentials derived adguard record`,
-    `credentials derived zerotier record` and
+    `credentials derived zerotier record`,
+    `credentials derived bgp record` and
     `credentials derived github-admin record` — the §3 rows whose
-    credential is made in the console that checks it rather than minted
-    here. Each prints the steps that create it, takes the value, and
-    writes it into the config of the stack that reads it, which is then
-    committed like the rows above. The GitHub one is last of these
+    credential is made in the console that checks it — or, for the BGP
+    session password, drawn by the operator, no console making one —
+    rather than minted here. Each prints the steps that create it, takes
+    the value, and writes it into the config of the stack that reads it,
+    which is then committed like the rows above. The GitHub one is last of these
     because stage 10 authenticates as it, and it needs stage 7 to have
     run.
 9.  `credentials derived github-dispatch-key record` and
