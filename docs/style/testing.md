@@ -41,6 +41,26 @@ moves a type token its author never types — a literal catches that. A
 table row's field is edited at the field, under that field's own
 documentation — a literal beside it only says the same thing twice.
 
+**That test asks for a second source, not a second site.** Read alone it
+licenses restating a function: an assertion holding an accessor's result
+to a rewrite of its body fails for whoever edits the accessor, which is
+a different site from the constant the accessor reads, so it seems to
+pass. It is the same mirror with the hand moved from the declaration to
+the definition — both sides still move in one edit by one person, and a
+right new body and a wrong one pass equally. What qualifies an expected
+side is that it is **independently derivable**: from what the outside
+party does, from an artifact of its own origin, or from a requirement
+stated somewhere the code under test is not. A value merely written a
+second time is not that. The resolvers' interface endpoint is one
+assertion carrying both: the address and the port halves of
+`f'http://{address}:{port}'` are the accessor's own body written again,
+symbolic on both sides, so they hold the accessor to the census's
+constants and would pass any value those constants took; while the
+scheme and the shape — plain HTTP, the census address rather than the
+vhost, that port, no path — are what the appliance answers and the
+overlay flow rule admits, which an endpoint drifting from them fails
+against nowhere before a live apply. That half is the earned content.
+
 **"The value has a second source out in the world" is necessary and not
 sufficient.** In an infrastructure repository every constant has one
 eventually: a dataset already at the path, a bookmark already on the

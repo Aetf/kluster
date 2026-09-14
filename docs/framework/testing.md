@@ -387,8 +387,38 @@ does not work: the suite imports the package from the import path, so
 the run is against unmutated code and passes — which in a mutation round
 is the alarming answer, and reads as "the new test does not bite".
 
-**That last step is a rename because a write into a tracked path is a
-window.** `>` truncates its target before the writer produces a byte —
+**A second tree measures only what it imports, so its environment is
+built there and never linked in.** The same proof run against the old
+code — a scratch checkout of `main` beside the workspace, to show a case
+reddened before the change and not after — is a second tree, and a
+second tree given a copy or a hardlink of another checkout's `.venv`
+runs that checkout's package while collecting this tree's tests. Two
+absolute paths do it: the console script's shebang — the first line of
+`.venv/bin/pytest` is `#!` and the absolute path of that checkout's
+`.venv/bin/python` — and the `.pth` file the editable install of
+`kluster` leaves in `site-packages`, naming that checkout's `src`. `uv
+run pytest` execs the script, the script execs the other interpreter,
+and the other interpreter imports the other `src`. The obvious spot
+check passes on the same tree: `uv run`'s own sync reinstalls the
+editable package, so `uv run python -c 'import kluster;
+print(kluster.__file__)'` names this tree, while the script it does not
+reinstall keeps the shebang. Nothing errors, and the run reports the
+answer the round was hoping not to see — green on the old code — which
+is the direction that ends an investigation. So the environment is built
+in the tree, `mise x uv -- uv sync` from its root, which is not the
+expensive step it looks like because `uv` links packages out of its
+cache rather than fetching them; and the run asserts what it imported
+rather than trusting the recipe. A `pytest` plugin that raises from
+`pytest_sessionstart` unless `kluster.__file__` resolves inside the tree
+under test is the form that has worked — loaded with `-p <module>`,
+which imports by name off `sys.path`, so a plugin kept under the tree's
+`.claude/` needs `PYTHONPATH=.claude` on the command, or it fails with
+`No module named` before any test runs: the run either measures the tree
+it claims to or refuses, and a refusal is the one answer that cannot be
+misread.
+
+**The restore above is a rename because a write into a tracked path is
+a window.** `>` truncates its target before the writer produces a byte —
 `{ stat -c %s f; } > f` reports `0` on a file that was not empty an
 instant earlier — and the file stays short until the writer finishes.
 `jj` snapshots the working copy on every command, several workspaces
@@ -531,6 +561,20 @@ an interruption begins by establishing what is in the tree — `jj log`
 and `jj diff` before anything is edited — rather than by continuing from
 memory, and a mutation round is over when `jj diff --stat` says zero,
 not when the author believes the last restore ran.
+
+**A restore is confirmed, never assumed, and the mechanism that was to
+produce it is not what confirms it.** A loop that mutates, runs, and
+restores in a `finally` leaves the file mutated when a tool timeout
+kills the process mid-case, because nothing lives to run the `finally`;
+a driver whose last stanza restores a copy taken before the fix puts the
+pre-fix file back over the fix; an edit that never applied leaves the
+tree unmutated and the round measuring nothing. Each of them leaves a
+tree that looks like one nobody touched, and the code that was supposed
+to restore reports nothing either way. What confirms the restore is the
+tree: `jj diff --stat` at zero with the round's work committed below it,
+or, for a file the round holds uncommitted, the source read back and
+compared against the pristine copy. Reading it back is part of the
+round, not a recovery step for when something looks wrong.
 
 **After any mutation round, verify the diff against the branch's own
 base:**

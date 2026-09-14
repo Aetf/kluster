@@ -115,7 +115,11 @@ open-ended:
     "these two terms within a hundred and twenty characters of each
     other", which is what a proximity sweep means and not what it does.
     The naming rule below does not catch it either: a reader handed the
-    pattern reads the intent rather than the defect.
+    pattern reads the intent rather than the defect. `\b` has the same
+    shape of failure on a noun with an underscore in it: `_` is a word
+    character, so `\brestore\b` does not match inside `pg_restore`, and
+    a boundary meant to keep `restores` out keeps every `pg_` form out
+    with it.
 -   **Make a second pass for closure operators near those nouns** —
     "nowhere else", "only", "never", "no other", "and nothing else". A
     change that adds an exception leaves the affirmative form merely
@@ -148,6 +152,18 @@ in the same pass — or run a matcher in a mode that is not line-oriented
 where it has one, or search for the rarest single word in the phrase
 and read the hits. Under-reporting is the failure mode that matters
 here, because it is silent and looks exactly like a clean sweep.
+
+**Every pass reports how many files it read, and a skip set is tested
+against paths relative to the tree being swept.** A sweep run inside a
+workspace stands under the primary checkout's `.claude/`
+([framework/dispatch.md](../framework/dispatch.md) §1.2), so a skip set
+written to keep scratch out — anything matching `.claude` — excludes
+every file when it is tested against absolute paths, and the sweep
+visits nothing and reports clean. A relative walk from the tree's root
+contains no `.claude` unless the file is scratch. The file count is the
+control that catches it, the way the positive match above catches a
+pattern that cannot fire: a sweep that read no files has found nothing
+about the repository.
 
 **Docs layer like the code.** `docs/framework/` documents mechanisms
 (how this repo does Pulumi, CI, testing, and how work is dispatched)
