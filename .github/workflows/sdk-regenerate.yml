@@ -1,0 +1,173 @@
+name: sdk-regenerate
+
+# A renovate branch that moves a pin in `Pulumi.yaml`'s `packages:` block has
+# changed the recipe and not the SDK: `sdks/<name>` is what the program
+# imports, and until `pulumi install` has regenerated it from the block the
+# bump is a declaration the committed tree contradicts -- which is what the
+# consistency test in `checks` says, by naming the SDK. This workflow finishes
+# the bump on the branch: it regenerates `sdks/`, re-locks `uv.lock`, runs the
+# whole gate on the regenerated tree, and commits the result onto the branch
+# (framework/ci.md §3).
+#
+# **The gate runs here, before the push, because the pushed head's own runs
+# wait for a person.** The push is made with the workflow's token, and a
+# `pull_request` run that a `GITHUB_TOKEN` push causes is created in an
+# approval-required state: `checks`, `changes`, `classify` and this workflow
+# all exist on the regenerated head, and none starts until someone with write
+# access selects **Approve workflows to run** in the merge box. So the one run
+# that sees the regenerated tree before that click is this one, and a tree
+# that fails the gate is not pushed at all: the run goes red on the renovate
+# head, where the pull request shows it. (A `push` made with the token still
+# starts nothing, which is the property the unattended merge relies on to
+# start no deploy.)
+#
+# **After the click, the ordinary route applies.** `classify` refuses
+# candidacy because `Pulumi.yaml` is touched, so the merge is a maintainer's
+# after the checks; the comment this workflow leaves says so. What removes
+# the manual merge is an admission in `classify` for a `Pulumi.yaml` changed
+# only in `packages:` on renovate's own pull request; what removes the click
+# is a credential that pushes as something other than `GITHUB_TOKEN`. Both
+# are decided and neither is built here (ci.md §3).
+#
+# **Recognised by outcome, not by parsing.** The block is regenerated whenever
+# a renovate branch touches `Pulumi.yaml` at all, and a regeneration that
+# changes nothing under `sdks/` -- a `versions:` bump, or a second run on a
+# head already regenerated -- ends here with nothing to do. What decides that
+# is the tree, so a new entry, a removed one and a moved pin all count.
+#
+# **Only renovate's branches, and only this repository's.** A person's branch
+# is theirs to push to (dispatch.md §2 rule 4), and a fork's is one this token
+# cannot push to. The login is in the census `conventions/forge.py` carries,
+# and a test holds this file to it.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+    paths: [Pulumi.yaml]
+
+concurrency:
+  group: sdk-regenerate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GH_REPO: ${{ github.repository }}
+  PR: ${{ github.event.pull_request.number }}
+
+jobs:
+  regenerate:
+    if: >-
+      github.event.pull_request.user.login == 'renovate[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # Two plugin downloads and a re-lock on top of the gate; the tests carry
+    # checks.yml's own `timeout 300`, and this bound is for everything else.
+    timeout-minutes: 30
+    steps:
+      # The branch itself rather than the merge ref, so the commit below is a
+      # fast-forward of what renovate pushed.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - uses: jdx/mise-action@v3
+        with:
+          # Pinned like every tool `mise.toml` manages, and for the same
+          # reason (framework/ci.md §3). This is the action's own input, and
+          # the one renovate bumps.
+          version: 2026.9.1
+          experimental: true
+
+      # The generator reads the block and nothing else: no stack, no backend,
+      # no passphrase. `--no-plugins` leaves the program's own providers out
+      # (the bridge it needs is fetched regardless), and `--no-dependencies`
+      # leaves the venv to the gate below, which installs it `--locked`. It is
+      # not a pure generator even so: it links each SDK through `uv add`,
+      # which rewrites the `[tool.uv.sources]` table (the entries come back in
+      # another order) and re-locks `uv.lock` when an SDK's version moved.
+      # Neither rewrite is committed below -- the sources reorder is not part
+      # of the bump, and the lock is re-made under the repository's own uv.
+      - name: Regenerate the SDKs from the packages block
+        run: mise x -- pulumi install --no-dependencies --no-plugins
+
+      - name: Is there anything to commit
+        id: tree
+        run: |
+          set -euo pipefail
+          git add --all -- sdks
+          if git diff --cached --quiet -- sdks; then
+            echo 'The committed SDKs already match the block; nothing to do.'
+            echo 'regenerated=false' >> "$GITHUB_OUTPUT"
+          else
+            git diff --cached --stat -- sdks
+            echo 'regenerated=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      # A regenerated SDK carries its provider's version in its own
+      # `pyproject.toml`, and the lock records that version: a lock that still
+      # names the old one fails `uv sync --locked` (`The lockfile at uv.lock
+      # needs to be updated`). `pulumi install` may already have re-locked
+      # above; this is the lock the commit carries, made by the uv that
+      # `mise.toml` pins rather than whichever one the CLI found.
+      - name: Re-lock
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv lock
+
+      # AGENTS.md's gate, step for step, on the regenerated tree.
+      - name: Install dependencies
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv sync --locked
+      - name: Format
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv run ruff format --check .
+      - name: Lint
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv run ruff check .
+      - name: Types
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv run basedpyright
+      - name: Imports
+        if: steps.tree.outputs.regenerated == 'true'
+        run: mise x uv -- uv run lint-imports
+      - name: Tests
+        if: steps.tree.outputs.regenerated == 'true'
+        run: timeout 300 mise x -- uv run pytest -q
+
+      # Explicit paths, never `-a`: the regeneration is `sdks/` and the lock,
+      # and `pulumi install`'s reorder of `pyproject.toml` is not part of the
+      # bump (it is what a `-a` would commit). The
+      # author is the workflow's own identity, spelled without the numeric
+      # account id GitHub also accepts: `renovate.json5` names this address in
+      # `gitIgnoredAuthors` so that renovate keeps treating the branch as its
+      # own, and a test holds the two spellings equal.
+      - name: Commit and push
+        if: steps.tree.outputs.regenerated == 'true'
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -- sdks uv.lock
+          git commit -m 'sdks: regenerated from the packages block' \
+            -m 'pulumi install, from the Pulumi.yaml this branch carries; uv.lock re-locked to match.'
+          git push origin "HEAD:refs/heads/$BRANCH"
+          git rev-parse HEAD > "$RUNNER_TEMP/pushed"
+
+      - name: Say what the head needs
+        if: steps.tree.outputs.regenerated == 'true'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/comment.md" <<EOF
+          Regenerated \`sdks/\` from the \`packages:\` block and pushed $(cat "$RUNNER_TEMP/pushed"); the gate passed on that tree in [this run]($RUN_URL).
+
+          The push was made with the workflow token, so that head's runs wait for approval: select **Approve workflows to run** in the merge box to start them. \`classify\` then refuses candidacy because \`Pulumi.yaml\` is touched, and the merge is yours once the checks are green (framework/ci.md §3).
+          EOF
+          gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"
