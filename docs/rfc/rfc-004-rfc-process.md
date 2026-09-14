@@ -21,6 +21,13 @@
     document was accepted; rfc-003 has since inserted a §7 of its own, and
     that subsection is its §8.4. The body keeps the number it was accepted
     with ([framework/rfc.md](../framework/rfc.md) §5.3).
+*   **Updated:** 2026-09-14 — §7.3's rule is widened by its built form: a
+    decision that moved after construction is recorded in the status header
+    the same way, and the recording ships in the change that deviates, which
+    is a slice only while the RFC is under construction
+    ([framework/rfc.md](../framework/rfc.md) §5.3, `kluster-ops#345`). §4.1's
+    "any construction deviation" is the same clause. The body keeps the
+    wording it was accepted with.
 *   **Authority:** AGENTS.md, [framework/dispatch.md](../framework/dispatch.md)
     and the style rules (`docs/style/`) are what this document obeys. Where
     they are silent, a rule proposed here is marked **new rule** — which is
