@@ -973,7 +973,8 @@ ROWS: dict[str, Row] = {
         register='UDM SSH key, libvirt SSH identity',
         source=Manual(
             'the gateway and libvirt SSH identities',
-            'Neither is minted here: gw-config installs the gateway key, and aconfmgr\n'
+            "Neither is minted here: the gateway's `AuthorizedKeys` component keeps the\n"
+            '  gateway key installed on the device (physical/gateway.md §1.4), and aconfmgr\n'
             "  provisions the homelab host's service user with its key (physical/\n"
             '  homelab-host.md §4). The act on this side is the paste into the stack.',
         ),
