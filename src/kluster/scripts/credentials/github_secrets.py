@@ -55,7 +55,7 @@ import logging
 import os
 import subprocess as sp
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, cast
 
 from .pulumi_config import SlotRefused
@@ -159,9 +159,14 @@ class Slot:
 
 @dataclass(frozen=True)
 class Forge:
-    """The forge's secret store, as the admin token that may write it."""
+    """The forge's secret store, as the admin token that may write it.
 
-    token: str
+    The token does not print: it is an account-root credential, and this record
+    is carried inside `slots.Context`, whose repr is one `%r` in a log line away
+    from a transcript.
+    """
+
+    token: str = field(repr=False)
     run: Runner = run_gh
 
     def listing(self, slot: Slot) -> dict[str, str]:

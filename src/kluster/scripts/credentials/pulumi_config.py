@@ -133,14 +133,16 @@ class BackendEnvironment:
     stack with another's passphrase.
     """
 
-    passphrase: str | None = None
+    #: The estate passphrase. Neither it nor the mapping below prints: both
+    #: hold passphrases, and the URL is what a repr is read for.
+    passphrase: str | None = field(default=None, repr=False)
     url: str | None = None
     #: Stacks whose config is encrypted under a passphrase of their own, by
     #: stack name. A stack absent from here takes the estate's. A mapping and
     #: not a second field, so adding another such stack is a row rather than a
     #: branch — and so `apart` is the whole answer to "which stacks are not on
     #: the estate passphrase", which a test can read.
-    apart: Mapping[str, str] = field(default_factory=dict[str, str])
+    apart: Mapping[str, str] = field(default_factory=dict[str, str], repr=False)
 
     def variables(self, stack: str) -> dict[str, str]:
         passphrase = self.apart.get(stack)
@@ -245,8 +247,15 @@ class Stack:
         raw = self._pulumi('stack', 'output', '--json', '--show-secrets', '--stack', self.name).strip()
         try:
             parsed: object = json.loads(raw or '{}')
-        except ValueError as exc:
-            raise SlotRefused(f'`pulumi stack output --json` did not print JSON: {raw[:120]!r}') from exc
+        except json.JSONDecodeError as exc:
+            # The size and where the parse stopped, never the text: this is a
+            # dump whose values are secrets by design, and the refusal is
+            # logged. Not `str(exc)` either -- two of the decoder's messages
+            # quote the character they stopped on.
+            raise SlotRefused(
+                f'`pulumi stack output --json` did not print JSON: {len(raw)} characters, '
+                f'and parsing stopped at line {exc.lineno} column {exc.colno}'
+            ) from exc
         if not isinstance(parsed, dict):
             raise SlotRefused(f'`pulumi stack output --json` printed a {type(parsed).__name__}, not an object')
         return cast('dict[str, Any]', parsed)

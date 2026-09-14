@@ -21,8 +21,9 @@ import pytest
 from memory_kit import MemoryKit
 
 from kluster import conventions
-from kluster.scripts.credentials import escrow, oci_iam, oci_slot, pki, workstation
+from kluster.scripts.credentials import b2, escrow, oci_iam, oci_slot, pki, workstation
 from kluster.scripts.credentials.delivery import Delivery
+from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.state_backend import cli, config, provision, settings
 from kluster.scripts.state_backend.state import StateError
 
@@ -227,6 +228,10 @@ class _Recorder:
         self.retired: int = 0
         self.terminated: int = 0
         self.launched: int = 0
+        #: Bucket converges. The first thing a run creates at a provider, so
+        #: the refusal that has to come before anything is created comes
+        #: before this.
+        self.buckets_converged: int = 0
         self.launched_metadata: dict[str, str] = {}
         self.forgotten: list[str] = []
         self.dumped: list[Path] = []
@@ -254,6 +259,11 @@ def _returning(value: Any) -> Callable[..., Any]:
 #: is "box differs from commit", not any particular way of differing.
 CURRENT = {'butane': 'aaaa', 'operator_keys': 'bbbb'}
 
+#: The account the fake seed authorizes as, and the one `conventions` records
+#: for every converge below but the one that says otherwise: a converge proves
+#: the two agree before it creates anything.
+ACCOUNT_ID = 'account-fbb1a7'
+
 
 def _expiry(days: int) -> str:
     return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days)).isoformat()
@@ -274,9 +284,11 @@ def _built_from(digests: dict[str, str], *, dump_key_id: str = 'key-id', expiry:
 
 @pytest.fixture
 def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
-    from kluster.scripts.credentials import b2
-
     def install(recorder: _Recorder) -> None:
+        def ensure_bucket(*_args: object, **_kwargs: object) -> str:
+            recorder.buckets_converged += 1
+            return 'bucket-id'
+
         def write_dump(destination: Path, *, bundle_dir: Path, recipients: Sequence[str]) -> None:
             if recorder.dump_fails:
                 raise StateError('pg_dump against the box failed: connection refused')
@@ -311,8 +323,15 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             recorder.order.append('launch')
             return 'ocid1.instance.new'
 
-        monkeypatch.setattr(b2.Session, 'from_entry', staticmethod(_returning(object())))
-        monkeypatch.setattr(b2, 'ensure_bucket', _returning('bucket-id'))
+        # The session is what the account check reads, so it is the one thing
+        # the stand-in has to carry; `conventions` records the same account
+        # for the same reason the real seed's does.
+        session = b2.Session(account_id=ACCOUNT_ID, api_url='https://api.example', token='unused')
+        monkeypatch.setattr(b2.Session, 'from_entry', staticmethod(_returning(session)))
+        monkeypatch.setattr(
+            conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id=ACCOUNT_ID)
+        )
+        monkeypatch.setattr(b2, 'ensure_bucket', ensure_bucket)
         monkeypatch.setattr(b2, 'mint_dump_key', mint)
         monkeypatch.setattr(b2, 'dump_key_is_current', _returning(recorder.dump_key_current))
         monkeypatch.setattr(provision.OciClients, 'load', classmethod(_returning(object())))
@@ -489,6 +508,34 @@ def test_a_first_run_mints_and_launches(converge: Any) -> None:
     assert _run() == 0
 
     assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 1, 1)
+
+
+@pytest.mark.parametrize('instance_exists', [False, True], ids=['first run', 'running box'])
+def test_a_seed_for_another_account_is_refused_before_anything_is_created(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, instance_exists: bool
+) -> None:
+    """The one B2 key this command mints is held to the recorded account, and early.
+
+    The check inside the mint is not enough here: the bucket is converged, the
+    network is converged and the running box is terminated before the mint
+    runs, and a seed for another account would create the bucket there and
+    destroy the box for a key that lands somewhere the nightly dump is never
+    read back from. So the run refuses on the same step it authorizes.
+    """
+    recorder = _Recorder(instance_exists=instance_exists, metadata=_built_from({'butane': 'stale'}))
+    converge(recorder)
+    monkeypatch.setattr(
+        conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id='some-other-account')
+    )
+
+    # Both accounts and the repair: on this path the operator's next action is
+    # to fix whichever of the two is stale and run `provision` again.
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = _run()
+
+    assert recorder.buckets_converged == 0
+    assert (recorder.terminated, recorder.minted, recorder.launched) == (0, 0, 0)
+    assert recorder.instance_exists == instance_exists
 
 
 def test_the_converge_hands_the_launch_what_the_box_must_carry(converge: Any) -> None:

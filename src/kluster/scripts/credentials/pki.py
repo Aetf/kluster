@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -42,9 +42,12 @@ CA_COMMON_NAME = 'kluster state-backend CA'
 
 @dataclass(frozen=True)
 class Credential:
-    """A private key with its certificate, in the PEM forms consumers want."""
+    """A private key with its certificate, in the PEM forms consumers want.
 
-    key_pem: bytes
+    The key does not print; the certificate is public and does.
+    """
+
+    key_pem: bytes = field(repr=False)
     cert_pem: bytes
 
 
@@ -87,9 +90,13 @@ class Authority:
     certificates that assert the same thing. What identifies the CA across
     them is its public key, which is stable because the private half comes
     from escrow.
+
+    The key does not print. Today's type carries `object`'s repr and would
+    disclose nothing, but that is a property of the library rather than of
+    this record, and what the field holds is the escrowed private key.
     """
 
-    key: ec.EllipticCurvePrivateKey
+    key: ec.EllipticCurvePrivateKey = field(repr=False)
 
     @classmethod
     def from_pem(cls, pem: str | bytes) -> Authority:

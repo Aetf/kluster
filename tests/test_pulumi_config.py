@@ -12,6 +12,7 @@ CLI is not installed, which is neither CI nor a workstation with `mise`.
 from __future__ import annotations
 
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,31 @@ def test_a_slot_that_does_not_keep_the_value_is_a_failure(
 
     with pytest.raises(pulumi_config.SlotRefused, match='does not decrypt'):
         stack.set_secret(QUALIFIED_KEY, SECRET)
+
+
+def test_an_output_dump_that_is_not_json_is_refused_without_being_quoted(tmp_path: Path) -> None:
+    """`stack output --show-secrets` is a dump whose values are secrets by design.
+
+    A dump the CLI cut short is still that dump up to where it stopped, and the
+    refusal it produces is logged by the sync that asked for it. So the refusal
+    says how much arrived and where the parse gave up, and quotes none of it.
+    """
+    truncated = '{"token": "' + SECRET + '", "other": "val'
+
+    def cut_short(args: Sequence[str], *, cwd: Path, env: Mapping[str, str], stdin: str | None) -> str:
+        assert list(args[:2]) == ['stack', 'output']
+        return truncated
+
+    stack = pulumi_config.Stack(name=STACK, directory=tmp_path, run=cut_short)
+
+    with pytest.raises(pulumi_config.SlotRefused) as refused:
+        _ = stack.outputs()
+
+    message = str(refused.value)
+    assert SECRET not in message, message
+    assert 'token' not in message, message
+    assert f'{len(truncated)} characters' in message
+    assert 'line 1 column' in message
 
 
 def test_the_project_directory_is_the_checkout_holding_pulumi_yaml() -> None:

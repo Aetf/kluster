@@ -300,6 +300,11 @@ def _provision(
 
     log.info('[3/7] authorizing with B2, then converging bucket %s', settings.B2_BUCKET)
     session = b2.Session.from_entry(store, seed_entry)
+    # Before the bucket, and so before every OCI write and the terminate below:
+    # this is the first thing the run creates, and a seed for another account
+    # would create it there. The mint checks again for its own sake; this one
+    # is what makes the refusal cost nothing on this path.
+    b2.verify_account(session.account_id)
     bucket_id = b2.ensure_bucket(
         session,
         settings.B2_BUCKET,

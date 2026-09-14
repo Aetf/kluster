@@ -22,21 +22,47 @@ a prohibition — a `NamedTuple` or a `TypedDict` in these modules may carry no
 secret at all, and the census refuses one that says it does.
 
 **The modules are the ones that hold credentials**, and a module that grows a
-record carrying one joins the list. The boundary is deliberate rather than
-exhaustive: this proves nothing about a class it does not name.
+record carrying one joins the list — a component's module as readily as a
+script's, which is how `routing` is here: it holds the BGP session password
+both as the stack's input and resolved for the daemon's configuration. The
+boundary is deliberate rather than exhaustive: this proves nothing about a
+class in a module it does not name, and a module is covered whole or not at
+all, because a record censused by class alone leaves the next record in the
+same module uncaught.
+
+**A field that holds a record is classified by what that record prints**, not
+by what it holds: `slots.Context` carries the forge's admin token through a
+`Forge` whose own repr hides it, and the last test here pins that mechanism.
+The one exception is a field already out of the repr for another reason —
+`Context`'s two caches — which the census records as secret, since every
+hidden field has to be one it can name.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import cast, final, is_typeddict
 
 import pytest
 
+from kluster.components.gateway import routing
 from kluster.providers.device_files import ssh
-from kluster.scripts.credentials import age, b2, cloudflare, escrow, masters, oci_iam
+from kluster.scripts.credentials import (
+    age,
+    b2,
+    cloudflare,
+    escrow,
+    github_secrets,
+    masters,
+    oci_iam,
+    payload,
+    pki,
+    pulumi_config,
+    slots,
+)
 from kluster.scripts.state_backend import config
 
 #: Written into every secret field of every record built below, and looked for
@@ -77,7 +103,22 @@ class Census:
 
 
 #: The modules whose records this census covers.
-MODULES: tuple[ModuleType, ...] = (age, b2, cloudflare, escrow, masters, oci_iam, config, ssh)
+MODULES: tuple[ModuleType, ...] = (
+    age,
+    b2,
+    cloudflare,
+    escrow,
+    github_secrets,
+    masters,
+    oci_iam,
+    payload,
+    pki,
+    pulumi_config,
+    slots,
+    config,
+    ssh,
+    routing,
+)
 
 CENSUS: dict[type, Census] = {
     age.Identity: Census('secret public', secret='secret'),
@@ -105,6 +146,8 @@ CENSUS: dict[type, Census] = {
     escrow.Shape: Census('looks_like matches'),
     escrow.Vault: Census('registry identity', secret='identity'),
     escrow.WorkstationSlot: Census('path read_by'),
+    github_secrets.Forge: Census('token run', secret='token'),
+    github_secrets.Slot: Census('repository name environment'),
     masters.Credential: Census('root values', secret='values'),
     masters.Field: Census('name describes file env kind'),
     masters.Root: Census('member title console fields'),
@@ -120,6 +163,46 @@ CENSUS: dict[type, Census] = {
     oci_iam._ConsumerPolicyParams: Census('group compartment_id'),  # pyright: ignore[reportPrivateUsage]
     oci_iam._SeedPolicyParams: Census('group'),  # pyright: ignore[reportPrivateUsage]
     oci_iam._SeedSession: Census('iam row'),  # pyright: ignore[reportPrivateUsage]
+    # The raw answer, which for a mint carries the credential the provider
+    # discloses once.
+    payload.Payload: Census('where fields', secret='fields'),
+    # The CA key is hidden for what it is, not for how its type happens to
+    # print (`pki.Authority`).
+    pki.Authority: Census('key', secret='key'),
+    pki.Credential: Census('key_pem cert_pem', secret='key_pem'),
+    # `apart` maps a stack name to that stack's own passphrase.
+    pulumi_config.BackendEnvironment: Census('passphrase url apart', secret='passphrase apart'),
+    pulumi_config.Stack: Census('name directory environment run'),
+    # The two caches hold an opened escrow and the backend environment, each a
+    # record with a secret of its own, and are out of the repr for that
+    # reason as well as for being caches.
+    slots.Context: Census(
+        'forge open_vault open_environment project runner ask _vault _environment',
+        secret='_vault _environment',
+    ),
+    slots.Decided: Census('where constant'),
+    slots.Derived: Census('label'),
+    slots.EscrowCopy: Census('label'),
+    slots.GwConfigSecret: Census('what'),
+    slots.Issued: Census('role'),
+    slots.Manual: Census('describes console command'),
+    slots.Minted: Census('command unbuilt'),
+    slots.OnBox: Census('what'),
+    slots.PulumiConfig: Census('stack key'),
+    slots.PulumiState: Census('stack what'),
+    slots.Row: Census('register source targets pending'),
+    slots.SealedSecret: Census('what'),
+    slots.StateRead: Census('stack output'),
+    slots.WorkstationSlot: Census('name'),
+    routing.RoutingSession: Census('neighbour password', secret='password'),
+    routing._ConvergerParams: Census(  # pyright: ignore[reportPrivateUsage]
+        'cluster source live stamp daemons daemon owner group mode check restart'
+    ),
+    routing._FrrParams: Census(  # pyright: ignore[reportPrivateUsage]
+        'cluster peer peer_description password local_asn peer_asn pool_v4 pool_v6 v4_list v6_list max_prefixes',
+        secret='password',
+    ),
+    routing._UnitParams: Census('cluster daemon_unit executable'),  # pyright: ignore[reportPrivateUsage]
     config.ClientBundle: Census('name address ca_cert cert key', secret='key'),
     config.Machine: Census(
         'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
@@ -299,3 +382,30 @@ def test_a_record_that_carries_another_prints_no_secret_of_the_inner_one() -> No
     assert 'key-id' in repr(minted), 'the id still prints: it is what a console listing is matched against'
     assert SECRET not in repr(seeded)
     assert 'ocid1.user.oc1..seed' in repr(seeded), 'the OCIDs still print: they say which kit is open'
+
+
+def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> None:
+    """The two records a push reaches everything through, by the same mechanism.
+
+    `slots.Context` is what every row's push is handed, and `pulumi_config.Stack`
+    is what a config push runs as: one carries the forge's account-root token,
+    the other the passphrase that opens every stack's committed configuration.
+    Neither hides the containing field — the mechanism is the inner record's
+    own repr — so this is where a regression in either inner record would
+    show first.
+    """
+    environment = pulumi_config.BackendEnvironment(
+        passphrase=SECRET, url='https://backend.example', apart={'github': SECRET}
+    )
+    context = slots.Context(
+        forge=github_secrets.Forge(token=SECRET),
+        open_vault=lambda: cast('escrow.Vault', object()),
+        open_environment=lambda: environment,
+        project=Path('.'),
+    )
+    stack = pulumi_config.Stack(name='dns', directory=Path('.'), environment=environment)
+
+    assert context.forge.token == SECRET and stack.environment.passphrase == SECRET, 'the records were not filled'
+    assert SECRET not in repr(context)
+    assert SECRET not in repr(stack)
+    assert 'https://backend.example' in repr(stack), 'the URL still prints: it says which backend a run opened'

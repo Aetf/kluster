@@ -446,40 +446,69 @@ def retire_others(session: Session, role: Role, *, keep: str) -> None:
             session.delete_key(existing.key_id)
 
 
-def verify_account(account_id: str) -> None:
-    """Hold the account a seed authorizes as against the one `conventions` records.
+#: How a refusal names the credential in hand, and what replacing it takes,
+#: by which credential that is. A seed is re-created from the recorded
+#: account's master key; a master key is forgotten, so that the re-run prompts
+#: for the recorded account's. The command named for the seed is not the one
+#: that refused on the seed paths, and the one named for the root is not the
+#: one that refused on the root path: each repair changes what the re-run
+#: holds, where re-running the refused command unchanged would refuse again.
+_SEED_REPAIR = (
+    'seed',
+    "re-create it from the recorded account's master key with `credentials seed b2 create`",
+)
+_ROOT_REPAIR = (
+    'account root',
+    "run `credentials root b2 forget` so that the re-run prompts for the recorded account's master key — or "
+    'unset the variable, where `credentials root ls` says the one in hand came from the environment',
+)
+
+
+def verify_account(account_id: str, *, root: bool = False) -> None:
+    """Hold the account a credential authorizes as against the one `conventions` records.
 
     The account is a fact rather than a credential, so it has one home
-    (`conventions.B2_ACCOUNT`) and a mint copies nothing: the seed belongs to
-    whichever account the operator made it in, and all that is left is to prove
-    that account is this installation's. The two ways it can fail to be are the
-    ways the fact goes stale -- a kit re-seeded from another B2 account, and an
-    identifier written down wrong -- and both would leave live keys in an
-    account nothing here manages.
+    (`conventions.B2_ACCOUNT`) and a mint copies nothing: the credential belongs
+    to whichever account the operator made it in, and all that is left is to
+    prove that account is this installation's. The two ways it can fail to be
+    are the ways the fact goes stale -- a kit re-seeded from another B2
+    account, a master key typed in from the wrong console, an identifier
+    written down wrong -- and all of them would leave live keys in an account
+    nothing here manages.
 
     Both accounts are named, because which of the two is stale is the
-    operator's question and neither one alone answers it.
+    operator's question and neither one alone answers it -- and both repairs
+    are named, because each answer has a different one: a wrong record is a
+    one-line edit to `conventions`, a wrong credential is replaced by whatever
+    replaces that kind of credential. `root` says which kind the caller holds:
+    `create_seed` authorizes with the account master key and every other path
+    with the seed, and the repair for each is not the same command
+    (`_SEED_REPAIR`, `_ROOT_REPAIR`). Either way the command that refused is
+    then re-run; the check is what every B2 path here does first, so a re-run
+    resumes from nothing created.
 
     An installation that has recorded no account is refused rather than waved
     through, and the refusal carries the identifier to record: skipping the
     check where the fact is missing is exactly the state that lets a mint run
     against any account at all.
     """
+    noun, repair = _ROOT_REPAIR if root else _SEED_REPAIR
     intended = conventions.B2_ACCOUNT.account_id
     if intended is None:
         raise CredentialRejected(
-            f'this B2 seed authorizes as the account {account_id}, and `conventions.B2_ACCOUNT` records no '
+            f'this B2 {noun} authorizes as the account {account_id}, and `conventions.B2_ACCOUNT` records no '
             'account to hold it against: record it as the `account_id` of `conventions.B2_ACCOUNT` and commit '
             'that line, then re-run — until the account is written down, nothing here can tell this one from '
             'the account a kit seeded somewhere else would mint in'
         )
     if account_id != intended:
         raise CredentialRejected(
-            f'this B2 seed authorizes as {account_id}, but `conventions.B2_ACCOUNT` records {intended} as the '
+            f'this B2 {noun} authorizes as {account_id}, but `conventions.B2_ACCOUNT` records {intended} as the '
             'account this installation backs up into: one of the two is stale, and minting here would leave a '
-            'live key in an account nothing here manages'
+            'live key in an account nothing here manages. If the record is wrong, correct the `account_id` of '
+            f'`conventions.B2_ACCOUNT` and commit that line; if the {noun} is, {repair}. Then re-run this command'
         )
-    log.info('the seed authorizes as %s, which is the account `conventions` records', account_id)
+    log.info('the %s authorizes as %s, which is the account `conventions` records', noun, account_id)
 
 
 def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) -> str:
@@ -497,7 +526,7 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     this installation's whole B2 chain somewhere nothing records.
     """
     session = Session.authorize(root[masters.B2_ACCOUNT_ID], root[masters.B2_KEY])
-    verify_account(session.account_id)
+    verify_account(session.account_id, root=True)
     minted = _mint_verified(session, SEED)
     seeds.put(seed_entry, minted.app_key.key_id, minted.app_key.key)
     # Stored first, retired second: an interrupted run leaves a key the kit does
@@ -642,7 +671,15 @@ def mint_dump_key(session: Session, *, bucket_id: str) -> Delivery[AppKey]:
     The closure retires as `session`, the credential that minted the key rather
     than the key itself: a write-only key carries no `deleteKeys` and could
     retire nothing, its predecessor least of all.
+
+    The account is held against `conventions` before the key exists, as every
+    mint here does: a session for another account would otherwise put the dump
+    key -- and with it every nightly dump -- into a bucket nothing here reads
+    back from. The one caller checks the same thing earlier, before the bucket
+    it converges on the way here (`state_backend.cli`); this is what makes the
+    rule hold for the mint itself, whoever calls it.
     """
+    verify_account(session.account_id)
     role = dumps(bucket_id)
     minted = session.create_key(role)
     log.info('minted %s (%s)', role.name, minted.key_id)
