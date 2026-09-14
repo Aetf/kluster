@@ -99,7 +99,7 @@ def test_a_fixed_vips_two_families_carry_the_same_host_number() -> None:
 
 # The gateway census is held against the artifacts that can disagree with it,
 # and restated nowhere. `test_device_services` checks the rendered units and
-# files against `tests/data/gw-config-caddyfile`, a transcript of what the
+# files against `tests/data/live-caddyfile`, a transcript of what the
 # device serves today; that one goes when the device does.
 #
 # What no artifact reaches -- a service's address, the build it runs, a vhost's

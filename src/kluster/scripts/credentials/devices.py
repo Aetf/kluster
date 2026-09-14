@@ -213,10 +213,10 @@ DEVICES: dict[str, Device] = {
                 '  admin account is the API credential, and both instances carry\n'
                 '  the same one — a rewrite is written to alice and bob directly,\n'
                 '  with a single login (declarative/dns.md §3).\n'
-                "  That account is part of each instance's initial configuration,\n"
-                '  which the gw-config device services declare and push (physical/\n'
-                '  gateway.md §1). Changing it is a change there; this command\n'
-                '  delivers whatever that configuration now says.'
+                "  That account lives in each instance's own `AdGuardHome.yaml`, state\n"
+                '  the device keeps: the initial state the `physical` stack installs\n'
+                '  names no account (credentials.md §3). Changing it is a change on\n'
+                '  the instances; this command delivers whatever they now answer to.'
             ),
             fields=(
                 Field('username', 'adguardUsername', 'the admin username'),

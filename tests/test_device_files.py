@@ -1,4 +1,4 @@
-"""The gw-config provider: convergence against a device that is not there.
+"""The device-files provider: convergence against a device that is not there.
 
 Every test below runs the provider's real code against a fake device. What is
 doubled is the wire -- the SSH session -- and nothing above it: the shell
