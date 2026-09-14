@@ -452,6 +452,65 @@ def test_rotating_the_recovery_key_changes_no_plaintext(kit: KdbxStore, registry
     assert registry.recipients() == [successor.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
 
 
+def test_rotating_the_recovery_key_again_reuses_the_successor_already_stored(
+    kit: KdbxStore, registry: escrow.Registry
+) -> None:
+    # A rotation that died part way through its re-wrap: the successor kit
+    # holds a key, some ciphertexts are under it, the rest are still under the
+    # retired key and `RECIPIENTS` still names the retired key. The re-run must
+    # finish with the key the successor holds -- a fresh one would strand every
+    # ciphertext already under the first.
+    _ = escrow.init(kit, registry)
+    before = _filled(registry)
+    successor = MemoryKit()
+    stored = age.generate()
+    successor.put(escrow.RECOVERY_ENTRY, stored.public, stored.secret)
+    half = registry.path(escrow.CA, escrow.FIRST)
+    _ = half.write_text(age.encrypt(before[escrow.CA], [stored.public]))
+
+    escrow.rotate_recovery(kit, successor, registry)
+
+    assert successor.get(escrow.RECOVERY_ENTRY) == stored.secret
+    assert registry.recipients() == [stored.public]
+    opened = escrow.Vault.open(successor, registry)
+    assert {label: opened.recover(label) for label in before} == before
+
+
+def test_rotating_the_recovery_key_refuses_a_successor_holding_the_retired_key(
+    kit: KdbxStore, registry: escrow.Registry
+) -> None:
+    # A copy of the kit in hand, or the kit itself, is not a successor: the
+    # re-wrap would re-encrypt to the key already named and nothing rotates.
+    _ = escrow.init(kit, registry)
+    _ = escrow.generate(registry, escrow.PASSPHRASE)
+    successor = MemoryKit()
+    successor.put(
+        escrow.RECOVERY_ENTRY,
+        kit.get(escrow.RECOVERY_ENTRY, attribute='UserName'),
+        kit.get(escrow.RECOVERY_ENTRY),
+    )
+
+    with pytest.raises(escrow.EscrowError, match='the retired key itself'):
+        escrow.rotate_recovery(kit, successor, registry)
+
+    assert registry.recipients() == [kit.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
+
+
+def test_a_recovery_row_without_a_key_is_written_over(kit: KdbxStore, registry: escrow.Registry) -> None:
+    # Present is not complete: a row the vault cannot open with is no key to
+    # reuse, and reusing an empty one would re-wrap to nothing.
+    _ = escrow.init(kit, registry)
+    before = _filled(registry)
+    successor = MemoryKit()
+    successor.put(escrow.RECOVERY_ENTRY, '', '')
+
+    escrow.rotate_recovery(kit, successor, registry)
+
+    opened = escrow.Vault.open(successor, registry)
+    assert {label: opened.recover(label) for label in before} == before
+    assert registry.recipients() == [successor.get(escrow.RECOVERY_ENTRY, attribute='UserName')]
+
+
 def test_check_is_happy_with_a_full_registry(vault: escrow.Vault) -> None:
     _ = _filled(vault.registry)
 
