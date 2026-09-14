@@ -14,12 +14,18 @@ side of the system only delivers it:
     web console and scopes to the whole account;
 -   the **GitHub admin token**, a personal access token created in the GitHub
     UI, which is what the `github` stack declares the forge with and what
-    `credentials derived sync` pushes every GitHub secret as.
+    `credentials derived sync` pushes every GitHub secret as;
+-   the **BGP session password**, the one row here no console makes: it is a
+    shared secret both ends of the gateway's routing session are configured
+    with, either end accepts any string, and the operator draws it. The
+    `physical` stack writes it into the routing daemon's configuration on the
+    device (`components/gateway/routing.py`), and the cluster's half is a
+    SealedSecret that arrives with `k8s-base` (declarative/cluster-infra.md §2).
 
 None of them is a seed: a seed is a credential that mints successors
 (`entries.py`), and each of these mints nothing. Losing one costs a console
-visit and a re-run of its `record` command, which is also the whole of its
-rotation.
+visit — or, for the session password, a fresh draw — and a re-run of its
+`record` command, which is also the whole of its rotation.
 
 **A row here is a provider credential like any other**, and lives where every
 other provider credential of this installation lives: the committed
@@ -45,8 +51,9 @@ being an address rather than a credential.
 **Which stack takes a row is not an argument.** The credential authenticates
 against one thing, and the stack that talks to that thing is the only consumer
 there is: `physical` drives the UDM's Network API and the overlay's Central
-account, `dns` writes the split-horizon rewrites on the AdGuard pair
-(declarative/dns.md §3), and `github` declares the forge.
+account and writes the routing daemon's configuration onto the device, `dns`
+writes the split-horizon rewrites on the AdGuard pair (declarative/dns.md §3),
+and `github` declares the forge.
 
 §3's other pasted row — the UDM SSH key and the libvirt identity — has no
 member here, because there are no console steps to print for it: nobody
@@ -89,6 +96,11 @@ GITHUB_STACK = derived.GITHUB_STACK
 #: because a caller indexes `DEVICES` by it, and a member spelled in two places
 #: is a member that can drift into a `KeyError`.
 GITHUB_ADMIN = 'github-admin'
+
+#: The row whose slot map entry is more than its config key (`slots.py`): the
+#: stack carries the value on to the device, so the map names that channel
+#: beside the key this table delivers into.
+BGP = 'bgp'
 
 
 @dataclass(frozen=True)
@@ -269,6 +281,26 @@ DEVICES: dict[str, Device] = {
             ),
             fields=(Field('token', 'githubAdminToken', 'the personal access token'),),
         ),
+        Device(
+            member=BGP,
+            register='BGP session password',
+            title='the BGP session password',
+            stack=PHYSICAL_STACK,
+            holds="the routing session's password",
+            console=(
+                'No console makes this one. An MD5 session password is a shared\n'
+                '  secret both ends of the gateway↔worker BGP session are configured\n'
+                '  with, and either end accepts any string: draw one -- `openssl rand\n'
+                '  -base64 24` -- and hand it in. The stack writes it into the routing\n'
+                "  daemon's configuration on the device (physical/gateway.md §1.3);\n"
+                "  the worker's half is Cilium's BGPv2 `authSecretRef`, a SealedSecret\n"
+                '  carrying this same value that arrives with `k8s-base`\n'
+                '  (declarative/cluster-infra.md §2). Rotating it is a fresh draw and\n'
+                '  this command again, then both ends re-applied: the session is down\n'
+                '  from the first apply to the second.'
+            ),
+            fields=(Field('password', 'gatewayBgpPassword', 'the session password'),),
+        ),
     )
 }
 
@@ -361,4 +393,4 @@ def borrow(device: Device, *, stack: pulumi_config.Stack) -> str:
     return value
 
 
-__all__ = ('DEVICES', 'GITHUB_ADMIN', 'STDIN', 'Device', 'Field', 'announce', 'borrow', 'deliver')
+__all__ = ('BGP', 'DEVICES', 'GITHUB_ADMIN', 'STDIN', 'Device', 'Field', 'announce', 'borrow', 'deliver')
