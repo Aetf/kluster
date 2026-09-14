@@ -305,12 +305,25 @@ class Machine:
         return {spec.name: getattr(self, spec.name) for spec in fields(self)}
 
 
-def machine(roots: Roots, *, address: str, dump_key_id: str, dump_key: str, bucket_id: str) -> Machine:
-    """The machine this commit describes, at this address, with this dump key."""
+def machine(
+    roots: Roots,
+    *,
+    address: str,
+    dump_key_id: str,
+    dump_key: str,
+    bucket_id: str,
+    now: dt.datetime | None = None,
+) -> Machine:
+    """The machine this commit describes, at this address, with this dump key.
+
+    `now` is the instant the server certificate is issued at, and it goes to
+    `pki` untouched: the default is `pki`'s, in one place, so a test can pin
+    the certificate's validity the way it pins `renewal_due`'s reading of it.
+    """
     # One issuance, both halves. A leaf key is random at issuance (pki.py), so
     # asking the CA twice would hand the box a certificate its key does not
     # match -- and a box whose TLS key is wrong answers nothing.
-    server = roots.ca.issue_server(address)
+    server = roots.ca.issue_server(address, now=now)
     return Machine(
         operator_keys=operator_keys(),
         postgres_uid=settings.POSTGRES_UID,

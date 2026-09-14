@@ -1027,6 +1027,47 @@ def test_the_readiness_wait_states_its_condition_before_probing(
     assert '15m00s' in announcement
 
 
+def test_the_readiness_wait_that_gives_up_says_what_it_last_saw_and_where_to_look(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The wait's failure is the run's last word, and it has to be a lead.
+
+    A port that never answers has two very different causes -- a box still
+    starting or broken, and a route dropping the packets -- and the wait
+    cannot tell them apart from here. So it reports the last thing the probe
+    said, verbatim, and the one command that separates the two from another
+    host. A `False` with neither is an operator left to guess.
+
+    The clock is the test's, advanced only by the wait's own `sleep`: a
+    one-minute budget here is four refusals of a fake, not a minute of wall
+    time.
+    """
+    caplog.set_level(logging.ERROR)
+    clock = [0.0]
+    probe: list[str] = []
+
+    def fake_run(argv: list[str], **_kwargs: object) -> Any:
+        probe[:] = argv
+        return type('Completed', (), {'returncode': 1, 'stderr': '\nconnect: Connection refused\n'})()
+
+    def nap(seconds: float) -> None:
+        clock[0] += seconds
+
+    monkeypatch.setattr(provision.sp, 'run', fake_run)
+    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(provision.time, 'sleep', nap)
+
+    assert provision.wait_for_backend('192.0.2.10', timeout=60) is False
+
+    assert 'last attempt said: connect: Connection refused' in caplog.messages
+    separating = next(message for message in caplog.messages if 'broken box from a broken route' in message)
+    # The command the operator runs is the probe the wait ran, spelled for a
+    # shell with the stdin the probe closes -- so that the answer from another
+    # host is comparable to the wait's own.
+    assert f'{" ".join(probe)} </dev/null' in separating
+    assert 'state-backend ssh' in separating
+
+
 # -- what the command line reaches the converge as ---------------------------
 
 
@@ -1365,21 +1406,17 @@ def test_the_recorded_expiry_is_the_certificate_s_death_not_its_birth() -> None:
     test can see it: they all replace this function with a stand-in.
     """
     roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
-    built = config.machine(roots, address='192.0.2.10', dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+    built = config.machine(
+        roots, address='192.0.2.10', dump_key_id='key-id', dump_key='secret', bucket_id='bucket', now=NOW
+    )
 
     recorded = dt.datetime.fromisoformat(config.expires_at(built))
 
-    # The one reading in this module against the real clock, because the
-    # certificate was minted against it: `config.machine` takes no `now`, so
-    # the expiry is `pki`'s reading plus `LEAF_VALIDITY`, and a fixed instant
-    # here would compare a date the calendar wrote against one the test did.
-    # The tolerance is a day against a value of three years; no stall
-    # reaches it.
-    ahead = recorded - dt.datetime.now(dt.timezone.utc)
-    assert abs(ahead - pki.LEAF_VALIDITY) < dt.timedelta(days=1)
+    # Exact: x509 keeps whole seconds and `NOW` carries none.
+    assert recorded - NOW == pki.LEAF_VALIDITY
     # Which is what makes a freshly built box no reason to touch anything --
-    # the other end of the same value, read by the same clock.
-    assert config.renewal_due(config.expires_at(built)) is None
+    # the other end of the same value, read at the same instant.
+    assert config.renewal_due(config.expires_at(built), now=NOW) is None
 
 
 def test_a_certificate_with_life_left_is_no_reason_to_do_anything() -> None:
