@@ -480,9 +480,12 @@ def _workflows_and_actions() -> list[Path]:
 
 
 #: How a step names an action in this repository rather than one on the
-#: marketplace: a path from the repository root, in either spelling GitHub
-#: accepts. What it names is a directory, and the action inside it is the
-#: directory's `action.yml` or `action.yaml`.
+#: marketplace, and how a job names a reusable workflow in it: a path from
+#: the repository root, in either spelling GitHub accepts. What it names is a
+#: directory, whose action is its `action.yml` or `action.yaml`, or a
+#: reusable workflow's file, which carries one of those suffixes itself --
+#: GitHub confines those to `.github/workflows/`, so the file is one the
+#: censuses read wherever it is a workflow at all.
 LOCAL_ACTION_IN_A_STEP = re.compile(r'^[ \t-]*uses:[ \t]*[\'"]?(?:\./|\$/)([^\s\'"#]+)', re.MULTILINE)
 
 
@@ -497,28 +500,34 @@ def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
     every local `uses:` in every file the censuses read is resolved, and the
     file it lands on has to be one they read too -- which turns the glob from
     a directory someone chose into the whole of what a workflow runs out of
-    this repository.
+    this repository. A job's `uses:` of a reusable workflow resolves the same
+    way; GitHub already holds those to `.github/workflows/`, so that half
+    closes nothing and only checks the glob's spelling reached the file.
     """
     read = set(_workflows_and_actions())
     reached: set[Path] = set()
     unread: list[str] = []
     for path in sorted(read):
-        for directory in LOCAL_ACTION_IN_A_STEP.findall(path.read_text()):
-            action = [
-                candidate for name in ('action.yml', 'action.yaml') if (candidate := ROOT / directory / name).is_file()
-            ]
-            if not action:
-                unread.append(f'{_name(path)} uses {directory}, where no action file exists')
-            elif action[0] not in read:
-                unread.append(f'{_name(path)} uses {action[0].relative_to(ROOT)}, which no census reads')
+        for target in LOCAL_ACTION_IN_A_STEP.findall(path.read_text()):
+            if target.endswith(('.yml', '.yaml')):
+                candidates = [ROOT / target]
+                absent = 'which does not exist'
             else:
-                reached.add(action[0])
+                candidates = [ROOT / target / name for name in ('action.yml', 'action.yaml')]
+                absent = 'where no action file exists'
+            found = [candidate for candidate in candidates if candidate.is_file()]
+            if not found:
+                unread.append(f'{_name(path)} uses {target}, {absent}')
+            elif found[0] not in read:
+                unread.append(f'{_name(path)} uses {found[0].relative_to(ROOT)}, which no census reads')
+            else:
+                reached.add(found[0])
 
     # The jobs that reach a device join the overlay through this action first
     # (ci.md §2), so a pattern that stopped matching `uses:` lines would be
     # silent about the one every apply runs.
     assert GITHUB / 'actions' / 'zerotier' / 'action.yml' in reached
-    assert not unread, f'a step reaches an action the censuses do not read: {unread}'
+    assert not unread, f'a `uses:` reaches a file the censuses do not read: {unread}'
 
 
 def _name(path: Path) -> str:
