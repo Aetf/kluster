@@ -277,9 +277,16 @@ Certificate Transparency, undoing the NXDOMAIN hiding. Fix: per-zone
 
 ### L3 — CAA + DNSSEC
 
-With all DNS in Pulumi and issuance entirely DNS-01, add per-zone CAA
-(pin Let's Encrypt) and enable DNSSEC — cheap misissuance defence.
-*Lives in* dns.md §1.
+With all DNS in Pulumi and issuance entirely DNS-01, every zone the
+`dns` stack holds has DNSSEC enabled and carries the CAA records its
+issuer set calls for (`components/dns/zone.py`) — cheap misissuance
+defence. The set is per zone, decided by who issues for it
+(`ZONE_ISSUERS` in `components/dns/base.py`): a zone the cluster alone
+serves pins Let's Encrypt, a zone holding a Cloudflare-proxied name
+authorizes the edge's issuer set as well, and a zone something outside
+this installation serves gets no pin invented for it. *Lives in*
+dns.md §1.1; the Certificate Transparency read that checks the pins
+against what was actually issued is dns.md §1.2.
 
 ### L4 — device-files SSH host-key pinning
 
