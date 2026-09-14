@@ -47,10 +47,11 @@ _DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 def is_digest(value: str) -> bool:
     """Whether `value` is a registry digest, in the one spelling a registry uses.
 
-    Read here and by the provider that pulls by one
-    (`providers.device_files.provider`), so that the shape a pin is accepted in
-    and the shape a pull is performed by cannot drift apart. The provider's
-    `check` is the other boundary: it holds a digest to this same spelling and a
+    Read here, where an image pin is parsed, and by the `check` of the provider
+    that pulls by one (`providers.device_files.provider`), which imports it
+    rather than spelling its own: the shape a pin is accepted in and the shape
+    a pull is performed by are then one function and cannot drift apart. That
+    `check` is the other boundary -- it holds a digest to this spelling and a
     repository to one naming its registry host, because the device resolves the
     reference itself and compares the marker beside its tree byte for byte.
     """
