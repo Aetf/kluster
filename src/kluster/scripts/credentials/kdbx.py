@@ -38,6 +38,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar, cast
+from uuid import uuid4
 
 from pykeepass import PyKeePass, create_database
 from pykeepass.exceptions import CredentialsError
@@ -64,6 +65,12 @@ KEYRING_SERVICE = 'kluster-credentials'
 #: The attributes an entry carries natively; anything else is a custom
 #: property, which is how a seed records what it is without spending a field.
 _NATIVE = ('Title', 'UserName', 'Password', 'URL', 'Notes')
+
+#: What a successor kit's `DatabaseDescription` says, followed by the
+#: predecessor's `uuid` (credentials.md §4.2). The description is the one
+#: field of a KeePass database that is about the file rather than about a row,
+#: which is what a statement of lineage is.
+LINEAGE_PREFIX = 'kluster: successor of '
 
 
 class KdbxError(RuntimeError):
@@ -171,6 +178,14 @@ class KdbxStore:
         Refuses an existing file: rotation writes a *new* database and the old
         one stays until the rotation that wrote the successor has been
         verified (§4.2), so overwriting is never the intent.
+
+        The database is given a root-group UUID of its own. `pykeepass` makes
+        a new database by copying a blank one it ships, so without this every
+        kit this program created would share that template's UUID and `uuid`
+        could not tell one from another -- which is what the lineage marker
+        (`mark_successor_of`) relies on it doing. A kit created before this
+        rule carries the template's UUID; that costs nothing to a successor
+        written from it, and only two such kits are indistinguishable.
         """
         from . import workstation
 
@@ -179,7 +194,10 @@ class KdbxStore:
         # A directory this makes is the operator's alone; one that already
         # exists is left as the operator set it up.
         _ = workstation.secret_dir(path.parent)
-        return cls(path=path, _db=create_database(str(path), password=password))
+        db = create_database(str(path), password=password)
+        cast('Group', db.root_group).uuid = uuid4()
+        db.save()
+        return cls(path=path, _db=db)
 
     def unlock(self) -> None:
         """Open the database, asking the secret store before asking the operator.
@@ -254,6 +272,35 @@ class KdbxStore:
         self.unlock()
         assert self._db is not None
         return self._db
+
+    @property
+    def uuid(self) -> str:
+        """The database's identity: its root group's UUID.
+
+        A copy of the file carries the same one and a database `create` made
+        does not, so two stores answering the same `uuid` are one database
+        under two names, whichever paths they were opened by.
+        """
+        return str(cast('Group', self._open.root_group).uuid)
+
+    def mark_successor_of(self, predecessor_uuid: str) -> None:
+        """Record in the database's description that it is the successor of `predecessor_uuid`.
+
+        Lineage, not progress: it says what the file *is*, which stays true
+        whatever rows are later written into it or deleted from it, and
+        `rotate` checks it against the predecessor in hand rather than
+        believing it (§4.2).
+        """
+        self._open.database_description = f'{LINEAGE_PREFIX}{predecessor_uuid}'
+        self._open.save()
+        log.info('kdbx: marked %s as the successor of %s', self.path.name, predecessor_uuid)
+
+    def predecessor_uuid(self) -> str | None:
+        """The `uuid` this database was marked the successor of, or None where it was never marked."""
+        description = str(self._open.database_description or '')
+        if not description.startswith(LINEAGE_PREFIX):
+            return None
+        return description.removeprefix(LINEAGE_PREFIX).strip()
 
     def _entry(self, entry: str) -> Entry:
         found = _first(cast('Entry | list[Entry] | None', self._open.find_entries(path=_path(entry))))

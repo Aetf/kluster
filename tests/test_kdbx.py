@@ -9,6 +9,7 @@ written and is not.
 from __future__ import annotations
 
 import logging
+import shutil
 import types
 from collections.abc import Callable
 from pathlib import Path
@@ -93,6 +94,47 @@ def test_create_refuses_an_existing_file(tmp_path: Path) -> None:
     # Rotation writes a new file; the retired one outlives it (§2.2).
     with pytest.raises(KdbxError, match='already exists'):
         _ = KdbxStore.create(path, PASSWORD)
+
+
+def _reopened(path: Path) -> KdbxStore:
+    store = KdbxStore(path=path)
+    store.unlock_with(PASSWORD)
+    return store
+
+
+def test_a_database_has_a_uuid_of_its_own_that_a_copy_shares(tmp_path: Path) -> None:
+    """`uuid` tells two databases apart and tells a copy from neither.
+
+    `pykeepass` copies one blank database for every `create`, so the UUID has
+    to be given rather than inherited: two databases created one after the
+    other answer differently, a save and a reopen keep the answer, and a
+    `shutil.copy` -- the same database under another name -- keeps it too.
+    """
+    path = tmp_path / 'kit.kdbx'
+    store = KdbxStore.create(path, PASSWORD)
+    other = KdbxStore.create(tmp_path / 'other.kdbx', PASSWORD)
+
+    assert store.uuid != other.uuid
+    store.put('seeds/one', 'a', 'x')
+    assert _reopened(path).uuid == store.uuid
+    _ = shutil.copy(path, tmp_path / 'copy.kdbx')
+    assert _reopened(tmp_path / 'copy.kdbx').uuid == store.uuid
+
+
+def test_the_lineage_marker_round_trips_and_a_fresh_database_carries_none(tmp_path: Path) -> None:
+    # What `rotate` writes into a successor and reads back on the re-run
+    # (§4.2): the predecessor's `uuid`, in the file's own description.
+    path = tmp_path / 'successor.kdbx'
+    successor = KdbxStore.create(path, PASSWORD)
+    predecessor = KdbxStore.create(tmp_path / 'kit.kdbx', PASSWORD)
+    assert successor.predecessor_uuid() is None
+
+    successor.mark_successor_of(predecessor.uuid)
+
+    assert _reopened(path).predecessor_uuid() == predecessor.uuid
+    # The marker is about the file, not a row: writing rows leaves it as it is.
+    successor.put('seeds/one', 'a', 'x')
+    assert _reopened(path).predecessor_uuid() == predecessor.uuid
 
 
 def test_writes_survive_a_reopen(tmp_path: Path) -> None:
