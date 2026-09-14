@@ -9,14 +9,37 @@ rather than being invented.
 
 from __future__ import annotations
 
+import functools
 import shutil
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
+import requests
+from b2_api import ACCOUNT_ID as B2_ACCOUNT
+from b2_api import FakeApi as B2Api
+from cloudflare_api import ACCOUNT_ID as CLOUDFLARE_ACCOUNT
+from cloudflare_api import FakeApi as CloudflareApi
+from cloudflare_api import console_seed
+from oci_conventions import with_tenancy_ocid
+from test_oci_iam import ROOT_USER, TENANCY, Tenancy
 
-from kluster.scripts.credentials import age, entries, escrow, lifecycle, masters, pulumi_config, workstation
+from kluster import conventions
+from kluster.scripts.credentials import (
+    age,
+    b2,
+    entries,
+    escrow,
+    lifecycle,
+    masters,
+    oci_iam,
+    pulumi_config,
+    workstation,
+)
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.masters import CredentialRejected
 
 PASSWORD = 'kit-password'
 
@@ -127,15 +150,15 @@ def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
         _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
 
 
-def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxStore, tmp_path: Path) -> None:
+def _never() -> KdbxStore:
+    raise AssertionError('the run made its successor kit when it should have refused first')
+
+
+def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxStore) -> None:
     # A rotation that matches no row would otherwise report an empty list as a
     # finished run, leaving a successor kit with nothing in it.
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
-
     with pytest.raises(KdbxError, match='no seed named'):
-        _ = lifecycle.rotate(kit, successor, prompt=_refuse, only='nonesuch')
-
-    assert successor.entries() == []
+        _ = lifecycle.rotate(kit, _never, prompt=_refuse, only='nonesuch')
 
 
 @needs_age
@@ -147,7 +170,7 @@ def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
     retired = kit.get(escrow.RECOVERY_ENTRY)
 
     successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
-    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, only='recovery', registry=registry)
+    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, only='recovery', registry=registry)
 
     assert rotated == ['recovery']
     assert successor.get(escrow.RECOVERY_ENTRY) != retired
@@ -155,6 +178,159 @@ def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
     # production consequences -- and the retired kit destroyable.
     assert escrow.Vault.open(successor, registry).recover(escrow.PASSPHRASE) == passphrase
     assert kit.get(escrow.RECOVERY_ENTRY) == retired
+
+
+@dataclass
+class WholeKit:
+    """A kit with every row the walk rotates, and the fake platforms behind them.
+
+    A recovery key, an OCI seed in the fake tenancy `conventions` records, a B2
+    seed in the fake account it records, and a Cloudflare dashboard that hands
+    the walk a token it accepts. The kit's rotation runs entirely against the
+    fakes: the tenancy reaches `rotate_seed` through the parameter `lifecycle`
+    has no way to pass, and one `requests` module serves both HTTP platforms,
+    so its `get` is routed to the fake the URL is for.
+    """
+
+    tenancy: Tenancy
+    b2_api: B2Api
+    dashboard: CloudflareApi
+    user_id: str
+    oci_key: str
+    b2_key: str
+    #: Every console prompt the walk made.
+    console_visits: list[str]
+
+
+def whole_kit(kit: KdbxStore, registry: escrow.Registry, monkeypatch: pytest.MonkeyPatch) -> WholeKit:
+    _ = lifecycle.bootstrap(kit, prompt=_refuse, only='recovery', registry=registry)
+    tenancy = Tenancy()
+    with_tenancy_ocid(monkeypatch, TENANCY)
+    oci_root = masters.Credential(
+        root=masters.ROOTS[masters.OCI],
+        values={
+            masters.OCI_TENANCY: TENANCY,
+            masters.OCI_USER: ROOT_USER,
+            masters.OCI_PRIVATE_KEY: oci_iam.generate_key().private_pem,
+        },
+    )
+    user_id = oci_iam.create_seed(root=oci_root, seeds=kit, seed_entry=entries.SEEDS['oci'].entry, connect=tenancy)
+    monkeypatch.setattr(oci_iam, 'rotate_seed', functools.partial(oci_iam.rotate_seed, connect=tenancy))
+    b2_api = B2Api()
+    dashboard = CloudflareApi()
+
+    def get(url: str, **request: Any) -> requests.Response:
+        return b2_api.get(url, **request) if url == b2.AUTHORIZE_URL else dashboard.get(url, **request)
+
+    monkeypatch.setattr(requests, 'get', get)
+    monkeypatch.setattr(requests, 'post', b2_api.post)
+    monkeypatch.setattr(requests, 'request', dashboard.request)
+    monkeypatch.setattr(conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id=B2_ACCOUNT))
+    b2_root = masters.Credential(
+        root=masters.ROOTS[masters.B2], values={'account-id': b2_api.master.key_id, 'key': b2_api.master.secret}
+    )
+    b2_key = b2.create_seed(root=b2_root, seeds=kit, seed_entry=entries.SEEDS['b2'].entry)
+    _ = dashboard.add_zone(conventions.ZONE_PRIMARY)
+    monkeypatch.setattr(conventions, 'CLOUDFLARE_ACCOUNT', conventions.CloudflareAccount(account_id=CLOUDFLARE_ACCOUNT))
+    console_visits: list[str] = []
+
+    def console(message: str) -> str:
+        console_visits.append(message)
+        return console_seed(dashboard)
+
+    monkeypatch.setattr('getpass.getpass', console)
+    return WholeKit(
+        tenancy=tenancy,
+        b2_api=b2_api,
+        dashboard=dashboard,
+        user_id=user_id,
+        oci_key=oci_iam.fingerprint(oci_iam.load_seed(kit, entries.SEEDS['oci'].entry).private_key),
+        b2_key=b2_key,
+        console_visits=console_visits,
+    )
+
+
+@needs_age
+def test_the_whole_kit_rotates_row_by_row_into_the_successor(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+
+    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+
+    # Every row of the register, in its order, and each row's successor is the
+    # one credential its platform is left with -- the account checks up front
+    # pass a correct kit through, and the console row was asked for once.
+    assert rotated == list(entries.SEEDS)
+    assert successor.entries() == sorted(seed.entry for seed in entries.SEEDS.values())
+    assert whole.tenancy.identity.keys[whole.user_id] == [
+        oci_iam.fingerprint(oci_iam.load_seed(successor, entries.SEEDS['oci'].entry).private_key)
+    ]
+    assert whole.b2_api.named(b2.SEED.name) == [successor.get(entries.SEEDS['b2'].entry, attribute='UserName')]
+    assert len(whole.console_visits) == 1
+
+
+@needs_age
+def test_a_refusal_knowable_in_advance_rotates_nothing(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A B2 account refusal during `kit rotate` leaves every other row un-rotated.
+
+    OCI rotates ahead of B2 in the walk and retires its predecessor the moment
+    its successor is stored, so a refusal raised where B2's own rotation raises
+    it would land with OCI's old-kit key already gone -- a state no re-run
+    resumes from, because the successor file exists and the retired kit's OCI
+    row no longer authenticates. Every account check therefore runs before any
+    row rotates, and the property is that such a refusal costs nothing: no key
+    retired, no row written, no successor file made, no console visit asked
+    for.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    # The one thing wrong with the kit: its B2 seed belongs to an account that
+    # is not the one `conventions` records.
+    monkeypatch.setattr(
+        conventions, 'B2_ACCOUNT', conventions.B2Account(region='us-west-002', account_id='some-other-account')
+    )
+    successor = tmp_path / 'successor.kdbx'
+
+    with pytest.raises(CredentialRejected, match=f'{B2_ACCOUNT}.*some-other-account'):
+        _ = lifecycle.rotate(kit, lambda: KdbxStore.create(successor, PASSWORD), prompt=_refuse, registry=registry)
+
+    # The OCI row is un-rotated: its old key is the one key on the user, and
+    # the kit's row still holds it. Nothing else moved either.
+    assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
+    assert oci_iam.fingerprint(oci_iam.load_seed(kit, entries.SEEDS['oci'].entry).private_key) == whole.oci_key
+    assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
+    assert not successor.exists()
+    assert whole.console_visits == []
+
+
+def test_a_self_reproducing_family_with_no_account_check_is_refused_before_the_walk(kit: KdbxStore) -> None:
+    # A row of §2's shape whose platform can mint its successor, and whose
+    # account check nobody has added to the pre-flight: refused by name, where
+    # walking past it would let its rotation retire behind a refusal that
+    # should have come first. A console-made row has nothing to check up
+    # front and is passed through.
+    minting = entries.Seed(
+        member='example',
+        title='Example minting seed',
+        identifier='its key id',
+        mints='a successor of its own class',
+        mints_own_successor=True,
+    )
+    console_made = entries.Seed(
+        member='pasted',
+        title='Example console seed',
+        identifier='the name the console shows it under',
+        mints='a successor of its own class',
+        mints_own_successor=False,
+        console='the provider console → API tokens → New token.',
+    )
+
+    with pytest.raises(KdbxError, match='example.*not in the pre-flight'):
+        lifecycle.prove_account(kit, minting)
+    lifecycle.prove_account(kit, console_made)
 
 
 @needs_age
