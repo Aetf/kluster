@@ -261,6 +261,55 @@ class Recorder(pulumi.runtime.Mocks):
         """The URNs this resource was declared to depend on, under the name `options_of` takes."""
         return list(self.options_of(name, typ).dependencies)
 
+    def children_not_named_for_their_component(self) -> dict[str, str]:
+        """Every registration whose logical name does not carry its component's, and the name it should carry.
+
+        Keyed by URN, valued by the name of the nearest component above the
+        registration. Empty on a run that keeps the rule style/pulumi.md
+        states: a child's logical name is `f'{name}-…'` from the `name` its
+        component was given, because a URN qualifies a name by the chain of
+        parent *types* and not by any parent's name, so two instances of one
+        component type can each hold a child of one type only if the child's
+        name carries theirs (`_capture_request` is where a run that does not is
+        stopped, and only on the census that happens to collide).
+
+        The component is found by walking the parent chain past custom
+        resources: a resource declared against a component's own resource -- a
+        repository's protection, parented on the repository -- is that
+        component's child for the purpose of the URN exactly as one parented on
+        the component is, since the custom resource between them contributes a
+        type to the chain and no name. A registration with no component above
+        it -- a top-level component, a stack program's own resource -- is
+        judged by nothing and never listed.
+
+        Carrying is read as the rule's two forms and nothing looser: the
+        component's name alone, or the name followed by `-`. That the name
+        carried is the holding component's rather than a shorter sibling's the
+        rule's form also fits is the reviewer's to read off the declaration,
+        not this record's.
+        """
+        misnamed: dict[str, str] = {}
+        for urn, request in self.registrations.items():
+            component = self._component_above(request)
+            if component is None:
+                continue
+            rest = request.name.removeprefix(component.name)
+            if request.name == rest or not (rest == '' or rest.startswith('-')):
+                misnamed[urn] = component.name
+        return misnamed
+
+    def _component_above(self, request: Any) -> Any | None:
+        """The nearest component registration above this one, or `None` under the root alone."""
+        parent = request.parent
+        while parent in self.registrations:
+            above = self.registrations[parent]
+            if above.type == _ROOT_TYPE:
+                return None
+            if not above.custom:
+                return above
+            parent = above.parent
+        return None
+
 
 class _RunMonitor(pulumi.runtime.mocks.MockMonitor):
     """Pulumi's mock monitor, carrying which kind of run it was built for.
@@ -319,7 +368,7 @@ def _capture_request(self: Any, request: Any) -> Any:
     stricter than the engine's, never laxer. Note what neither form carries:
     the parent's *name*. Two components of one type, each holding a child of
     one type under one name, are a duplicate URN in the engine too, which is
-    why a child is conventionally named after the component that holds it.
+    why a child's name carries the component's (style/pulumi.md).
 
     **What is kept.** The request itself, because a resource's *options* --
     `import_`, `ignore_changes`, `delete_before_replace`, `depends_on` -- reach
