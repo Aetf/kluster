@@ -1209,6 +1209,23 @@ def load_seed(store: KdbxStore, entry: str) -> SeedRow:
     )
 
 
+def holds_seed(store: KdbxStore, entry: str) -> bool:
+    """Whether `entry` is a complete seed row: every part `load_seed` reads is there.
+
+    `_store` is three saves, so a run that died between them leaves a row
+    with the user OCID and no key. A presence test that stopped at the entry
+    would hand that row to a reader that raises; this one asks for each part
+    by name, and a row missing any of them is treated as absent and written
+    over by the next `_store`.
+    """
+    return (
+        store.has(entry)
+        and bool(store.get(entry, attribute='UserName'))
+        and entries.OCI_TENANCY_ATTRIBUTE in store.attributes(entry)
+        and entries.OCI_KEY_ATTACHMENT in store.attachments(entry)
+    )
+
+
 def load_domain(store: KdbxStore, entry: str) -> str | None:
     """The row's identity domain URL, or None for a row written before it.
 
@@ -1386,7 +1403,27 @@ def rotate_seed(
     `into` is where the successor is written, defaulting to the database the
     predecessor came from — a whole-kit rotation writes a *new* file (§4.2)
     and the retired one must stay exactly as it was.
+
+    **A successor that already holds a complete row is finished, not minted
+    over.** That is the state a rotation interrupted after `_store` leaves,
+    and the row's key is the only live one the kit names once the sweep has
+    reached the predecessor. So `into` is tested before anything is read from
+    `store`: the re-run authorizes as the successor's key, retires every other
+    key on the user -- the predecessor, and any stray the predecessor's own
+    sweep could not delete -- and returns the fingerprint the successor holds.
+    Nothing is minted, so the quota is not consulted; a re-run of a completed
+    rotation is a sweep that finds nothing to delete. A successor row whose
+    key the tenancy no longer accepts is refused at the sweep as today, and
+    its repair is `credentials seed oci create` into that file.
     """
+    if into is not None and holds_seed(into, seed_entry):
+        seed = _seed_session(into, seed_entry, connect=connect)
+        verify_tenancy(seed.row.tenancy)
+        kept = fingerprint(seed.row.private_key)
+        log.info('the successor kit already holds a seed key (%s); retiring every other key on the user', kept)
+        _sweep(seed.iam, seed.row.user, kept)
+        return kept
+
     seed = _seed_session(store, seed_entry, connect=connect)
 
     # Before the sweep, which is this path's first write and a destructive one:
