@@ -8,9 +8,10 @@ mint it or stop and print what a human must do in a console.
 Two properties are the point:
 
 -   **Resumable by probing, not by bookkeeping.** A stage asks whether its
-    output exists and skips if it does. A checkpoint file would record "this
-    ran", which stops being true the moment someone deletes a key in a
-    console -- and the run after that would skip the repair.
+    output exists and skips if it does -- and what it asks about is the row
+    in the kit, not the credential behind it at a platform. A checkpoint file
+    would record "this ran", which stops being true the moment a row is
+    deleted out of the kit -- and the run after that would skip the repair.
 -   **One password, and only for the kit.** The kit is unlocked once and
     passed down, so a bootstrap that pauses for two console visits does not
     ask again on the way back. The account roots a mint needs are not in a
@@ -96,7 +97,20 @@ def create_seed(
     entry: str | None = None,
     registry: escrow.Registry | None = None,
 ) -> None:
-    """Create one §2 row in the kit. Assumes it is not there yet.
+    """Create one §2 row in the kit, over one already there -- except recovery.
+
+    Nothing here probes the kit. Every provider row is written through
+    `kdbx.put`, which replaces an existing entry's secret, and the OCI key
+    file through `kdbx.attach`, which deletes an attachment of the same name
+    first; B2 then retires the seed's other keys at the platform and OCI the
+    user's, so a run against a present row leaves one credential standing,
+    the new one (a superseded Cloudflare token stays, for the dashboard to
+    delete). That is what makes `seed <member> create` the repair for a row
+    that is present in the kit but dead at its platform -- the state
+    `bootstrap`'s probe skips. The recovery row is the exception: `escrow.init`
+    refuses a present row and a present `escrow/RECIPIENTS`, because every
+    ciphertext opens with that one key and nothing else, and replacing it
+    deliberately is `kit rotate`.
 
     `entry` overrides where the row is written, which is what `seed <member>
     create --entry` passes; the register's own path is the default.
@@ -226,8 +240,13 @@ def bootstrap(
     """Fill the kit with every §2 row. Returns the members it created.
 
     Idempotent by probing: a row already in the kit is left alone, so an
-    interrupted bootstrap is resumed by re-running it. That also makes this
-    the repair path when one seed is lost -- `--only <member>`.
+    interrupted bootstrap is resumed by re-running it, and `--only <member>`
+    is the walk confined to one row -- the repair for a row the kit has lost.
+    The probe is `kit.has` and nothing else: a row the kit still holds is
+    skipped whatever has become of the credential behind it at its platform,
+    and that state is `seed <member> create`'s (`create_seed`, which
+    overwrites a provider row) -- for every row but the recovery key, which
+    `seed recovery create` refuses and `kit rotate` replaces.
 
     It fills the kit and stops there. The escrow's own labels are minted one
     command at a time (`credentials derived <row> generate`), because
