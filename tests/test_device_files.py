@@ -2219,11 +2219,12 @@ def test_the_pin_matches_the_device_at_whatever_address_the_session_dials() -> N
     The pin is a bare `ssh-ed25519 <blob>` line rather than a `known_hosts`
     entry, and a matcher given a parsed key applies it to whatever host it is
     asked about. That is what lets the same configured value serve a session
-    dialled at the device's overlay address and one dialled at a LAN name during
-    first bring-up (`stacks/physical.py`, `gatewayBootstrapHost`): the device
-    presents the same key either way, and nothing in the pin disagrees.
+    dialled at the device's overlay address and one dialled at a LAN address
+    during first bring-up (`stacks/physical.py`, `gatewayBootstrapHost`, which
+    is a literal address and never a name): the device presents the same key
+    either way, and nothing in the pin disagrees.
     """
-    lan = 'gateway.invalid'
+    lan = '192.0.2.1'
 
     over_overlay, _, _, _, _, _, _ = match_known_hosts(ssh.pinned_host_keys(HOST_KEY), HOST, HOST, 22)
     over_lan, _, _, _, _, _, _ = match_known_hosts(ssh.pinned_host_keys(HOST_KEY), lan, lan, 22)
