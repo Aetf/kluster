@@ -829,6 +829,53 @@ def test_a_committed_sdk_was_generated_from_what_the_block_declares(name: str) -
     assert recorded == _bridge_parameterization(declared.provider, declared.version), stale
 
 
+#: What `renovate.json5` reads the block with, spelled exactly as that file
+#: holds it: one pattern for the bridge release, which every entry pins and
+#: one bump moves everywhere, and one for the provider each entry is
+#: parameterized with.
+BRIDGE_MATCH_STRING = r'source: terraform-provider\s+version: (?<currentValue>\d[\d.]*)'
+PROVIDER_MATCH_STRING = (
+    r'source: terraform-provider\s+version: [\d.]+\s+parameters:\s+'
+    r'- (?<depName>[\w.-]+/[\w.-]+)\s+- (?<currentValue>\d[\d.]*)'
+)
+
+
+def _as_renovate_spells_it(pattern: str) -> str:
+    """The JSON5 single-quoted string `renovate.json5` holds a pattern in."""
+    return "'" + pattern.replace('\\', '\\\\') + "'"
+
+
+def _as_python_spells_it(pattern: str) -> re.Pattern[str]:
+    """Python spells a named group `(?P<...>`, renovate's regex engine `(?<...>`."""
+    return re.compile(pattern.replace('(?<', '(?P<'))
+
+
+def test_renovate_reads_every_entry_of_the_packages_block() -> None:
+    """The two managers reach every pin the block holds, and the pins they read are the block's.
+
+    Renovate reads its configuration from the default branch, so a pattern
+    that stopped matching an entry -- a key renamed, a line inserted between
+    the two it spans -- would open no pull request and report nothing. Holding
+    the pattern here, against the block as written, is what makes that a red
+    check on the change that did it.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    text = PULUMI_YAML.read_text()
+    declared = _declared_packages()
+
+    assert _as_renovate_spells_it(BRIDGE_MATCH_STRING) in config
+    assert _as_renovate_spells_it(PROVIDER_MATCH_STRING) in config
+
+    bridges = [found.group('currentValue') for found in _as_python_spells_it(BRIDGE_MATCH_STRING).finditer(text)]
+    providers = {
+        (found.group('depName'), found.group('currentValue'))
+        for found in _as_python_spells_it(PROVIDER_MATCH_STRING).finditer(text)
+    }
+
+    assert bridges == [entry.bridge for entry in declared.values()]
+    assert providers == {(entry.provider, entry.version) for entry in declared.values()}
+
+
 def test_nothing_under_packages_is_a_bridged_sdk() -> None:
     """`packages/` is what this repository authors; a bridged SDK belongs under `sdks/`.
 
