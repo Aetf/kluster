@@ -10,12 +10,9 @@ than an ephemeral one.
 from typing import Any
 
 import pulumi
-import pulumi.runtime.mocks
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
-from pulumi.runtime.proto import resource_pb2
+from mock_monitor import Recorder, decline_every_invoke, run_with
 
 from kluster.components.cloud.nodes import MANAGEMENT_PORTS, CloudNodes, NodeLoadBalancer
 
@@ -153,25 +150,6 @@ async def test_the_vip_is_a_reserved_address_on_a_secondary_private_ip(nodes: Cl
     assert await nodes.reserved_ip.lifetime.future() == 'RESERVED'
     assert await nodes.secondary_ip.vnic_id.future() == VNIC_ID
     assert await nodes.reserved_ip.private_ip_id.future() == await nodes.secondary_ip.id.future()
-
-
-def decline_every_invoke() -> None:
-    """Answer every invoke the way the engine answers one it cannot service yet.
-
-    An invoke is gated on its dependencies having been created, and while one
-    is pending -- skipped by a `--target`ed update, say -- the engine answers
-    `unknown` in place of a result (`ResourceInvokeResponse.unknown`) rather
-    than calling the provider. Pulumi's mock monitor never sets the field, so
-    the run's monitor is given that answer here. Every token, because the
-    suite's one invoke is the subject.
-    """
-    mock = pulumi.runtime.settings.get_monitor()
-    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
-
-    def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
-        return resource_pb2.ResourceInvokeResponse(unknown=True)
-
-    mock.Invoke = declined
 
 
 @pytest.mark.asyncio

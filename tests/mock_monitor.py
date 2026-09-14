@@ -3,8 +3,8 @@
 Its own named module rather than a `conftest`, for the reason `memory_kit` is
 one: test modules import it, and `conftest` is not a unique module name.
 
-Three things live here, and they are the three every suite that declares
-resources against Pulumi's mocks was re-growing:
+What lives here is what every suite that declares resources against Pulumi's
+mocks was re-growing:
 
 -   `Recorder`, a monitor that invents nothing and remembers every
     declaration, so a case can ask what the program handed a provider rather
@@ -13,7 +13,9 @@ resources against Pulumi's mocks was re-growing:
     a bridged provider needs before it may register anything;
 -   `declaring`, which waits until the monitor has actually seen the
     declaration -- without it every assertion about the monitor passes
-    vacuously.
+    vacuously;
+-   `decline_every_invoke`, the one answer to an invoke that the engine gives
+    and the mock never does.
 
 Importing this module also installs the one patch of Pulumi's own mock monitor
 that the suite depends on (`_capture_request` below).
@@ -31,6 +33,7 @@ computed outputs the provider reads back, and which invokes it answers.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -39,6 +42,7 @@ from typing import TYPE_CHECKING, Any, cast
 import pulumi
 import pulumi.runtime.mocks
 import pulumi.runtime.settings
+from pulumi.runtime.proto import resource_pb2
 from pulumi.runtime.stack import wait_for_rpcs
 
 if TYPE_CHECKING:
@@ -258,11 +262,45 @@ class Recorder(pulumi.runtime.Mocks):
         return list(self.options_of(name, typ).dependencies)
 
 
+class _RunMonitor(pulumi.runtime.mocks.MockMonitor):
+    """Pulumi's mock monitor, carrying which kind of run it was built for.
+
+    The flag is here rather than read off the runtime because of where the
+    monitor runs: the SDK dispatches `RegisterResource` onto an executor thread
+    that has no Python context of its own, and there `is_dry_run()` does not
+    answer for the run in hand (`_capture_request`). `run_with` builds one of
+    these for every run, so the run's own answer travels with the monitor to
+    the thread that needs it.
+    """
+
+    def __init__(self, mocks: pulumi.runtime.Mocks, *, dry_run: bool) -> None:
+        super().__init__(mocks)
+        self.dry_run: bool = dry_run
+
+
 _register_resource = pulumi.runtime.mocks.MockMonitor.RegisterResource
 
 
+def _register_as_the_run(monitor: _RunMonitor, request: Any) -> Any:
+    """The SDK's own registration, deserialized under the run's kind rather than the process's.
+
+    Run inside a copy of the executor thread's context, never on the thread
+    itself, so the thread is left as it was found. The SDK's setter for
+    `dry_run` treats the first value set in a context as the process-wide
+    default for every thread that has none, and a copy starts with none: so
+    the assignment below both answers this registration and leaves the
+    process default at the run most recently registered, and it can never
+    find an earlier run's value already in place, which is the condition
+    under which the setter keeps the earlier one.
+    """
+    # The SDK declares the property without a setter; the descriptor behind
+    # it supplies one, and `set_mocks` assigns through it the same way.
+    pulumi.runtime.settings.SETTINGS.dry_run = monitor.dry_run  # pyright: ignore[reportAttributeAccessIssue]
+    return _register_resource(monitor, request)
+
+
 def _capture_request(self: Any, request: Any) -> Any:
-    """Refuse a registration the engine would, and keep the two things the mock drops.
+    """Refuse a repeated identity, keep what the mock drops, and read the inputs under the run's own kind.
 
     **The refusal.** A URN is a resource's identity, and a program that
     registers one twice is a program the engine stops: `Duplicate resource URN
@@ -290,7 +328,19 @@ def _capture_request(self: Any, request: Any) -> Any:
     per-property dependency edges, which the mock's response leaves empty
     although the request carried them (framework/testing.md §3.1).
 
-    Patched on the class, once, at import: `set_mocks` builds a fresh monitor
+    **Which kind of run the inputs are read under.** The SDK runs this method
+    on an executor thread with no Python context, and the runtime's `dry_run`
+    is a context variable whose answer on such a thread is a process-wide
+    default the SDK's setter fixes at the first value set in a context. The
+    mock deserializes the request's inputs right here, and an unknown nested
+    in them becomes an `Unknown` under a preview and a dropped key otherwise
+    -- so, left alone, what a case reads back off the recorder for a nested
+    unknown follows whichever run set the flag first in the context this run
+    shares, not the run in hand (framework/testing.md §3.3). A monitor
+    `run_with` built carries its run's own flag, and the SDK's method runs
+    under it, in a context of its own so the thread is left untouched.
+
+    Patched on the class, once, at import: `run_with` builds a fresh monitor
     per run, so there is no instance to hook, and the recording lands on
     whichever `Recorder` that monitor was built around rather than on a global.
     """
@@ -304,7 +354,10 @@ def _capture_request(self: Any, request: Any) -> Any:
             )
         self.mocks.requested.append(request)
         self.mocks.registrations[urn] = request
-    response = _register_resource(self, request)
+    if isinstance(self, _RunMonitor):
+        response = contextvars.copy_context().run(_register_as_the_run, self, request)
+    else:
+        response = _register_resource(self, request)
     for name, dependencies in request.propertyDependencies.items():
         response.propertyDependencies[name].urns.extend(dependencies.urns)
     return response
@@ -327,8 +380,14 @@ async def run_with[MonitorT: pulumi.runtime.Mocks](
     primed once. It costs a round trip against the mock and is done for every
     suite, so that adding a bridged resource to a program is not also a puzzle
     in whichever suite declares it.
+
+    The monitor is built here rather than left to `set_mocks`, so that it
+    carries `preview` to the thread the mock deserializes on
+    (`_capture_request`).
     """
-    pulumi.runtime.set_mocks(monitor, project=project, stack=stack, preview=preview)
+    pulumi.runtime.set_mocks(
+        monitor, project=project, stack=stack, preview=preview, monitor=_RunMonitor(monitor, dry_run=preview)
+    )
     # Registrations are dispatched onto a queue that lives in module state and
     # so outlives the event loop of whichever test made them. Emptying it as a
     # run begins is what lets `declaring` mean "what this run declared" rather
@@ -356,3 +415,24 @@ async def declaring() -> AsyncGenerator[None]:
     pending = asyncio.all_tasks() - before - {asyncio.current_task()}
     _ = await asyncio.gather(*pending)
     await wait_for_rpcs(await_all_outstanding_tasks=False)
+
+
+def decline_every_invoke() -> None:
+    """Answer every invoke the way the engine answers one it cannot service yet.
+
+    An invoke is gated on its dependencies having been created, and while one
+    is pending -- skipped by a `--target`ed update, say -- the engine answers
+    `unknown` in place of a result (`ResourceInvokeResponse.unknown`) rather
+    than calling the provider. Pulumi's mock monitor never sets the field, so
+    the run's monitor is given that answer here, for the run alone: it is the
+    instance `run_with` built that is patched, and the next run builds a fresh
+    one. Every token, because a suite reaching for this has one invoke and it
+    is the subject.
+    """
+    mock = pulumi.runtime.settings.get_monitor()
+    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
+
+    def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
+        return resource_pb2.ResourceInvokeResponse(unknown=True)
+
+    mock.Invoke = declined

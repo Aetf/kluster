@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import fnmatch
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, TypeVar, cast
 
@@ -165,9 +165,15 @@ class SecretTemplate:
     plaintext, with a Go template expression where a decrypted field belongs
     (`{{ index . "password" }}`). What stays in the repository is therefore
     reviewable configuration with credential-shaped holes in it.
+
+    `data` does not print. It is the produced Secret's own data, and a value in
+    it arrives as an `Output` — whose repr discloses nothing — only where the
+    caller made it one: the type promises nothing, and a test hands over the
+    literal. The field is hidden for what it holds rather than for how one of
+    its types prints.
     """
 
-    data: Mapping[str, pulumi.Input[str]] | None = None
+    data: Mapping[str, pulumi.Input[str]] | None = field(default=None, repr=False)
     type: str | None = None
     immutable: bool | None = None
     labels: Mapping[str, str] | None = None

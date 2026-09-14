@@ -280,8 +280,9 @@ def intercepting_signals(_declaration: container.ServiceDeclaration) -> Mapping[
 
 
 def test_no_machine_asks_s6_to_hand_its_signals_to_a_forwarder() -> None:
-    """`machinectl reboot` is the verb that bounces a machine (gateway.md §1.1),
-    and it works because s6-linux-init handles `SIGINT` as a reboot.
+    """`machinectl reboot` is the verb expected to bounce a machine -- an
+    expectation gateway.md §1 leaves to the first soak -- and it rests on
+    s6-linux-init handling `SIGINT` as a reboot.
 
     A non-zero `S6_CMD_RECEIVE_SIGNALS` makes s6-overlay's `stage0` rename the
     `.s6-svscan` handlers aside -- `SIGINT` among them -- and install its own

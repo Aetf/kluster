@@ -21,14 +21,11 @@ from typing import Any, cast
 
 import pulumi
 import pulumi.dynamic as dynamic
-import pulumi.runtime.mocks
-import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
 import requests
-from mock_monitor import Recorder, declaring, run_with
+from mock_monitor import Recorder, decline_every_invoke, declaring, run_with
 from pulumi.runtime import rpc
-from pulumi.runtime.proto import resource_pb2
 
 from kluster.components.talos import image
 from kluster.providers import talos_factory
@@ -140,25 +137,6 @@ async def test_the_cloud_image_is_still_imported_from_the_factory_url() -> None:
     assert await cloud.image.display_name.future() == f'talos-{TALOS_VERSION}-arm64-{CLOUD_SCHEMATIC[:12]}'
 
 
-def decline_every_invoke() -> None:
-    """Answer every invoke the way the engine answers one it cannot service yet.
-
-    An invoke is gated on its dependencies having been created, and while one
-    is pending -- skipped by a `--target`ed update, say -- the engine answers
-    `unknown` in place of a result (`ResourceInvokeResponse.unknown`) rather
-    than calling the provider. Pulumi's mock monitor never sets the field, so
-    the run's monitor is given that answer here. Every token, because the
-    suite's one invoke is the subject.
-    """
-    mock = pulumi.runtime.settings.get_monitor()
-    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
-
-    def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
-        return resource_pb2.ResourceInvokeResponse(unknown=True)
-
-    mock.Invoke = declined
-
-
 @pytest.mark.asyncio
 async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_rather_than_crashing(
     factory: Factory,
@@ -175,11 +153,10 @@ async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_ra
     Read off what the program handed the provider rather than off the image's
     outputs, because the source is nested inside `imageSourceDetails` and the
     mock's readback of a nested unknown is not the engine's
-    (framework/testing.md §3.3). The mock monitor deserializes on a thread
-    that sees the process-wide default of `dry_run` rather than this run's
-    value, so the unknown arrives as an `Unknown` or as a dropped key by which
-    suite ran first; what holds either way is that no value reached the
-    provider under that key.
+    (framework/testing.md §3.3): under this update run the key is dropped,
+    under a preview it would hold an `Unknown`. The assertion is the form that
+    holds in either kind of run, because what the case is about is that no
+    value reached the provider under that key.
     """
     decline_every_invoke()
 
