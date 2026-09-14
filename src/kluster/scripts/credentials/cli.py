@@ -405,10 +405,11 @@ def build_parser() -> argparse.ArgumentParser:
             'A seed is a credential kept in the offline kit so that everything a stack runs on can be '
             'minted from it without reaching for an account root: one per provider, plus the recovery key '
             'the escrowed secrets are encrypted to. Each member below is one entry of the kit. `create` '
-            'writes it for the first time -- minting it where the platform has an API for that, printing '
-            'the console steps where it has none -- and a seed that can mint its own successor also has '
-            '`rotate`. A member listed here whose mint is not written refuses by name, so the register '
-            'and the tree can be read against each other.'
+            'writes it, whether or not the kit already holds one -- minting it where the platform has an '
+            'API for that, printing the console steps where it has none -- except the recovery key, '
+            'which refuses a present row because every escrowed secret opens with that one key; and a '
+            'seed that can mint its own successor also has `rotate`. A member listed here whose mint is '
+            'not written refuses by name, so the register and the tree can be read against each other.'
         ),
         epilog=_see_also('§2'),
     )
@@ -461,10 +462,12 @@ def build_parser() -> argparse.ArgumentParser:
         if seed.repair is not None:
             _ = seed_verbs.add_parser(seed.repair.verb, help=seed.repair.summary, description=seed.repair.detail)
 
-    # The offline store itself, and the things done to the whole of it. The two
-    # walks take the seed table in order and skip what is already there, so an
-    # interrupted run is resumed by re-running it rather than by remembering
-    # where it stopped.
+    # The offline store itself, and the things done to the whole of it. Both
+    # walks take the seed table in order. `bootstrap` skips what is already
+    # there, so an interrupted run is resumed by re-running it rather than by
+    # remembering where it stopped; `rotate` writes a new file that a re-run
+    # cannot resume, so it raises every refusal it can before its first row
+    # (`lifecycle.rotate`).
     kit_subject = subjects.add_parser(
         'kit',
         help='the offline store, and what is done to the whole of it',
@@ -1210,12 +1213,22 @@ def main(argv: list[str] | None = None) -> int:
                     for label in escrow.missing(registry):
                         log.warning('nothing escrowed for %s yet: %s', label, escrow.fill_command(label))
             case ('kit', 'rotate', _):
-                # Before the successor exists, not once `rotate` reaches its
-                # walk: a `--only` that names no row would otherwise leave a
-                # new database file behind with nothing rotated into it.
+                # The successor is made by `rotate`, once every refusal it can
+                # raise up front has passed: a `--only` that names no row, or a
+                # seed in an account `conventions` does not record, would
+                # otherwise leave a new database file behind with nothing
+                # rotated into it, and a re-run refusing that file as already
+                # existing. The member check is `rotate`'s own first step and
+                # is made here as well, so that the command's refusal of a
+                # typo does not depend on the walk's.
                 lifecycle.require_member(args.only)
-                successor = KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: '))
-                rotated = lifecycle.rotate(store, successor, prompt=input, only=args.only, registry=registry)
+                rotated = lifecycle.rotate(
+                    store,
+                    lambda: KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: ')),
+                    prompt=input,
+                    only=args.only,
+                    registry=registry,
+                )
                 log.info('rotated %s into %s', ', '.join(rotated), args.into)
                 if 'recovery' in rotated:
                     log.warning('commit %s: every ciphertext now opens with the successor key alone', registry.root)

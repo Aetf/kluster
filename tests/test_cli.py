@@ -313,8 +313,13 @@ def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch,
 
     assert cli.main(['kit', 'rotate', '--into', str(successor), '--only', 'oci']) == 0
 
+    # The destination travels as a factory `rotate` calls once its own
+    # refusals are behind it, so the file is not made by the command itself.
+    assert 'store.create' not in dispatch.reached
+    rotate_calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'lifecycle.rotate']
+    assert [kwargs['only'] for _, kwargs in rotate_calls] == ['oci']
+    _ = rotate_calls[0][0][1]()
     assert [args[0] for name, args, _ in dispatch.calls if name == 'store.create'] == [successor]
-    assert [kwargs['only'] for name, _, kwargs in dispatch.calls if name == 'lifecycle.rotate'] == ['oci']
 
 
 def test_rotate_refuses_an_unknown_member_before_creating_the_successor(

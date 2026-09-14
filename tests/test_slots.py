@@ -1,9 +1,11 @@
 """The slot map, held against the register it mirrors, and the push that reads it.
 
-Two halves. The first reads `docs/credentials.md` §3 and compares it with the
-map: a credential in the table with no map row, or a map row naming a credential
-the table does not, fails here — which is the only thing keeping two
-descriptions of one inventory from drifting apart. The second drives
+Two halves. The first reads `docs/credentials.md` — §3's table, and the closed
+set of channels §1 rule 6 states — and compares it with the map: a credential
+in the table with no map row, a map row naming a credential the table does not,
+or a channel the map has a term for that rule 6 does not name, fails here —
+which is the only thing keeping two descriptions of one inventory from drifting
+apart. The second drives
 `slots.sync` against a `gh` that runs nothing, because what is under test is
 which slots a row fills and what it says when it cannot fill one; the subprocess
 itself is `test_github_secrets.py`.
@@ -231,6 +233,51 @@ def test_the_vocabulary_names_every_channel_of_the_closed_set() -> None:
     # the register can only describe in words nothing checks.
     assert {type(channel) for channel in channels} == set(get_args(slots.Channel))
     assert {slots.register_column(channel) for channel in channels} == slots.REGISTER_COLUMNS
+
+
+def rule_6_channels() -> set[str]:
+    """§1 rule 6's closed set in the document's own words: the term each channel begins with.
+
+    Read out of the file the way `register_table` reads §3, and in the grammar
+    `promised_channels` reads a cell in -- `·`-separated, the fixed term first
+    and a qualifier after it -- because the rule is where the closed set is
+    stated in prose and the cells are where it is spelled per row, and the two
+    are written by different hands.
+    """
+    document = (pulumi_config.project_dir() / 'docs' / 'credentials.md').read_text()
+    rules = document.split('\n## 1. ', 1)[1].split('\n## 2. ', 1)[0]
+    # The rule's first paragraph is the enumeration, opened by its bold lead
+    # sentence; the paragraphs after the blank line describe members of it.
+    numbered = rules.split('\n6.  ', 1)
+    assert len(numbered) == 2, '§1 has no rule 6'
+    item = ' '.join(numbered[1].split('\n\n', 1)[0].split())
+    opened = re.fullmatch(r'\*\*[^*]+\*\*\s*(.+)', item)
+    assert opened is not None, f'rule 6 does not open with a bold sentence: {item[:60]!r}'
+    terms: set[str] = set()
+    for entry in opened.group(1).split(CHANNEL_SEPARATOR):
+        # A term is bold or plain, and ends where its parenthesized qualifier
+        # opens or where the sentence after the last entry begins.
+        found = re.match(r'[^(.]*', entry.replace('**', '').strip())
+        term = found.group().strip() if found is not None else ''
+        assert term, f'rule 6 has an entry with no term: {entry!r}'
+        assert term not in terms, f'rule 6 names {term!r} twice'
+        terms.add(term)
+    return terms
+
+
+def test_rule_6_names_every_channel_the_cells_have_a_term_for() -> None:
+    named = rule_6_channels()
+
+    # Rule 6 is the closed set as prose states it, and `_TERMS` is that set as
+    # the cells spell it; a term renamed on one side alone is a channel the
+    # register can then only describe in words nothing checks. A subset rather
+    # than equality, because the rule names more than a cell can be delivered
+    # into: the kit's own channel, which no §3 row lands in, and the GitHub
+    # secrets under their prose names, which the cells abbreviate and
+    # `promised_channels` holds against the cells alone.
+    terms = {slots.register_column(channel) for channel in channels_of_every_kind() if not isinstance(channel, Slot)}
+
+    assert terms <= named, sorted(terms - named)
 
 
 def drifted_channels(cell: str, rows: Sequence[slots.Row]) -> tuple[set[str], set[str], set[str]]:

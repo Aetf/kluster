@@ -362,7 +362,12 @@ class KdbxStore:
         return True
 
     def put(self, entry: str, username: str, secret: str) -> None:
-        """Create `entry`, or replace the password of an existing one.
+        """Create `entry`, or replace both the username and the password of an existing one.
+
+        Both halves, because the username is the row's identifier (§2) -- what
+        an operator reading the row matches against a platform's listing --
+        and a secret replaced under its predecessor's identifier would read as
+        the predecessor.
 
         Idempotent by design: a rotation playbook re-runs the same call. The
         database is saved on every write, so an interrupted run leaves the

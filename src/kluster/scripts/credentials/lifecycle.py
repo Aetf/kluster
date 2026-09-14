@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import getpass
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
@@ -100,17 +101,17 @@ def create_seed(
     """Create one §2 row in the kit, over one already there -- except recovery.
 
     Nothing here probes the kit. Every provider row is written through
-    `kdbx.put`, which replaces an existing entry's secret, and the OCI key
-    file through `kdbx.attach`, which deletes an attachment of the same name
-    first; B2 then retires the seed's other keys at the platform and OCI the
-    user's, so a run against a present row leaves one credential standing,
-    the new one (a superseded Cloudflare token stays, for the dashboard to
-    delete). That is what makes `seed <member> create` the repair for a row
-    that is present in the kit but dead at its platform -- the state
-    `bootstrap`'s probe skips. The recovery row is the exception: `escrow.init`
-    refuses a present row and a present `escrow/RECIPIENTS`, because every
-    ciphertext opens with that one key and nothing else, and replacing it
-    deliberately is `kit rotate`.
+    `kdbx.put`, which replaces an existing entry's identifier and its secret
+    both, and the OCI key file through `kdbx.attach`, which deletes an
+    attachment of the same name first; B2 then retires the seed's other keys
+    at the platform and OCI the user's, so a run against a present row leaves
+    one credential standing, the new one (a superseded Cloudflare token stays,
+    for the dashboard to delete). That is what makes `seed <member> create`
+    the repair for a row that is present in the kit but dead at its platform
+    -- the state `bootstrap`'s probe skips. The recovery row is the exception:
+    `escrow.init` refuses a present row and a present `escrow/RECIPIENTS`,
+    because every ciphertext opens with that one key and nothing else, and
+    replacing it deliberately is `kit rotate`.
 
     `entry` overrides where the row is written, which is what `seed <member>
     create --entry` passes; the register's own path is the default.
@@ -267,9 +268,43 @@ def bootstrap(
     return created
 
 
+def prove_account(kit: KdbxStore, seed: entries.Seed) -> None:
+    """Hold one row's account against what `conventions` records, changing nothing.
+
+    **The account check each self-reproducing row's `rotate_seed` makes before
+    its own first write, and nothing else**: reachable on its own so that
+    `rotate` can make every row's before any row's first write. What it takes
+    to answer is the platform's business -- the OCI tenancy is stored on the
+    row, and the B2 account is knowable only by authorizing as the seed -- so
+    what a check happens to catch on the way (a B2 key that no longer
+    authenticates, the network) is incidental, and what falls outside the
+    definition lands at the row as it always did: a dead OCI key is met by the
+    OCI row's own listing, once the recovery row has re-wrapped. The recovery
+    key has no account, and a console-made row has no credential until the
+    walk reaches it, so neither has an account check.
+
+    A seed family that mints its own successor adds its account check here as
+    well as to its own rotation -- here is what keeps the refusal ahead of
+    every other row's retirement, there is what keeps it ahead of its own when
+    the row is rotated alone -- and until it does, its rotation is refused by
+    name rather than walked past.
+    """
+    match seed.member:
+        case entries.OCI:
+            oci_iam.verify_tenancy(oci_iam.load_seed(kit, seed.entry).tenancy)
+        case entries.B2:
+            b2.verify_account(b2.Session.from_entry(kit, seed.entry).account_id)
+        case _ if seed.mints_own_successor:
+            raise KdbxError(
+                f'rotating {seed.member} is in the register (§2) but its account check is not in the pre-flight'
+            )
+        case _:
+            pass
+
+
 def rotate(
     kit: KdbxStore,
-    successor: KdbxStore,
+    successor: Callable[[], KdbxStore],
     *,
     prompt: Prompt,
     only: str | None = None,
@@ -285,31 +320,51 @@ def rotate(
 
     A seed whose platform can mint its successor does so; the rest stop and
     print their console steps, exactly as at bootstrap.
+
+    **Every account refusal is raised before the walk starts** (`prove_account`,
+    which says what that is and is not), because this walk is the one that a
+    re-run does not resume. `bootstrap` skips what the kit already holds, so a
+    row that refused is retried with the rows before it left alone; here a row
+    that rotated has retired its predecessor at the platform, the successor
+    file a re-run would write already exists, and the retired kit's row no
+    longer authenticates. Ordering the walk would not do instead: each row's
+    own check sits directly above its own retirement, so whichever row went
+    first would still have retired before the next row's check ran.
+
+    `successor` is a factory rather than a database for the same reason, one
+    step earlier: creating a KeePass file writes it, so a successor made
+    before the checks would be left on disk by a refusal, and the re-run the
+    refusal advises would be refused in turn for the file already existing.
+    It is called once every refusal this can raise up front has passed, and
+    not at all otherwise.
     """
     require_member(only)
+    walk = [(member, seed) for member, seed in entries.SEEDS.items() if only is None or member == only]
+    log.info('holding every seed to be rotated against the account `conventions` records, before any row rotates')
+    for _, seed in walk:
+        prove_account(kit, seed)
+    into = successor()
     rotated: list[str] = []
-    for member, seed in entries.SEEDS.items():
-        if only is not None and member != only:
-            continue
+    for member, seed in walk:
         match member:
             case entries.RECOVERY:
                 # Pure re-encryption: a successor key, and every ciphertext in
                 # the registry re-wrapped to it. No production secret changes
                 # value, which is why the two rotations are separable.
-                escrow.rotate_recovery(kit, successor, registry or escrow.Registry.open(), entry=seed.entry)
+                escrow.rotate_recovery(kit, into, registry or escrow.Registry.open(), entry=seed.entry)
             case entries.OCI:
                 # Reads the predecessor from the retired kit, writes the
                 # successor into the new one, and leaves the retired file
                 # untouched.
-                _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+                _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case entries.CLOUDFLARE:
                 # The platform allows no minted successor, so rotating is the
                 # same console visit bring-up made, written into the new kit.
-                _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=successor, seed_entry=seed.entry)
+                _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=into, seed_entry=seed.entry)
             case entries.B2:
-                _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=successor)
+                _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case _ if seed.manual:
-                _record_console_seed(seed, prompt, into=successor, entry=seed.entry)
+                _record_console_seed(seed, prompt, into=into, entry=seed.entry)
             case _:
                 raise KdbxError(f'rotating {member} is in the register (§2) but not yet implemented')
         rotated.append(member)
