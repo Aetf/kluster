@@ -453,3 +453,17 @@ async def test_required_checks_on_a_repository_the_plan_cannot_guard_are_refused
             description='a private repository',
             required_checks=('checks',),
         )
+
+
+def test_every_child_carries_its_repositorys_name(stack: Forge) -> None:
+    """The rule, held on the run rather than on the census happening not to collide.
+
+    Two `ManagedRepository`s are two instances of one type, and the URN tells
+    their children apart by the children's names alone (style/pulumi.md). The
+    census today has one protection and no Environment name shared between
+    the repositories, so a child named without its repository would register
+    cleanly and be caught only when a second repository asked for the same
+    thing -- at which point the repair is a rename, and a rename is a delete
+    and a create.
+    """
+    assert stack.children_not_named_for_their_component() == {}

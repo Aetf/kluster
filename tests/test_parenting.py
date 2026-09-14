@@ -21,7 +21,7 @@ import pulumi.runtime
 import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, declaring, run_with
 
 from putils import Component, UnparentedChildError, install_parent_backstop
 from putils import component as putils_component
@@ -290,3 +290,96 @@ async def test_installing_outside_a_program_says_so() -> None:
             install_parent_backstop()
 
     contextvars.copy_context().run(run)
+
+
+# -- the other half of the URN -----------------------------------------------
+#
+# A parent is one half of what places a child in the URN; the child's name is
+# the other, and the URN carries the parent's *type* rather than its name. So a
+# child named without its component collides with the same child under the next
+# instance of that component (style/pulumi.md), and the recorder reads a run for
+# exactly that shape.
+
+
+class Unqualified(Component, pulumi_type='test:Unqualified'):
+    """A component whose child is named the same whatever the component is called."""
+
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.thing = Thing('thing', opts=self.child_opts())
+        self.register_outputs({})
+
+
+class Layered(Component, pulumi_type='test:Layered'):
+    """A component whose second resource is declared against its first rather than against itself.
+
+    The shape a repository and its protection take: the custom resource
+    between the component and the leaf adds a type to the URN and no name, so
+    the leaf's name is still what tells two components' leaves apart.
+    """
+
+    def __init__(self, name: str, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.thing = Thing(f'{name}-thing', opts=self.child_opts())
+        self.below = Thing('below', opts=pulumi.ResourceOptions(parent=self.thing))
+        self.register_outputs({})
+
+
+async def recorded(declare: Callable[[], object]) -> Recorder:
+    """A run of its own, read back through the recorder that saw it."""
+    recorder = await run_with(Recorder(), stack='test', project='putils')
+    async with declaring():
+        _ = declare()
+    return recorder
+
+
+@pytest.mark.asyncio
+async def test_a_child_named_for_its_component_is_not_listed() -> None:
+    """A run that keeps the rule reads back empty, and so does a resource under no component."""
+
+    def declare() -> None:
+        _ = Wellformed('kept')
+        _ = Thing('loose')
+
+    recorder = await recorded(declare)
+
+    assert recorder.children_not_named_for_their_component() == {}
+
+
+@pytest.mark.asyncio
+async def test_a_child_named_without_its_component_is_listed_with_the_name_it_lacks() -> None:
+    """Listed by URN, against the component's name, so the reader sees both what collides and the repair."""
+    recorder = await recorded(lambda: Unqualified('first'))
+
+    listed = recorder.children_not_named_for_their_component()
+
+    assert list(listed.values()) == ['first']
+    (urn,) = listed
+    assert urn.endswith('test:Unqualified$test:index:Thing::thing')
+
+
+@pytest.mark.asyncio
+async def test_a_resource_declared_against_a_components_resource_is_judged_by_the_component() -> None:
+    """The custom resource in between carries no name into the URN, so it is walked past."""
+    recorder = await recorded(lambda: Layered('layered'))
+
+    listed = recorder.children_not_named_for_their_component()
+
+    assert list(listed.values()) == ['layered']
+    (urn,) = listed
+    assert urn.endswith('test:index:Thing$test:index:Thing::below')
+
+
+@pytest.mark.asyncio
+async def test_a_name_that_merely_begins_with_the_components_is_listed() -> None:
+    """The rule's forms are the name and the name followed by `-`; a longer word is neither."""
+
+    class Runon(Component, pulumi_type='test:Runon'):
+        def __init__(self, name: str) -> None:
+            super().__init__(name)
+            self.thing = Thing(f'{name}thing', opts=self.child_opts())
+            self.register_outputs({})
+
+    recorder = await recorded(lambda: Runon('run'))
+
+    assert list(recorder.children_not_named_for_their_component().values()) == ['run']
