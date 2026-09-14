@@ -153,6 +153,59 @@ def test_the_stack_is_created_when_the_backend_has_none(
     assert runner.stacks == [STACK]
 
 
+def _inits(runner: RecordedPulumi) -> list[list[str]]:
+    return [args for args in runner.invocations if args[:2] == ['stack', 'init']]
+
+
+def test_the_stack_census_is_the_dispatch_table() -> None:
+    from kluster import stacks
+
+    # The scripts layer may import no stack program, so the census it refuses
+    # a delivery against is a restatement of the dispatch table rather than
+    # the table itself; this is what keeps the restatement from going stale.
+    assert pulumi_config.STACKS == frozenset(stacks.STACKS)
+
+
+def test_a_stack_no_program_declares_is_refused_naming_the_census(api: FakeApi, kit: KdbxStore) -> None:
+    runner = RecordedPulumi()
+    slot = pulumi_config.Stack(name='dsn', directory=pulumi_config.project_dir(), run=runner)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='dsn.*k8s-base') as refusal:
+        derived.cloudflare_zones(kit, stack=slot)
+
+    # A misspelled `--stack` would otherwise be created in the backend and
+    # filled, with the real stack's token retired by name on the way. Refused
+    # before the seed is opened: no `pulumi` runs, nothing is minted.
+    assert all(name in str(refusal.value) for name in pulumi_config.STACKS)
+    assert runner.invocations == []
+    assert _live(api) == []
+
+
+def test_a_delivery_aimed_at_another_stack_creates_none(api: FakeApi, kit: KdbxStore) -> None:
+    runner = RecordedPulumi()
+    slot = pulumi_config.Stack(name='apps', directory=pulumi_config.project_dir(), run=runner)
+
+    with pytest.raises(pulumi_config.SlotRefused, match='apps stack does not exist'):
+        derived.cloudflare_zones(kit, stack=slot)
+
+    # The row's own stack is created by its first mint, which is bring-up;
+    # any other stack is brought up on its own, and a mint aimed there fills
+    # it or refuses. `stack init` is not reachable from here.
+    assert _inits(runner) == []
+    assert runner.stacks == []
+    assert _live(api) == []
+
+
+def test_a_delivery_aimed_at_another_stack_that_exists_fills_it(api: FakeApi, kit: KdbxStore) -> None:
+    runner = RecordedPulumi(stacks=['apps'])
+    slot = pulumi_config.Stack(name='apps', directory=pulumi_config.project_dir(), run=runner)
+
+    derived.cloudflare_zones(kit, stack=slot)
+
+    assert _inits(runner) == []
+    assert runner.config[derived.API_TOKEN_KEY] in api.values
+
+
 def test_the_minted_token_never_touches_the_kit(
     kit: KdbxStore, stack: tuple[pulumi_config.Stack, RecordedPulumi]
 ) -> None:

@@ -97,6 +97,16 @@ PASSPHRASE_ENV = 'PULUMI_CONFIG_PASSPHRASE'
 #: The stack whose committed configuration is encrypted apart from the rest.
 GITHUB_STACK = 'github'
 
+#: Every stack of this project, by the name `pulumi stack select` takes. The
+#: dispatch table in `kluster.stacks` is the authority; this is its restatement
+#: for a layer that may import no stack program (the layering contract in
+#: `pyproject.toml`), and a test holds the two equal (`tests/test_derived.py`).
+#: What it is for is a delivery that takes a stack by name: a name outside
+#: this set is refused before anything is minted, because the alternative is
+#: `stack init` creating the misspelling in the backend and the mint filling
+#: it while retiring the real stack's live credential by name (`derived`).
+STACKS: frozenset[str] = frozenset({'physical', 'dns', 'k8s-base', 'apps', GITHUB_STACK})
+
 #: Every stack that is **not** on the estate passphrase, and the register row
 #: (§3) the one it *is* on comes from. A census rather than a consequence of
 #: whatever a run happened to recover: a stack named here and handed no
