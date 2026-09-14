@@ -184,7 +184,7 @@ Owning docs keep the content — the index only locates it.
 | Gateway (ZT container down, firmware-wiped device, UDM replacement) | physical/gateway.md §3 |
 | Node replacement (CP node, worker VM, block volume and VIP extras) | §3 here |
 | Upgrades (Talos serial, Cilium canary) | §2 here |
-| Backup restores (CNPG, VolSync, etcd) | storage.md §5 + drill scripts |
+| Backup restores (CNPG, VolSync, etcd) | storage.md §5; the drills are §4 here |
 | Alert-channel failure (HA push down → meta-alert; GitHub leg down) | architecture.md §4.3 |
 
 vmalert rule families adopt this index as they are ported: an alert
