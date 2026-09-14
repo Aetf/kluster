@@ -181,6 +181,33 @@ not the address it currently answers on. The same holds for anything
 else a name is spliced from — a value that is configuration is a value
 someone may edit.
 
+**A child's logical name carries its component's `name`.** A URN
+qualifies a logical name by the chain of parent *types*, never by a
+parent's name, so two components of one type that each declare a child
+of one type under one name — two `ManagedRepository`s each holding a
+`BranchProtection('main')`, two repositories each with an Environment
+of one name — register one URN twice. The engine refuses the second,
+and the repair is a rename, which is a delete and a create: for a
+`RepositoryEnvironment` one that discards its secrets and forces a
+`credentials derived sync`, for a `BranchProtection` an unprotected
+window. So a child's logical name carries the `name` of the component
+the URN places it under — the nearest component above it on the parent
+chain, whatever code declared it: `name` alone for the resource the
+component *is*, `f'{name}-…'` for the rest. That value is chosen, so
+the rule above is satisfied, and applied at every level it makes every
+name unique across instances of the whole type chain. One family is
+named the other way round today: the gateway's persistence mechanism
+names every device file for itself and the path
+(`f'{persistence}-{kind}-{name}'`) and parents it on the component that
+asked, so that two askers of one path are refused as one thing declared
+twice rather than kept apart by name — which is why the invariant that
+holds this rule is asserted on the `github` program and not on
+`physical`. It is about *logical* names only: a singleton whose
+physical name comes from `conventions` with autonaming disabled keeps
+that physical name. Landing the rule on a child that state already
+holds under the old name is `aliases=[pulumi.Alias(name=<old>)]` on
+that child, dropped in a later change once state carries the new URN.
+
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
 owned, with `ignore_changes` shrunk to what genuinely belongs to
@@ -208,4 +235,6 @@ The architecture reviewer's standing questions, for the review stage
 -   Would the diff's names survive the "no metaphor, one term per
     concept" test, and is every logical name built only from values
     that cannot move?
+-   Does every child's logical name carry the `name` of the component
+    the URN places it under?
 -   Do the comments say anything the code already says?
