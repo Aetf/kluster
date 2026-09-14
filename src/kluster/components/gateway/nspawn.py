@@ -313,11 +313,9 @@ def machine_file(machine: str, name: str) -> str:
     content stamp covers the machine's directory as the shell globs it, and a
     glob skips leading-dot names — so such a file would be delivered, bound
     into the container, and never once restart the machine that reads it. The
-    refusal belongs here rather than in the script because of where each one
-    fails: a name refused at declaration fails loudly at preview, before
-    anything reaches the device, while a script taught to see the file would
-    leave the mistake to surface as a service that quietly does not restart. A
-    machine's own files are also the one place a caller can be held to a name
+    refusal belongs here rather than in the script: a name refused at
+    declaration fails loudly at preview, before anything reaches the device,
+    and a machine's own files are the one place a caller can be held to a name
     at all.
     """
     if name.startswith('.'):
@@ -525,9 +523,11 @@ def machines_script() -> str:
 
     What that costs is that a directory is authority, so the layout has to make
     a half-delivered or abandoned one harmless. It does: a machine is its
-    settings file, which is the last thing a delete takes away and one of the
-    first a push puts down, and a tree without one is skipped rather than
-    started.
+    settings file, and the push puts that file down after the files the machine
+    mounts and before its tree, and takes it away in the reverse order — so a
+    tree never stands without its settings, and settings never without the
+    files they name. The only half-states are a directory that is not yet a
+    machine and a machine whose tree has not landed, and both are skipped.
     """
     return templates.render(
         persistence.TEMPLATE_PACKAGE,

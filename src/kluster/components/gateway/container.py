@@ -519,16 +519,18 @@ class _MachineParams:
 class InterceptedSignals(Exception):
     """A machine's environment would take s6's signal handlers away from it.
 
-    The reboot verb this device's machines are bounced with is the only casualty
-    that would not announce itself, so the variable is refused where every
-    machine's environment is rendered rather than recorded in a comment
+    `machinectl reboot` is the verb expected to bounce a machine on this device
+    — an expectation physical/gateway.md §1 leaves to the first soak — and it
+    rests on s6 keeping its own `SIGINT` handler. Losing that handler is the one
+    casualty that would not announce itself, so the variable is refused where
+    every machine's environment is rendered rather than recorded in a comment
     (`S6_CMD_RECEIVE_SIGNALS`).
     """
 
     def __init__(self, machine: str) -> None:
         super().__init__(
             f'refusing to render {machine}: its environment carries {S6_CMD_RECEIVE_SIGNALS}, which '
-            f"replaces s6's own SIGINT handler and so takes `machinectl reboot` away from this machine"
+            f"replaces s6's own SIGINT handler -- the one `machinectl reboot` is expected to bounce this machine through"
         )
         self.machine: str = machine
 

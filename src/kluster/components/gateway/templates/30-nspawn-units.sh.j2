@@ -24,21 +24,42 @@ mkdir -p "$live"
 # directory is keyed by machine name, so a stray file with another name would
 # be installed as another machine's settings and removed as stale in the same
 # run. What the source glob walks is therefore the directories, not the files.
+#
+# A regular file at that name, and not merely something there. It is the same
+# test 40-machines.sh recognizes a machine by, so what is mirrored and what is
+# a machine to the converger cannot be two different sets; and the kind is the
+# test rather than the name because the kind that must not be read is the one
+# nothing here would create -- `cmp` on a named pipe waits for a writer that is
+# not coming, and this script runs at boot with nobody watching it.
+declared() {
+    [ -f "$src/$1/$1{{ suffix }}" ]
+}
+
 for dir in "$src"/*/; do
     machine=$(basename "$dir")
-    f=$dir$machine{{ suffix }}
-    [ -e "$f" ] || continue
-    if ! cmp -s "$f" "$live/$machine{{ suffix }}"; then
+    declared "$machine" || continue
+    f=$src/$machine/$machine{{ suffix }}
+    # The live name is this script's own -- nothing else puts anything there --
+    # so whatever is wearing it that is not a regular file is debris and is
+    # taken away rather than read around: `cmp` would wait on a named pipe here
+    # exactly as on the source, and `cp` would write through a link to wherever
+    # it pointed. A link is asked about first and separately, because `-e` and
+    # `-f` follow one.
+    installed=$live/$machine{{ suffix }}
+    if [ -L "$installed" ] || { [ -e "$installed" ] && [ ! -f "$installed" ]; }; then
+        rm -rf "$installed"
+    fi
+    if ! cmp -s "$f" "$installed"; then
         echo "nspawn-units: installing $machine{{ suffix }}"
         cp "$f" "$live/"
     fi
 done
 
 for f in "$live"/*{{ suffix }}; do
-    [ -e "$f" ] || continue
+    [ -e "$f" ] || [ -L "$f" ] || continue
     machine=$(basename "$f" {{ suffix }})
-    if [ ! -e "$src/$machine/$machine{{ suffix }}" ]; then
+    if ! declared "$machine"; then
         echo "nspawn-units: removing stale $(basename "$f")"
-        rm "$f"
+        rm -rf "$f"
     fi
 done

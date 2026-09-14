@@ -252,11 +252,13 @@ never the cloud path (architecture.md §3.4). The AdGuard pair
     service leaves the homelab host. What the `physical` stack's
     `ResolverService` takes over is the static half (listeners,
     upstreams) as an **initial state**, not as live state: it declares
-    one `AdGuardHome.initial.yaml` per instance, under a name the
-    instance itself never reads, and the device's `40-machines.sh`
-    copies it to the `AdGuardHome.yaml` the instance does read only
-    when the working directory is empty — after a wipe, and at no other
-    time.
+    one `AdGuardHome.yaml` per instance, delivered under the machine's
+    `initial-state/` directory rather than into its state, and the
+    device's `40-machines.sh` copies that directory onto the state
+    directory the instance reads only while the state directory is
+    empty — before the first start, or after a wipe, and at no other
+    time (physical/gateway.md §1.1). What keeps the seed apart from the
+    live file is where it sits, not a second name.
 -   **An initial state, because the file is the instance's own.**
     AdGuard Home keeps its whole configuration in one YAML file that a
     running instance rewrites whenever it accepts a change through its

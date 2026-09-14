@@ -5,15 +5,15 @@ service is: the runtime is the framework, so what is exercised is what it does
 for *a* machine. Which file lands where, what runs after one lands, and what a
 rollback moves.
 
-`40-machines.sh` is exercised by **running it**, against a directory tree this
-module builds and a `systemctl` it can read back. That is the tier the change
-this file covers needs: the script is handed no machines, so every claim about
+The two convergers are exercised by **running them**, against a directory
+tree this module builds and, for `40-machines.sh`, a `systemctl` it can read
+back. That is the tier a script handed no machines needs: every claim about
 which machines it acts on is a claim about what it finds on a disk, and reading
 the rendered text back would only restate the template. The cases therefore
 disagree with the declaration on purpose — a tree with no settings, a settings
 file that went away under a running machine, a half-written file a push
-abandoned — because that is the device state the operator meets and no
-declaration describes it.
+abandoned, a named pipe where a file was expected — because that is the device
+state the operator meets and no declaration describes it.
 
 The other renderers are plain functions over plain data, so those cases read
 their output directly; the component is declared once against mocks, which is
@@ -1007,19 +1007,149 @@ def test_a_machine_that_failed_to_start_fails_the_run_and_leaves_its_stamp_unwri
     assert (device.machines / 'bob' / nspawn.STAMP).exists()
 
 
-def test_the_settings_mirror_removes_what_has_no_source() -> None:
-    """The live directory is wholly this program's, unlike the unit store.
-
-    So a machine retired here is retired on a recovery boot too, rather than
-    only on the push that retired it.
-    """
+def test_the_settings_mirror_is_rendered_against_the_devices_own_directories() -> None:
+    """The production rendering points at the device; the cases below point at a tree."""
     script = nspawn.nspawn_units_script()
 
     assert f'src={nspawn.MACHINES}' in script
     assert f'live={nspawn.LIVE_NSPAWN_DIR}' in script
-    assert 'for dir in "$src"/*/; do' in script
-    assert f'f=$dir$machine{nspawn.NSPAWN_SUFFIX}' in script
-    assert 'removing stale' in script
+
+
+@final
+@dataclass(frozen=True)
+class _NspawnUnitsRendering:
+    """What `30-nspawn-units.sh.j2` reads, spelled again so a test can aim it at a tree."""
+
+    cluster: str
+    machines_root: str
+    live_nspawn_dir: str
+    suffix: str
+
+
+@final
+@dataclass(frozen=True)
+class _Mirror:
+    """The settings mirror rendered against two directories of a temporary tree."""
+
+    script: Path
+    machines: Path
+    live: Path
+
+
+@pytest.fixture
+def mirror(tmp_path: Path) -> _Mirror:
+    box = _Mirror(script=tmp_path / nspawn.NSPAWN_UNITS_SCRIPT, machines=tmp_path / 'machines', live=tmp_path / 'live')
+    box.machines.mkdir()
+    _ = box.script.write_text(
+        templates.render(
+            persistence.TEMPLATE_PACKAGE,
+            f'templates/{nspawn.NSPAWN_UNITS_SCRIPT}.j2',
+            _NspawnUnitsRendering(
+                cluster=conventions.CLUSTER_NAME,
+                machines_root=str(box.machines),
+                live_nspawn_dir=str(box.live),
+                suffix=nspawn.NSPAWN_SUFFIX,
+            ),
+        ),
+        encoding='utf-8',
+    )
+    return box
+
+
+def settings_of(mirror: _Mirror, machine: str) -> Path:
+    """Where the push puts a machine's settings, whatever is actually there."""
+    (mirror.machines / machine).mkdir(exist_ok=True)
+    return mirror.machines / machine / f'{machine}{nspawn.NSPAWN_SUFFIX}'
+
+
+def installed_as(mirror: _Mirror, machine: str) -> Path:
+    """Where the mirror installs them, whatever is actually there."""
+    return mirror.live / f'{machine}{nspawn.NSPAWN_SUFFIX}'
+
+
+def mirror_once(mirror: _Mirror) -> tuple[int, str]:
+    """Run the mirror once, bounded the way `converge` is: hanging is the failure."""
+    completed = subprocess.run(  # noqa: S603 -- a rendered script of this repository's own
+        ['/bin/bash', str(mirror.script)],  # noqa: S607 -- the shell the device's own scripts name
+        env={'PATH': '/usr/bin:/bin'},
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+    return completed.returncode, completed.stdout
+
+
+def test_the_mirror_installs_a_settings_file_once_and_removes_it_with_its_source(mirror: _Mirror) -> None:
+    """A true mirror, both ways: what the cases after this one are measured against."""
+    _ = settings_of(mirror, 'alice').write_text('one\n', encoding='utf-8')
+
+    status, log = mirror_once(mirror)
+    assert (status, installed_as(mirror, 'alice').read_text(encoding='utf-8')) == (0, 'one\n')
+    assert 'installing' in log
+
+    status, log = mirror_once(mirror)
+    assert (status, log) == (0, ''), 'an installed copy that matches its source is left alone'
+
+    settings_of(mirror, 'alice').unlink()
+    status, log = mirror_once(mirror)
+    assert status == 0
+    assert 'removing stale' in log
+    assert not installed_as(mirror, 'alice').exists(), 'a retired machine is retired on a recovery boot too'
+
+
+def test_a_settings_path_that_is_not_a_regular_file_is_neither_read_nor_a_machine(mirror: _Mirror) -> None:
+    """The mirror runs at boot, unattended, so it may not open anything that waits.
+
+    A named pipe where the settings should be is a machine the push has not
+    finished with or never wrote; `cmp` on it would block until a writer that
+    is not coming arrived, and take the rest of the boot chain with it. The
+    kind is the test, and it is the same test `40-machines.sh` starts a machine
+    by — so a copy installed while the file was real goes as stale, and the
+    two convergers agree that there is no machine here.
+    """
+    _ = settings_of(mirror, 'alice').write_text('one\n', encoding='utf-8')
+    _ = settings_of(mirror, 'bob').write_text('two\n', encoding='utf-8')
+    _ = mirror_once(mirror)
+
+    settings_of(mirror, 'alice').unlink()
+    os.mkfifo(settings_of(mirror, 'alice'))
+
+    status, _ = mirror_once(mirror)
+
+    assert status == 0
+    assert not installed_as(mirror, 'alice').exists()
+    assert installed_as(mirror, 'bob').read_text(encoding='utf-8') == 'two\n', 'its siblings are still mirrored'
+
+
+def test_debris_at_the_live_name_is_taken_away_and_the_settings_installed_over_it(mirror: _Mirror) -> None:
+    """The live name is the mirror's own, so what wears it is not read around.
+
+    `cmp` opens both of its arguments, so a named pipe on the live side wedges
+    exactly as one on the source side does; and `cp` would write through a link
+    to wherever it pointed. Either is removed first, and the link's target is
+    left alone. Debris with no source goes the same way: a dangling link, which
+    `-e` cannot see, and a directory, which a plain `rm` refuses.
+    """
+    _ = settings_of(mirror, 'alice').write_text('one\n', encoding='utf-8')
+    _ = settings_of(mirror, 'bob').write_text('two\n', encoding='utf-8')
+    mirror.live.mkdir()
+    os.mkfifo(installed_as(mirror, 'alice'))
+    elsewhere = mirror.live.parent / 'elsewhere'
+    _ = elsewhere.write_text('not the settings\n', encoding='utf-8')
+    installed_as(mirror, 'bob').symlink_to(elsewhere)
+    installed_as(mirror, 'carol').symlink_to(mirror.live.parent / 'nowhere')
+    installed_as(mirror, 'dave').mkdir()
+
+    status, _ = mirror_once(mirror)
+
+    assert status == 0
+    assert installed_as(mirror, 'alice').read_text(encoding='utf-8') == 'one\n'
+    assert not installed_as(mirror, 'bob').is_symlink()
+    assert installed_as(mirror, 'bob').read_text(encoding='utf-8') == 'two\n'
+    assert elsewhere.read_text(encoding='utf-8') == 'not the settings\n'
+    assert not installed_as(mirror, 'carol').is_symlink(), 'a dangling link with no source is taken away'
+    assert not installed_as(mirror, 'dave').exists(), 'a directory with no source is taken away'
 
 
 ##
