@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import getpass
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
 from .kdbx import KdbxError, KdbxStore
-from .masters import Prompt
+from .masters import CredentialRejected, Prompt
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,14 @@ def _announce(seed: entries.Seed) -> None:
         log.warning('  %s', line)
 
 
+def _ask_token(seed: entries.Seed) -> str:
+    """One hidden paste of a console credential's secret; empty is a refusal to give one."""
+    secret = getpass.getpass(f'{seed.title} — the token: ').strip()
+    if not secret:
+        raise KdbxError(f'{seed.title}: the token is required')
+    return secret
+
+
 def _read_console_token(seed: entries.Seed) -> str:
     """A console credential that is one secret and nothing else.
 
@@ -62,10 +70,74 @@ def _read_console_token(seed: entries.Seed) -> str:
     disagree.
     """
     _announce(seed)
-    secret = getpass.getpass(f'{seed.title} — the token: ').strip()
-    if not secret:
-        raise KdbxError(f'{seed.title}: the token is required')
-    return secret
+    return _ask_token(seed)
+
+
+def _left_behind(seed: entries.Seed, rotated: Sequence[str], into: KdbxStore) -> str:
+    """What stopping a rotation at `seed`'s row leaves in the two kits.
+
+    Said by the refusal that stops there, because nothing else says it: a
+    rotation is not resumed by re-running it (`rotate`), and the rows already
+    in the successor are the ones whose predecessors the retired kit can no
+    longer use.
+    """
+    held = (
+        f'holds {", ".join(rotated)}, whose predecessors in the retired kit no longer work'
+        if rotated
+        else 'holds no row'
+    )
+    # What this run knows of the console row is that it wrote nothing for it
+    # and retired nothing of it; whether the retired kit's token still works
+    # is the dashboard's to say, and the console steps invite deleting it.
+    return (
+        f'the successor kit {into.path} {held}; it does not hold {seed.member}, whose row in the retired kit '
+        'this run did not touch, and no row after it was rotated'
+    )
+
+
+def _adopt_pasted_seed(seed: entries.Seed, *, into: KdbxStore, rotated: Sequence[str]) -> str:
+    """The console-made row of a rotation: a refused paste is asked again.
+
+    Every refusal `cloudflare.adopt_seed` raises -- the value is not a token,
+    the wrong template, no zone visible, the wrong account -- is one the
+    operator fixes on the dashboard page they are standing on, so asking
+    again costs one paste where stopping costs the run: the rows before this
+    one have rotated and their predecessors are gone (`rotate` says why no
+    re-run resumes that). The line between what is asked again and what is
+    raised is `CredentialRejected`'s own -- the API said no -- so the network,
+    which no page fixes, is raised as it is. Nothing is stored by a refused
+    paste; `adopt_seed` writes the row after its last check.
+
+    Stopping is Ctrl-C or end of input, and the error that stops the run says
+    what state the two kits are left in -- as a `KdbxError`, so it ends the
+    command the way every other refusal does, with that message and no
+    traceback. An empty paste is asked again like a refused one: a copy that
+    did not take is the very class of slip the re-ask exists to make cheap,
+    and a token is never empty, so nothing is lost by not treating it as the
+    stop. That leaves the two keystrokes an operator reaches for to stop as
+    the only ones that do.
+    """
+    _announce(seed)
+    while True:
+        try:
+            token = getpass.getpass(f'{seed.title} — the token (Ctrl-C to stop): ').strip()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise KdbxError(f'{seed.title}: stopped at the paste; {_left_behind(seed, rotated, into)}') from exc
+        if not token:
+            log.warning('nothing pasted; paste the token, or Ctrl-C to stop')
+            continue
+        try:
+            return cloudflare.adopt_seed(token=token, seeds=into, seed_entry=seed.entry)
+        except CredentialRejected as exc:
+            log.error('%s: refused, and nothing was stored: %s', seed.title, exc)
+            # Said in so many words because one refusal's text names that
+            # command: run while `rotate` waits here, it would record the
+            # new token in the retired kit (Aetf/kluster-ops#347).
+            log.warning(
+                'fix it on the dashboard page and paste the new token at this prompt -- no other command is run '
+                'while `rotate` waits, and `credentials seed cloudflare create` would put it in the retired kit '
+                '-- or Ctrl-C to stop'
+            )
 
 
 def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore, entry: str) -> None:
@@ -84,10 +156,7 @@ def _record_console_seed(seed: entries.Seed, prompt: Prompt, *, into: KdbxStore,
     if not identifier:
         raise KdbxError(f'{seed.title}: {seed.identifier} is required')
 
-    secret = getpass.getpass(f'{seed.title} — the token: ').strip()
-    if not secret:
-        raise KdbxError(f'{seed.title}: the token is required')
-    into.put(entry, identifier, secret)
+    into.put(entry, identifier, _ask_token(seed))
 
 
 def create_seed(
@@ -319,7 +388,10 @@ def rotate(
     re-running its own command.
 
     A seed whose platform can mint its successor does so; the rest stop and
-    print their console steps, exactly as at bootstrap.
+    print their console steps, as at bootstrap -- with one difference: a
+    paste the dashboard made wrong is asked for again rather than raised
+    (`_adopt_pasted_seed`), because here the refusal would land after the
+    rows before it have retired their predecessors.
 
     **Every account refusal is raised before the walk starts** (`prove_account`,
     which says what that is and is not), because this walk is the one that a
@@ -359,8 +431,11 @@ def rotate(
                 _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case entries.CLOUDFLARE:
                 # The platform allows no minted successor, so rotating is the
-                # same console visit bring-up made, written into the new kit.
-                _ = cloudflare.adopt_seed(token=_read_console_token(seed), seeds=into, seed_entry=seed.entry)
+                # same console visit bring-up made, written into the new kit
+                # -- and a paste the dashboard made wrong is asked for again
+                # rather than ending a run that has already retired the rows
+                # before it.
+                _ = _adopt_pasted_seed(seed, into=into, rotated=rotated)
             case entries.B2:
                 _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case _ if seed.manual:
