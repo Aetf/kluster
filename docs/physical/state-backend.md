@@ -333,14 +333,24 @@ there is nothing for it to edit.)
     the box's key free of delete/prune capability (the H4
     discipline), and it is what gives retired encryption keys a
     definite end of life (below).
--   Freshness is to be asserted **from outside** by the ops repo's
-    scheduled workflow (object-age on the prefix, ci.md §3) — the
-    box monitors nothing about itself. **That workflow does not
-    exist** (§6), and the box's design is what makes its absence
-    total: a nightly that stopped in August looks exactly like one
-    that ran, until a restore reaches for it. Reading the newest
-    object's timestamp is the assertion, and today the only thing
-    that performs it is an operator running §7.3.1.
+-   The box reports one thing about itself, and to one audience: a
+    run of `state-dump.service` that fails leaves a notice under
+    `/etc/motd.d/`, which Fedora CoreOS prints at an interactive ssh
+    login — a plain `state-backend ssh`; one given a command prints
+    none — so it reaches whoever next opens a shell there for any
+    reason, and it pages nobody. The next run that succeeds removes
+    it. What nothing on the box observes is the bucket: its key writes
+    and cannot list (above), so whether a recent object is *there* is
+    a question only the outside can ask, and a run that never began —
+    a timer that stopped firing, a box that is down — has no failure
+    to report.
+    Freshness is therefore to be asserted **from outside** by the ops
+    repo's scheduled workflow (object-age on the prefix, ci.md §3).
+    **That workflow does not exist** (§6), and the box's design is
+    what makes its absence total: a nightly that stopped in August
+    looks exactly like one that ran, until a restore reaches for it.
+    Reading the newest object's timestamp is the assertion, and today
+    the only thing that performs it is an operator running §7.3.1.
 -   **The age identity rotates by generations; no key is assumed
     immortal.** A generation is a label with a **stored ciphertext**:
     the identity for `backup/age/<generation>` is random at creation
@@ -420,7 +430,9 @@ there is nothing for it to edit.)
 
 ## 6. Monitoring
 
-Everything observable lives **outside** the box:
+Every probe lives **outside** the box — the one signal it raises itself
+is §5's failed-run notice, and that reaches nobody who does not open a
+shell on it:
 
 -   Every CI job and local `pulumi` operation is an implicit
     5432 + TLS + auth probe — backend-down is discovered by the first
