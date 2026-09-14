@@ -24,10 +24,16 @@ disagree with the census, which is what makes them able to catch it.
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from collections.abc import Iterable
 from ipaddress import IPv6Network
 from pathlib import Path
+from typing import NamedTuple, cast
+
+import pytest
+import yaml
 
 from kluster import conventions
 from kluster.scripts.credentials import pulumi_config
@@ -713,6 +719,131 @@ def test_the_stack_encrypted_apart_is_the_one_the_forge_program_declares() -> No
     from kluster.stacks import github
 
     assert set(pulumi_config.APART) == {github.STACK}
+
+
+# --------------------------------------------------------------------------
+# The local packages.
+# --------------------------------------------------------------------------
+# `Pulumi.yaml`'s `packages:` block is the recipe for every SDK under `sdks/`:
+# which release of Pulumi's any-Terraform-provider bridge, parameterized with
+# which upstream provider at which version. No program reads the block -- it is
+# `pulumi install`'s input -- and the SDK that command generates records the
+# same three values in its own `pulumi-plugin.json`, which is what the engine
+# resolves the plugin from at run time. Two artifacts of independent origin,
+# so they can disagree: a version edited into the block is not a bump until the
+# SDK is regenerated from it, and the cases below are what say so. They are the
+# `uv sync --locked` of these packages.
+
+PULUMI_YAML = ROOT / 'Pulumi.yaml'
+PACKAGES = ROOT / 'packages'
+SDKS = ROOT / 'sdks'
+
+#: The generator every entry of the block names, and the `name` every SDK's
+#: `pulumi-plugin.json` carries: the bridge is the plugin, and the upstream
+#: provider is its parameter.
+BRIDGE = 'terraform-provider'
+
+
+class Declared(NamedTuple):
+    """One entry of the block: the bridge release and the provider it is parameterized with."""
+
+    bridge: str
+    provider: str
+    version: str
+
+
+def _declared_packages() -> dict[str, Declared]:
+    """The block as written, keyed by the SDK it declares."""
+    block = yaml.safe_load(PULUMI_YAML.read_text())['packages']
+    return {
+        name: Declared(str(entry['version']), str(entry['parameters'][0]), str(entry['parameters'][1]))
+        for name, entry in block.items()
+        if entry['source'] == BRIDGE
+    }
+
+
+def _generated_plugin(directory: Path) -> dict[str, object] | None:
+    """What an SDK under `directory` says it was generated from, as the engine reads it.
+
+    `None` where there is no such file: a package with no `pulumi-plugin.json`
+    is not a generated SDK at all, which is an answer rather than an error.
+    """
+    plugins = list(directory.glob('pulumi_*/pulumi-plugin.json'))
+    if not plugins:
+        return None
+    (plugin,) = plugins
+    return json.loads(plugin.read_text())
+
+
+def _bridge_parameterization(provider: str, version: str) -> dict[str, dict[str, str]]:
+    """How the bridge records its parameter inside the SDK it generates.
+
+    `parameterization.value` is this JSON, base64-encoded. Transcribed from
+    the bridge's own output rather than derived from anything here, which is
+    what makes it the side the block cannot move. The coordinates are taken
+    as the block spells them: the bridge would generate the same SDK from
+    `Backblaze/b2`, but renovate's lookup against the OpenTofu registry is
+    case-sensitive and finds only `backblaze/b2`, so the spelling the SDK
+    records is the one the block has to hold.
+    """
+    return {'remote': {'url': f'registry.opentofu.org/{provider}', 'version': version}}
+
+
+def test_every_sdk_is_declared_and_every_declaration_has_its_sdk() -> None:
+    """The block and the directory list the same packages, both ways.
+
+    An SDK the block does not declare is one `pulumi install` cannot regenerate
+    and no bump can reach; a declaration with no SDK is an import that fails at
+    the first `pulumi` run. The bridge is the only generator the block names
+    today, which the filter in `_declared_packages` states rather than assumes.
+    """
+    declared = set(_declared_packages())
+    committed = {path.name for path in SDKS.iterdir() if path.is_dir()}
+
+    assert declared, 'the block declares no bridged package'
+    assert declared == committed, (
+        f'declared but not committed: {sorted(declared - committed)}; committed but not declared: {sorted(committed - declared)}'
+    )
+
+
+@pytest.mark.parametrize('name', sorted(_declared_packages()))
+def test_a_committed_sdk_was_generated_from_what_the_block_declares(name: str) -> None:
+    """Each SDK's `pulumi-plugin.json` carries the bridge release and the provider the block names.
+
+    The block is edited -- by renovate or by hand -- and the SDK is generated,
+    so the two agree only when `pulumi install` has run since the edit. Every
+    pin-bearing field is compared, and the parameter is compared decoded, so a
+    provider swapped for another at the same version fails here too.
+    """
+    declared = _declared_packages()[name]
+    plugin = _generated_plugin(SDKS / name)
+    assert plugin is not None, f'sdks/{name} carries no pulumi-plugin.json'
+    parameterization = cast('dict[str, str]', plugin['parameterization'])
+    recorded = json.loads(base64.b64decode(parameterization['value']))
+
+    stale = f'sdks/{name} was generated from a different declaration than Pulumi.yaml holds; run `pulumi install`'
+    assert plugin['name'] == BRIDGE, stale
+    assert plugin['version'] == declared.bridge, stale
+    assert parameterization['name'] == name, stale
+    assert parameterization['version'] == declared.version, stale
+    assert recorded == _bridge_parameterization(declared.provider, declared.version), stale
+
+
+def test_nothing_under_packages_is_a_bridged_sdk() -> None:
+    """`packages/` is what this repository authors; a bridged SDK belongs under `sdks/`.
+
+    Held by what a bridged SDK is -- one whose plugin is the bridge -- rather
+    than by listing the directories, so a fourth provider added on the wrong
+    side of the line fails by name. A member with no plugin file at all is a
+    package someone wrote, which is what the directory is for.
+    """
+    bridged = [
+        path.name
+        for path in PACKAGES.iterdir()
+        if path.is_dir() and (plugin := _generated_plugin(path)) is not None and plugin['name'] == BRIDGE
+    ]
+
+    assert bridged == [], f'generated by the bridge and committed under packages/ rather than sdks/: {bridged}'
 
 
 # --------------------------------------------------------------------------

@@ -38,3 +38,43 @@ config:
   versions:image-gateway-adguard-alice: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
   versions:image-gateway-adguard-bob: ghcr.io/aetf/homelab-containers/adguard:3@sha256:45a2895bea93f2d7ed02a1ea4a36783e32eae29733ea613869724ddeb024aad5
   versions:image-gateway-zerotier: ghcr.io/aetf/homelab-containers/zerotier:3@sha256:e4d8cb40f8a5e787b7d4ad6ddc60d6a0289d2eb988b3575e6a54273a354c39d7
+
+# The bridged provider SDKs under `sdks/`, one entry per SDK: the release of
+# Pulumi's any-Terraform-provider bridge (`version`) and the upstream provider
+# it is parameterized with (`parameters`: the registry coordinates, then the
+# provider's version). Three providers have no published Pulumi SDK, and this
+# block is their recipe -- `pulumi install` regenerates every `sdks/<name>`
+# from it, and the result is committed (the tree is small, and every CI job
+# would otherwise fetch two plugins before it could `uv sync`). Each SDK's own
+# `pulumi_<name>/pulumi-plugin.json` records the same three values, and a test
+# holds it to this block, so a bump here is not finished until the SDK has been
+# regenerated: renovate proposes the bump, and a workflow regenerates on its
+# branch (framework/ci.md §3). No stack program reads this block -- it is the
+# generator's input, and the engine resolves the plugin at run time from the
+# SDK's `pulumi-plugin.json`.
+#
+# The bridge version is shared by all three: it moves under one renovate
+# dependency (`pulumi/pulumi-terraform-provider`), so it moves for all three at
+# once. Each upstream provider is a dependency of its own, spelled in lower
+# case as the registry API takes it: renovate looks the coordinates up
+# verbatim and the lookup is case-sensitive, while the bridge canonicalizes
+# either spelling to the same SDK.
+packages:
+  b2:
+    source: terraform-provider
+    version: 1.3.0
+    parameters:
+      - backblaze/b2
+      - 0.13.2
+  unifi:
+    source: terraform-provider
+    version: 1.3.0
+    parameters:
+      - filipowm/unifi
+      - 1.1.0
+  zerotier:
+    source: terraform-provider
+    version: 1.3.0
+    parameters:
+      - zerotier/zerotier
+      - 1.6.0
