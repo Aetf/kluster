@@ -17,9 +17,13 @@ member landing on its own; a comma followed by a date is not a list.
 
 A number **lands** on a numbered heading (`## 5.`, `### 5.3`), an inline
 `**§5.3 …**` label (the runbooks number their steps that way), a numbered
-list item under a heading (`§0.4` is item 4 of the list under §0, a form the
-documents and the code both use), and every parent of one of those (§7
-wherever §7.1 exists).
+list item under a heading that has no heading-numbered child -- no `### N.x`
+heading and no `**§N.x**` label anywhere in the document -- (`§0.4` is item 4
+of the list under §0, a form the documents and the code both use), and every
+parent of one of those (§7 wherever §7.1 exists). Where §N has such a child,
+`§N.M` is that child and nothing else, and the list under §N is cited in
+words, "item M of §N": the rule is docs/style/README.md under "Comments and
+docs", and this sweep is what holds it.
 
 An accepted RFC's body is frozen: it keeps the words and the numbers the
 decision was made in, and a cross-reference a later renumbering overtakes is
@@ -112,6 +116,7 @@ def prose(text: str) -> str:
 def sections(text: str) -> set[str]:
     """Every number a reference into this prose can land on."""
     found: set[str] = set()
+    items: set[str] = set()
     heading: str | None = None
     for line in text.splitlines():
         if match := HEADING.match(line):
@@ -119,8 +124,12 @@ def sections(text: str) -> set[str]:
             if heading:
                 found.add(heading)
         elif heading and (match := LIST_ITEM.match(line)):
-            found.add(f'{heading}.{match.group(1)}')
+            items.add(f'{heading}.{match.group(1)}')
     found |= {match.group(1) for match in INLINE_LABEL.finditer(text)}
+    # A list item is `§N.M` only where nothing heading-numbered stands beneath
+    # §N; where a `### N.x` or `**§N.x**` exists, `§N.x` is that and nothing else.
+    beneath = {'.'.join(number.split('.')[:depth]) for number in found for depth in range(1, number.count('.') + 1)}
+    found |= {item for item in items if item.rsplit('.', 1)[0] not in beneath}
     for number in list(found):
         parts = number.split('.')
         found |= {'.'.join(parts[:depth]) for depth in range(1, len(parts))}
@@ -352,6 +361,23 @@ def test_a_numbered_list_item_under_a_heading_is_addressable(tmp_path: Path) -> 
     assert [str(f) for f in sweep(root).dangling] == [
         'docs/a.md:10: §0.3 lands nowhere in docs/a.md (a bare number is read against its own document)',
         'docs/a.md:10: §1.1 lands nowhere in docs/a.md (a bare number is read against its own document)',
+    ]
+
+
+def test_a_list_under_a_heading_with_numbered_subheadings_is_not_addressable(tmp_path: Path) -> None:
+    root = _tree(
+        tmp_path,
+        {
+            'docs/a.md': '# A\n\n## 2. Two\n\n1.  First.\n2.  Second.\n3.  Third.\n\n### 2.1 Sub\n\nSee §2.1, §2.2 and §2.3.\n',
+            'docs/b.md': '# B\n\n## 5. Steps\n\n1.  First.\n2.  Second.\n\n**§5.3 Third.**\n\nSee §5.1, §5.2 and §5.3.\n',
+        },
+    )
+    # §2.1 is the heading and §5.3 the label; the list items beside them are not §N.M.
+    assert [str(f) for f in sweep(root).dangling] == [
+        'docs/a.md:11: §2.2 lands nowhere in docs/a.md (a bare number is read against its own document)',
+        'docs/a.md:11: §2.3 lands nowhere in docs/a.md (a bare number is read against its own document)',
+        'docs/b.md:10: §5.1 lands nowhere in docs/b.md (a bare number is read against its own document)',
+        'docs/b.md:10: §5.2 lands nowhere in docs/b.md (a bare number is read against its own document)',
     ]
 
 
