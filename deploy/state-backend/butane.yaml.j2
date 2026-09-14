@@ -34,7 +34,8 @@ storage:
     - path: /opt/bin
       mode: 0755
     # Where a failed dump leaves its notice. Fedora CoreOS prints
-    # /etc/motd.d/* at every ssh login, and `state-backend ssh` is the one
+    # /etc/motd.d/* at an interactive ssh login — a plain `state-backend
+    # ssh`; one given a command prints none — and that login is the one
     # human channel this box has.
     - path: /etc/motd.d
       mode: 0755
@@ -240,10 +241,12 @@ systemd:
 
     # Where a failure goes, and how far it gets. No probe watches the objects
     # yet, so this reaches exactly one place: Fedora CoreOS prints
-    # /etc/motd.d/* at ssh login, and `state-backend ssh` is how an operator
-    # gets there. It pages nobody. What it buys is that a dump which has been
-    # failing for a week says so to the next person who logs in for any
-    # reason, instead of being a `systemctl status` nobody thought to run.
+    # /etc/motd.d/* at an interactive ssh login — a plain `state-backend
+    # ssh`; one given a command prints none — and that login is how an
+    # operator gets there. It pages nobody. What it buys is that a dump which
+    # has been failing for a week says so to the next person who opens a
+    # shell there for any reason, instead of being a `systemctl status`
+    # nobody thought to run.
     # The notice means "the last run failed", which is why a good run removes
     # it: ExecStartPost above does not run when ExecStart failed or was killed
     # by the timeout.

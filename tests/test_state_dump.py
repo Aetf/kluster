@@ -508,10 +508,11 @@ def test_the_dump_unit_can_time_out() -> None:
 def test_a_failed_dump_reaches_the_next_login() -> None:
     """Nothing watches the objects yet, so a failure waits for a human.
 
-    Fedora CoreOS prints `/etc/motd.d/*` at ssh login and `state-backend ssh`
-    is how an operator reaches this box, which makes a notice there the one
-    channel a failure has. It is worth having only while it means "the last
-    run failed", so a successful run takes it down again.
+    Fedora CoreOS prints `/etc/motd.d/*` at an interactive ssh login — a
+    plain `state-backend ssh`; one given a command prints none — and that
+    login is how an operator reaches this box, which makes a notice there
+    the one channel a failure has. It is worth having only while it means
+    "the last run failed", so a successful run takes it down again.
     """
     unit = _unit('state-dump.service')
     assert 'OnFailure=state-dump-failed.service' in unit

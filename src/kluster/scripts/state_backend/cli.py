@@ -19,10 +19,13 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
+from kluster.conventions import CompartmentMissing
 from kluster.scripts.credentials import b2, entries, escrow, pki, workstation
 from kluster.scripts.credentials.age import AgeError
 from kluster.scripts.credentials.escrow import EscrowError
 from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.masters import CredentialRejected
+from kluster.scripts.credentials.pulumi_config import SlotRefused
 from kluster.scripts.credentials.workstation import WorkstationError
 
 from . import config, provision, settings, state
@@ -41,6 +44,27 @@ log = logging.getLogger(__name__)
 #: published rather than internal: `provision --help` and
 #: deploy/state-backend/README.md both name it.
 RESTORE_PENDING = 3
+
+#: What `main` turns into one line and an exit status of 1: every refusal a
+#: module this program imports can raise. A refusal is a decision with the
+#: repair in its message, and an operator reads a traceback as a crash instead,
+#: with that repair buried under the stack. The census is the import closure
+#: rather than today's call paths, because that is the boundary a test can
+#: hold (`test_provision.py` walks it in both directions); the two members no
+#: current call reaches — `SlotRefused`, which `state.stacks` translates into a
+#: `StateError`, and `CompartmentMissing`, whose `require` the provisioner does
+#: not call — are here so that a call that reaches one tomorrow gets the line
+#: rather than the traceback.
+REFUSALS = (
+    AgeError,
+    CompartmentMissing,
+    CredentialRejected,
+    EscrowError,
+    KdbxError,
+    SlotRefused,
+    StateError,
+    WorkstationError,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -667,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             case _:  # pragma: no cover - argparse rejects everything else
                 raise ValueError(f'unhandled action {args.action}')
-    except (KdbxError, EscrowError, AgeError, StateError, WorkstationError) as exc:
+    except REFUSALS as exc:
         log.error('%s', exc)
         return 1
 

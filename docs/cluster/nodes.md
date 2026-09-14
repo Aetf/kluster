@@ -470,18 +470,26 @@ by construction; Tier 0 remains the foundation everything else sits on:
 
 -   **Tier 0 — declarative rebuild + backups (the foundation)**: the
     cluster *is* the Pulumi program plus Talos machine configs. Survival
-    of permanent loss comes from: hourly etcd snapshots shipped to B2
-    (off-provider by the storage.md §4 placement rule), VolSync volume
-    backups and CNPG barman to the same bucket (storage.md §5), and
-    periodically *drilled* restores — the drill program of
-    operations.md §4, none of which has run. Target: RPO ≤ 1 h, RTO
-    ~1–2 h hands-on. The **cold-standby drill** covers total-cloud-loss
-    (tenancy termination included): bootstrap a temporary single-node CP
-    on the homelab host (libvirt) from the latest etcd snapshot in
-    ~30–60 min, then rebuild the cloud pool at leisure. (The scratch
-    CP VM's ~4 GiB has no standing slack to come from on the 32 GB
-    host — the drill script, unwritten today, is to squeeze ARC / the
-    worker VM for the duration and restore them after.)
+    of permanent loss is designed to come from three legs, and none of
+    the three is built. Their destination — the bucket, with the etcd
+    leg's writer key — is declared by the `physical` stack
+    (declarative/physical.md §5, storage.md §4) and exists once that
+    stack is first applied (migration.md §1 step 2); nothing writes to
+    it. The legs: hourly etcd snapshots shipped to B2 (off-provider by
+    the storage.md §4 placement rule) — an ops-repo workflow, and that
+    repository carries no workflows, so none is taken; VolSync volume
+    backups and CNPG barman to the same bucket (storage.md §5) —
+    installed by the `k8s-base` stack, which is unwritten, so neither
+    runs; and periodically *drilled* restores — the drill program of
+    operations.md §4, none of which has run.
+    Target: RPO ≤ 1 h, RTO ~1–2 h hands-on. The **cold-standby drill**
+    covers total-cloud-loss (tenancy termination included): bootstrap a
+    temporary single-node CP on the homelab host (libvirt) from the
+    latest etcd snapshot in ~30–60 min, then rebuild the cloud pool at
+    leisure. (The scratch CP VM's ~4 GiB has no standing slack to come
+    from on the 32 GB host — the drill script, unwritten today, is to
+    squeeze ARC / the worker VM for the duration and restore them
+    after.)
 -   **Tier 1 — workload HA**: apps that support replication run
     multi-replica across the pools (CNPG multi-instance, stateless ×2).
     Even under full CP loss, running workloads keep serving — kubelet

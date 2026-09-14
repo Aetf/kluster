@@ -10,10 +10,15 @@ it refuses to do to one without being asked.
 from __future__ import annotations
 
 import argparse
+import ast
+import builtins
 import datetime as dt
+import importlib
+import importlib.util
 import json
 import logging
-from collections.abc import Callable, Sequence
+import types
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -1021,6 +1026,130 @@ def test_every_provision_flag_reaches_the_converge(monkeypatch: pytest.MonkeyPat
     assert cli.main(['provision', '--replace', '--no-dump']) == 0
     assert (seen['force'], seen['replace'], seen['dump']) == (False, True, False)
     assert seen['dump_output'] is None
+
+
+def test_a_refused_provision_is_one_line_and_no_traceback(
+    converge: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A provider saying no is a decision, and `main` dresses it as one.
+
+    The message carries the repair; a traceback buries it under the stack and
+    reads as a crash at the appliance. B2 refusing the seed key is the case
+    because it is the refusal `_provision` meets first.
+    """
+    converge(_Recorder(instance_exists=False))
+    monkeypatch.setattr(cli.KdbxStore, 'from_env', classmethod(_returning(object())))
+    monkeypatch.setattr(cli.escrow.Registry, 'open', classmethod(_returning(escrow.Registry(root=tmp_path))))
+
+    def refuse(*_args: object, **_kwargs: object) -> object:
+        raise CredentialRejected('B2 refused the seed key: unauthorized')
+
+    monkeypatch.setattr(cli.b2.Session, 'from_entry', staticmethod(refuse))
+    caplog.set_level(logging.ERROR)
+
+    assert cli.main(['provision']) == 1
+
+    [record] = caplog.records
+    assert record.getMessage() == 'B2 refused the seed key: unauthorized'
+    assert record.exc_info is None
+
+
+#: Where the walk below stops: a module outside this package is somebody
+#: else's program, and what it raises is not a refusal of this one.
+_OURS = 'kluster'
+
+
+def _imports(tree: ast.Module, package: str) -> Iterator[str]:
+    """Every module under `_OURS` a file names in an import, at any depth.
+
+    A `from a.b import c` names `a.b` and may name the module `a.b.c`; which
+    of those exist is settled by importing them, and a name that is not a
+    module is an attribute the walk has no use for.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ''
+            if node.level:
+                base = importlib.util.resolve_name('.' * node.level + base, package)
+            names = [base, *(f'{base}.{alias.name}' for alias in node.names)]
+        else:
+            continue
+        for name in names:
+            if name == _OURS or name.startswith(f'{_OURS}.'):
+                yield name
+
+
+def _closure(start: str) -> dict[str, ast.Module]:
+    """Every module `start` reaches through imports, transitively, with its syntax tree."""
+    found: dict[str, ast.Module] = {}
+    pending = [start]
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            # An imported name that is not a module: an attribute, which the
+            # walk has no use for. Any other failure is a real one.
+            if exc.name != name:
+                raise
+            continue
+        if module.__file__ is None:
+            continue
+        tree = ast.parse(Path(module.__file__).read_text())
+        found[name] = tree
+        pending.extend(_imports(tree, module.__package__ or name))
+    return found
+
+
+def _named(node: ast.expr, module: types.ModuleType) -> object:
+    """What a dotted name in `module` refers to at module scope, or None."""
+    if isinstance(node, ast.Name):
+        return getattr(module, node.id, getattr(builtins, node.id, None))
+    if isinstance(node, ast.Attribute):
+        owner = _named(node.value, module)
+        return None if owner is None else getattr(owner, node.attr, None)
+    return None
+
+
+def _raised(closure: dict[str, ast.Module]) -> dict[type[BaseException], set[str]]:
+    """Each exception class this repository defines that the closure raises, and where."""
+    raised: dict[type[BaseException], set[str]] = {}
+    for name, tree in closure.items():
+        module = importlib.import_module(name)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+                continue
+            target = _named(node.exc.func, module)
+            assert isinstance(target, type) and issubclass(target, BaseException), (
+                f'{name}:{node.lineno} raises {ast.unparse(node.exc.func)}, which is not a class at module scope'
+            )
+            if target.__module__.startswith(f'{_OURS}.'):
+                raised.setdefault(target, set()).add(name)
+    return raised
+
+
+def test_main_turns_every_refusal_the_program_can_raise_into_one_line() -> None:
+    """`cli.REFUSALS` is a census of the import closure, held in both directions.
+
+    Forward: every exception class this repository defines that some module
+    `cli` reaches can raise is caught, so no refusal surfaces as a traceback.
+    Backward: every member of the tuple is raised somewhere in that closure,
+    so no member is a name nothing raises. The closure is the import graph
+    rather than a call graph, which is what lets the test be written; the
+    two members that over-approximation adds are named at the tuple.
+    """
+    raised = _raised(_closure(cli.__name__))
+    assert raised, 'the walk found no raise of a repository exception, so it walked nothing'
+
+    uncaught = {cls.__name__: sorted(where) for cls, where in raised.items() if not issubclass(cls, cli.REFUSALS)}
+    assert not uncaught, f'raised on a path main reaches and not in cli.REFUSALS: {uncaught}'
+
+    unraised = [member.__name__ for member in cli.REFUSALS if not any(issubclass(cls, member) for cls in raised)]
+    assert not unraised, f'in cli.REFUSALS and raised nowhere main reaches: {unraised}'
 
 
 def _provision_help() -> str:
