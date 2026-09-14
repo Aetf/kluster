@@ -13,6 +13,7 @@ import argparse
 import ast
 import builtins
 import datetime as dt
+import functools
 import importlib
 import importlib.util
 import json
@@ -270,8 +271,15 @@ CURRENT = {'butane': 'aaaa', 'operator_keys': 'bbbb'}
 ACCOUNT_ID = 'account-fbb1a7'
 
 
+#: A fixed clock, so a boundary case is a boundary case rather than a race
+#: against the second the test runs in (`config.renewal_due` takes `now` for
+#: exactly this). Every expiry below is written against it, and every converge
+#: reads them against it too.
+NOW = dt.datetime(2026, 9, 5, 12, 0, tzinfo=dt.timezone.utc)
+
+
 def _expiry(days: int) -> str:
-    return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=days)).isoformat()
+    return (NOW + dt.timedelta(days=days)).isoformat()
 
 
 #: A certificate with most of its life ahead of it, as a box records it. Well
@@ -358,6 +366,7 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(config, 'machine', _returning(object()))
         monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
         monkeypatch.setattr(config, 'expires_at', _returning(FRESH))
+        monkeypatch.setattr(config, 'renewal_due', functools.partial(config.renewal_due, now=NOW))
         monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT)))
         monkeypatch.setattr(config, 'client_bundle', _returning(object()))
         monkeypatch.setattr(config, 'write_client_bundle', _returning(None))
@@ -985,17 +994,31 @@ def test_every_slow_stage_announces_itself_before_it_starts(
 def test_the_readiness_wait_states_its_condition_before_probing(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The longest silence in a provision run is the one after the launch."""
+    """The longest silence in a provision run is the one after the launch.
+
+    The ceiling in the announcement is the wait's `timeout`, and the clock
+    the wait reads it against is the test's, advanced only by the wait's own
+    `sleep`: fifteen minutes here is sixty probes of a fake that never
+    answers, not a second of wall time.
+    """
     caplog.set_level(logging.INFO)
     said: list[str] = []
+    probes: list[int] = []
+    clock = [0.0]
 
     def fake_run(_argv: list[str], **_kwargs: object) -> Any:
+        probes.append(1)
         said.extend(caplog.messages)
         return type('Completed', (), {'returncode': 0, 'stderr': ''})()
 
-    monkeypatch.setattr(provision.sp, 'run', fake_run)
+    def nap(seconds: float) -> None:
+        clock[0] += seconds
 
-    assert provision.wait_for_backend('192.0.2.10', timeout=900) is True
+    monkeypatch.setattr(provision.sp, 'run', fake_run)
+    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(provision.time, 'sleep', nap)
+
+    assert provision.wait_for_backend('192.0.2.10', timeout=900) is True, f'gave up after {len(probes)} probes'
     announcement = next(message for message in said if 'waiting' in message)
     # The condition, the retry cadence, why it is slow, and the ceiling.
     assert '192.0.2.10' in announcement
@@ -1334,11 +1357,6 @@ def test_an_empty_escrow_beside_a_running_box_refuses_to_generate(empty_escrow: 
 
 # -- the certificate the box is walking towards the end of ---------------------
 
-#: A fixed clock, so a boundary case is a boundary case rather than a race
-#: against the second the test runs in (`config.renewal_due` takes `now` for
-#: exactly this).
-NOW = dt.datetime(2026, 9, 5, 12, 0, tzinfo=dt.timezone.utc)
-
 
 def test_the_recorded_expiry_is_the_certificate_s_death_not_its_birth() -> None:
     """A box recording its issuance date would ask to be replaced forever.
@@ -1351,10 +1369,16 @@ def test_the_recorded_expiry_is_the_certificate_s_death_not_its_birth() -> None:
 
     recorded = dt.datetime.fromisoformat(config.expires_at(built))
 
+    # The one reading in this module against the real clock, because the
+    # certificate was minted against it: `config.machine` takes no `now`, so
+    # the expiry is `pki`'s reading plus `LEAF_VALIDITY`, and a fixed instant
+    # here would compare a date the calendar wrote against one the test did.
+    # The tolerance is a day against a value of three years; no stall
+    # reaches it.
     ahead = recorded - dt.datetime.now(dt.timezone.utc)
     assert abs(ahead - pki.LEAF_VALIDITY) < dt.timedelta(days=1)
     # Which is what makes a freshly built box no reason to touch anything --
-    # the other end of the same value.
+    # the other end of the same value, read by the same clock.
     assert config.renewal_due(config.expires_at(built)) is None
 
 
