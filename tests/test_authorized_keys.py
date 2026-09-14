@@ -85,8 +85,8 @@ def test_the_converger_is_a_unit_and_an_executable_rather_than_a_boot_chain_scri
     also every key file's hook: a key declared during a push is usable when the
     push returns rather than at the next boot.
     """
-    executable = monitor.inputs_of(f'{MECHANISM}-bin-{access.CONVERGER}')
-    unit = monitor.inputs_of(f'{MECHANISM}-unit-{access.CONVERGER_UNIT}')
+    executable = monitor.inputs_of(f'{NAME}-bin-{access.CONVERGER}')
+    unit = monitor.inputs_of(f'{NAME}-unit-{access.CONVERGER_UNIT}')
 
     assert executable['path'] == persistence.executable_path(access.CONVERGER)
     assert executable['mode'] == persistence.SCRIPT_MODE

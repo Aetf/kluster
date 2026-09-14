@@ -43,11 +43,12 @@ from kluster.providers.device_files.ssh import STAGING_SUFFIX
 from putils import Component
 
 NAME = 'runtime'
-#: The mechanism the runtime asks, whose own name is what its `_declare`
-#: builds a resource name out of: the path discipline is layer one's, so the
-#: resource is named for the layer that decided the path and parented to the
-#: layer that needed the file.
+#: The mechanism the runtime asks. The path discipline is layer one's, and the
+#: resource that comes back is the runtime's: parented on it and named for it,
+#: so nothing below keys on this name but the mechanism's own files.
 MECHANISM = 'mechanism'
+#: A component that has a machine, whose drop-in is therefore named for it.
+WORKLOAD = 'workload'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
@@ -110,16 +111,16 @@ def test_the_framework_reaches_the_device_only_through_the_mechanism(monitor: Re
     asked.
     """
     for name in (
-        f'{MECHANISM}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}',
-        f'{MECHANISM}-on-boot-{nspawn.MACHINES_SCRIPT}',
-        f'{MECHANISM}-bin-{nspawn.ROLLBACK_PROGRAM}',
-        f'{MECHANISM}-bin-{nspawn.WATCHDOG_WORKER}',
-        f'{MECHANISM}-unit-{nspawn.WATCHDOG_UNIT}',
-        f'{MECHANISM}-skeleton-{nspawn.SKELETON}',
+        f'{NAME}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}',
+        f'{NAME}-on-boot-{nspawn.MACHINES_SCRIPT}',
+        f'{NAME}-bin-{nspawn.ROLLBACK_PROGRAM}',
+        f'{NAME}-bin-{nspawn.WATCHDOG_WORKER}',
+        f'{NAME}-unit-{nspawn.WATCHDOG_UNIT}',
+        f'{NAME}-skeleton-{nspawn.SKELETON}',
     ):
         assert monitor.options_of(name).parent.endswith(f'::{NAME}'), name
 
-    assert monitor.inputs_of(f'{MECHANISM}-skeleton-{nspawn.SKELETON}')['path'] == nspawn.MACHINES
+    assert monitor.inputs_of(f'{NAME}-skeleton-{nspawn.SKELETON}')['path'] == nspawn.MACHINES
     assert nspawn.MACHINES == f'{conventions.gateway.CUSTOM_ROOT}/machines'
 
 
@@ -237,14 +238,14 @@ async def test_a_machines_drop_in_is_a_resource_of_the_component_that_has_the_ma
     """
     unit = nspawn.machine_unit('plain')
     async with declaring():
-        workload = Workload('workload', runtime=runtime)
+        workload = Workload(WORKLOAD, runtime=runtime)
 
-    inputs = monitor.inputs_of(f'{MECHANISM}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}')
+    inputs = monitor.inputs_of(f'{WORKLOAD}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}')
 
     assert inputs['path'] == persistence.dropin_source(unit, nspawn.MACHINE_DROPIN)
     assert f'Restart={nspawn.RESTART_POLICY}' in str(inputs['content'])
     assert str(await workload.dropin.urn.future()).endswith(f'{nspawn.MACHINE_DROPIN}')
-    assert monitor.options_of(f'{MECHANISM}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}').parent.endswith('::workload')
+    assert monitor.options_of(f'{WORKLOAD}-dropin-{unit}.d/{nspawn.MACHINE_DROPIN}').parent.endswith(f'::{WORKLOAD}')
 
 
 ##
@@ -1218,7 +1219,7 @@ def test_the_watchdog_unit_is_installed_by_the_layer_below(monitor: Recorder) ->
     Which is layer one's decision and not this one's: what the runtime states
     is that the watchdog is a unit, not where a unit goes.
     """
-    inputs = monitor.inputs_of(f'{MECHANISM}-unit-{nspawn.WATCHDOG_UNIT}')
+    inputs = monitor.inputs_of(f'{NAME}-unit-{nspawn.WATCHDOG_UNIT}')
 
     assert inputs['path'] == persistence.unit_source(nspawn.WATCHDOG_UNIT)
     assert persistence.on_boot_path(persistence.UNITS_SCRIPT) in inputs['hook']
@@ -1230,7 +1231,7 @@ def test_the_rollback_is_delivered_with_nothing_told_about_it(monitor: Recorder)
     An executable with a hook would run at delivery, and running a rollback
     because a rollback was installed is the opposite of what it is for.
     """
-    inputs = monitor.inputs_of(f'{MECHANISM}-bin-{nspawn.ROLLBACK_PROGRAM}')
+    inputs = monitor.inputs_of(f'{NAME}-bin-{nspawn.ROLLBACK_PROGRAM}')
 
     assert inputs['path'] == persistence.executable_path(nspawn.ROLLBACK_PROGRAM)
     assert inputs['mode'] == persistence.SCRIPT_MODE
@@ -1240,7 +1241,7 @@ def test_the_rollback_is_delivered_with_nothing_told_about_it(monitor: Recorder)
 def test_the_convergers_run_themselves_once_they_land(monitor: Recorder) -> None:
     """The recovery path is the push path, for the scripts as for everything else."""
     for script in (nspawn.NSPAWN_UNITS_SCRIPT, nspawn.MACHINES_SCRIPT):
-        inputs = monitor.inputs_of(f'{MECHANISM}-on-boot-{script}')
+        inputs = monitor.inputs_of(f'{NAME}-on-boot-{script}')
 
         assert inputs['path'] == persistence.on_boot_path(script)
         assert inputs['hook'] == persistence.on_boot_hook(script)
@@ -1259,7 +1260,7 @@ def test_no_machine_is_declared_a_unit_of_its_own(monitor: Recorder) -> None:
         and monitor.options_of(declaration.name).parent.endswith(f'::{NAME}')
     ]
 
-    assert units == [f'{MECHANISM}-unit-{nspawn.WATCHDOG_UNIT}']
+    assert units == [f'{NAME}-unit-{nspawn.WATCHDOG_UNIT}']
     assert nspawn.machine_unit('plain') == 'systemd-nspawn@plain.service'
 
 
@@ -1286,7 +1287,7 @@ def test_the_settings_converger_is_declared_before_the_machine_converger(monitor
     numbered for it, so nothing else has to say which comes first.
     """
     assert nspawn.NSPAWN_UNITS_SCRIPT < nspawn.MACHINES_SCRIPT
-    assert monitor.inputs_of(f'{MECHANISM}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}')['mode'] == persistence.SCRIPT_MODE
+    assert monitor.inputs_of(f'{NAME}-on-boot-{nspawn.NSPAWN_UNITS_SCRIPT}')['mode'] == persistence.SCRIPT_MODE
 
 
 def test_the_pieces_of_one_machine_are_all_under_its_own_directory() -> None:
@@ -1315,7 +1316,7 @@ async def test_the_runtime_is_not_a_second_place_the_layout_is_decided(
     so a machine's directory cannot mean one thing to the converger and another
     to the push.
     """
-    script = str(monitor.inputs_of(f'{MECHANISM}-on-boot-{nspawn.MACHINES_SCRIPT}')['content'])
+    script = str(monitor.inputs_of(f'{NAME}-on-boot-{nspawn.MACHINES_SCRIPT}')['content'])
 
     assert f'MACHINES={nspawn.MACHINES}' in script
     assert nspawn.MACHINES == persistence.skeleton_path(nspawn.SKELETON)

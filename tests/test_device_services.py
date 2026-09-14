@@ -740,11 +740,18 @@ def test_every_file_of_a_machine_converges_that_machine_and_holds_it_to_starting
     unnoticed. Each file's hook is for its own path, because the same command
     runs after the delete and a machine on its way out must not be rolled back
     for failing to be active.
+
+    A file of a machine is one under the machine's directory. The drop-in the
+    container declares is the machine's too and is named for it, but it lands
+    beside the unit sources and is the unit converger's to install, so it is
+    not in this set.
     """
+    directory = f'{nspawn.machine_path("caddy")}/'
     files = [
         declaration
         for declaration in monitor.declared
-        if declaration.name.startswith(f'{NAME}-caddy-') and 'hook' in declaration.inputs
+        if str(declaration.inputs.get('path') or declaration.inputs.get('root', '')).startswith(directory)
+        and 'hook' in declaration.inputs
     ]
 
     assert sorted(declaration.name for declaration in files) == [
@@ -790,9 +797,9 @@ async def test_a_machines_files_wait_for_the_runtime_that_converges_them(monitor
     settings = monitor.depends_on(f'{NAME}-caddy-nspawn')
 
     for name in (
-        f'{NAME}-persistence-on-boot-{nspawn.MACHINES_SCRIPT}',
+        f'{NAME}-nspawn-on-boot-{nspawn.MACHINES_SCRIPT}',
         f'{NAME}-persistence-on-boot-{persistence.PACKAGES_SCRIPT}',
-        f'{NAME}-persistence-bin-{nspawn.ROLLBACK_PROGRAM}',
+        f'{NAME}-nspawn-bin-{nspawn.ROLLBACK_PROGRAM}',
     ):
         assert any(urn.endswith(f'::{name}') for urn in settings), name
 
@@ -829,10 +836,10 @@ async def test_the_tree_lands_last_so_the_machine_starts_once_with_everything(
 def dropin_of(service: str) -> str:
     """The resource name of one machine's drop-in on the template unit.
 
-    Layer one names it, because layer one decided the path; the component that
-    has the machine owns it.
+    Named for the component that has the machine, which owns it; layer one
+    decided the path and the kind, which is the rest of the name.
     """
-    return f'{NAME}-persistence-dropin-{nspawn.machine_unit(service)}.d/{nspawn.MACHINE_DROPIN}'
+    return f'{NAME}-{service}-dropin-{nspawn.machine_unit(service)}.d/{nspawn.MACHINE_DROPIN}'
 
 
 def test_every_machine_carries_what_its_shared_unit_cannot_say_about_it(monitor: Recorder) -> None:

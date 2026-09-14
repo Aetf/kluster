@@ -551,6 +551,23 @@ async def test_the_device_is_given_the_packages_its_container_runtime_needs(setu
 
 
 @pytest.mark.asyncio
+async def test_every_child_carries_its_components_name(setup: Installation) -> None:
+    """The rule, held on the whole program rather than on the census happening not to collide.
+
+    The gateway is where it bites: the persistence mechanism declares a file on
+    behalf of whichever component asked, and the URN places that file under the
+    asker, so it is the asker's name the file carries (style/pulumi.md). A
+    file named for the mechanism instead registers cleanly today -- one
+    `SiteRouting`, one `AuthorizedKeys`, one `NspawnRuntime` -- and collides the
+    day a second instance of one of them asks for a file of the same kind.
+    """
+    async with declaring():
+        await physical.main()
+
+    assert setup.children_not_named_for_their_component() == {}
+
+
+@pytest.mark.asyncio
 async def test_the_pinhole_waits_for_an_address_the_worker_has_not_formed_yet(setup: Installation) -> None:
     """The second nested egg: the address is SLAAC off a network this run makes.
 
