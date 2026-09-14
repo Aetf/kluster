@@ -51,7 +51,7 @@ class ManagedRepository(Component):
         *,
         entry: conventions.forge.Repository,
         description: str,
-        required_checks: Sequence[str] = (),
+        required_checks: Sequence[str],
         unattended_merges: bool = False,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
@@ -59,7 +59,13 @@ class ManagedRepository(Component):
         :param entry: The census row this repository is declared from.
         :param description: What GitHub shows under the repository name.
         :param required_checks: The checks a pull request must pass before it
-            may merge. Naming any is what asks for branch protection at all.
+            may merge. Naming any is what asks for branch protection at all,
+            and a repository that asks for none is handed the empty roll
+            explicitly rather than by default: the protection is declared
+            when the roll is non-empty and deleted when it is, so a default
+            would let a call site that lost the argument take the guard off
+            `main` with the component raising nothing — only the stack's own
+            tests would notice.
         :param unattended_merges: Whether auto-merge and branch updating are
             offered. They are the two settings an unattended merge needs: one
             queues it behind the checks, the other lets a pull request satisfy

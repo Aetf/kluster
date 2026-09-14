@@ -56,9 +56,17 @@ HOMELAB_ARCHITECTURE = 'amd64'
 CLOUD_PLATFORM = 'oracle'
 HOMELAB_PLATFORM = 'nocloud'
 
-#: The GPU cutover needs the i915 firmware present *before* it happens, so the
-#: worker's schematic carries it from day 0 — harmless without a GPU, and the
-#: cutover then touches no OS image (physical/homelab-host.md §3).
+#: What each schematic carries beyond stock Talos. These rolls are stated here
+#: and not handed down by the stack program, because an extension set is what
+#: an artefact *is* — like its platform — rather than a table a caller chooses
+#: for it: the cloud image and the worker image are two schematics, and the
+#: subclass that is each artefact names its own. The cloud schematic is the
+#: stock one, because the one extension the fleet needs is firmware for a GPU
+#: the cloud nodes do not have. The GPU cutover needs that i915 firmware
+#: present *before* it happens, so the worker's schematic carries it from
+#: day 0 — harmless without a GPU, and the cutover then touches no OS image
+#: (physical/homelab-host.md §3).
+CLOUD_EXTENSIONS: tuple[str, ...] = ()
 HOMELAB_EXTENSIONS = ('siderolabs/i915',)
 
 #: Where a decompressed artefact is kept on the machine running the program.
@@ -75,7 +83,10 @@ class TalosArtefact(Component, abc.ABC):
 
     The half both artefacts share. A subclass supplies `_declare_artefact`,
     which is what is done with the URL: imported into a cloud catalogue, or
-    fetched onto the machine running the program.
+    fetched onto the machine running the program — and `extensions`, the roll
+    that makes its schematic the one it is. The roll is required rather than
+    defaulted to empty, so a subclass says what it carries even when that is
+    nothing (style/pulumi.md).
 
     Abstract, and that is load-bearing rather than documentation. This class
     opens the parent backstop's scope and the closing `register_outputs` is
@@ -89,7 +100,7 @@ class TalosArtefact(Component, abc.ABC):
         name: str,
         *,
         talos_version: str,
-        extensions: Sequence[str] = (),
+        extensions: Sequence[str],
         architecture: str,
         platform: str,
         opts: pulumi.ResourceOptions | None = None,
@@ -139,7 +150,12 @@ class TalosArtefact(Component, abc.ABC):
 # so leaving them out would file every artefact in the state under
 # `TalosArtefact` and rename resources the day the hierarchy changes.
 class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage'):
-    """One schematic and the OCI custom image built from it."""
+    """One schematic and the OCI custom image built from it.
+
+    The extension set is stated here rather than taken as a parameter, for the
+    same reason the worker's is (`TalosNocloudImage`): it is what this
+    artefact *is*, and no caller has a second opinion about it.
+    """
 
     def __init__(
         self,
@@ -147,7 +163,6 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
         *,
         compartment_id: pulumi.Input[str],
         talos_version: str,
-        extensions: Sequence[str] = (),
         architecture: str = CLOUD_ARCHITECTURE,
         platform: str = CLOUD_PLATFORM,
         opts: pulumi.ResourceOptions | None = None,
@@ -156,7 +171,7 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
         super().__init__(
             name,
             talos_version=talos_version,
-            extensions=extensions,
+            extensions=CLOUD_EXTENSIONS,
             architecture=architecture,
             platform=platform,
             opts=opts,
@@ -191,7 +206,7 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
     same reason the platform is: it is what this artefact *is* — the schematic
     the worker boots, i915 firmware included — and no caller has a second
     opinion about it. What varies between artefacts is carried by the base's
-    `extensions`, which is how the cloud schematic differs from this one.
+    `extensions`, which is how this schematic differs from the cloud one.
 
     `path` is what a libvirt volume is created from. The volume's size is then
     the image's size and cannot be declared — the provider refuses `size`
