@@ -716,8 +716,8 @@ name.
 | `state-backend bundle operator --address <ip> [--directory <path>]` | Once per workstation, or after a certificate reissue. Writes the client bundle into its slot; `state-backend provision` ends by doing the same thing. `--directory` writes it somewhere else instead — a second checkout, or a directory being staged for another machine — and the default is the slot. |
 | `credentials derived <row> generate` | Rotating one escrowed credential (§4.2). Generates a new value, commits its ciphertext as the row's next generation and writes it into a workstation slot where the row has one — the two passphrases do, and a row without one reaches its consumer through that consumer's own procedure (§4.2). One act, no other row touched. |
 | `credentials derived <row> import [--from-slot]` | Escrows a value that already exists as the row's next generation, changing nothing a consumer holds (§4.2). The value comes from standard input, or from the row's workstation slot with `--from-slot` — which is how a passphrase already sitting in `.credentials/` is escrowed without being copied through a shell. Refuses an empty or wrong-shaped value: a pipe whose producer failed dies here, not at the recovery that trusted the ciphertext. |
-| `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. |
-| `credentials kit rewrap` | The resume and repair path for that re-wrap: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. A rotation interrupted part way, or a ciphertext added while the file already named the successor, is what it is for; an ordinary kit rotation never calls it. |
+| `credentials kit rotate --into <new kit>` | Rotation (§4.2). Writes a new database and re-wraps the escrow to the successor recovery key in the same run; the retired one stays. A run that stopped part way is resumed by running it again with the same `--into`: the successor is opened rather than created, and each row it holds is finished rather than rotated twice. |
+| `credentials kit rewrap` | The re-wrap on its own, for a recipients file edited by hand: it takes no recipients, re-encrypts every generation to whatever `escrow/RECIPIENTS` already names, and refuses a run that no identity in hand could open afterward. It opens with the one key the kit holds, so a rotation interrupted part way is not its case (§4.2: that is `kit rotate --into` the same file, again); an ordinary kit rotation never calls it. |
 | `credentials derived check` | Any time, kit or no kit: every escrowed row the register names is present, generations run from 1 with no gap, every ciphertext is an ASCII-armored age file, `escrow/RECIPIENTS` holds age recipients, nothing is escrowed under a label the register does not name, and no stray file sits in the directory. It opens nothing, so a clone is enough to run it — which is what would let CI run it, though no workflow does today. |
 | `credentials kit ls [<group>]` / `show <entry>` | Looking without changing. `ls` prints entry paths and reads no field, so it can disclose nothing; a group narrows it to one branch of the kit (`seeds`), where the default is the whole of it. `show` prints one entry's non-secret fields. |
 | `credentials kit password remember` | Once per machine, so a run that lasts minutes is not guarded by a password typed into it. The password is proven against the kit before it is stored, keyed by the kit's resolved path — a kit reached by a new path needs one re-run. |
@@ -1139,7 +1139,9 @@ It **writes a new database file** (`--into`), and the retired one
 is left byte-for-byte as it was: unseal the old, have each seed mint its
 successor, generate a fresh recovery key, and write all of it into
 the new database. The Cloudflare seed token is an explicit pause — the
-script prints the console steps and waits.
+script prints the console steps and waits. `--into` is created when it
+is absent and opened when it exists, and an interrupted run is resumed
+by running the same command again (the resume rule below).
 
 **The recovery row's rotation is the re-encryption.** Rotating that row
 writes the successor identity into the new database and then, in the
@@ -1151,9 +1153,15 @@ is touched, no stack is re-encrypted and no appliance is re-provisioned
 — that commit and the new database are the whole of a kit rotation.
 `credentials kit rewrap` is the standalone form of the same
 re-encryption and takes no recipients: it re-encrypts to whatever
-`escrow/RECIPIENTS` already names, which makes it the way to finish a
-rotation that died part way through, and it refuses outright a run that
-would leave the registry with nothing in hand able to open it.
+`escrow/RECIPIENTS` already names, and it refuses outright a run that
+would leave the registry with nothing in hand able to open it. Its job
+is a recipients file edited by hand — a custodian's recipient added
+beside the one in hand — while every ciphertext is still under the key
+the kit holds. It opens with that one key, so it does not finish a
+rotation that stopped part way through: from the retired kit the
+ciphertexts already under the successor do not open, and from the
+successor `escrow/RECIPIENTS` still names the retired key, which is
+written last. That run is `kit rotate --into` the same file, again.
 
 **What a run proves is that the new kit's seeds work, one row at a
 time.** A seed that mints its own successor (OCI, B2) authenticates *as*
@@ -1166,7 +1174,7 @@ any of it.
 No row in the walk is merely pasted in, which is what makes the run's
 success mean the successor kit works.
 
-**Every account refusal is raised before the walk starts, and the
+**Every account refusal is raised before the walk starts, and a new
 successor file is made after them.** The pre-flight
 (`lifecycle.prove_account`) is each self-reproducing seed's account
 check — what its own rotation holds against `conventions` before its
@@ -1178,18 +1186,23 @@ only by authorizing as the seed, so that check also meets a B2 key that
 no longer authenticates, and the network. Neither of those is what the
 pre-flight is for, and what falls outside its definition lands at its
 row as it always did: a dead OCI seed key is met by the OCI row's own
-listing, after the recovery row has re-wrapped the escrow. A refusal the pre-flight raises costs nothing: no predecessor
-is retired, no row is written, no `--into` file exists yet to be
-refused as already there on the re-run the refusal advises, and no
-console visit has been asked for. The alternative would be a refusal
-landing after an earlier row had already retired its predecessor, which
-is the one state a re-run does not resume from: `bootstrap`'s walk
-skips what the kit holds and retries the row that refused, but here the
-successor file already exists and the retired kit's rotated row no
-longer authenticates. Ordering the walk instead would not do, because
-each row's check sits directly above its own retirement, so whichever
-row went first would still have retired before the next row's check
-ran. **A seed family that mints its own successor adds its account
+listing, after the recovery row has re-wrapped the escrow; its repair
+is `credentials --kdbx <successor> seed oci create`, which mints a
+fresh seed into the successor from the account root, and the same
+`kit rotate --into` then resumes past the row. A refusal the pre-flight
+raises costs nothing: no predecessor is retired, no row is written, no
+`--into` file is made, no console visit has been asked for, and no
+second run is owed. A refusal landing after an earlier row had retired
+its predecessor would cost all of those, and ordering the walk instead
+would not do, because each row's check sits directly above its own
+retirement, so whichever row went first would still have retired before
+the next row's check ran. Each check reads the row's **live**
+credential (`lifecycle.live`): the successor's row where the successor
+already holds a complete one, the retired kit's otherwise — a resumed
+run's B2 row in the retired kit is a key the account no longer accepts
+once the first run retired it, and a check that read it there would
+refuse a sound resume.
+**A seed family that mints its own successor adds its account
 check to the pre-flight** as well as to its own rotation, and until it
 does, a kit rotation refuses it by name. A row with no account check
 is left where it is: a console-made token does not exist until the
@@ -1198,8 +1211,55 @@ after the rows before it have rotated — and, because the operator is
 on the page that fixes it, asked for again rather than raised — an
 empty paste included. Ctrl-C or end of input at that prompt stops the
 run, and the refusal that stops it says which rows the successor
-holds, that their predecessors in the retired kit no longer work, and
-that the console row and every row after it are not rotated.
+holds, that their predecessors in the retired kit no longer work, that
+the console row and every row after it are not rotated, and that the
+same command with the same `--into` resumes at that row.
+
+**An interrupted rotation is resumed by running the same command
+again.** Nothing records which row ran: the successor is probed the way
+`bootstrap` probes the kit it fills, and where a row is there — its
+own reader would succeed on it (`lifecycle.holds`); a row missing any
+part is treated as absent and written over — the arm finishes that
+row's retirement rather than minting again. The recovery arm re-wraps
+to the key the successor holds, opening every ciphertext with that key
+or the retired one, so a registry half under each converges; the OCI
+and B2 arms authorize as the successor's key and retire every other key
+of the seed's name, the predecessor among them; the Cloudflare arm
+verifies the stored token again — the same checks a paste gets — and
+writes the same row back without a paste; a manual row is skipped. A
+completed rotation run again is therefore a no-op at every platform and
+reports every row; the re-wrap re-encrypts every ciphertext on every
+pass, so a resume shows a diff on files whose plaintext did not change.
+The retired kit is read and never written, and a successor row whose
+credential the platform refuses is refused at its row, not healed: the
+repair is `credentials --kdbx <successor> seed oci create` or
+`credentials --kdbx <successor> seed cloudflare create`, into the
+successor, after which the same `kit rotate --into` resumes past it.
+
+**The successor file names its predecessor** — the rule that makes an
+existing `--into` safe to open. A successor `rotate` creates records,
+in the KDBX file's own `DatabaseDescription`, `kluster: successor of
+<uuid>`, where `<uuid>` is the predecessor's root-group UUID
+(`KdbxStore.uuid`): a value a copy of a file shares and a file
+`KdbxStore.create` made does not, since `create` gives each new
+database a UUID of its own. The marker is written once, at creation
+and before any row, and an existing `--into` is refused unless its
+marker names the kit in hand: that refuses the kit itself and any copy
+of it (one database identity), a kit `bootstrap` wrote (no marker), and
+a successor of some other kit — an older retired kit of this estate
+among them, whose rows name the same principals, whose keys are dead
+at every platform, and whose recovery row would otherwise be reused
+by the re-wrap as the new recovery key. Escrow content cannot tell
+that last case from a successor that died before its first ciphertext
+(both open nothing yet), and a path comparison cannot see a copy; the
+marker can.
+It is lineage and not a checkpoint: it says what the file *is*, which
+stays true whatever rows are later deleted from it, and it is checked
+against the predecessor rather than believed. A file that exists and
+carries no marker is refused by name, and the refusal says how to tell
+the two things it can be apart: one that `kit ls` shows empty is a
+successor that died before its marker was written and is deleted by
+hand; one that shows rows is not this kit's successor.
 
 Nothing beyond the kit is touched. The §3 credentials minted from
 the retired seeds keep working, and each is replaced by re-running its
