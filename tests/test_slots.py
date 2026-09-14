@@ -404,10 +404,12 @@ def workflow_backend_secrets() -> set[str]:
 
     Read out of the workflows for the reason §3 is read out of the document: the
     map exists to fill what CI names, and a name only one of the two knows is a
-    job that starts with an empty file where a certificate should be.
+    job that starts with an empty file where a certificate should be. The
+    workflows alone, in both suffix spellings GitHub reads: a composite action
+    has no `secrets` context, so nothing under `.github/actions/` can name one.
     """
     workflows = pulumi_config.project_dir() / '.github' / 'workflows'
-    text = '\n'.join(path.read_text() for path in sorted(workflows.glob('*.yml')))
+    text = '\n'.join(path.read_text() for pattern in ('*.yml', '*.yaml') for path in sorted(workflows.glob(pattern)))
     return set(re.findall(r'secrets\.(PULUMI_BACKEND_[A-Z]+)', text))
 
 
