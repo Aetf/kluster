@@ -384,12 +384,19 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
 
     A `TimeoutExpired` escaping the loop ends the wait at exactly the moment
     the appliance is coming up, which is what it did the first time it ran.
+
+    The clock is the test's, advanced only by the wait's own `sleep`, so the
+    budget is a number of probes rather than of seconds: a probe that never
+    answers runs out of deadline after `600 / 15` of them, and a process
+    stalled between computing the deadline and checking it -- swap, a
+    contended machine -- moves nothing the wait reads.
     """
     import subprocess as sp
 
     from kluster.scripts.state_backend import provision
 
     calls: list[int] = []
+    clock = [0.0]
 
     def probe(*_args: object, **_kwargs: object) -> sp.CompletedProcess[str]:
         calls.append(1)
@@ -397,14 +404,14 @@ def test_the_backend_wait_survives_a_hanging_probe(monkeypatch: pytest.MonkeyPat
             raise sp.TimeoutExpired(cmd='openssl', timeout=30)
         return sp.CompletedProcess(args=[], returncode=0, stdout='', stderr='')
 
+    def nap(seconds: float) -> None:
+        clock[0] += seconds
+
     monkeypatch.setattr(provision.sp, 'run', probe)
+    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(provision.time, 'sleep', nap)
 
-    def instant(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(provision.time, 'sleep', instant)
-
-    assert provision.wait_for_backend('192.0.2.10', timeout=600) is True
+    assert provision.wait_for_backend('192.0.2.10', timeout=600) is True, f'gave up after {len(calls)} probes'
     assert len(calls) == 3
 
 
