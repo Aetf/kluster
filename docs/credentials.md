@@ -693,8 +693,8 @@ name.
 | `credentials root ls` | Which roots this machine holds, and which layer of the chain each comes from. Prints no values. |
 | `credentials root <name> forget` | Removes one root from the secret store and from its token file. |
 | `credentials kit bootstrap` | Bring-up, from nothing or from a partial kit. Resumable: re-running skips what is already there. |
-| `credentials kit bootstrap --only <member>` | One seed was lost. Re-creates that row alone. `--only recovery` is also the repair path for a kit that predates the escrow: creating that row writes the recovery key (§2.2) into the kit and `escrow/RECIPIENTS` into the checkout. It refuses a kit that already holds a live recovery key, because every ciphertext opens with that one and nothing else. |
-| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. Every provider row holds its account against what `conventions` records before its first write: the OCI create, against the tenancy its account root names, ahead of the group, user, membership and policy it would otherwise leave standing there; the Cloudflare adopt, against the accounts the console-made token can see, while the operator is still on the dashboard page that fixes a token made in the wrong one; and the B2 create, against the account its master key authorizes as, before the seed every later B2 credential descends from exists. The recovery keypair is not a provider credential at all. |
+| `credentials kit bootstrap --only <member>` | One seed's row is gone from the kit. Creates that row alone; the rest of the kit is untouched. It is the walk above confined to one row, and the walk probes the kit and nothing else: a row the kit still holds is skipped, whatever has become of the credential behind it at the platform. A row that is present in the kit but dead at its platform is the next command's. `--only recovery` is also the repair path for a kit that predates the escrow: creating that row writes the recovery key (§2.2) into the kit and `escrow/RECIPIENTS` into the checkout. |
+| `credentials seed <member> create` | The same single-row create, addressed by row rather than through `kit bootstrap`'s walk, and the form that takes `--entry` for a kit whose row sits somewhere else. It probes nothing: the row is written even when the kit already holds one — the entry's secret is replaced, and so is an attachment of the same name — which makes it the repair for a row that is present in the kit but dead at its platform: an OCI key or B2 key deleted at the platform, a Cloudflare token deleted in the dashboard. The recovery keypair is the exception: `seed recovery create` refuses a kit that already holds a recovery key, and a checkout that already holds `escrow/RECIPIENTS`, because every ciphertext opens with that one key and nothing else; replacing it deliberately is `credentials kit rotate` (§4.2), which re-wraps the escrow on its way. Every provider row holds its account against what `conventions` records before its first write: the OCI create, against the tenancy its account root names, ahead of the group, user, membership and policy it would otherwise leave standing there; the Cloudflare adopt, against the accounts the console-made token can see, while the operator is still on the dashboard page that fixes a token made in the wrong one; and the B2 create, against the account its master key authorizes as, before the seed every later B2 credential descends from exists. The recovery keypair is not a provider credential at all. |
 | `credentials seed oci rotate` / `credentials seed b2 rotate` | One self-reproducing seed replaced **inside the kit that is open**: the seed mints its successor, the successor is verified, and the predecessor is retired. Each holds its account against `conventions` before any of it, because a rotation's other act is to delete every key of that name that is in the successor's way — run against an account this installation does not own, that is a sweep through somebody else's keys. `credentials kit rotate` (§4.2) is the whole-kit form, which writes a new database instead. The rows the platform cannot rotate have no such subcommand — they are console visits. |
 | `credentials seed oci domain` | Once, on a kit written before the OCI row carried its identity domain (§4.3). Borrows the OCI account root; every rotation after it needs nothing but the kit. |
 | `credentials derived oci-state-backend mint` | After the kit exists and **before** `state-backend provision`, which is the only thing that reads it. Mints the appliance's own user, group, policy and API key from the OCI seed into the workstation slot (§4.4), confined to the compartment `conventions` names for it. Before it creates anything, it refuses a seed that belongs to an account other than the one `conventions` records — this being the first place in a bring-up that check can fire. Re-running it rotates that key; a workstation that does not hold the kit cannot run it, and does not provision. |
@@ -1109,12 +1109,18 @@ can obtain; the rest of §3 is design rather than procedure.
 
 **Resumable by probing, not by bookkeeping.** `kit bootstrap` asks whether
 each row is already in the kit and skips it if so, so an interrupted run
-is resumed by re-running the same command, and `--only <member>` is the
-repair path when a single seed is lost. `state-backend provision`
-compares the running appliance against the repository the same way. A
-checkpoint file would record "this ran" — which stops being true the
-moment someone deletes a key in a console, and the run after that would
-skip the repair.
+is resumed by re-running the same command, and `--only <member>` is that
+walk confined to one row — the repair for a row the kit has lost. What
+it probes is the kit: a row the kit still holds is skipped whatever has
+become of the credential behind it at its platform, and that state — a
+provider seed's key deleted in a console, say — is repaired by
+`credentials seed <member> create`, which probes nothing and overwrites
+a provider row (§4's table; the recovery key has no platform to die at,
+and is the one row that command refuses to overwrite). `state-backend
+provision` compares the running appliance against the repository the
+same way. A checkpoint file would record "this ran" instead — which
+stops being true the moment a row is deleted out of the kit — and the
+run after that would skip the repair.
 
 **The console steps live in the register, not in a runbook.** Each §2
 row that no API can create carries the instructions for creating it
