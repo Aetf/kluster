@@ -89,6 +89,15 @@ members as anchors is fine, since a list left short fails open the way
 any incomplete sentence does; it is the quantifier that may not travel.
 Cite the document and leave the number where the members are.
 
+**A section is cited by the number its document visibly gives it.**
+`§N.M` is a numbered heading or an inline `**§N.M**` label. A numbered
+list item is `§N.M` only under a heading with no numbered heading or
+label beneath it; elsewhere it is cited in words, "item M of §N", since
+a reader who finds `### N.1` and `### N.2` but no `### N.3` reads `§N.3`
+as stale rather than as the third item of a list. The sweep
+(`tests/test_docs_sections.py`) holds this, so a citation of the other
+kind fails the gate rather than reading as a stale number.
+
 **When a change makes a claim false, sweep for the claim, not for the
 identifier that moved.** Searching for the symbol finds call sites; the
 sentence that asserted something about them is prose, and only a search
