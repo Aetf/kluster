@@ -153,6 +153,34 @@ def test_an_escrowed_backup_identity_opens_what_it_encrypts(vault: escrow.Vault,
     assert age.decrypt(path, [identity]) == 'a pg_dump'
 
 
+def test_a_backup_identity_label_takes_one_generation_for_its_lifetime(vault: escrow.Vault) -> None:
+    label = escrow.backup_labels()[0]
+    first = escrow.generate(vault.registry, label)
+
+    # The backup generation is the label, and every reader of it -- the
+    # appliance's recipient list, the identities a restore opens a dump with --
+    # takes the latest escrow generation alone (`state_backend.config`). A
+    # second one would have the next provision run encrypt every dump to a key
+    # no dump in retention was written to, so both writers refuse it and the
+    # first generation is what the label goes on answering with.
+    with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
+        _ = escrow.generate(vault.registry, label)
+    with pytest.raises(escrow.EscrowError, match='one value for its lifetime'):
+        _ = escrow.adopt(vault.registry, label, age.generate().secret)
+
+    assert vault.registry.generations(label) == [escrow.FIRST]
+    assert vault.recover(label) == first
+
+
+def test_every_backup_label_is_single_and_nothing_else_is() -> None:
+    # The property is what the invariant credentials.md §2.2 states rests on,
+    # and it holds for exactly the labels whose generation is in their name:
+    # the rows that rotate by growing a generation must keep doing so.
+    single = {label for label, row in escrow.register().items() if row.single}
+
+    assert single == set(escrow.backup_labels())
+
+
 def test_import_escrows_a_value_that_already_exists(vault: escrow.Vault) -> None:
     # The migration path: a live credential carries over unrotated.
     _ = escrow.adopt(vault.registry, escrow.PASSPHRASE, 'the-live-passphrase')

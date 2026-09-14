@@ -254,6 +254,25 @@ class Label:
     slot: WorkstationSlot | None = None
 
     @property
+    def single(self) -> bool:
+        """Whether the label holds one value for its lifetime.
+
+        Most labels rotate by growing a generation, which every reader can
+        name (`Vault.recover`). A label whose readers take the latest alone
+        and whose consumers were built against the first cannot: a second
+        generation there is a value the next build adopts while everything
+        already produced under the first stays answerable only to the first.
+        Such a label rotates as a *new label* instead, and both writers refuse
+        a second generation under it (`_next_generation`).
+
+        A fact of the label's namespace rather than a field beside it: the
+        backup identities carry their generation in the name, so every label
+        under `BACKUP` is one of these -- a retired generation included, which
+        is the same reading `check` gives a retired one.
+        """
+        return self.name.startswith(f'{BACKUP}/')
+
+    @property
     def verb(self) -> str:
         """The `credentials derived <row> <verb>` that puts a value in this row.
 
@@ -291,6 +310,16 @@ def backup_labels() -> tuple[str, ...]:
     happened there is no predecessor, and naming one would have the register
     demand a ciphertext for a generation that never existed — and a bring-up
     mint a key nothing needs and encrypt every dump to it.
+
+    **The backup generation is the label, so each label holds one identity
+    for its lifetime** (credentials.md §2.2; `Label.single`). The
+    appliance's recipient list and the identities a restore opens a dump with
+    are both the latest escrow generation of each window label
+    (`state_backend.config`), so a second generation under one label would
+    have the next provision run encrypt every dump to a key that no dump
+    already in retention was written to, while `derived check` -- which reads
+    density, not count -- stays green. Rotating the backup key is bumping the
+    pin below and generating the label that names the new generation.
 
     Read from the appliance's own pin rather than repeated here: the Butane
     file names exactly these recipients, so bumping the generation is one
@@ -526,6 +555,24 @@ class Registry:
         )
 
 
+def _next_generation(registry: Registry, row: Label) -> int:
+    """The number the row's next ciphertext is filed under, or a refusal for a row that has its one.
+
+    In front of both writers -- a fresh mint and an adopted value -- because
+    the invariant is the row's and not the verb's: a label that holds one
+    value for its lifetime holds it however the value came about.
+    """
+    found = registry.generations(row.name)
+    if found and row.single:
+        raise EscrowError(
+            f'{row.name} holds one value for its lifetime and already holds generation {found[-1]}: its '
+            f'readers take the latest generation alone, so a second would be adopted by the next build '
+            f'while everything produced under the first stays openable only with the first. Rotating '
+            f'{row.what} is a new label, not a new generation (credentials.md §2.2)'
+        )
+    return registry.next_generation(row.name)
+
+
 def _store(registry: Registry, label: str, secret: str, *, generation: int, recipients: Sequence[str]) -> Path:
     """Encrypt first, then place the file — the order the safety property needs.
 
@@ -578,7 +625,9 @@ def generate(registry: Registry, label: str) -> str:
     Nothing adopts the new generation on its own. The consumer named in the
     register has to be re-run against it, and until then the previous
     generation is what production holds — which is exactly what makes a
-    per-credential rotation a decision rather than a side effect.
+    per-credential rotation a decision rather than a side effect. A label
+    that holds one value for its lifetime has no next generation to mint
+    once it holds one, and is refused by name (`_next_generation`).
     """
     row = _row(label)
     if not isinstance(row.origin, Generated):
@@ -586,7 +635,7 @@ def generate(registry: Registry, label: str) -> str:
             f'{label} is made in a console, not here, so there is nothing to draw; '
             f'`{fill_command(label)}` prints the steps and escrows what they produce'
         )
-    generation = registry.next_generation(label)
+    generation = _next_generation(registry, row)
     secret = row.origin.mint()
     # The row's own mint against the row's own shape: the register says what a
     # label holds in one place, and a mint that stopped agreeing with it fails
@@ -608,7 +657,9 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
 
     The *next* generation rather than a fixed first one, so importing can
     never overwrite what is already filed under this label. On a registry
-    that holds nothing for it, next is first, which is the migration case.
+    that holds nothing for it, next is first, which is the migration case --
+    and for a label that holds one value for its lifetime, the only case
+    (`_next_generation`).
 
     The value is checked against the register's shape for the label before
     anything is written. An import is the only way a value the escrow did not
@@ -618,7 +669,7 @@ def adopt(registry: Registry, label: str, secret: str) -> Path:
     """
     row = _row(label)
     row.validate(secret)
-    generation = registry.next_generation(label)
+    generation = _next_generation(registry, row)
     path = _store(registry, label, secret, generation=generation, recipients=registry.recipients())
     log.info('escrow: adopted the existing %s as generation %d in %s', label, generation, path)
     return path
