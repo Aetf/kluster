@@ -367,9 +367,13 @@ rather than pull. *Lives in* ci.md §4.
 
 -   **Cloud-side control plane / single $0-trust tenancy** — the
     residual risks (etcd in an untrusted tenancy, tenancy-loss) are
-    already carried consciously with the right mitigations (etcd
+    carried consciously, with the mitigations designed for them (etcd
     encryption at rest, hourly snapshots off-provider, the cold-standby
-    drill). H1/H4 harden the *mechanism*, not the placement decision.
+    drill). Of those, the encryption is in the control plane's machine
+    configuration; the snapshots are an ops-repo workflow, and that
+    repository carries no workflows, so none is taken; and the drill is
+    unwritten (nodes.md §5 Tier 0). H1/H4 harden the *mechanism*, not
+    the placement decision.
 -   **Combined CP+ingress+worker nodes** — the cost basis of the
     three-node pool; M4 contains the workload risk rather than
     unbundling the roles.

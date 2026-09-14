@@ -84,9 +84,10 @@ def test_the_kubelet_reserves_room_for_the_node() -> None:
 
 
 def test_kubernetes_secrets_are_encrypted_at_rest() -> None:
-    # etcd sits in a $0-trust tenancy and its snapshots leave the site every
-    # hour (architecture.md §6.5): unencrypted secrets there are the whole
-    # cluster's credentials in someone else's storage.
+    # etcd sits in a $0-trust tenancy and its snapshots are designed to leave
+    # the site every hour (storage.md §5, nodes.md §5 Tier 0): unencrypted
+    # secrets there are the whole cluster's credentials in someone else's
+    # storage.
     assert (
         talos.control_plane_patch(cert_sans=SANS, secretbox_secret=SECRETBOX)['cluster']['secretboxEncryptionSecret']
         == SECRETBOX
