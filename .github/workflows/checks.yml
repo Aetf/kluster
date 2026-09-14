@@ -53,9 +53,12 @@ jobs:
       - name: Imports
         run: mise x uv -- uv run lint-imports
 
-      # A hung coroutine must fail the job rather than burn the runner's hour.
+      # A hung case fails by name under the per-case bound `pyproject.toml`
+      # configures; the outer `timeout` is the hang guard for what that
+      # cannot reach, an order of magnitude above the run so that the
+      # ordinary run never meets it (framework/testing.md §1).
       - name: Tests
-        run: timeout 300 mise x -- uv run pytest -q
+        run: timeout 1200 mise x -- uv run pytest -q
 
       # Renovate can bump a pinned version but cannot recompute its digest;
       # this is what stops a stale hash from reaching the appliance.

@@ -20,12 +20,36 @@ The suite has three tiers, and each one is bounded by what it can know:
 
 The project uses `pytest` and `pytest-asyncio` for unit testing.
 
-To run the tests (always with a timeout — a coroutine that never resolves its
-futures hangs forever instead of failing):
+To run the tests:
 
 ```bash
-timeout 60 mise x uv -- uv run pytest
+timeout 1200 mise x uv -- uv run pytest
 ```
+
+A coroutine that never resolves its futures hangs forever instead of failing,
+and the run is bounded twice against that, at two scales:
+
+-   **Per case**, by `pytest-timeout`, configured in `pyproject.toml`
+    (`[tool.pytest.ini_options]`). A case that hangs fails by name, with the
+    stack it hung in — a frame waiting on a future is a hang, a frame doing
+    work is a stalled machine — and the run goes on to a summary, so one
+    hung case costs one red line rather than the whole report. The signal
+    method is the configured one because it is what lets the run continue;
+    the thread method ends the process after a stack dump, with no summary,
+    which is the same blind result as a kill from outside. The bound is an
+    order of magnitude above the slowest case: it is a hang guard, not a
+    budget any case approaches (§7 item 5).
+-   **Around the run**, by the outer `timeout` above, for what a per-case
+    bound cannot reach: collection, and a process still alive after the
+    summary is printed. A kill there ends with status 124 and no summary,
+    which is why it is an order of magnitude above the run's duration
+    rather than a budget the ordinary run approaches — the suite takes
+    about a minute on an idle many-core workstation and about two on a
+    two-core runner, and it grows with every campaign.
+
+The outer number is carried wherever the gate's command is written out —
+AGENTS.md's gate line, the command above, README.md's, `checks.yml`'s
+`Tests` step — and the per-case number lives in `pyproject.toml` alone.
 
 ### 1.1 A test process holds no credentials in its environment
 
@@ -361,6 +385,12 @@ present:
 RUN_LIVE_DRILLS=1 timeout 600 mise x uv -- uv run pytest tests/live -s --log-cli-level=INFO
 ```
 
+A drill runs under no per-case bound: its duration is the provider's — a
+rotation waits for the tenancy to authenticate the key — so
+`tests/live/conftest.py` marks every item under the directory
+`timeout(0)`, which outranks the bound §1 configures, and the outer
+`timeout` on the command above is the only guard a drill runs under.
+
 `tests/live/conftest.py` is the entire mechanism: without `RUN_LIVE_DRILLS=1`
 it declines to collect the directory, so an ordinary `pytest` run neither
 executes a drill nor reports one as skipped. There is no marker and no
@@ -636,9 +666,10 @@ fix, and the diff is the only artifact that disagrees.
 2.  **Test Outputs**: Await `.future()` (or use `.apply()` /
     `pulumi.Output.all()`) to check values of outputs, as they resolve
     asynchronously; `resolve` is only usable inside `async_output` coroutines.
-3.  **Always Use Timers**: Run the suite under an outer `timeout` — the form
-    in §1 — so a coroutine that never resolves its futures ends the run as a
-    killed process rather than hanging it.
+3.  **Always Use Timers**: Run the suite under the outer `timeout` — the form
+    in §1 — for what the per-case bound cannot reach, and leave that bound in
+    place: it is what ends a coroutine that never resolves its futures, by
+    name.
 4.  **Keep it Fast**: Unit tests should not make network calls or create real
     resources.
 5.  **No Wall-Clock Budgets**: A unit case's outcome never depends on how
@@ -656,7 +687,7 @@ fix, and the diff is the only artifact that disagrees.
         case in `tests/test_provision.py` is the inline form.
     -   A **hang guard** is bounded in turns of the event loop --
         `asyncio.sleep(0)` yields exactly once, whatever the machine is doing
-        -- or left to the `timeout` the gate already runs under (item 3).
+        -- or left to the bounds the gate already runs under (item 3).
         Never `asyncio.wait_for(…, seconds)`: a guard in turns fails as "not
         settled after N idle iterations", which no stall of any length can
         produce, and one in seconds fails as whatever the deadline cut off.
@@ -666,7 +697,11 @@ fix, and the diff is the only artifact that disagrees.
         awaits a registered resource's output the turns run out in
         microseconds while the thread is still working, and the guard fails
         by how loaded the machine is -- the flake in a new shape. That path
-        is left to the gate's timeout.
+        is left to the gate's bounds. The per-case bound among them is the
+        one real-clock bound a case runs under, and it is admitted because
+        it fails differently: an order of magnitude above the slowest case,
+        so no ordinary run approaches it, and with the stack the case hung
+        in, which is what tells a stall from a hang (§1).
         The one guard that stays in seconds is the `timeout=` handed to
         `subprocess.run`, where nothing yields to count -- and it fails as
         `TimeoutExpired` naming its seconds, which is a failure with a name.
