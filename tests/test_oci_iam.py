@@ -903,6 +903,86 @@ def test_rotation_defaults_to_the_database_it_read(kit: KdbxStore, tenancy: Tena
     assert oci_iam.fingerprint(after) == current
 
 
+def _stored(kit: KdbxStore, *, user_id: str, private_pem: str) -> None:
+    """The seed row as `_store` writes it (§2): the three saves, and the domain."""
+    kit.put(SEED_ENTRY, user_id, '')
+    kit.attach(SEED_ENTRY, entries.OCI_KEY_ATTACHMENT, private_pem.encode())
+    kit.set_attribute(SEED_ENTRY, entries.OCI_TENANCY_ATTRIBUTE, TENANCY)
+    kit.set_attribute(SEED_ENTRY, entries.OCI_DOMAIN_ATTRIBUTE, DOMAIN_URL)
+
+
+def _registered(tenancy: Tenancy, user_id: str) -> oci_iam.KeyPair:
+    """A key on the user whose private half a run may or may not have stored."""
+    pair = oci_iam.generate_key()
+    _ = tenancy.identity.register_key(user_id, pair.public_pem)
+    return pair
+
+
+def test_rotation_into_a_kit_already_holding_the_successor_mints_nothing(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
+) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    before = oci_iam.load_seed(kit, SEED_ENTRY).private_key
+    # A rotation that stored its successor and died before its sweep: the
+    # successor kit holds a complete row, and the user holds the predecessor,
+    # the successor's key, and a stray the predecessor's sweep did not reach.
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    stored = _registered(tenancy, user_id)
+    _stored(successor, user_id=user_id, private_pem=stored.private_pem)
+    _ = _registered(tenancy, user_id)
+    uploaded = set(tenancy.identity.uploaded)
+    connections = len(tenancy.domain_connections)
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    # The key the successor holds is the one kept; every other goes.
+    assert current == oci_iam.fingerprint(stored.private_pem)
+    assert tenancy.identity.keys[user_id] == [current]
+    # Nothing minted, and the row untouched: a fresh key would have replaced
+    # the only private half of the key the user was left with.
+    assert set(tenancy.identity.uploaded) == uploaded
+    assert oci_iam.load_seed(successor, SEED_ENTRY).private_key == stored.private_pem
+    assert oci_iam.load_seed(kit, SEED_ENTRY).private_key == before
+    # As the successor's key, and never as the predecessor's: on a resume the
+    # predecessor may already be retired, and a session as it is a 401 before
+    # any presence test could run.
+    opened = [key for _, _, key in tenancy.domain_connections[connections:]]
+    assert opened == [current]
+
+
+def test_a_successor_row_without_its_key_is_written_over(
+    kit: KdbxStore, tenancy: Tenancy, root: masters.Credential, tmp_path: Path
+) -> None:
+    user_id = oci_iam.create_seed(root=root, seeds=kit, seed_entry=SEED_ENTRY, connect=tenancy)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    # `_store`'s first save and nothing after it: the row exists, and the
+    # reader would raise on it.
+    successor.put(SEED_ENTRY, user_id, '')
+
+    current = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+    assert oci_iam.fingerprint(oci_iam.load_seed(successor, SEED_ENTRY).private_key) == current
+    assert tenancy.identity.keys[user_id] == [current]
+
+
+@pytest.mark.parametrize('missing', ['UserName', entries.OCI_TENANCY_ATTRIBUTE, entries.OCI_KEY_ATTACHMENT])
+def test_a_row_missing_any_part_the_reader_reads_is_not_held(memory_kit: KdbxStore, missing: str) -> None:
+    private_pem = oci_iam.generate_key().private_pem
+    memory_kit.put(SEED_ENTRY, '' if missing == 'UserName' else 'ocid1.user.oc1..seed', '')
+    if missing != entries.OCI_TENANCY_ATTRIBUTE:
+        memory_kit.set_attribute(SEED_ENTRY, entries.OCI_TENANCY_ATTRIBUTE, TENANCY)
+    if missing != entries.OCI_KEY_ATTACHMENT:
+        memory_kit.attach(SEED_ENTRY, entries.OCI_KEY_ATTACHMENT, private_pem.encode())
+
+    assert not oci_iam.holds_seed(memory_kit, SEED_ENTRY)
+
+
+def test_a_complete_row_is_held(memory_kit: KdbxStore) -> None:
+    _stored(memory_kit, user_id='ocid1.user.oc1..seed', private_pem=oci_iam.generate_key().private_pem)
+
+    assert oci_iam.holds_seed(memory_kit, SEED_ENTRY)
+
+
 # -- the compartment a consumer's key is confined to -------------------------
 
 
@@ -1935,6 +2015,65 @@ def test_rotating_the_seed_heals_from_a_failure_at_any_call(failing_call: int, w
     row = oci_iam.load_seed(kit, SEED_ENTRY)
     user_id, private_pem = row.user, row.private_key
     assert identity.keys[user_id] == [oci_iam.fingerprint(private_pem)]
+
+
+def _rotate_into(tenancy: FaultyTenancy, kit: KdbxStore, successor: KdbxStore) -> None:
+    _ = oci_iam.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor, connect=tenancy)
+
+
+def _rotate_into_a_fresh_kit(tenancy: FaultyTenancy, kit: KdbxStore) -> None:
+    _rotate_into(tenancy, kit, MemoryKit())
+
+
+ROTATE_INTO_CALLS = _calls_made(_rotate_into_a_fresh_kit, prepared=True)
+
+#: The three ways a key gets onto a user, as the fake tenancy names them: the
+#: domain's self-service create, its administrative create, and the legacy
+#: upload. A resume that mints shows as any one of them.
+MINTS = frozenset({'create_my_api_key', 'create_api_key', 'upload_api_key'})
+
+
+@pytest.mark.parametrize('when', CRASH_POINTS)
+@pytest.mark.parametrize('failing_call', range(1, ROTATE_INTO_CALLS + 1))
+def test_rotating_into_a_second_kit_heals_from_a_failure_at_any_call(
+    failing_call: int, when: str, pooled_keys: None
+) -> None:
+    identity = FakeIdentity()
+    kit = MemoryKit()
+    successor = MemoryKit()
+    _create(FaultyTenancy(identity=identity), kit)
+    retired = oci_iam.load_seed(kit, SEED_ENTRY).private_key
+    crashed = FaultyTenancy(identity=identity, fail_at=failing_call, when=when)
+
+    with pytest.raises(Interrupted):
+        _rotate_into(crashed, kit, successor)
+    # Whichever kit the interruption left the live key in, that kit does not
+    # lie about it: the successor names a key the tenancy has or nothing, and
+    # where it names nothing the retired kit's key still authenticates.
+    _survived(crashed, successor)
+    stored = oci_iam.holds_seed(successor, SEED_ENTRY)
+    if not stored:
+        _kit_never_lies(kit, identity)
+    held = oci_iam.fingerprint(oci_iam.load_seed(successor, SEED_ENTRY).private_key) if stored else None
+
+    # The repair is the same command into the same successor.
+    healed = FaultyTenancy(identity=identity)
+    _rotate_into(healed, kit, successor)
+
+    _survived(healed, successor)
+    row = oci_iam.load_seed(successor, SEED_ENTRY)
+    assert identity.keys[row.user] == [oci_iam.fingerprint(row.private_key)]
+    # A successor that already held its key keeps it, and the re-run mints
+    # nothing: a second mint would replace the only private half of a key
+    # the first run may already have swept the predecessor as.
+    minted = [call for call in healed.ledger.calls if call in MINTS]
+    if held is not None:
+        assert minted == []
+        assert oci_iam.fingerprint(row.private_key) == held
+    else:
+        assert len(minted) == 1
+    # §4.2: the retired kit is never written, whichever path the re-run took.
+    assert oci_iam.load_seed(kit, SEED_ENTRY).private_key == retired
 
 
 @dataclass
