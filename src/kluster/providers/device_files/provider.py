@@ -164,6 +164,7 @@ from typing import Any, final
 import pulumi
 import pulumi.dynamic as dynamic
 
+from kluster.lib.versions import is_digest
 from kluster.providers.configured import (
     STAMPS,
     ConfiguredProvider,
@@ -872,8 +873,12 @@ class DeviceArtifactProvider(DeviceProvider):
 
     def check(self, _olds: dict[str, Any], news: dict[str, Any]) -> dynamic.CheckResult:
         failures = [*_canonical_path(news, 'root'), *_registry_qualified(news, 'repository')]
+        # The one spelling a pin is accepted in (`lib.versions`), so that what
+        # a pin admits and what a pull is performed by cannot drift apart: the
+        # marker on the device is compared byte for byte, and a differently
+        # spelled digest is a pin that never matches.
         digest = news.get('digest')
-        if digest is not None and not is_unknown(digest) and not _is_digest(str(digest)):
+        if digest is not None and not is_unknown(digest) and not is_digest(str(digest)):
             failures.append(dynamic.CheckFailure('digest', f'must be a `sha256:<hex>` manifest digest, got {digest!r}'))
         return self._stamp(news, failures)
 
@@ -1312,19 +1317,3 @@ async def _tree_holds(transport: ssh.Transport, directory: str, digest: str) -> 
 def _owner(props: Mapping[str, Any]) -> str | None:
     owner = props.get('owner')
     return str(owner) if owner else None
-
-
-def _is_digest(value: str) -> bool:
-    """Whether this is a registry digest, in the one spelling a registry uses.
-
-    Lower case and algorithm-qualified, both because that is the form a
-    reference carries and because the marker on the device is compared byte for
-    byte -- a differently-spelled digest is a pin that never matches.
-    """
-    algorithm, separator, hex_digest = value.partition(':')
-    return (
-        algorithm == 'sha256'
-        and bool(separator)
-        and len(hex_digest) == 64
-        and all(character in '0123456789abcdef' for character in hex_digest)
-    )
