@@ -185,8 +185,13 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
 
 ## 2. Postgres
 
--   A **podman quadlet** unit, image pinned to the major line
-    (`postgres:NN`) in the Butane file; a `podman auto-update` timer
+-   A plain systemd unit, `pgstate.service`, whose `ExecStart` is
+    `podman run --replace …` — not a quadlet, so the box holds no
+    `.container` file — with the image pinned to the major line
+    (`postgres:NN` — `POSTGRES_IMAGE` in the `state-backend` script's
+    settings, rendered into the Butane file). The container carries the
+    `io.containers.autoupdate=registry` label, and
+    `podman-auto-update.timer`, enabled by the same Butane file,
     applies minor/patch releases — the same trust-the-stream posture
     as the OS, safe for the same reason (nothing outlives
     `pg_dump` + re-provision).
@@ -304,7 +309,8 @@ there is nothing for it to edit.)
 
 ## 5. Backup
 
--   A systemd timer (quadlet) runs `pg_dump -Fc`, **lists the archive
+-   A plain systemd timer, `state-dump.timer` driving
+    `state-dump.service`, runs `pg_dump -Fc`, **lists the archive
     with `pg_restore --list` and fails the run when it names no
     table**, **age-encrypts** the dump — it holds every stack's
     ciphertext *and* salt — and
