@@ -10,9 +10,12 @@ than an ephemeral one.
 from typing import Any
 
 import pulumi
+import pulumi.runtime.mocks
+import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, run_with
+from pulumi.runtime.proto import resource_pb2
 
 from kluster.components.cloud.nodes import MANAGEMENT_PORTS, CloudNodes, NodeLoadBalancer
 
@@ -150,6 +153,50 @@ async def test_the_vip_is_a_reserved_address_on_a_secondary_private_ip(nodes: Cl
     assert await nodes.reserved_ip.lifetime.future() == 'RESERVED'
     assert await nodes.secondary_ip.vnic_id.future() == VNIC_ID
     assert await nodes.reserved_ip.private_ip_id.future() == await nodes.secondary_ip.id.future()
+
+
+def decline_every_invoke() -> None:
+    """Answer every invoke the way the engine answers one it cannot service yet.
+
+    An invoke is gated on its dependencies having been created, and while one
+    is pending -- skipped by a `--target`ed update, say -- the engine answers
+    `unknown` in place of a result (`ResourceInvokeResponse.unknown`) rather
+    than calling the provider. Pulumi's mock monitor never sets the field, so
+    the run's monitor is given that answer here. Every token, because the
+    suite's one invoke is the subject.
+    """
+    mock = pulumi.runtime.settings.get_monitor()
+    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
+
+    def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
+        return resource_pb2.ResourceInvokeResponse(unknown=True)
+
+    mock.Invoke = declined
+
+
+@pytest.mark.asyncio
+async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_than_crashing() -> None:
+    """The unknown degrades the one input, and nothing surfaces as a traceback.
+
+    Awaiting the lookup through `resolve` is what puts it under the rule every
+    other awaited value in the component follows (framework/pulumi.md §1.2):
+    an unknown aborts the coroutine, that input alone becomes unknown, and the
+    rest of the resource is declared as it would have been. Awaited directly,
+    the same answer is a `None` for an `assert` to trip over -- a traceback on
+    a run that may have converged everything it was asked to.
+
+    A preview, because the mock's readback in an update turns an unknown
+    resource input into a known `None` (framework/testing.md §3.3), which is
+    exactly the difference this case exists to see; the abort itself does not
+    ask which kind of run it is in.
+    """
+    _ = await run_with(Oci(), stack='physical', preview=True)
+    decline_every_invoke()
+
+    nodes = build_nodes()
+
+    assert await nodes.secondary_ip.vnic_id.is_known() is False
+    assert await nodes.secondary_ip.display_name.is_known() is True
 
 
 @pytest.mark.asyncio
