@@ -143,6 +143,12 @@ with their addressing and role tag: physical/gateway.md §2.1.
 Job names below are the ones the checks tab shows.
 
 ```
+PR      checks.yml:         checks
+push                          (AGENTS.md's gate as CI runs it, without
+                               the cloud; one job, so that `checks` is the
+                               one required context it reports (§5) — the
+                               step list is the workflow's own)
+
 PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                               (parallel, report-only; all three or none —
                                the three filters are one pattern list — and
