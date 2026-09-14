@@ -1,4 +1,4 @@
-"""The gw-config dynamic provider: desired-state files on the gateway device.
+"""The device-files dynamic provider: desired-state files on the gateway device.
 
 The device has no API for what matters on it -- routing, the container services,
 the scripts that re-establish both after a firmware update -- but it has a proven

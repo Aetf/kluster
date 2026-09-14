@@ -959,7 +959,7 @@ drop
 accept ethertype arp;
 
 # CI confinement: four targets, each flow as outbound leg + return leg.
-# Targets: UDM SSH (gw-config push), the UDM's UniFi Network API
+# Targets: UDM SSH (the device-files push), the UDM's UniFi Network API
 # (443, the UniFi OS proxy — the unifi provider's controller calls,
 # declarative/physical.md §4), the AdGuard APIs (alice/bob),
 # the homelab host's libvirt SSH.
@@ -1250,7 +1250,7 @@ Per the census discipline (state-backend.md §7): title, trigger, gist —
 executable form ships with the implementation.
 
 **Standing decision: an unreachable gateway fails the whole `physical`
-preview.** Every gw-config resource diffs against the device rather than
+preview.** Every device-files resource diffs against the device rather than
 against state, so a preview opens a session per resource; with the UDM
 down, its ZT container down, or the overlay itself down, all of them
 fail, and the run produces no plan. That is intended — a
@@ -1272,7 +1272,7 @@ at the registrar.
 
 -   **ZT container down on the UDM** — trigger: physical-stack CI runs
     fail to reach the UDM; personal devices lose LAN reachability. The
-    repair tool (gw-config push) itself rides ZT, hence the side-door:
+    repair tool (the device-files push) itself rides ZT, hence the side-door:
     connect to the **homelab host's direct ZT address** (member-to-
     member traffic needs no managed routes), hop to the LAN, SSH the
     UDM, restart the machine or rerun the boot chain's two machine
@@ -1285,7 +1285,7 @@ at the registrar.
     post-update: the unifios-utilities apt pattern (§5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the pull-direction yadm timer), re-run the
-    gw-config provider for the services, re-authorize the *new* UDM
+    device-files provider for the services, re-authorize the *new* UDM
     member identity in the roster (identity lives in `/data`, lost with
     the box), re-point the managed routes at it — the §2.5 ceremony
     over again, bootstrap knob and all, since a replacement box is a

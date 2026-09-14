@@ -487,7 +487,7 @@ def test_the_certificate_asked_for_is_the_wildcard_and_never_the_apex() -> None:
 
 #: The device's live configuration, checked in beside this module: what the
 #: legacy half of the render has to keep serving.
-LIVE_CADDYFILE = Path(__file__).parent / 'data' / 'gw-config-caddyfile'
+LIVE_CADDYFILE = Path(__file__).parent / 'data' / 'live-caddyfile'
 
 #: One `@name host <host>` matcher and the `handle` block it guards, which is
 #: how both files spell a vhost. The body ends at the first closing brace back

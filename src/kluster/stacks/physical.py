@@ -1,7 +1,7 @@
 """The `physical` stack: everything that exists before the Kubernetes API.
 
 OCI network and nodes, the Talos day-1 chain, the homelab worker VM, the
-UDM's gw-config and firewall, and the B2 buckets — declared per
+UDM's device files and firewall, and the B2 buckets — declared per
 docs/declarative/physical.md. The state-backend appliance is
 deliberately *not* here: it is this program's own prerequisite
 (docs/physical/state-backend.md).
