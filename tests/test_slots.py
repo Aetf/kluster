@@ -708,7 +708,7 @@ def context(
     """A push that reaches nothing real: no kit, no backend, no forge, no terminal."""
     resolved = pulumi_config.BackendEnvironment(url=backend_url)
     return slots.Context(
-        forge=Forge(token='the-account-root', run=gh),
+        forge=Forge(token='the-admin-token', run=gh),
         open_vault=open_vault,
         open_environment=lambda: resolved,
         runner=runner if runner is not None else RecordedPulumi(),

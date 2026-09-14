@@ -161,8 +161,15 @@ class Slot:
 class Forge:
     """The forge's secret store, as the admin token that may write it.
 
-    The token does not print: it is an account-root credential, and this record
-    is carried inside `slots.Context`, whose repr is one `%r` in a log line away
+    The token is the `github` stack's config secret (`githubAdminToken`,
+    docs/framework/github.md §1): a provider credential like every other, held
+    apart from the estate under that stack's own passphrase so that nothing CI
+    can start reads it, and read back out of that stack for a push
+    (`devices.borrow`). Not an account root -- the root is the GitHub login
+    behind the page that makes the token, which nothing here opens.
+
+    It does not print even so: it can unguard `main`, and this record is
+    carried inside `slots.Context`, whose repr is one `%r` in a log line away
     from a transcript.
     """
 
