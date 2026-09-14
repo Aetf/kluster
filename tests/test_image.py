@@ -13,6 +13,7 @@ mistaken for a resource somebody deleted.
 
 from __future__ import annotations
 
+import inspect
 import json
 import lzma
 from collections.abc import Iterator
@@ -175,6 +176,25 @@ def test_each_artefact_keeps_its_own_type_token() -> None:
     assert image.TalosImage.__pulumi_type__ == 'kluster:physical:image:TalosImage'
     assert image.TalosNocloudImage.__pulumi_type__ == 'kluster:physical:image:TalosNocloudImage'
     assert image.TalosImage.__pulumi_type__ != image.TalosArtefact.__pulumi_type__
+
+
+def test_each_artefact_states_its_platform_and_architecture_rather_than_taking_them() -> None:
+    """The subclass is the artefact, so the artefact's shape is not a parameter.
+
+    Platform and architecture pick one file out of the factory's matrix the
+    way the extension roll does, and no caller varies either: the cloud image
+    is OCI's own format on the ARM shape, the worker's is `nocloud` on x86. A
+    defaulted parameter nobody passes would read as a caller's choice while
+    being the subclass's (style/pulumi.md), so the base requires both and
+    each subclass states its own.
+    """
+    for artefact in (image.TalosImage, image.TalosNocloudImage):
+        parameters = inspect.signature(artefact.__init__).parameters
+        assert 'platform' not in parameters, artefact.__name__
+        assert 'architecture' not in parameters, artefact.__name__
+    base = inspect.signature(image.TalosArtefact.__init__).parameters
+    assert base['platform'].default is inspect.Parameter.empty
+    assert base['architecture'].default is inspect.Parameter.empty
 
 
 def test_the_shared_base_cannot_be_built_on_its_own() -> None:
