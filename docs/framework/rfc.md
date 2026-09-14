@@ -459,6 +459,12 @@ not to trust that paragraph.
 
 The recording ships in the slice that deviates, not later.
 
+A cross-reference that another document overtakes is decoded the same
+way: an accepted body that cites a section of another document by
+number keeps that number when the document is renumbered, and the
+header gains a dated `Updated:` line saying which number the body
+carries, what it named at acceptance, and where that passage is now.
+
 ### 5.4 Superseding
 
 A design defect found after the RFC is implemented is a **new RFC**,

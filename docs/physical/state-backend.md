@@ -67,14 +67,24 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     and ssh reports a possible man-in-the-middle; the replace path
     therefore drops the destroyed box's key from `known_hosts` itself.
     The
-    no-drift rule is what makes "the repo describes the box" true;
-    the quarterly drill (§7.3) is what keeps that claim tested.
+    no-drift rule is what makes "the repo describes the box" true. What
+    tests that claim today is a converge an operator runs by hand, which
+    compares the box's bill of materials against the commit (below);
+    the quarterly drill (§7.3) is designed to prove it on a schedule, by
+    provisioning a scratch box from the same commit, and is not built —
+    the ops repository carries no workflows, so no pass of it has
+    happened.
 -   **The box decides that by carrying its own bill of materials.**
     At launch, the instance's metadata records a digest per component
     of what it was built from — the Butane file, the operator keys,
     each pin, the certificate identities, the dump key's id — and a
     converge run recomputes them and calls for the box's replacement
-    when any differs, naming the ones that did. Certificates are compared by what they
+    when any differs, naming the ones that did. The Butane digest is
+    over the template's text as committed, comments included, so an
+    edit that changes no rendered byte — a reworded comment — is drift
+    like any other: the next plain converge reports `the machine
+    definition changed: butane` and stops, and nothing accepts it short
+    of `--force`, which replaces the box. Certificates are compared by what they
     assert rather than by bytes, because they are re-issued on every
     render and would otherwise read as permanent drift. The two
     comparisons differ, and the difference is which key is stable: the
