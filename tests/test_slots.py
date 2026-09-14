@@ -41,6 +41,10 @@ REPOSITORY = conventions.forge.DEPLOYMENT.full_name
 OPS_REPOSITORY = conventions.forge.OPS.full_name
 DRILL_ENVIRONMENT = conventions.forge.DRILL.name
 ENVIRONMENTS = tuple(environment.name for environment in conventions.forge.DEPLOYMENT.environments)
+#: The output the `dns` identity's row reads, as the `physical` program exports
+#: it: the fake stack below answers under this name for the same reason the
+#: names above are read rather than copied.
+CI_DNS_IDENTITY = conventions.PHYSICAL_OUTPUTS.ci_identity['ci-dns']
 
 PASSPHRASE = 'a-recovered-passphrase'
 
@@ -820,7 +824,7 @@ def test_the_kit_is_not_opened_for_a_row_that_does_not_need_it() -> None:
 
 def test_a_state_read_pushes_the_output_the_map_names() -> None:
     gh = RecordedGh()
-    pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': 'an-identity'})
+    pulumi = RecordedPulumi(stacks=['physical'], outputs={CI_DNS_IDENTITY: 'an-identity'})
 
     _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
@@ -840,15 +844,16 @@ def test_a_state_read_of_an_output_the_program_does_not_export_says_so() -> None
     gh = RecordedGh()
     pulumi = RecordedPulumi(stacks=['physical'])
 
-    # The output name is this map's half of a contract the program has to keep,
-    # so an unkept one is named rather than pushed as an empty secret.
+    # The output name is a contract the program has to keep -- it exports under
+    # it or the read finds nothing -- so an unkept one is named rather than
+    # pushed as an empty secret.
     with pytest.raises(SlotRefused, match='exports no'):
         _ = slots.sync(context(gh, runner=pulumi), only='zerotier-identity-dns')
 
 
 def test_a_state_read_of_an_output_that_is_not_a_string_says_so() -> None:
     gh = RecordedGh()
-    pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': None})
+    pulumi = RecordedPulumi(stacks=['physical'], outputs={CI_DNS_IDENTITY: None})
 
     # A `null` output would otherwise be coerced into the four characters
     # `null` and pushed as though CI had been handed an identity.
@@ -862,7 +867,7 @@ def test_a_state_read_of_the_unknown_sentinel_says_the_apply_was_targeted() -> N
     # from `pulumi.runtime.rpc`: a test that pins a constant against itself pins
     # nothing, and this string is the interface the checkpoint carries.
     sentinel = '04da6b54-80e4-46f7-96ec-b56ff0331ba9'
-    pulumi = RecordedPulumi(stacks=['physical'], outputs={'ci_zerotier_identity_dns': sentinel})
+    pulumi = RecordedPulumi(stacks=['physical'], outputs={CI_DNS_IDENTITY: sentinel})
 
     # An export whose value comes from a resource a `--target`ed apply skipped
     # is a string, so the type boundary above lets it through: it is present,

@@ -41,6 +41,7 @@ from kluster.stacks import physical
 
 LB_ADDRESS = '203.0.113.10'
 LB_ADDRESS_V6 = '2001:db8::10'
+VIP1_ADDRESS = '203.0.113.20'
 VNIC_ID = 'ocid1.vnic.oc1.phx.vip'
 AVAILABILITY_DOMAIN = 'ZRbp:PHX-AD-1'
 OBJECT_NAMESPACE = 'axmpletenancy'
@@ -142,6 +143,8 @@ class Installation(Recorder):
                 return {'networkId': ZT_NETWORK_ID}
             case 'oci:Core/instance:Instance':
                 return {'availabilityDomain': AVAILABILITY_DOMAIN}
+            case 'oci:Core/publicIp:PublicIp':
+                return {'ipAddress': VIP1_ADDRESS}
             case 'b2:index/bucket:Bucket':
                 return {'bucketId': 'b2-bucket-id'}
             case 'b2:index/applicationKey:ApplicationKey':
@@ -598,17 +601,37 @@ async def test_a_compartment_that_does_not_exist_yet_names_the_command_that_make
         await physical.main()
 
 
+class ExportedPhysical(Recorder):
+    """A `physical` whose StackReference hands out exactly what the program exported.
+
+    Each output's value is its own name, so a record built from one says which
+    export it was read from, and a read of a name the program never exported
+    lands as `None` rather than as an invented address.
+    """
+
+    def __init__(self, exported: set[str]) -> None:
+        super().__init__()
+        self.exported = exported
+
+    def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
+        if args.typ == 'pulumi:pulumi:StackReference':
+            return {'outputs': {name: name for name in self.exported}}
+        return {}
+
+
 @pytest.mark.asyncio
-async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
+async def test_every_output_dns_reads_across_the_reference_is_one_this_program_exports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The three outputs `dns` builds its anchors from, by the names it uses.
+    """The seam between the two programs, held by running both.
 
-    An output name is not an implementation detail here: `dns` writes it into
-    a record, and a record whose content changed name after an apply is a
-    replacement rather than an update. Asserting against the `dns` module's
-    own constants is what keeps the two halves of the contract from drifting
-    apart silently.
+    Both spell the names from `conventions.PHYSICAL_OUTPUTS`, so what is left
+    to disagree is the programs themselves: an export this one dropped, or a
+    field `dns` reads that nothing here writes under. `dns` writes what it
+    reads into its anchors, and an output the reference does not carry arrives
+    there as the string `None` — so the anchors are declared against a
+    reference carrying this program's exports and nothing else, and each is
+    checked to carry one of them.
     """
     from kluster.stacks import dns
 
@@ -618,17 +641,51 @@ async def test_the_anchor_contract_is_exported_under_the_names_dns_reads(
         exported[name] = value
 
     monkeypatch.setattr(physical.pulumi, 'export', record)
+    async with declaring():
+        await physical.main()
+
+    pulumi.runtime.set_all_config({f'kluster:{dns.CLOUDFLARE_API_TOKEN}': 'a-zones-token'})
+    reader = await run_with(ExportedPhysical(set(exported)), stack='dns')
+    async with declaring():
+        await dns.main()
+
+    anchors = [
+        reader.inputs_of(f'{conventions.ZONE_PRIMARY}-{anchor}-{family}')
+        for anchor, family in (
+            (conventions.ANCHOR_CLUSTER, 'a'),
+            (conventions.ANCHOR_CLUSTER, 'aaaa'),
+            (conventions.ANCHOR_VIP1, 'a'),
+        )
+    ]
+    for anchor in anchors:
+        assert anchor['content'] in exported, anchor
+    # And which export each family carries: the A records carry the IPv4
+    # outputs and the AAAA the IPv6 one, or a dual-stack anchor is two records
+    # of one family.
+    exports = [cast('pulumi.Output[str]', exported[cast('str', anchor['content'])]).future() for anchor in anchors]
+    assert [await export for export in exports] == [LB_ADDRESS, LB_ADDRESS_V6, VIP1_ADDRESS]
+
+
+@pytest.mark.asyncio
+async def test_the_program_exports_every_name_the_structure_carries_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`PhysicalOutputs` is the contract and the export its implementation, both ways.
+
+    A field nothing exports is what its reader receives as `None`; an export
+    under a name the structure does not carry is one no reader can ask for.
+    Either passes the type checker, so the run is what holds them together.
+    """
+    exported: dict[str, object] = {}
+
+    def record(name: str, value: object) -> None:
+        exported[name] = value
+
+    monkeypatch.setattr(physical.pulumi, 'export', record)
 
     await physical.main()
 
-    for output in (dns.OUTPUT_CLUSTER_V4, dns.OUTPUT_CLUSTER_V6, dns.OUTPUT_VIP1_V4):
-        assert output in exported, output
-
-    addresses = (
-        cast('pulumi.Output[str]', exported[dns.OUTPUT_CLUSTER_V4]),
-        cast('pulumi.Output[str]', exported[dns.OUTPUT_CLUSTER_V6]),
-    )
-    assert [await address.future() for address in addresses] == [LB_ADDRESS, LB_ADDRESS_V6]
+    assert set(exported) == set(conventions.PHYSICAL_OUTPUTS.names())
 
 
 @pytest.mark.asyncio
@@ -638,10 +695,14 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
     """The identities CI joins the overlay with, by the names `derived sync` reads.
 
     The slot map's half of that contract is a stack output name
-    (`slots.StateRead`) and this program's half is the export; nothing but the
-    string ties them together, and the map's own tests supply the output by
-    hand, so a rename on either side would surface first as a bring-up that
-    cannot fill `ZEROTIER_IDENTITY`. Which member each export carries is part
+    (`slots.StateRead`) and this program's half is the export. Both spell it
+    from `conventions.PHYSICAL_OUTPUTS`, so what this holds is the map rather
+    than the spelling: that it declares a read of every identity export, and
+    that every read it declares of this stack names a field of the structure
+    -- the case above holds fields to exports, so a row can then only name
+    something the program exports. The map's own tests supply the output by
+    hand, so a read of an export this program dropped would otherwise surface
+    first as a bring-up that cannot fill `ZEROTIER_IDENTITY`. Which member each export carries is part
     of the contract rather than cosmetic: an identity live in two jobs at once
     flaps, which is why there is one per identity domain (gateway.md §2.6). The
     marking is checked for the same reason it is on the cluster credentials
@@ -663,13 +724,14 @@ async def test_the_ci_join_credentials_are_exported_under_the_names_the_slot_map
         for row in slots.ROWS.values()
         if isinstance(row.source, slots.StateRead) and row.source.stack == slots.PHYSICAL_STACK
     }
-    # Every continuous-integration member the roster carries gets an export:
-    # one added without one would join no job, having no secret to be pushed.
-    assert set(physical.CI_IDENTITY_OUTPUTS) == set(conventions.overlay.CI_MEMBERS)
-    assert contracted >= set(physical.CI_IDENTITY_OUTPUTS.values())
-    assert contracted <= set(exported)
+    # The map reads every identity export there is -- one it did not would
+    # join no job, having no secret pushed -- and everything the map reads out
+    # of this stack's state, identities or not, is a name the structure
+    # carries.
+    assert contracted >= set(conventions.PHYSICAL_OUTPUTS.ci_identity.values())
+    assert contracted <= set(conventions.PHYSICAL_OUTPUTS.names())
 
-    for member, output in physical.CI_IDENTITY_OUTPUTS.items():
+    for member, output in conventions.PHYSICAL_OUTPUTS.ci_identity.items():
         identity = cast('pulumi.Output[str]', exported[output])
         assert await identity.is_secret()
         assert await identity.future() == f'{conventions.CLUSTER_NAME}-identity-{member}-secret'
@@ -695,8 +757,8 @@ async def test_the_cluster_credentials_are_exported_and_stay_secret(
 
     await physical.main()
 
-    kubeconfig = cast('pulumi.Output[str]', exported['kubeconfig'])
-    talosconfig = cast('pulumi.Output[str]', exported['talosconfig'])
+    kubeconfig = cast('pulumi.Output[str]', exported[conventions.PHYSICAL_OUTPUTS.kubeconfig])
+    talosconfig = cast('pulumi.Output[str]', exported[conventions.PHYSICAL_OUTPUTS.talosconfig])
     assert await kubeconfig.is_secret()
     assert await talosconfig.is_secret()
     assert await kubeconfig.future() == KUBECONFIG
@@ -776,11 +838,14 @@ async def test_the_bucket_census_is_exported_for_the_stacks_that_fill_the_bucket
 
     await physical.main()
 
-    assert exported['backup_bucket'] == conventions.BUCKET_BACKUP
-    assert exported['backup_endpoint'] == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
+    assert exported[conventions.PHYSICAL_OUTPUTS.backup_bucket] == conventions.BUCKET_BACKUP
+    assert (
+        exported[conventions.PHYSICAL_OUTPUTS.backup_endpoint]
+        == f'https://s3.{conventions.B2_ACCOUNT.region}.backblazeb2.com'
+    )
 
     # The one consumer that exists whether or not any application does.
-    keys = cast('dict[str, dict[str, pulumi.Output[str]]]', exported['backup_keys'])
+    keys = cast('dict[str, dict[str, pulumi.Output[str]]]', exported[conventions.PHYSICAL_OUTPUTS.backup_keys])
     assert set(keys) == {'etcd'}
     assert await keys['etcd']['id'].future() == 'kluster-backup-etcd-key-id'
 

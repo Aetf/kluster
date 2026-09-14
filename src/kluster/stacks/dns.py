@@ -35,12 +35,6 @@ from kluster.components.dns.record import zone_records
 from kluster.components.dns.rewrites import ResolverRewrites, rewrites
 from kluster.components.dns.zone import ManagedZone
 
-#: The `physical` outputs the anchors are made of: the load balancer's two
-#: public addresses, and the reserved IPv4 behind the dedicated VIP.
-OUTPUT_CLUSTER_V4 = 'cluster_endpoint'
-OUTPUT_CLUSTER_V6 = 'cluster_endpoint_v6'
-OUTPUT_VIP1_V4 = 'vip1'
-
 #: Where the zones token is read: at the line that builds the provider it
 #: configures, and nowhere else (rfc-002 §8.1). The key is this project's, not
 #: the provider package's, because a `cloudflare:` entry in a committed stack
@@ -101,16 +95,19 @@ def _anchor_addresses(physical: pulumi.StackReference) -> base.AnchorAddresses:
     """The three addresses the anchors carry, out of the physical stack.
 
     Reading them is a job the census cannot do for itself, and this is the one
-    place in the stack that reaches across a StackReference. Nothing here
-    awaits: an address the `physical` stack has not published yet travels into
+    place in the stack that reaches across a StackReference. The names asked
+    for are `conventions.PHYSICAL_OUTPUTS`, the same structure `physical`
+    exports under, so an output renamed there is renamed here in the same
+    edit. Nothing here awaits: an address the `physical` stack has not published yet travels into
     the record as an unresolved output rather than raising, so this program
     declares the same records whether or not `physical` has been applied —
     which is the state it is in today.
     """
+    outputs = conventions.PHYSICAL_OUTPUTS
     return base.AnchorAddresses(
-        cluster_v4=_address(physical, OUTPUT_CLUSTER_V4),
-        cluster_v6=_address(physical, OUTPUT_CLUSTER_V6),
-        vip1_v4=_address(physical, OUTPUT_VIP1_V4),
+        cluster_v4=_address(physical, outputs.cluster_endpoint),
+        cluster_v6=_address(physical, outputs.cluster_endpoint_v6),
+        vip1_v4=_address(physical, outputs.vip1),
     )
 
 
