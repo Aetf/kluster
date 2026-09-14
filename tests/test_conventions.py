@@ -444,23 +444,86 @@ def test_a_row_states_what_it_publishes_beside_its_name() -> None:
 # --------------------------------------------------------------------------
 # The `github` program declares from this table and the `credentials` command
 # pushes secrets into what it names, so neither can disagree with it: both read
-# it. What can is the workflow files. They spell labels, logins and the
-# Environment a job deploys into as literals no import reaches, so a census
-# that stopped carrying one of those leaves a condition that is never true or a
-# job GitHub refuses to start -- and the cases below are that seam and nothing
-# else.
+# it. What can is the workflow files and the composite actions their steps
+# call. They spell labels, logins and the Environment a job deploys into as
+# literals no import reaches, so a census that stopped carrying one of those
+# leaves a condition that is never true or a job GitHub refuses to start -- and
+# the cases below are that seam and nothing else.
 
-WORKFLOWS = Path(__file__).parent.parent / '.github' / 'workflows'
+ROOT = Path(__file__).parent.parent
+GITHUB = ROOT / '.github'
 
 
-def _workflows() -> list[Path]:
-    """Every workflow file GitHub would run, which is both spellings of the suffix.
+def _workflows_and_actions() -> list[Path]:
+    """The workflow files and the composite actions at `.github/actions/*/`.
 
-    GitHub reads `.yml` and `.yaml` out of this directory identically, so a
-    census that globs one of them is one a file named the other way is invisible
-    to -- and invisible is the state every case that uses it exists to prevent.
+    A step inside a composite action carries an `if:` and a `run:` GitHub
+    evaluates exactly as it does a step written in the workflow, so a login or
+    a label compared there is one the workflow branches on, and a census that
+    read the workflows alone would be blind to it. Workflows can live nowhere
+    but `.github/workflows/`, so that half of the set is closed by GitHub. A
+    local action can live in any directory of the repository, and an action's
+    step can `uses:` another, so that half is closed by a case instead: every
+    local `uses:` in a file here resolves to a file here
+    (`test_every_local_action_a_step_uses_is_one_the_censuses_read`), which is
+    what makes reading this set the same as reading every step a workflow runs
+    out of this repository.
+
+    Both spellings of the suffix, because GitHub reads `.yml` and `.yaml`
+    identically, and a file named the other way would be invisible the same way.
     """
-    return sorted(WORKFLOWS.glob('*.yml')) + sorted(WORKFLOWS.glob('*.yaml'))
+    return sorted(
+        path
+        for pattern in ('workflows/*.yml', 'workflows/*.yaml', 'actions/*/action.yml', 'actions/*/action.yaml')
+        for path in GITHUB.glob(pattern)
+    )
+
+
+#: How a step names an action in this repository rather than one on the
+#: marketplace: a path from the repository root, in either spelling GitHub
+#: accepts. What it names is a directory, and the action inside it is the
+#: directory's `action.yml` or `action.yaml`.
+LOCAL_ACTION_IN_A_STEP = re.compile(r'^[ \t-]*uses:[ \t]*[\'"]?(?:\./|\$/)([^\s\'"#]+)', re.MULTILINE)
+
+
+def test_every_local_action_a_step_uses_is_one_the_censuses_read() -> None:
+    """What closes the set above under `uses:`, and the only thing that does.
+
+    `_workflows_and_actions` globs one directory of actions, and nothing in
+    GitHub holds actions to that directory: a step may name any directory in
+    the repository, and a composite action's own steps may name another. A
+    condition in an action outside the glob would pass every census here
+    exactly as one in `.github/actions/` did before the glob reached it. So
+    every local `uses:` in every file the censuses read is resolved, and the
+    file it lands on has to be one they read too -- which turns the glob from
+    a directory someone chose into the whole of what a workflow runs out of
+    this repository.
+    """
+    read = set(_workflows_and_actions())
+    reached: set[Path] = set()
+    unread: list[str] = []
+    for path in sorted(read):
+        for directory in LOCAL_ACTION_IN_A_STEP.findall(path.read_text()):
+            action = [
+                candidate for name in ('action.yml', 'action.yaml') if (candidate := ROOT / directory / name).is_file()
+            ]
+            if not action:
+                unread.append(f'{_name(path)} uses {directory}, where no action file exists')
+            elif action[0] not in read:
+                unread.append(f'{_name(path)} uses {action[0].relative_to(ROOT)}, which no census reads')
+            else:
+                reached.add(action[0])
+
+    # The jobs that reach a device join the overlay through this action first
+    # (ci.md §2), so a pattern that stopped matching `uses:` lines would be
+    # silent about the one every apply runs.
+    assert GITHUB / 'actions' / 'zerotier' / 'action.yml' in reached
+    assert not unread, f'a step reaches an action the censuses do not read: {unread}'
+
+
+def _name(path: Path) -> str:
+    """How a failure names a file: relative to `.github/`, since every action file is `action.yml`."""
+    return str(path.relative_to(GITHUB))
 
 
 #: How a workflow condition names a label on the pull request it is running
@@ -488,7 +551,12 @@ ENVIRONMENT_IN_A_JOB = re.compile(r'^[ \t]*environment:[ \t]*([a-z0-9-]+)[ \t]*$
 #: The other way GitHub spells the same identity. `conventions.forge.Author`
 #: carries a login and no id and says why, so a workflow reaching for the id
 #: form is outside what the census covers -- and this is what makes that a red
-#: check rather than a workflow that slipped past the scan above.
+#: check rather than a workflow that slipped past the scan above. It matches
+#: the id wherever it is written, read as a value as readily as compared in a
+#: condition, so a workflow that only ever *printed* one -- a bot's git
+#: identity, say -- would fail this census too. That is deliberate: the
+#: refusal fails closed and its message names the file, and whoever needs the
+#: id form then extends the census on purpose rather than around it.
 AUTHOR_BY_ID = re.compile(r'\.(?:user|sender)\.id\b|\.actor_id\b')
 
 
@@ -505,7 +573,7 @@ def test_every_environment_a_workflow_deploys_into_is_one_the_census_carries() -
     declared = {
         environment.name for repository in conventions.forge.REPOSITORIES for environment in repository.environments
     }
-    read = {name for workflow in _workflows() for name in ENVIRONMENT_IN_A_JOB.findall(workflow.read_text())}
+    read = {name for path in _workflows_and_actions() for name in ENVIRONMENT_IN_A_JOB.findall(path.read_text())}
 
     # The gated apply is the Environment whose credentials can root the gateway
     # (ci.md §3), so a scan that stopped reaching the chain would be silent
@@ -519,11 +587,11 @@ def test_every_label_a_workflow_branches_on_is_one_the_census_carries() -> None:
 
     The condition is simply never true, so the behaviour it guards is
     unavailable at the moment somebody needs it and nothing anywhere reports
-    that. Reading the workflows is what keeps the census from being shorter
-    than what they depend on.
+    that. Reading the workflows, and the actions their steps call, is what
+    keeps the census from being shorter than what they depend on.
     """
     declared = {label.name for repository in conventions.forge.REPOSITORIES for label in repository.labels}
-    read = {label for workflow in _workflows() for label in LABEL_IN_A_CONDITION.findall(workflow.read_text())}
+    read = {label for path in _workflows_and_actions() for label in LABEL_IN_A_CONDITION.findall(path.read_text())}
 
     # `expect-changes` stands noop-automerge down altogether (ci.md §3). A
     # census that lost it would leave a live condition pointing at a label no
@@ -556,8 +624,8 @@ def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> No
     named = {author.login for repository in conventions.forge.REPOSITORIES for author in repository.authors}
     read = {
         login
-        for workflow in _workflows()
-        for match in AUTHOR_IN_A_CONDITION.findall(workflow.read_text())
+        for path in _workflows_and_actions()
+        for match in AUTHOR_IN_A_CONDITION.findall(path.read_text())
         for login in match
         if login
     }
@@ -578,7 +646,7 @@ def test_no_workflow_identifies_an_account_by_id() -> None:
     check with a reason on it, instead of a census that silently stopped
     covering the condition it exists for.
     """
-    reached = {workflow.name for workflow in _workflows() if AUTHOR_BY_ID.search(workflow.read_text())}
+    reached = {_name(path) for path in _workflows_and_actions() if AUTHOR_BY_ID.search(path.read_text())}
 
     assert not reached, f'identifies an account by id, which conventions.forge.Author does not carry: {sorted(reached)}'
 
@@ -615,9 +683,9 @@ def test_no_workflow_points_a_pulumi_command_at_the_stack_encrypted_apart() -> N
     """
     apart = set(pulumi_config.APART)
     named = [
-        f'{workflow.name}: {match.group(0)}'
-        for workflow in _workflows()
-        if 'pulumi' in (text := workflow.read_text())
+        f'{_name(path)}: {match.group(0)}'
+        for path in _workflows_and_actions()
+        if 'pulumi' in (text := path.read_text())
         for match in PULUMI_STACK_FLAG.finditer(text)
         if match.group(1) in apart
     ]
