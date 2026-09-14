@@ -724,9 +724,10 @@ pushes those files itself**:
     `{path, mode, owner, hook}`, whose existence and shape are compared
     against the device the way a file's content is, and which declares
     nothing about the contents — hence a delete that takes the directory
-    away only while it is empty. The path is the directory and not a
-    symbolic link to one: a link there fails the operation by name,
-    whether it is being made or taken away. Implementation rule: the one
+    away only while it is empty. What a declared path may hold — and
+    why a symbolic link there is refused rather than followed or
+    replaced — is one rule all three resources share, stated in
+    physical/gateway.md §1.2. Implementation rule: the one
     secret-bearing input among the three — a `DeviceFile`'s content, on
     request — is declared secret (`additional_secret_outputs`) so it
     never renders in plain preview or state output; an artifact's
