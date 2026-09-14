@@ -55,8 +55,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # The selection diffs against the base commit, which a shallow clone
-          # does not have.
+          # The selection diffs against a base -- the merge commit's first
+          # parent on a pull request, `event.before` on a push -- and a shallow
+          # clone has neither.
           fetch-depth: 0
 
       # Skipping an unchanged image is safe here in a way that skipping a
@@ -68,8 +69,14 @@ jobs:
         id: select
         env:
           EVENT: ${{ github.event_name }}
-          # push: the commit the branch moved from. PR: its base.
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          # push: the commit `main` moved from. PR: the checkout is GitHub's
+          # merge of the head into `main`, so its first parent is the `main`
+          # the change is being merged onto. Not `pull_request.base.sha`,
+          # which is `main` as of the pull request's creation and never
+          # moves, so the diff below would carry every file `main` gained
+          # since -- an image `main` changed rebuilt on pull requests that
+          # never touched it.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
         run: |
           set -euo pipefail
           all=$(find docker -maxdepth 1 -name '*.Containerfile' -printf '%f\n' 2>/dev/null \
