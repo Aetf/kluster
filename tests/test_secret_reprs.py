@@ -421,8 +421,9 @@ def test_a_context_prints_neither_the_token_nor_the_passphrase_it_reaches() -> N
     """The two records a push reaches everything through, by the same mechanism.
 
     `slots.Context` is what every row's push is handed, and `pulumi_config.Stack`
-    is what a config push runs as: one carries the forge's account-root token,
-    the other the passphrase that opens every stack's committed configuration.
+    is what a config push runs as: one carries the forge's admin token, the
+    `github` stack's config secret (framework/github.md §1), the other the
+    passphrase that opens every stack's committed configuration.
     Neither hides the containing field — the mechanism is the inner record's
     own repr — so this is where a regression in either inner record would
     show first.
