@@ -195,18 +195,17 @@ the URN places it under — the nearest component above it on the parent
 chain, whatever code declared it: `name` alone for the resource the
 component *is*, `f'{name}-…'` for the rest. That value is chosen, so
 the rule above is satisfied, and applied at every level it makes every
-name unique across instances of the whole type chain. One family is
-named the other way round today: the gateway's persistence mechanism
-names every device file for itself and the path
-(`f'{persistence}-{kind}-{name}'`) and parents it on the component that
-asked, so that two askers of one path are refused as one thing declared
-twice rather than kept apart by name — which is why the invariant that
-holds this rule is asserted on the `github` program and not on
-`physical`. It is about *logical* names only: a singleton whose
-physical name comes from `conventions` with autonaming disabled keeps
-that physical name. Landing the rule on a child that state already
-holds under the old name is `aliases=[pulumi.Alias(name=<old>)]` on
-that child, dropped in a later change once state carries the new URN.
+name unique across instances of the whole type chain. A name is not
+what keeps two resources off one place on a target: the URN qualifies a
+name by parent types, so two components of different types can each
+declare one device path, endpoint or record and register cleanly —
+one-place-one-resource is an invariant over the declared inputs,
+asserted on the program. It is about *logical* names only: a singleton
+whose physical name comes from `conventions` with autonaming disabled
+keeps that physical name. Landing the rule on a child that state
+already holds under the old name is `aliases=[pulumi.Alias(name=<old>)]`
+on that child, dropped in a later change once state carries the new
+URN.
 
 **Adopted resources graduate to declared.** `import` is step one of
 adoption; the end state is an explicit declaration whose fields are
