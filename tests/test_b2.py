@@ -19,6 +19,7 @@ mid-mint of.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,7 +31,7 @@ from b2_api import ACCOUNT_ID, FakeApi, Key
 from memory_kit import MemoryKit
 
 from kluster import conventions
-from kluster.scripts.credentials import b2, entries, masters, payload
+from kluster.scripts.credentials import b2, cli, entries, masters, payload
 from kluster.scripts.credentials.kdbx import KdbxStore
 from kluster.scripts.credentials.masters import CredentialRejected
 from kluster.scripts.credentials.delivery import Delivery
@@ -296,6 +297,86 @@ def test_a_rotation_in_another_account_deletes_nothing(
     # through somebody else's keys.
     assert api.named(b2.SEED.name) == sorted([key_id, stranger.key_id])
     assert kit.get(SEED_ENTRY, attribute='UserName') == key_id
+
+
+def test_a_dump_key_is_not_minted_in_another_account(
+    api: FakeApi, kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ = _seeded(api, kit)
+    session, bucket_id = _bucket(api, kit)
+    before = _mints(api)
+    _elsewhere(monkeypatch)
+
+    # The same check as the three mints above, on the one mint that takes its
+    # session ready-made: a caller cannot hand this a session for an account
+    # `conventions` does not record and get a key out of it.
+    with pytest.raises(CredentialRejected, match=f'{ACCOUNT_ID}.*some-other-account'):
+        _ = b2.mint_dump_key(session, bucket_id=bucket_id)
+
+    assert _mints(api) == before
+    assert not api.named(b2.DUMPS_NAME)
+
+
+def _commands_named(message: str) -> list[list[str]]:
+    """Every `credentials …` command a refusal quotes, as argv without the program name."""
+    return [quoted.split()[1:] for quoted in re.findall(r'`(credentials [^`]+)`', message)]
+
+
+def _conventions_named(message: str) -> list[str]:
+    return re.findall(r'`conventions\.(\w+)`', message)
+
+
+def _mint_management_as_seed(kit: KdbxStore, api: FakeApi) -> object:
+    return b2.mint_management(kit, seed_entry=SEED_ENTRY)
+
+
+def _create_seed_as_root(kit: KdbxStore, api: FakeApi) -> object:
+    return b2.create_seed(root=_root(api), seeds=kit, seed_entry=SEED_ENTRY)
+
+
+@pytest.mark.parametrize(
+    ('refused_by', 'refused_command'),
+    [
+        pytest.param(_mint_management_as_seed, ['derived', 'b2-management', 'mint'], id='seed'),
+        pytest.param(_create_seed_as_root, ['seed', 'b2', 'create'], id='root'),
+    ],
+)
+def test_a_refusal_names_both_repairs_and_each_is_a_command_that_exists(
+    api: FakeApi,
+    kit: KdbxStore,
+    monkeypatch: pytest.MonkeyPatch,
+    refused_by: Callable[[KdbxStore, FakeApi], object],
+    refused_command: list[str],
+) -> None:
+    """Which of the two accounts is stale decides the repair, so both are spelled out.
+
+    Held against the parser and against `conventions` rather than against the
+    words: the command a refusal names has to be one `credentials` accepts, and
+    the constant it names has to be one `conventions` has. And the command
+    named must not be the one that just refused — on the root path the seed's
+    repair would send the operator round in a circle, holding the same wrong
+    master key.
+    """
+    _ = _seeded(api, kit)
+    _elsewhere(monkeypatch)
+
+    with pytest.raises(CredentialRejected) as refused:
+        _ = refused_by(kit, api)
+    message = str(refused.value)
+
+    named = _conventions_named(message)
+    assert named, message
+    for name in named:
+        assert hasattr(getattr(conventions, name), 'account_id'), f'{name} records no account_id'
+
+    commands = _commands_named(message)
+    assert commands, message
+    parser = cli.build_parser()
+    for argv in commands:
+        parsed = vars(parser.parse_args(argv))
+        assert [parsed['subject'], parsed['member'], parsed['action']] != refused_command, (
+            f'the refusal sends the operator back to the command that refused: {argv}'
+        )
 
 
 def test_an_installation_that_records_no_account_is_refused_and_told_which_one_to_record(
@@ -610,6 +691,49 @@ def test_a_retention_of_the_wrong_type_is_refused_rather_than_compared() -> None
 def test_an_answer_that_is_not_an_object_is_refused_rather_than_indexed() -> None:
     with pytest.raises(payload.ResponseRejected, match='b2_create_key: expected an object'):
         _ = b2._created_key(['key-1', 'secret-of-key-1'])  # pyright: ignore[reportPrivateUsage]
+
+
+#: Shaped like the secret half of a key: short enough that a refusal which
+#: quoted small values would quote this one whole.
+STRAY_SECRET = 'K004secret-fbb1a7'
+
+
+@pytest.mark.parametrize(
+    ('answer', 'described_as'),
+    [
+        pytest.param(
+            STRAY_SECRET, f'a string of {len(STRAY_SECRET)} characters', id='a string where an object was expected'
+        ),
+        pytest.param([STRAY_SECRET], 'a list of 1 entries', id='a list where an object was expected'),
+        pytest.param(
+            {'applicationKeyId': 'key-1', 'applicationKey': [STRAY_SECRET, STRAY_SECRET]},
+            'a list of 2 entries',
+            id='a field of the wrong type',
+        ),
+        pytest.param(
+            {'applicationKeyId': 'key-1', 'applicationKey': {'value': STRAY_SECRET}},
+            'an object of 1 fields',
+            id='a field nested',
+        ),
+    ],
+)
+def test_a_refusal_describes_the_answer_and_never_quotes_it(answer: object, described_as: str) -> None:
+    """The one place a provider's raw answer meets a log line.
+
+    `b2_create_key` answers with the credential it just made, and a refusal of
+    that answer is logged. So what a refusal says about a value is its kind and
+    its size -- what the operator has to fix is the shape -- and never its
+    content, however short: the cap that used to decide was one a key fits
+    under.
+    """
+    with pytest.raises(payload.ResponseRejected) as refused:
+        _ = b2._created_key(answer)  # pyright: ignore[reportPrivateUsage]
+
+    message = str(refused.value)
+    assert STRAY_SECRET not in message, message
+    assert 'b2_create_key' in message
+    # Kind and size are what is said instead, so the message is still an answer.
+    assert described_as in message, message
 
 
 def test_a_retention_that_already_says_this_is_not_rewritten(api: FakeApi, kit: KdbxStore) -> None:

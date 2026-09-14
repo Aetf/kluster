@@ -143,7 +143,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     broke the nightly dump silently until it next fired. So the key is
     minted only on the branch that launches a box, and the converge
     asks B2 whether the *recorded* key still exists with the scope
-    settings.py wants: if it does not, the box cannot be handed the
+    `b2.dumps` states for it: if it does not, the box cannot be handed the
     intended key without being rebuilt, which is the same replace as
     any other drift. **The dump key's lifetime is the instance's.**
     `--replace` remains for the case with no diff to find: rotating the

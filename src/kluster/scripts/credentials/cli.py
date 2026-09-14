@@ -17,10 +17,10 @@ explanation itself.
 
 Every minting action is account check -> mint -> push to every slot -> verify
 -> retire the predecessor, and therefore idempotent: rotation is a re-run, not
-a second procedure. The first step is there only where this program records the
-platform's account, which is not every row; `generate` keeps the same shape
-around a value it makes rather than mints, and the reading verbs have no shape
-to keep.
+a second procedure. Every platform this program mints from records its account
+in `conventions`, so no minting row is without the first step; `generate` keeps
+the same shape around a value it makes rather than mints, and the reading verbs
+have no shape to keep.
 """
 
 from __future__ import annotations

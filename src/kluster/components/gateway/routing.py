@@ -49,7 +49,7 @@ in it — which is also why the file is not world-readable on the device.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from ipaddress import IPv4Address, IPv4Network, IPv6Network
 from typing import final
 
@@ -167,11 +167,14 @@ class RoutingSession:
     configuration names. That address is a constant rather than another
     resource's output on purpose — the session must not depend on a lease.
     `password` authenticates the session, so that claiming the peer's address is
-    not enough to become the peer.
+    not enough to become the peer. It does not print: the stack hands it over
+    as an `Output`, which discloses nothing, but a test hands over the literal,
+    and the field is hidden for what it holds rather than for how one of its
+    types prints.
     """
 
     neighbour: IPv4Address
-    password: pulumi.Input[str]
+    password: pulumi.Input[str] = field(repr=False)
 
 
 @final
@@ -181,12 +184,14 @@ class _FrrParams:
 
     The pools arrive whole rather than as text, so the file states the prefix
     length each family admits down to instead of being handed it.
+
+    The password is the resolved session secret, and does not print.
     """
 
     cluster: str
     peer: str
     peer_description: str
-    password: str
+    password: str = field(repr=False)
     local_asn: int
     peer_asn: int
     pool_v4: IPv4Network

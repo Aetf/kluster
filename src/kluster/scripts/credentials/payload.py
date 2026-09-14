@@ -15,7 +15,7 @@ does not stop a mint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from .masters import CredentialRejected
@@ -33,9 +33,29 @@ class ResponseRejected(CredentialRejected):
 
 
 def _describe(value: object) -> str:
-    """A value in a refusal: what it is, and what it says if that is short."""
-    shown = repr(value)
-    return shown if len(shown) <= 60 else f'a {type(value).__name__} of {len(shown)} characters'
+    """A value in a refusal: its JSON kind and its size, and never its content.
+
+    The answers read here are the ones that carry a credential -- the key
+    `b2_create_key` discloses once, the token Cloudflare discloses once -- and a
+    refusal is logged. What the operator has to act on is the shape the
+    provider sent, which the kind and the size say; the content would put a
+    secret into the run log exactly when the provider misbehaved.
+    """
+    match value:
+        case None:
+            return 'null'
+        case bool():
+            return 'a boolean'
+        case int() | float():
+            return 'a number'
+        case str():
+            return f'a string of {len(value)} characters'
+        case list():
+            return f'a list of {len(cast("list[object]", value))} entries'
+        case dict():
+            return f'an object of {len(cast("dict[object, object]", value))} fields'
+        case _:
+            return f'a {type(value).__name__}'
 
 
 @dataclass(frozen=True)
@@ -48,7 +68,10 @@ class Payload:
     """
 
     where: str
-    fields: dict[str, object]
+    #: The answer as it arrived, which for a mint includes the credential the
+    #: provider discloses once. Kept out of the repr for that reason; `where`
+    #: still prints, and is what a refusal is read by.
+    fields: dict[str, object] = field(repr=False)
 
     @classmethod
     def of(cls, answer: object, where: str) -> Payload:
