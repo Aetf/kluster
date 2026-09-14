@@ -200,8 +200,8 @@ class WorkstationSlot:
 
 
 @dataclass(frozen=True)
-class GwConfigSecret:
-    """A secret pushed to the gateway beside its nspawn units (physical/gateway.md §1).
+class DeviceSecret:
+    """A secret delivered to the gateway device as a file, beside its nspawn units (physical/gateway.md §1).
 
     Part of §1 rule 6's closed set, and addressed by no row: the gateway's own
     secrets travel in the `physical` stack's configuration, and the provider
@@ -211,12 +211,12 @@ class GwConfigSecret:
     what: str
 
     def __str__(self) -> str:
-        return f'gw-config device secret: {self.what}'
+        return f'device secret: {self.what}'
 
 
 #: Everything a row may be delivered into. `Slot` is the GitHub one, and the
 #: only kind this module can fill.
-Channel = Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | WorkstationSlot | GwConfigSecret
+Channel = Slot | PulumiConfig | PulumiState | EscrowCopy | SealedSecret | OnBox | WorkstationSlot | DeviceSecret
 
 
 #: How §3's "Slot" column names each channel: the fixed term an entry in that
@@ -231,7 +231,7 @@ _TERMS: Mapping[type[Channel], str] = {
     SealedSecret: 'SealedSecret',
     OnBox: 'on-box',
     WorkstationSlot: 'workstation slot',
-    GwConfigSecret: 'gw-config device secret',
+    DeviceSecret: 'device secret',
 }
 
 #: `Slot` is four terms rather than one, keyed by repository and by whether an

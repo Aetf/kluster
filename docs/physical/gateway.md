@@ -285,7 +285,7 @@ declarative/physical.md §4.
     cluster into the device would invert that dependency
     (declarative/dns.md §4). The credential that buys it is a **third
     Cloudflare token, zone-scoped and minted from the Cloudflare seed**
-    (credentials.md §3), delivered as a **gw-config device secret**
+    (credentials.md §3), delivered as a **device secret**
     beside the nspawn units and read by nothing else. It is separate
     from cert-manager's DNS-01 token on purpose: two issuers that must
     survive each other's outage do not share a credential, and the
