@@ -31,13 +31,11 @@ import pulumi.dynamic as dynamic
 import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, declaring, run_with
+from shimmed_serialization import serialized
 from asyncssh.known_hosts import match_known_hosts
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-# The engine's own provider serialization, which is what a `__provider` property
-# holds. It lives beside the base class rather than in the package's exports.
-from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
 
 from kluster.providers.configured import FINGERPRINT_LENGTH, PROVIDER_VERSION, SESSION
@@ -2069,8 +2067,8 @@ def test_what_lands_in_state_is_a_provider_with_nothing_in_it() -> None:
     carries something inert: identical for every resource, identical across a
     rotation, and holding nothing that a rotation would have to reach into.
     """
-    one = serialize_provider(file_provider())
-    rotated = serialize_provider(file_provider(private_key()))
+    one = serialized(file_provider())
+    rotated = serialized(file_provider(private_key()))
 
     assert file_provider().__getstate__() == {}
     assert one == rotated

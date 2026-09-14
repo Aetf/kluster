@@ -13,6 +13,11 @@ want a real KeePass file rather than the in-memory stand-in -- the row shape is
 half of what they check -- and a KDBX4 file is guarded by Argon2 at settings
 chosen to be slow. `cheap_kdbx_kdf` moves that cost to the algorithm's floor
 for the whole session.
+
+The last is a watch on a process-global the suites share without meaning to:
+`pickler_left_as_found` names the case that changes the pickler, so that the
+residue fails the case that made it rather than whichever case happens to run
+after it.
 """
 
 # `pykeepass` ships no type information; the store module carries the same
@@ -23,6 +28,7 @@ for the whole session.
 from __future__ import annotations
 
 import os
+import pickle
 from typing import TYPE_CHECKING, Any
 
 import pykeepass.pykeepass as pykeepass_module
@@ -108,3 +114,55 @@ def cheap_kdbx_kdf(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pykeepass_module, 'BLANK_DATABASE_LOCATION', str(blank))
         yield
+
+
+#: The pickler `dill` derives from and the one Pulumi's provider serialization
+#: patches. Private to `pickle`, and typed as nothing but a class because what
+#: is watched below is its whole attribute dict rather than any named method.
+PICKLER: type[Any] = pickle._Pickler  # pyright: ignore[reportPrivateUsage]
+
+
+class _Absent:
+    """What an attribute the pickler does not carry compares as.
+
+    Its own value rather than `None`, so that an attribute added holding `None`
+    and one removed are each a change, and each reads as one in the message.
+    """
+
+    def __repr__(self) -> str:
+        return 'absent'
+
+
+ABSENT = _Absent()
+
+
+@pytest.fixture(autouse=True)
+def pickler_left_as_found() -> Iterator[None]:
+    """A case that leaves the pickler changed fails by its own name.
+
+    Pulumi's `serialize_provider` replaces methods on `pickle._Pickler` and
+    puts none of them back (its `finally` restores the `pickle.Pickler` name
+    alone; `kluster.providers.serialization` has the rest). Production is
+    covered by the shim `kluster.providers` installs on the module attribute;
+    a case that reaches the bare function -- a name bound by a from-import
+    before that package was imported, say -- leaves the wrappers behind for
+    every case after it in the process. Residue like that fails some later
+    case with text naming this one's leftovers, and only in the collection
+    orders where that case comes later. Checked after each case, it fails the
+    case that leaked, whatever the order, naming what changed.
+
+    The whole attribute dict rather than the names the shim restores: what is
+    held is that the class is as the case found it, so a method Pulumi starts
+    patching in a later release is caught here without anyone listing it. The
+    comparison is by identity, which is what a leaked wrapper fails and what a
+    case that restored the original satisfies.
+    """
+    before = dict(vars(PICKLER))
+    yield
+    after = dict(vars(PICKLER))
+    changed = sorted(
+        name for name in before.keys() | after.keys() if before.get(name, ABSENT) is not after.get(name, ABSENT)
+    )
+    assert not changed, f'the case left the pickler changed at {changed}: ' + '; '.join(
+        f'{name}: was {before.get(name, ABSENT)!r}, now {after.get(name, ABSENT)!r}' for name in changed
+    )

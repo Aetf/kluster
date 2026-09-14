@@ -17,11 +17,8 @@ from typing import Any
 import pulumi.dynamic as dynamic
 import pytest
 import requests
-
-# The engine's own provider serialization, which is what a `__provider` property
-# holds. It lives beside the base class rather than in the package's exports.
-from pulumi.dynamic.dynamic import serialize_provider  # pyright: ignore[reportUnknownVariableType]
 from pulumi.runtime import rpc
+from shimmed_serialization import serialized
 
 from kluster.providers import adguard_rewrites, configured
 
@@ -316,8 +313,8 @@ def test_what_lands_in_state_is_a_provider_with_nothing_in_it() -> None:
     carries something inert: identical for every rewrite, identical across a
     rotation, and holding nothing that a rotation would have to reach into.
     """
-    one = serialize_provider(provider())
-    rotated = serialize_provider(provider('rotated'))
+    one = serialized(provider())
+    rotated = serialized(provider('rotated'))
 
     assert provider().__getstate__() == {}
     assert one == rotated

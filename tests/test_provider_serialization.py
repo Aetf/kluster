@@ -80,10 +80,16 @@ def depths(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
 
 @pytest.mark.asyncio
 async def test_declaring_a_dynamic_resource_leaves_the_pickler_as_it_found_it() -> None:
+    """After the declaration the pickler carries what it carried before it.
+
+    The snapshot is this case's own rather than what `pickle` ships: the
+    pickler is process-global, the shim puts back what it found rather than
+    what `pickle` defines, and what it finds depends on which modules ran
+    earlier in the session. A wrapper already there when this case starts is
+    another case's residue and is left to that case's teardown; what is held
+    here is that the declaration adds none, in whatever session state it runs.
+    """
     before = methods()
-    assert all(method.__module__ == 'pickle' for method in before.values()), (
-        f'a serialization earlier in this session already left a wrapper behind: {before}'
-    )
 
     await declare('kept')
 
