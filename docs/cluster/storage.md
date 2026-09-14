@@ -243,7 +243,9 @@ Per nodes.md §5, durability = declarative rebuild + backups + drills:
 2.  **Volumes**: VolSync restic backups on every working-state PVC
     (§3.1), same bucket, retention by class
     (declarative/workloads.md §3); restores double as the volume-move
-    mechanism, so every move exercises the restore path.
+    mechanism, so every move exercises the restore path. Installed by
+    the `k8s-base` stack, which is unwritten, so none runs (nodes.md §5
+    Tier 0).
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
     restore drill (port the legacy drill; nothing runs it here yet).

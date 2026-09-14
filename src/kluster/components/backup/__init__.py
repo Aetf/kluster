@@ -93,7 +93,12 @@ class Scope:
 
 
 def etcd_scope() -> Scope:
-    """The control plane's hourly snapshots, shipped by the ops-repo workflow."""
+    """The control plane's hourly snapshots: an ops-repo workflow's to ship.
+
+    That repository carries no workflows, so none is taken (nodes.md §5
+    Tier 0); the scope is declared with the bucket so that the writer key is
+    there when one is.
+    """
     return Scope(name='etcd', prefix=f'{conventions.ETCD_SNAPSHOT_PREFIX}/')
 
 

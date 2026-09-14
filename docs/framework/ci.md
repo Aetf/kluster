@@ -444,9 +444,11 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     thing they watch is exactly what the dead-man design exists to
     prevent. So the private **`kluster-ops`** repo (the notification
     hub, architecture.md §4.3) owns the complete scheduled census:
-    the hourly **etcd snapshot** (`talosctl etcd snapshot` against
-    the NLB endpoint → upload to B2 — no in-cluster CronJob, no
-    talosconfig copied into the cluster), the **freshness checks
+    the hourly **etcd snapshot** (designed as `talosctl etcd
+    snapshot` against the NLB endpoint → upload to B2 — no in-cluster
+    CronJob, no talosconfig copied into the cluster; that repository
+    carries no workflows, so none is taken — nodes.md §5 Tier 0), the
+    **freshness checks
     for backups vmalert can't see** (object-age assertions on the
     B2 `etcd/` and state-backend `pg_dump` prefixes, the
     server-cert expiry probe ≥30 days —
