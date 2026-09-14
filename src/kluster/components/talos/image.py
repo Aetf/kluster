@@ -58,9 +58,10 @@ HOMELAB_PLATFORM = 'nocloud'
 
 #: What each schematic carries beyond stock Talos. These rolls are stated here
 #: and not handed down by the stack program, because an extension set is what
-#: an artefact *is* — like its platform — rather than a table a caller chooses
-#: for it: the cloud image and the worker image are two schematics, and the
-#: subclass that is each artefact names its own. The cloud schematic is the
+#: an artefact *is* — like its platform and architecture, which each subclass
+#: states the same way — rather than a table a caller chooses for it: the
+#: cloud image and the worker image are two schematics, and the subclass that
+#: is each artefact names its own. The cloud schematic is the
 #: stock one, because the one extension the fleet needs is firmware for a GPU
 #: the cloud nodes do not have. The GPU cutover needs that i915 firmware
 #: present *before* it happens, so the worker's schematic carries it from
@@ -83,10 +84,16 @@ class TalosArtefact(Component, abc.ABC):
 
     The half both artefacts share. A subclass supplies `_declare_artefact`,
     which is what is done with the URL: imported into a cloud catalogue, or
-    fetched onto the machine running the program — and `extensions`, the roll
-    that makes its schematic the one it is. The roll is required rather than
-    defaulted to empty, so a subclass says what it carries even when that is
-    nothing (style/pulumi.md).
+    fetched onto the machine running the program — and the three facts that
+    pick its artefact out of the factory's matrix: `extensions`, the roll that
+    makes its schematic the one it is, and the `platform` and `architecture`
+    the factory builds that schematic for. All three are required here and
+    stated by the subclass, none taken from a caller: they are what each
+    artefact *is*, so no caller has a second opinion about them, and a
+    defaulted parameter nobody passes would be a property wearing a
+    parameter's clothes (style/pulumi.md). The roll is required rather than
+    defaulted to empty for the same reason, so a subclass says what it carries
+    even when that is nothing.
 
     Abstract, and that is load-bearing rather than documentation. This class
     opens the parent backstop's scope and the closing `register_outputs` is
@@ -152,9 +159,11 @@ class TalosArtefact(Component, abc.ABC):
 class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage'):
     """One schematic and the OCI custom image built from it.
 
-    The extension set is stated here rather than taken as a parameter, for the
-    same reason the worker's is (`TalosNocloudImage`): it is what this
-    artefact *is*, and no caller has a second opinion about it.
+    The extension set, platform and architecture are stated here rather than
+    taken as parameters, for the same reason the worker's are
+    (`TalosNocloudImage`): they are what this artefact *is* — the stock
+    schematic, built for OCI's own image format on the ARM shape the cloud
+    nodes run — and no caller has a second opinion about any of them.
     """
 
     def __init__(
@@ -163,8 +172,6 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
         *,
         compartment_id: pulumi.Input[str],
         talos_version: str,
-        architecture: str = CLOUD_ARCHITECTURE,
-        platform: str = CLOUD_PLATFORM,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         self._compartment_id = compartment_id
@@ -172,8 +179,8 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
             name,
             talos_version=talos_version,
             extensions=CLOUD_EXTENSIONS,
-            architecture=architecture,
-            platform=platform,
+            architecture=CLOUD_ARCHITECTURE,
+            platform=CLOUD_PLATFORM,
             opts=opts,
         )
 
@@ -202,11 +209,12 @@ class TalosImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosImage')
 class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:TalosNocloudImage'):
     """The worker's schematic, and its disk image on the machine that runs the program.
 
-    The extension set is stated here rather than taken as a parameter, for the
-    same reason the platform is: it is what this artefact *is* — the schematic
-    the worker boots, i915 firmware included — and no caller has a second
-    opinion about it. What varies between artefacts is carried by the base's
-    `extensions`, which is how this schematic differs from the cloud one.
+    The extension set, platform and architecture are stated here rather than
+    taken as parameters: they are what this artefact *is* — the schematic the
+    worker boots, i915 firmware included, as the `nocloud` x86 image — and no
+    caller has a second opinion about any of them. What varies between
+    artefacts is carried by the base's `extensions`, `platform` and
+    `architecture`, which is how this artefact differs from the cloud one.
 
     `path` is what a libvirt volume is created from. The volume's size is then
     the image's size and cannot be declared — the provider refuses `size`
@@ -219,14 +227,13 @@ class TalosNocloudImage(TalosArtefact, pulumi_type='kluster:physical:image:Talos
         name: str,
         *,
         talos_version: str,
-        architecture: str = HOMELAB_ARCHITECTURE,
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(
             name,
             talos_version=talos_version,
             extensions=HOMELAB_EXTENSIONS,
-            architecture=architecture,
+            architecture=HOMELAB_ARCHITECTURE,
             platform=HOMELAB_PLATFORM,
             opts=opts,
         )
