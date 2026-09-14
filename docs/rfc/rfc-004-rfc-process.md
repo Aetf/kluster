@@ -16,6 +16,11 @@
     the pull request carrying the document, with the design's own date in the
     Status line (§4.1); and the status word and the index row are written by
     the final push before the merge (§5.1).
+*   **Updated:** 2026-09-14 — §4.2 cites rfc-003 §7.4, the number its
+    "`diff` does not read the instance" subsection carried when this
+    document was accepted; rfc-003 has since inserted a §7 of its own, and
+    that subsection is its §8.4. The body keeps the number it was accepted
+    with ([framework/rfc.md](../framework/rfc.md) §5.3).
 *   **Authority:** AGENTS.md, [framework/dispatch.md](../framework/dispatch.md)
     and the style rules (`docs/style/`) are what this document obeys. Where
     they are silent, a rule proposed here is marked **new rule** — which is

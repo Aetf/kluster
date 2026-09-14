@@ -91,11 +91,12 @@ it.
 
 Two mechanisms hold that, because either alone is one accident from
 gone, and each has a test: no workflow points a `pulumi` command at this
-stack (a census over `.github/workflows/`, the same idiom the label and
-author censuses use), and the register row for this passphrase reaches
-no GitHub secret (a case over the slot map). A `preview` would be as bad
-as an `up`: reading this stack's config at all means holding the
-passphrase, and a workflow that held it would have it in an Environment.
+stack (a census over `.github/workflows/` and `.github/actions/`, the
+same idiom the label and author censuses use), and the register row for
+this passphrase reaches no GitHub secret (a case over the slot map). A
+`preview` would be as bad as an `up`: reading this stack's config at all
+means holding the passphrase, and a workflow that held it would have it
+in an Environment.
 
 **`PULUMI_CONFIG_PASSPHRASE` is process-global, so "a passphrase per
 stack" is a property of how a stack is invoked.** Every `credentials`

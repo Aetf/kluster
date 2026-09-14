@@ -1282,7 +1282,8 @@ at the registrar.
     `/etc/systemd/nspawn`. The boot chain re-establishes them
     autonomously (§1.1); verify ZT comes back (it carries the
     management path). Fallback if host-networking nspawn misbehaves
-    post-update: the unifios-utilities apt pattern (§5.3).
+    post-update: the unifios-utilities apt pattern (architecture.md
+    §5.3).
 -   **UDM replaced** — trigger: hardware failure/RMA. Restore from the
     UniFi autobackup (the pull-direction yadm timer), re-run the
     device-files provider for the services, re-authorize the *new* UDM
