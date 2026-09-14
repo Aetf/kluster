@@ -59,15 +59,16 @@ Role = Literal['controlplane', 'worker']
 #: unreserved node starves its own control plane before the kubelet notices.
 SYSTEM_RESERVED = {'cpu': '200m', 'memory': '512Mi', 'ephemeral-storage': '1Gi'}
 
-#: Ports that terminate in the host network namespace. Service ports are
-#: deliberately absent: LoadBalancer traffic is answered by Cilium's BPF
-#: datapath at tc ingress, ahead of nftables, so declared frontends serve
-#: without a firewall entry while undeclared ports fall through to
-#: default-deny (declarative/physical.md §2).
+#: Ports that terminate in the host network namespace: the two management
+#: APIs, which the balancer forwards from the same structure, and the two the
+#: cluster speaks to itself on. Service ports are deliberately absent:
+#: LoadBalancer traffic is answered by Cilium's BPF datapath at tc ingress,
+#: ahead of nftables, so declared frontends serve without a firewall entry
+#: while undeclared ports fall through to default-deny
+#: (declarative/physical.md §2).
 HOST_PORTS: tuple[int, ...] = (
-    50000,  # apid
+    *conventions.MANAGEMENT_PORTS,
     51820,  # KubeSpan
-    6443,  # kube-apiserver — a hostNetwork static pod
     10250,  # kubelet, intra-cluster
 )
 

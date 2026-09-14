@@ -61,9 +61,6 @@ from kluster.components.talos.image import TalosImage, TalosNocloudImage
 from kluster.lib import config as lib_config
 from kluster.lib.versions import NAMESPACE as VERSIONS, versions
 
-#: Talos' own API port, and the endpoint scheme the machine config expects.
-KUBE_API_PORT = 6443
-
 #: What the cloud provider is built from. The account's own identifiers — its
 #: region and its tenancy OCID — are facts and live in `conventions`; these
 #: three are the secrets, and they are read at the line that builds the
@@ -173,7 +170,11 @@ async def main() -> None:
     cluster = TalosCluster(
         conventions.CLUSTER_NAME,
         cluster_name=conventions.CLUSTER_NAME,
-        endpoint=load_balancer.address.apply(lambda address: f'https://{address}:{KUBE_API_PORT}'),
+        # The Kubernetes API at the balancer: the port is the one the balancer
+        # forwards and the nodes open, from the same structure as both.
+        endpoint=load_balancer.address.apply(
+            lambda address: f'https://{address}:{conventions.MANAGEMENT_PORTS.kubernetes}'
+        ),
         cert_sans=[load_balancer.address],
         control_plane_nodes=conventions.CLOUD_NODES,
         worker_nodes=(conventions.HOMELAB_NODE,),

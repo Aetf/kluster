@@ -14,7 +14,8 @@ import pytest
 import pytest_asyncio
 from mock_monitor import Recorder, decline_every_invoke, run_with
 
-from kluster.components.cloud.nodes import MANAGEMENT_PORTS, CloudNodes, NodeLoadBalancer
+from kluster import conventions
+from kluster.components.cloud.nodes import CloudNodes, NodeLoadBalancer
 
 COMPARTMENT_ID = 'ocid1.compartment.test'
 SUBNET_ID = 'ocid1.subnet.test'
@@ -179,14 +180,16 @@ async def test_a_vnic_lookup_the_engine_declines_leaves_the_vip_unknown_rather_t
 
 @pytest.mark.asyncio
 async def test_every_management_port_preserves_the_client_address(balancer: NodeLoadBalancer) -> None:
-    assert set(balancer.backend_sets) == set(MANAGEMENT_PORTS)
+    # The backend sets are the management ports and nothing else: the same
+    # structure the node firewall opens and the cluster endpoint names.
+    assert set(balancer.backend_sets) == set(conventions.MANAGEMENT_PORTS)
     for backend_set in balancer.backend_sets.values():
         assert await backend_set.is_preserve_source.future() is True
 
 
 @pytest.mark.asyncio
 async def test_every_node_backs_every_management_port(nodes: CloudNodes) -> None:
-    assert len(nodes.backends) == len(MANAGEMENT_PORTS) * 3
+    assert len(nodes.backends) == len(conventions.MANAGEMENT_PORTS) * 3
 
 
 @pytest.mark.asyncio
