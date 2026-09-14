@@ -205,6 +205,10 @@ def test_bootstrap_takes_the_seed_from_the_console(
     assert kit.get(SEED_ENTRY, attribute='UserName') == api.values[value]
 
 
+def _refuse_open(_path: Path) -> KdbxStore:
+    raise AssertionError('the run opened a successor it should have created')
+
+
 def test_rotation_is_the_same_console_visit_into_the_new_kit(
     api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -213,7 +217,8 @@ def test_rotation_is_the_same_console_visit_into_the_new_kit(
     current = _seed(api)
     monkeypatch.setattr('getpass.getpass', lambda _prompt='': current)
 
-    rotated = lifecycle.rotate(kit, lambda: memory_kit, prompt=_refuse, only='cloudflare')
+    successor = lifecycle.Successor(path=memory_kit.path, open=_refuse_open, create=lambda _path: memory_kit)
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, only='cloudflare')
 
     # §4.2: the successor goes into the new kit and the retired one keeps the
     # predecessor. Deleting the predecessor is the operator's own next click,

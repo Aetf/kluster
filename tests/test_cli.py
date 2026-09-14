@@ -241,7 +241,10 @@ class Dispatch:
             monkeypatch.setattr(KdbxStore, attribute, self.stub(f'store.{attribute}', result))
         # `kit rotate` creates the successor database, and `kit bootstrap`
         # creates the kit when there is none; neither should write a file here.
+        # Opening is recorded too, so that which of the two `rotate`'s
+        # destination reaches can be told apart.
         monkeypatch.setattr(KdbxStore, 'create', self.stub('store.create', kit))
+        monkeypatch.setattr(KdbxStore, 'from_env', self.stub('store.from_env', kit))
         monkeypatch.setattr('getpass.getpass', lambda _prompt='': PASSWORD)
         # `derived <row> recover` refuses to print a secret to a terminal,
         # and whether the test runner has one is not this test's business;
@@ -313,12 +316,30 @@ def test_rotate_carries_its_only_and_its_destination_through(dispatch: Dispatch,
 
     assert cli.main(['kit', 'rotate', '--into', str(successor), '--only', 'oci']) == 0
 
-    # The destination travels as a factory `rotate` calls once its own
-    # refusals are behind it, so the file is not made by the command itself.
+    # The destination travels as a path with the two ways of reaching it
+    # (`lifecycle.Successor`), which `rotate` chooses between once its own
+    # refusals are behind it, so the command itself neither makes nor opens
+    # the file.
     assert 'store.create' not in dispatch.reached
+    assert [args[0] for name, args, _ in dispatch.calls if name == 'store.from_env'] == [None]
     rotate_calls = [(args, kwargs) for name, args, kwargs in dispatch.calls if name == 'lifecycle.rotate']
     assert [kwargs['only'] for _, kwargs in rotate_calls] == ['oci']
-    _ = rotate_calls[0][0][1]()
+    assert rotate_calls[0][0][1].path == successor
+
+
+def test_rotate_hands_the_walk_an_opener_and_a_creator_for_its_destination(dispatch: Dispatch, tmp_path: Path) -> None:
+    # An existing `--into` is opened the way every other command opens the
+    # kit, and an absent one is created with a password asked for it; neither
+    # happens until the walk asks, and the walk is what decides which.
+    successor = tmp_path / 'next.kdbx'
+    assert cli.main(['kit', 'rotate', '--into', str(successor)]) == 0
+    destination = next(args[1] for name, args, _ in dispatch.calls if name == 'lifecycle.rotate')
+
+    _ = destination.open(successor)
+    _ = destination.create(successor)
+
+    # The one open before the walk's is the kit's own (`_kit`, by `--kdbx`).
+    assert [args[0] for name, args, _ in dispatch.calls if name == 'store.from_env'] == [None, successor]
     assert [args[0] for name, args, _ in dispatch.calls if name == 'store.create'] == [successor]
 
 

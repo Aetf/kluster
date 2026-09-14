@@ -12,6 +12,11 @@ Two properties are the point:
     in the kit, not the credential behind it at a platform. A checkpoint file
     would record "this ran", which stops being true the moment a row is
     deleted out of the kit -- and the run after that would skip the repair.
+    `bootstrap` probes the kit it fills. `rotate` probes the successor it
+    writes, and where a row is there it finishes that row's retirement rather
+    than minting again; the one thing it records is the successor's lineage
+    (`KdbxStore.mark_successor_of`), which says what the file is and not what
+    ran.
 -   **One password, and only for the kit.** The kit is unlocked once and
     passed down, so a bootstrap that pauses for two console visits does not
     ask again on the way back. The account roots a mint needs are not in a
@@ -24,6 +29,7 @@ from __future__ import annotations
 import getpass
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import b2, cloudflare, entries, escrow, masters, oci_iam, pulumi_config, workstation
@@ -74,12 +80,12 @@ def _read_console_token(seed: entries.Seed) -> str:
 
 
 def _left_behind(seed: entries.Seed, rotated: Sequence[str], into: KdbxStore) -> str:
-    """What stopping a rotation at `seed`'s row leaves in the two kits.
+    """What stopping a rotation at `seed`'s row leaves in the two kits, and how it goes on.
 
-    Said by the refusal that stops there, because nothing else says it: a
-    rotation is not resumed by re-running it (`rotate`), and the rows already
-    in the successor are the ones whose predecessors the retired kit can no
-    longer use.
+    Said by the refusal that stops there, because nothing else says it: the
+    rows already in the successor are the ones whose predecessors the retired
+    kit can no longer use, and the run that finishes the rest is the same
+    command with the same `--into` (`rotate`).
     """
     held = (
         f'holds {", ".join(rotated)}, whose predecessors in the retired kit no longer work'
@@ -91,7 +97,8 @@ def _left_behind(seed: entries.Seed, rotated: Sequence[str], into: KdbxStore) ->
     # is the dashboard's to say, and the console steps invite deleting it.
     return (
         f'the successor kit {into.path} {held}; it does not hold {seed.member}, whose row in the retired kit '
-        'this run did not touch, and no row after it was rotated'
+        'this run did not touch, and no row after it was rotated; re-run the same command with the same '
+        '`--into` to resume at this row'
     )
 
 
@@ -101,9 +108,8 @@ def _adopt_pasted_seed(seed: entries.Seed, *, into: KdbxStore, rotated: Sequence
     Every refusal `cloudflare.adopt_seed` raises -- the value is not a token,
     the wrong template, no zone visible, the wrong account -- is one the
     operator fixes on the dashboard page they are standing on, so asking
-    again costs one paste where stopping costs the run: the rows before this
-    one have rotated and their predecessors are gone (`rotate` says why no
-    re-run resumes that). The line between what is asked again and what is
+    again costs one paste where stopping costs a second run of `rotate` and a
+    second console visit. The line between what is asked again and what is
     raised is `CredentialRejected`'s own -- the API said no -- so the network,
     which no page fixes, is raised as it is. Nothing is stored by a refused
     paste; `adopt_seed` writes the row after its last check.
@@ -345,9 +351,16 @@ def prove_account(kit: KdbxStore, seed: entries.Seed) -> None:
     what a check happens to catch on the way (a B2 key that no longer
     authenticates, the network) is incidental, and what falls outside the
     definition lands at the row as it always did: a dead OCI key is met by the
-    OCI row's own listing, once the recovery row has re-wrapped. The recovery
-    key has no account, and a console-made row has no credential until the
-    walk reaches it, so neither has an account check.
+    OCI row's own listing, once the recovery row has re-wrapped -- its repair
+    is `credentials --kdbx <successor> seed oci create`, after which the same
+    `kit rotate --into` resumes past the row. The recovery key has no account,
+    and a console-made row has no credential until the walk reaches it, so
+    neither has an account check.
+
+    The row handed in is the live one (`live`): the successor's where it
+    already holds a complete row, the kit's otherwise. A resumed run's B2 row
+    is one the account no longer accepts once the first run retired it, and
+    the check authorizes as the row it is handed.
 
     A seed family that mints its own successor adds its account check here as
     well as to its own rotation -- here is what keeps the refusal ahead of
@@ -368,15 +381,102 @@ def prove_account(kit: KdbxStore, seed: entries.Seed) -> None:
             pass
 
 
+@dataclass(frozen=True)
+class Successor:
+    """Where a rotation writes: the file at `path`, opened when it exists and created when it does not.
+
+    Two callables rather than a store, because which of them runs is
+    `rotate`'s to decide and when is too: an existing file is opened before
+    the pre-flight, so that its rows are what the pre-flight checks, and a
+    new one is created after it, so that a refusal leaves no file behind.
+    """
+
+    path: Path
+    #: Unlocks an existing file.
+    open: Callable[[Path], KdbxStore]
+    #: Makes a new one. Called only once every refusal the pre-flight can
+    #: raise has passed, and not at all where the file exists.
+    create: Callable[[Path], KdbxStore]
+
+
+def holds(store: KdbxStore, seed: entries.Seed) -> bool:
+    """Whether `store` holds a complete row for `seed`: its own reader would succeed on it.
+
+    Each family that has a reader answers for itself (`escrow.holds_recovery`,
+    `oci_iam.holds_seed`, `b2.holds_seed`); a console-made row is complete
+    when both halves `put` writes are there. A row that fails this is treated
+    as absent and written over, which every writer does on its own.
+    """
+    match seed.member:
+        case entries.RECOVERY:
+            return escrow.holds_recovery(store, entry=seed.entry)
+        case entries.OCI:
+            return oci_iam.holds_seed(store, seed.entry)
+        case entries.B2:
+            return b2.holds_seed(store, seed.entry)
+        case _:
+            return (
+                store.has(seed.entry)
+                and bool(store.get(seed.entry, attribute='UserName'))
+                and bool(store.get(seed.entry))
+            )
+
+
+def live(kit: KdbxStore, into: KdbxStore | None, seed: entries.Seed) -> KdbxStore:
+    """The kit whose row for `seed` is the live credential: the successor where it holds one, else the kit.
+
+    Once a row has rotated its predecessor is retired at the platform, so a
+    resumed run that read the kit's row would be refused by the platform for
+    a key it no longer has (`prove_account`), or -- worse -- pass and mint a
+    second successor over the only private half of the first.
+    """
+    if into is not None and holds(into, seed):
+        return into
+    return kit
+
+
+def require_successor_of(kit: KdbxStore, into: KdbxStore) -> None:
+    """Refuse an existing `--into` that is not `kit`'s own successor (§4.2).
+
+    The successor's lineage marker names the predecessor it was written from,
+    and that is what is checked -- not the rows, which cannot tell an older
+    retired kit of this estate from a successor that died before its first
+    row, and not the path, which cannot see a copy. What fails here: the kit
+    itself or a copy of it (one database identity), a kit `bootstrap` wrote
+    (no marker), and a successor of some other kit -- an older retired kit
+    among them, whose recovery row the re-wrap would otherwise reuse as the
+    new one.
+    """
+    if into.uuid == kit.uuid:
+        raise KdbxError(
+            f'{into.path} is the kit being rotated, or a copy of it (the same database identity as '
+            f'{kit.path}); a rotation writes a new file, and resumes only into the one it was writing'
+        )
+    predecessor = into.predecessor_uuid()
+    if predecessor is None:
+        raise KdbxError(
+            f'{into.path} exists and carries no lineage marker, so it is not the successor of {kit.path}: '
+            f'if `credentials --kdbx {into.path} kit ls` shows no row it is a successor that died before its '
+            'marker was written, and is deleted by hand; if it shows rows it is some other kit, and a rotation '
+            'writes a new file'
+        )
+    if predecessor != kit.uuid:
+        raise KdbxError(
+            f'{into.path} is the successor of another kit ({predecessor}), not of {kit.path} ({kit.uuid}): a '
+            'retired kit of this estate, or a successor written from a different one; a rotation resumes only '
+            'into the successor it was writing'
+        )
+
+
 def rotate(
     kit: KdbxStore,
-    successor: Callable[[], KdbxStore],
+    successor: Successor,
     *,
     prompt: Prompt,
     only: str | None = None,
     registry: escrow.Registry | None = None,
 ) -> list[str]:
-    """Write a new kit in which every seed has been replaced.
+    """Write a new kit in which every seed has been replaced. Returns every member the walk completed.
 
     A *new* database file, per §4.2. The recovery key is the row that makes
     the retired file destroyable: rotating it re-wraps the escrow, so once the
@@ -390,29 +490,44 @@ def rotate(
     (`_adopt_pasted_seed`), because here the refusal would land after the
     rows before it have retired their predecessors.
 
-    **Every account refusal is raised before the walk starts** (`prove_account`,
-    which says what that is and is not), because this walk is the one that a
-    re-run does not resume. `bootstrap` skips what the kit already holds, so a
-    row that refused is retried with the rows before it left alone; here a row
-    that rotated has retired its predecessor at the platform, the successor
-    file a re-run would write already exists, and the retired kit's row no
-    longer authenticates. Ordering the walk would not do instead: each row's
-    own check sits directly above its own retirement, so whichever row went
-    first would still have retired before the next row's check ran.
+    **An interrupted run is resumed by running the same command again.** The
+    successor is opened where it exists and created where it does not
+    (`Successor`); an existing file is accepted only as this kit's own
+    successor (`require_successor_of`). Every arm then converges on a
+    successor that already holds its row: it mints nothing and asks for
+    nothing, and finishes the retirement it owes -- the recovery arm re-wraps
+    to the key the successor holds, opening every ciphertext with that key or
+    the retired one; the OCI and B2 arms authorize as the successor's key and
+    retire every other; the Cloudflare arm re-verifies the stored token
+    without a paste; a manual row is skipped. A completed rotation re-run is
+    therefore a no-op at every platform, and reports every row. The retired
+    kit is read and never written.
 
-    `successor` is a factory rather than a database for the same reason, one
-    step earlier: creating a KeePass file writes it, so a successor made
-    before the checks would be left on disk by a refusal, and the re-run the
-    refusal advises would be refused in turn for the file already existing.
-    It is called once every refusal this can raise up front has passed, and
-    not at all otherwise.
+    **Every account refusal is raised before the walk starts** (`prove_account`,
+    which says what that is and is not), against the live row of each seed
+    (`live`): a refusal there costs nothing -- no predecessor retired, no row
+    written, no successor file made, no console visit asked for, no second
+    run. Ordering the walk would not do instead: each row's own check sits
+    directly above its own retirement, so whichever row went first would
+    still have retired before the next row's check ran. The successor is
+    created after those checks for the same reason, one step earlier:
+    creating a KeePass file writes it, and a file a refusal left behind would
+    be an empty successor to open on the re-run. Its lineage marker is
+    written at creation, before any row, so that the re-run finds it.
     """
     require_member(only)
     walk = [(member, seed) for member, seed in entries.SEEDS.items() if only is None or member == only]
+    into: KdbxStore | None = None
+    if successor.path.exists():
+        into = successor.open(successor.path)
+        require_successor_of(kit, into)
+        log.info('resuming into %s: a row it already holds is finished, not rotated again', successor.path)
     log.info('holding every seed to be rotated against the account `conventions` records, before any row rotates')
     for _, seed in walk:
-        prove_account(kit, seed)
-    into = successor()
+        prove_account(live(kit, into, seed), seed)
+    if into is None:
+        into = successor.create(successor.path)
+        into.mark_successor_of(kit.uuid)
     rotated: list[str] = []
     for member, seed in walk:
         match member:
@@ -422,21 +537,33 @@ def rotate(
                 # value, which is why the two rotations are separable.
                 escrow.rotate_recovery(kit, into, registry or escrow.Registry.open(), entry=seed.entry)
             case entries.OCI:
-                # Reads the predecessor from the retired kit, writes the
-                # successor into the new one, and leaves the retired file
-                # untouched.
+                # Reads the live row -- the successor's where it holds one,
+                # the retired kit's otherwise -- writes the successor into the
+                # new kit, and leaves the retired file untouched.
                 _ = oci_iam.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case entries.CLOUDFLARE:
                 # The platform allows no minted successor, so rotating is the
                 # same console visit bring-up made, written into the new kit
                 # -- and a paste the dashboard made wrong is asked for again
                 # rather than ending a run that has already retired the rows
-                # before it.
-                _ = _adopt_pasted_seed(seed, into=into, rotated=rotated)
+                # before it. A token the successor already holds is verified
+                # again rather than asked for: the same checks a paste gets,
+                # and the same row written back. Nothing at the platform is
+                # retired by this program either way.
+                if holds(into, seed):
+                    log.info('%s: the successor kit already holds a token; verifying it', seed.title)
+                    _ = cloudflare.adopt_seed(token=into.get(seed.entry), seeds=into, seed_entry=seed.entry)
+                else:
+                    _ = _adopt_pasted_seed(seed, into=into, rotated=rotated)
             case entries.B2:
                 _ = b2.rotate_seed(kit, seed_entry=seed.entry, into=into)
             case _ if seed.manual:
-                _record_console_seed(seed, prompt, into=into, entry=seed.entry)
+                # No verifier to run: a row the successor holds is what the
+                # operator pasted, and asking again would replace it.
+                if holds(into, seed):
+                    log.info('%s: already in the successor kit', seed.title)
+                else:
+                    _record_console_seed(seed, prompt, into=into, entry=seed.entry)
             case _:
                 raise KdbxError(f'rotating {member} is in the register (§2) but not yet implemented')
         rotated.append(member)

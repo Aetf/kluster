@@ -200,7 +200,9 @@ _ORDER = """when to run what:
     credentials kit rotate --into <new kit>
          Writes a *new* database, and re-wraps every escrow ciphertext to
          the successor recovery key. No production secret changes value, so
-         the retired file is destroyable once the run is verified.
+         the retired file is destroyable once the run is verified. An
+         interrupted run is resumed by running it again with the same
+         --into: the rows the successor holds are finished, not minted twice.
 
   looking without changing
     credentials derived check     every expected escrow row present, every
@@ -463,11 +465,10 @@ def build_parser() -> argparse.ArgumentParser:
             _ = seed_verbs.add_parser(seed.repair.verb, help=seed.repair.summary, description=seed.repair.detail)
 
     # The offline store itself, and the things done to the whole of it. Both
-    # walks take the seed table in order. `bootstrap` skips what is already
-    # there, so an interrupted run is resumed by re-running it rather than by
-    # remembering where it stopped; `rotate` writes a new file that a re-run
-    # cannot resume, so it raises every refusal it can before its first row
-    # (`lifecycle.rotate`).
+    # walks take the seed table in order, and both are resumed by re-running
+    # them rather than by remembering where they stopped: `bootstrap` skips
+    # what the kit already holds, and `rotate` opens the successor it was
+    # writing and finishes each row already in it (`lifecycle.rotate`).
     kit_subject = subjects.add_parser(
         'kit',
         help='the offline store, and what is done to the whole of it',
@@ -514,12 +515,21 @@ def build_parser() -> argparse.ArgumentParser:
             'console steps exactly as at bootstrap. Rotating the recovery key re-encrypts every escrowed '
             'ciphertext to the successor, so no production secret changes value and nothing has to be '
             're-deployed -- but the retired database opens the escrow no longer, which is what makes it '
-            'destroyable once this run has been verified.'
+            'destroyable once this run has been verified. A run that stopped part way is resumed by running '
+            'the same command again: the successor it was writing is opened rather than created, each row '
+            'already in it is finished (its predecessor retired, nothing minted or pasted twice), and the rest '
+            'are rotated as before.'
         ),
     )
     rot.set_defaults(action='rotate')
     _ = rot.add_argument(
-        '--into', type=Path, required=True, help='where to write the successor kit; must not exist yet'
+        '--into',
+        type=Path,
+        required=True,
+        help=(
+            "the successor kit: created when absent; an existing file must be this kit's own successor, "
+            'which is how an interrupted rotation is resumed -- re-run the same command'
+        ),
     )
     _ = rot.add_argument('--only', default=None, metavar='<member>', help='rotate just this seed into the successor')
 
@@ -529,9 +539,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             'Open every ciphertext under escrow/ with the recovery key this kit holds, and write each back '
             'encrypted to whatever escrow/RECIPIENTS already names. No plaintext changes, so no consumer is '
-            'touched. `kit rotate` does this for itself; running it alone finishes a rotation that died part '
-            'way through, or takes in a ciphertext written while the file already named the successor. A run '
-            'that would leave the registry with nothing in hand able to open it is refused.'
+            "touched. Its job is a recipients file edited by hand -- a custodian's recipient added beside "
+            'the one in hand -- while every ciphertext is still under the key this kit holds. It opens with '
+            'that one key, so it does not finish a rotation that stopped part way through: that is `kit '
+            'rotate --into` the same file, run again. A run that would leave the registry with nothing in '
+            'hand able to open it is refused.'
         ),
     )
     rewrap.set_defaults(action='rewrap')
@@ -1213,18 +1225,26 @@ def main(argv: list[str] | None = None) -> int:
                     for label in escrow.missing(registry):
                         log.warning('nothing escrowed for %s yet: %s', label, escrow.fill_command(label))
             case ('kit', 'rotate', _):
-                # The successor is made by `rotate`, once every refusal it can
-                # raise up front has passed: a `--only` that names no row, or a
-                # seed in an account `conventions` does not record, would
-                # otherwise leave a new database file behind with nothing
-                # rotated into it, and a re-run refusing that file as already
-                # existing. The member check is `rotate`'s own first step and
+                # The successor is opened or made by `rotate`: opened before
+                # its pre-flight where the file exists, so that the rows it
+                # holds are what is checked, and made after it where not, so
+                # that a `--only` naming no row, or a seed in an account
+                # `conventions` does not record, leaves no empty database
+                # behind. Opening takes the path the same way every other
+                # command opens the kit; creating asks for the new file's
+                # password. The member check is `rotate`'s own first step and
                 # is made here as well, so that the command's refusal of a
                 # typo does not depend on the walk's.
                 lifecycle.require_member(args.only)
                 rotated = lifecycle.rotate(
                     store,
-                    lambda: KdbxStore.create(args.into, getpass.getpass(f'master password for {args.into.name}: ')),
+                    lifecycle.Successor(
+                        path=args.into,
+                        open=KdbxStore.from_env,
+                        create=lambda path: KdbxStore.create(
+                            path, getpass.getpass(f'master password for {path.name}: ')
+                        ),
+                    ),
                     prompt=input,
                     only=args.only,
                     registry=registry,

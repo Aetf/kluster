@@ -2,9 +2,10 @@
 
 The properties worth holding are the ones that only show up on the second
 run or on the day something is lost: that an interrupted bootstrap resumes
-instead of duplicating, that a rotation leaves the retired kit exactly as it
-was, and that a credential no API can create stops the run with instructions
-rather than being invented.
+instead of duplicating, that an interrupted rotation resumes into the
+successor it was writing and mints nothing twice, that a rotation leaves the
+retired kit exactly as it was, and that a credential no API can create stops
+the run with instructions rather than being invented.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import requests
@@ -89,6 +91,18 @@ def kit(tmp_path: Path) -> KdbxStore:
 @pytest.fixture
 def registry(tmp_path: Path) -> escrow.Registry:
     return escrow.Registry.open(tmp_path / 'escrow')
+
+
+def _unlocked(path: Path) -> KdbxStore:
+    """An existing database, opened the way the command opens one."""
+    store = KdbxStore(path=path)
+    store.unlock_with(PASSWORD)
+    return store
+
+
+def _successor(path: Path) -> lifecycle.Successor:
+    """Where a rotation under test writes: opened when the file exists, created when it does not."""
+    return lifecycle.Successor(path=path, open=_unlocked, create=lambda path: KdbxStore.create(path, PASSWORD))
 
 
 @needs_age
@@ -168,15 +182,17 @@ def test_an_unknown_member_is_refused(kit: KdbxStore) -> None:
         _ = lifecycle.bootstrap(kit, prompt=_refuse, only='nonesuch')
 
 
-def _never() -> KdbxStore:
-    raise AssertionError('the run made its successor kit when it should have refused first')
+def _never(_path: Path) -> KdbxStore:
+    raise AssertionError('the run touched its successor kit when it should have refused first')
 
 
-def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxStore) -> None:
+def test_an_unknown_member_is_refused_before_the_successor_is_written(kit: KdbxStore, tmp_path: Path) -> None:
     # A rotation that matches no row would otherwise report an empty list as a
     # finished run, leaving a successor kit with nothing in it.
+    untouched = lifecycle.Successor(path=tmp_path / 'successor.kdbx', open=_never, create=_never)
+
     with pytest.raises(KdbxError, match='no seed named'):
-        _ = lifecycle.rotate(kit, _never, prompt=_refuse, only='nonesuch')
+        _ = lifecycle.rotate(kit, untouched, prompt=_refuse, only='nonesuch')
 
 
 @needs_age
@@ -187,9 +203,11 @@ def test_rotating_the_recovery_key_re_wraps_rather_than_re_generating(
     passphrase = escrow.generate(registry, escrow.PASSPHRASE)
     retired = kit.get(escrow.RECOVERY_ENTRY)
 
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
-    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, only='recovery', registry=registry)
+    rotated = lifecycle.rotate(
+        kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, only='recovery', registry=registry
+    )
 
+    successor = _unlocked(tmp_path / 'successor.kdbx')
     assert rotated == ['recovery']
     assert successor.get(escrow.RECOVERY_ENTRY) != retired
     # The plaintext is untouched, which is what makes this rotation free of
@@ -273,10 +291,10 @@ def test_the_whole_kit_rotates_row_by_row_into_the_successor(
     kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     whole = whole_kit(kit, registry, monkeypatch)
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
 
-    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+    rotated = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
+    successor = _unlocked(tmp_path / 'successor.kdbx')
     # Every row of the register, in its order, and each row's successor is the
     # one credential its platform is left with -- the account checks up front
     # pass a correct kit through, and the console row was asked for once.
@@ -297,12 +315,10 @@ def test_a_refusal_knowable_in_advance_rotates_nothing(
 
     OCI rotates ahead of B2 in the walk and retires its predecessor the moment
     its successor is stored, so a refusal raised where B2's own rotation raises
-    it would land with OCI's old-kit key already gone -- a state no re-run
-    resumes from, because the successor file exists and the retired kit's OCI
-    row no longer authenticates. Every account check therefore runs before any
-    row rotates, and the property is that such a refusal costs nothing: no key
-    retired, no row written, no successor file made, no console visit asked
-    for.
+    it would land with OCI's old-kit key already gone and a second run owed.
+    Every account check therefore runs before any row rotates, and the
+    property is that such a refusal costs nothing: no key retired, no row
+    written, no successor file made, no console visit asked for.
     """
     whole = whole_kit(kit, registry, monkeypatch)
     # The one thing wrong with the kit: its B2 seed belongs to an account that
@@ -313,7 +329,7 @@ def test_a_refusal_knowable_in_advance_rotates_nothing(
     successor = tmp_path / 'successor.kdbx'
 
     with pytest.raises(CredentialRejected, match=f'{B2_ACCOUNT}.*some-other-account'):
-        _ = lifecycle.rotate(kit, lambda: KdbxStore.create(successor, PASSWORD), prompt=_refuse, registry=registry)
+        _ = lifecycle.rotate(kit, _successor(successor), prompt=_refuse, registry=registry)
 
     # The OCI row is un-rotated: its old key is the one key on the user, and
     # the kit's row still holds it. Nothing else moved either.
@@ -341,17 +357,18 @@ def test_a_refused_paste_at_the_console_row_is_asked_again(
 
     The token does not exist before the walk reaches its row, so no pre-flight
     can see it, and by then the recovery and OCI rows have retired their
-    predecessors -- a refusal there would strand a run nothing resumes. The
-    operator is on the page that fixes it, so the walk says why and asks
-    again; the row is written once, with the token that was accepted.
+    predecessors -- a refusal there would cost a second run and a second
+    console visit. The operator is on the page that fixes it, so the walk
+    says why and asks again; the row is written once, with the token that was
+    accepted.
     """
     whole = whole_kit(kit, registry, monkeypatch)
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
     accepted = console_seed(whole.dashboard)
     monkeypatch.setattr('getpass.getpass', _answers(_wrong_template(whole.dashboard), accepted))
 
-    rotated = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+    rotated = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
+    successor = _unlocked(tmp_path / 'successor.kdbx')
     assert rotated == list(entries.SEEDS)
     assert successor.get(entries.SEEDS['cloudflare'].entry) == accepted
     assert successor.get(entries.SEEDS['cloudflare'].entry, attribute='UserName') == whole.dashboard.values[accepted]
@@ -379,7 +396,6 @@ def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
     hint says the paste goes here.
     """
     whole = whole_kit(kit, registry, monkeypatch)
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
     blind, accepted = console_seed(whole.dashboard), console_seed(whole.dashboard)
     pastes = _answers(blind, accepted)
 
@@ -392,9 +408,9 @@ def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
     whole.dashboard.seed_sees_zones = True
     monkeypatch.setattr('getpass.getpass', paste)
 
-    _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+    _ = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
-    assert successor.get(entries.SEEDS['cloudflare'].entry) == accepted
+    assert _unlocked(tmp_path / 'successor.kdbx').get(entries.SEEDS['cloudflare'].entry) == accepted
     messages = [record.message for record in caplog.records]
     refused = next(i for i, message in enumerate(messages) if 'refused, and nothing was stored' in message)
     refusal, hint = messages[refused], messages[refused + 1]
@@ -405,14 +421,8 @@ def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
         assert '`credentials ' not in line, line
 
 
-@needs_age
-def test_a_transport_failure_at_the_console_row_is_raised_not_asked_again(
-    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The re-ask boundary is `CredentialRejected` and nothing wider: no dashboard page fixes the network."""
-    whole = whole_kit(kit, registry, monkeypatch)
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
-    monkeypatch.setattr('getpass.getpass', _answers(console_seed(whole.dashboard)))
+def _dashboard_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The network dies for the Cloudflare API and no other platform."""
     routed = requests.get
 
     def unreachable(url: str, **request: Any) -> requests.Response:
@@ -422,10 +432,20 @@ def test_a_transport_failure_at_the_console_row_is_raised_not_asked_again(
 
     monkeypatch.setattr(requests, 'get', unreachable)
 
-    with pytest.raises(requests.ConnectionError):
-        _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
 
-    assert not successor.has(entries.SEEDS['cloudflare'].entry)
+@needs_age
+def test_a_transport_failure_at_the_console_row_is_raised_not_asked_again(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The re-ask boundary is `CredentialRejected` and nothing wider: no dashboard page fixes the network."""
+    whole = whole_kit(kit, registry, monkeypatch)
+    monkeypatch.setattr('getpass.getpass', _answers(console_seed(whole.dashboard)))
+    _dashboard_unreachable(monkeypatch)
+
+    with pytest.raises(requests.ConnectionError):
+        _ = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
+
+    assert not _unlocked(tmp_path / 'successor.kdbx').has(entries.SEEDS['cloudflare'].entry)
 
 
 @needs_age
@@ -441,24 +461,26 @@ def test_stopping_at_the_paste_says_what_each_kit_holds(
 
     An empty paste is not: it is asked again, like a refused one. The rows
     before the console one have rotated and are in the successor; the console
-    row itself and every row after it are not. That is the state a re-run
-    does not resume from, so the message is the only thing that tells the
-    operator -- and it arrives as the error the command prints, not as a
-    traceback.
+    row itself and every row after it are not, and the same command with the
+    same `--into` picks up at this row. The message is the only thing that
+    tells the operator all of that -- and it arrives as the error the command
+    prints, not as a traceback.
     """
     whole = whole_kit(kit, registry, monkeypatch)
-    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
     monkeypatch.setattr('getpass.getpass', _pastes(_wrong_template(whole.dashboard), '', stop))
 
     with pytest.raises(KdbxError, match=r'holds recovery, oci.*does not hold cloudflare.*no row after it') as caught:
-        _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+        _ = lifecycle.rotate(kit, _successor(tmp_path / 'successor.kdbx'), prompt=_refuse, registry=registry)
 
+    successor = _unlocked(tmp_path / 'successor.kdbx')
     assert isinstance(caught.value.__cause__, stop)
-    # The two consequences §4.2 promises the message says, held word for
-    # word: what the retired kit can no longer do, and what was not done.
+    # The consequences §4.2 promises the message says, held word for word:
+    # what the retired kit can no longer do, what was not done, and how the
+    # run goes on.
     assert 'holds recovery, oci, whose predecessors in the retired kit no longer work' in str(caught.value)
     assert 'does not hold cloudflare, whose row in the retired kit this run did not touch' in str(caught.value)
     assert 'no row after it was rotated' in str(caught.value)
+    assert 're-run the same command with the same `--into` to resume' in str(caught.value)
     # Before the row: rotated, with the OCI user's one key the successor's.
     assert successor.has(entries.SEEDS['recovery'].entry)
     assert whole.tenancy.identity.keys[whole.user_id] == [
@@ -468,6 +490,280 @@ def test_stopping_at_the_paste_says_what_each_kit_holds(
     assert not successor.has(entries.SEEDS['cloudflare'].entry)
     assert not successor.has(entries.SEEDS['b2'].entry)
     assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
+
+
+class Interrupted(Exception):
+    """The run died here: a crash, not a refusal, so nothing catches it."""
+
+
+def _rows(store: KdbxStore) -> dict[str, tuple[str, str]]:
+    """Every seed row the store holds, by entry: its identifier and its secret (the OCI row's is its key file)."""
+    rows: dict[str, tuple[str, str]] = {}
+    for seed in entries.SEEDS.values():
+        if not store.has(seed.entry):
+            continue
+        if seed.member == entries.OCI:
+            secret = store.attachment(seed.entry, entries.OCI_KEY_ATTACHMENT).decode()
+        else:
+            secret = store.get(seed.entry)
+        rows[seed.entry] = (store.get(seed.entry, attribute='UserName'), secret)
+    return rows
+
+
+def _oci_key(store: KdbxStore) -> str:
+    return oci_iam.fingerprint(oci_iam.load_seed(store, entries.SEEDS['oci'].entry).private_key)
+
+
+def _interrupt_mid_rewrap(patch: pytest.MonkeyPatch, _successor: Path) -> None:
+    """Dies after the re-wrap has written one ciphertext and before the next.
+
+    One file is under the successor key and the other under the retired one,
+    `escrow/RECIPIENTS` still names the retired key, and the successor holds
+    the only copy of the key the first file opens with.
+    """
+    encrypted = age.encrypt
+    written: list[str] = []
+
+    def one_then_die(plaintext: str, recipients: list[str]) -> str:
+        if written:
+            raise Interrupted('the second ciphertext was never written')
+        written.append(plaintext)
+        return encrypted(plaintext, recipients)
+
+    patch.setattr(age, 'encrypt', one_then_die)
+
+
+def _interrupt_after_oci_store(patch: pytest.MonkeyPatch, successor: Path) -> None:
+    """Dies once the successor's OCI row is stored and before the run signs as it to sweep.
+
+    The user holds the predecessor and the successor both, and the successor
+    kit holds the only private half of the second. The first session opened
+    after the row is stored is the sweep's, whatever the run authorized as
+    before that.
+    """
+    authorized = oci_iam.Iam.authorize
+
+    def until_stored(*args: Any, **kwargs: Any) -> oci_iam.Iam:
+        if oci_iam.holds_seed(_unlocked(successor), entries.SEEDS['oci'].entry):
+            raise Interrupted('died before the sweep as the successor')
+        return authorized(*args, **kwargs)
+
+    patch.setattr(oci_iam.Iam, 'authorize', until_stored)
+
+
+def _interrupt_after_b2_put(patch: pytest.MonkeyPatch, _successor: Path) -> None:
+    """Dies once the successor's B2 row is stored and before the predecessor is deleted."""
+
+    def die(*_args: Any, **_kwargs: Any) -> None:
+        raise Interrupted('died before retiring the predecessor')
+
+    patch.setattr(b2, 'retire_others', die)
+
+
+@dataclass(frozen=True)
+class Interruption:
+    """Where a first run dies, and which rows the successor holds when it has."""
+
+    arrange: Callable[[pytest.MonkeyPatch, Path], None]
+    held: tuple[str, ...]
+
+
+INTERRUPTIONS: dict[str, Interruption] = {
+    'mid-rewrap': Interruption(_interrupt_mid_rewrap, ('recovery',)),
+    'after-oci-store': Interruption(_interrupt_after_oci_store, ('recovery', 'oci')),
+    'at-cloudflare': Interruption(lambda patch, _successor: _dashboard_unreachable(patch), ('recovery', 'oci')),
+    'after-b2-put': Interruption(_interrupt_after_b2_put, ('recovery', 'oci', 'cloudflare', 'b2')),
+}
+
+
+@needs_age
+@pytest.mark.parametrize('interruption', list(INTERRUPTIONS), ids=list(INTERRUPTIONS))
+def test_a_rotation_interrupted_at_any_row_resumes_into_the_same_successor(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    """Re-running the same command with the same `--into` ends where a clean run ends.
+
+    Whatever row the first run died at, the second opens the successor it was
+    writing, finishes every row already in it -- the key it stored is the one
+    the platform is left with, and nothing is minted or pasted a second time
+    -- and rotates the rest. The retired kit is read and never written.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    _ = escrow.generate(registry, escrow.CA)
+    retired = kit.path.read_bytes()
+    successor = _successor(tmp_path / 'successor.kdbx')
+
+    with pytest.MonkeyPatch.context() as first_run, pytest.raises((Interrupted, requests.ConnectionError)):
+        INTERRUPTIONS[interruption].arrange(first_run, successor.path)
+        _ = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+    died_at = _unlocked(successor.path)
+    stored = _rows(died_at)
+    assert set(stored) == {entries.SEEDS[member].entry for member in INTERRUPTIONS[interruption].held}
+    stored_oci = _oci_key(died_at) if entries.SEEDS['oci'].entry in stored else None
+    visits_before = len(whole.console_visits)
+
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+
+    resumed = _unlocked(successor.path)
+    assert rotated == list(entries.SEEDS)
+    # Every row the first run stored is the row the successor ends with.
+    assert {entry: row for entry, row in _rows(resumed).items() if entry in stored} == stored
+    # And each platform is left with exactly the successor's key.
+    assert whole.tenancy.identity.keys[whole.user_id] == [_oci_key(resumed)]
+    assert stored_oci is None or _oci_key(resumed) == stored_oci
+    assert escrow.Vault.open(resumed, registry).recover(escrow.PASSPHRASE) == passphrase
+    assert registry.recipients() == [age.recipient(resumed.get(escrow.RECOVERY_ENTRY))]
+    assert whole.b2_api.named(b2.SEED.name) == [resumed.get(entries.SEEDS['b2'].entry, attribute='UserName')]
+    # The console is visited by the second run only where the first run never
+    # stored the token -- once, whether or not it had asked before dying.
+    asked_again = entries.SEEDS['cloudflare'].entry not in stored
+    assert len(whole.console_visits) == visits_before + (1 if asked_again else 0)
+    assert kit.path.read_bytes() == retired
+
+
+@needs_age
+def test_a_completed_rotation_re_run_is_a_no_op_at_every_platform(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    whole = whole_kit(kit, registry, monkeypatch)
+    passphrase = escrow.generate(registry, escrow.PASSPHRASE)
+    successor = _successor(tmp_path / 'successor.kdbx')
+    _ = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+    done = _unlocked(successor.path)
+    rows, oci_key, b2_calls = _rows(done), _oci_key(done), len(whole.b2_api.calls)
+
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+
+    again = _unlocked(successor.path)
+    assert rotated == list(entries.SEEDS)
+    assert _rows(again) == rows
+    assert whole.tenancy.identity.keys[whole.user_id] == [oci_key]
+    assert whole.b2_api.named(b2.SEED.name) == [rows[entries.SEEDS['b2'].entry][0]]
+    assert 'b2_create_key' not in whole.b2_api.calls[b2_calls:]
+    assert escrow.Vault.open(again, registry).recover(escrow.PASSPHRASE) == passphrase
+    assert len(whole.console_visits) == 1
+
+
+@needs_age
+def test_the_pre_flight_reads_a_rotated_row_from_the_successor(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row already rotated into the successor is checked as the successor holds it.
+
+    B2's account is knowable only by authorizing as the seed, and once the
+    row has rotated the retired kit's key is one the account refuses: a
+    pre-flight reading it there would refuse a sound resume before the walk.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = _successor(tmp_path / 'successor.kdbx')
+    _ = lifecycle.rotate(kit, successor, prompt=_refuse, only='b2', registry=registry)
+    b2_key = _unlocked(successor.path).get(entries.SEEDS['b2'].entry, attribute='UserName')
+
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+
+    assert rotated == list(entries.SEEDS)
+    assert whole.b2_api.named(b2.SEED.name) == [b2_key]
+    assert _unlocked(successor.path).get(entries.SEEDS['b2'].entry, attribute='UserName') == b2_key
+
+
+def _not_this_kits_successor(which: str, kit: KdbxStore, tmp_path: Path) -> Path:
+    """An existing file that is not the successor `kit` was writing."""
+    path = tmp_path / f'{which}.kdbx'
+    match which:
+        case 'the-kit-itself':
+            return kit.path
+        case 'a-copy':
+            _ = shutil.copy(kit.path, path)
+        case 'a-bootstrapped-kit':
+            _ = lifecycle.bootstrap(
+                KdbxStore.create(path, PASSWORD),
+                prompt=_refuse,
+                only='recovery',
+                registry=escrow.Registry.open(tmp_path / 'another-escrow'),
+            )
+        case 'another-kits-successor':
+            KdbxStore.create(path, PASSWORD).mark_successor_of(str(uuid4()))
+        case _:  # pragma: no cover - the parametrization names each case
+            raise AssertionError(which)
+    return path
+
+
+@needs_age
+@pytest.mark.parametrize('which', ['the-kit-itself', 'a-copy', 'a-bootstrapped-kit', 'another-kits-successor'])
+def test_an_existing_into_that_is_not_this_kits_successor_is_refused_before_anything(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, which: str
+) -> None:
+    """The successor file names its predecessor, and `--into` is refused where it names another (§4.2).
+
+    The kit itself and a copy of it share one database identity; a kit
+    `bootstrap` wrote carries no marker; a retired kit of this estate, or a
+    successor written from some other kit, carries a marker naming a kit that
+    is not this one. Each is refused by name, before any key is retired or
+    any console visit asked for, and the file is left byte for byte.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    path = _not_this_kits_successor(which, kit, tmp_path)
+    before = path.read_bytes()
+
+    with pytest.raises(KdbxError, match=re.escape(str(path))) as refused:
+        _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
+
+    assert 'resumes only into the' in str(refused.value) or 'is not the successor of' in str(refused.value)
+    assert path.read_bytes() == before
+    assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
+    assert whole.b2_api.named(b2.SEED.name) == [whole.b2_key]
+    assert whole.console_visits == []
+    assert _rows(kit) == _rows(_unlocked(kit.path))
+
+
+@needs_age
+def test_a_successor_that_died_before_its_first_row_is_resumed_from_that_row(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The marker is written at creation and before any row, so a successor
+    # that exists and is empty is this kit's and the re-run starts at the top.
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = _successor(tmp_path / 'successor.kdbx')
+
+    def die(*_args: Any, **_kwargs: Any) -> None:
+        raise Interrupted('died before the first row')
+
+    with pytest.MonkeyPatch.context() as first_run, pytest.raises(Interrupted):
+        first_run.setattr(escrow, 'rotate_recovery', die)
+        _ = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+    assert _unlocked(successor.path).entries() == []
+
+    rotated = lifecycle.rotate(kit, successor, prompt=_refuse, registry=registry)
+
+    resumed = _unlocked(successor.path)
+    assert rotated == list(entries.SEEDS)
+    assert whole.tenancy.identity.keys[whole.user_id] == [_oci_key(resumed)]
+    assert whole.b2_api.named(b2.SEED.name) == [resumed.get(entries.SEEDS['b2'].entry, attribute='UserName')]
+    assert len(whole.console_visits) == 1
+
+
+@needs_age
+def test_a_successor_whose_marker_was_never_written_is_refused_naming_kit_ls(
+    kit: KdbxStore, registry: escrow.Registry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An existing file with no marker: the refusal says how to tell a
+    # successor that died before its marker (empty; deleted by hand) from a
+    # kit that is simply not this one's successor (rows).
+    whole = whole_kit(kit, registry, monkeypatch)
+    path = tmp_path / 'successor.kdbx'
+    _ = KdbxStore.create(path, PASSWORD)
+
+    with pytest.raises(KdbxError, match='no lineage marker') as refused:
+        _ = lifecycle.rotate(kit, _successor(path), prompt=_refuse, registry=registry)
+
+    assert f'--kdbx {path} kit ls' in str(refused.value)
+    assert whole.tenancy.identity.keys[whole.user_id] == [whole.oci_key]
+    assert whole.console_visits == []
 
 
 def test_a_self_reproducing_family_with_no_account_check_is_refused_before_the_walk(kit: KdbxStore) -> None:
