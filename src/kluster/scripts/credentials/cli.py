@@ -166,9 +166,18 @@ _ORDER = """when to run what:
 
   when one seed is lost
     credentials kit bootstrap --only <member>
-         Re-creates that row alone; the rest of the kit is untouched. Not
-         the recovery key: every ciphertext under escrow/ opens with that
-         one and nothing else, so losing it is losing them.
+         The row is gone from the kit. Creates it alone; the rest of the
+         kit is untouched. A row the kit still holds is skipped, whatever
+         has become of the credential behind it -- the walk probes the
+         kit, not the platform. Not the recovery key: every ciphertext
+         under escrow/ opens with that one and nothing else, so losing it
+         is losing them.
+    credentials seed <member> create
+         The row is still in the kit, but the credential behind it is
+         dead at its platform -- a key deleted in a console, say. Mints
+         or records a fresh one and overwrites the row without probing.
+         Not the recovery key either: it refuses to be overwritten, and
+         replacing it deliberately is `kit rotate`.
 
   one-time repair
     credentials seed oci domain
@@ -478,7 +487,10 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             'Create every seed the kit does not hold yet, and the kit itself if there is none. A row a platform '
             'can mint is minted; the rest stop and print the console steps that create them, so an interrupted '
-            'run is resumed by running this again. Creating the recovery row also writes the public half of the '
+            'run is resumed by running this again. The probe is of the kit alone: a row the kit holds is skipped '
+            'whatever has become of the credential behind it at its platform, and replacing that one is '
+            '`seed <member> create` -- for every row but the recovery key, which `seed recovery create` '
+            'refuses and `kit rotate` replaces. Creating the recovery row also writes the public half of the '
             'recovery key to escrow/RECIPIENTS, which is a file to commit.'
         ),
     )
@@ -487,7 +499,7 @@ def build_parser() -> argparse.ArgumentParser:
         '--only',
         default=None,
         metavar='<member>',
-        help='create just this seed; `--only recovery` is how a kit that predates the escrow gets its key',
+        help='create just this seed, if the kit does not hold it; `--only recovery` is how a kit that predates the escrow gets its key',
     )
 
     rot = kit_verbs.add_parser(
