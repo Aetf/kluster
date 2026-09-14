@@ -14,8 +14,9 @@ pytest puts each of those directories on `sys.path`, so which `conftest` an
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
-from kluster.scripts.credentials.kdbx import KdbxError, KdbxStore
+from kluster.scripts.credentials.kdbx import LINEAGE_PREFIX, KdbxError, KdbxStore
 
 
 class MemoryKit(KdbxStore):
@@ -32,6 +33,20 @@ class MemoryKit(KdbxStore):
         super().__init__(path=Path('memory.kdbx'))
         self.rows: dict[str, dict[str, str]] = {}
         self.files: dict[str, dict[str, bytes]] = {}
+        self.identity: str = str(uuid4())
+        self.description: str | None = None
+
+    @property
+    def uuid(self) -> str:
+        return self.identity
+
+    def mark_successor_of(self, predecessor_uuid: str) -> None:
+        self.description = f'{LINEAGE_PREFIX}{predecessor_uuid}'
+
+    def predecessor_uuid(self) -> str | None:
+        if self.description is None or not self.description.startswith(LINEAGE_PREFIX):
+            return None
+        return self.description.removeprefix(LINEAGE_PREFIX)
 
     def _row(self, entry: str) -> dict[str, str]:
         if entry not in self.rows:
