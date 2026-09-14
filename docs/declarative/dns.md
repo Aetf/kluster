@@ -87,6 +87,118 @@ The zones as classified: unlimited-code.works, unlimitedcodeworks.xyz,
 peifeng.phd, ucw.phd and jiahui.love hold proxied names and take the
 Cloudflare set; jiahui.id takes none.
 
+### 1.2 The Certificate Transparency read
+
+What holds `ZONE_ISSUERS` to the world is not a test: the edge set is a
+copy of a list nothing here can see, and a test that fetched it would
+put a network call in the gate. What can be held offline is held there
+(`tests/test_dns_records.py`); what those tests and the edge's renewal
+notification leave — a third party issuing under a zone this
+installation holds — is this read, run by hand at each milestone's
+review checkpoint beside the documentation audit
+([dispatch.md](../framework/dispatch.md) §3.1). **Nothing in the
+repository automates it**: no test, script or workflow queries a log, so
+the checkpoint issue is its only moment. The read's outcome and the date
+it ran go on that issue in one line, because the next read's window is
+set from it: the window starts a week before the previous read's date,
+since crt.sh ingests with a lag and a certificate issued before a read
+but logged after it would otherwise fall between two windows (the ids
+make the overlap harmless). A first read has no previous date and takes
+the certificates valid on the day it runs — `&exclude=expired` goes on
+the URL for that read alone, which crt.sh filters on
+`not_after >= now()`, and `since` is the empty string, which the window
+comparison lets everything through (the read's own date lets nothing
+through and records a clean read from nothing) — because that is the
+question a read with no window asks; every later read takes what was
+issued since, expired or not. Every read is two runs
+of each query with the ids compared, and the union is the answer: the
+endpoint sometimes returns a strict subset of its own rows, with nothing
+in the response saying so.
+
+**What is read.** For every zone in `conventions.ALL_ZONES`, every
+certificate a public log holds for the apex or any name under it, from
+crt.sh's JSON endpoint — which caps an identity search at 10,000
+matched identities, a few thousand certificates, and says nothing in
+its JSON when it does, so a count in the thousands is itself a finding:
+
+    Z=<zone>; curl -s "https://crt.sh/?q=$Z&match=ILIKE&output=json&deduplicate=Y" \
+      | jq -r --arg z "$Z" --arg since <previous read> '.[]
+          | select(.not_before >= $since)
+          | .name_value |= (split("\n") | map(select(. == $z or endswith("." + $z))) | join(" "))
+          | select(.name_value != "")
+          | [.id, .issuer_name, .name_value, .not_before] | @tsv'
+
+`match=ILIKE` is a substring match over each certificate's identities,
+so it reaches the apex and every name under the zone; left unset, crt.sh
+infers the mode from the term, and a term with a hyphen — the primary —
+gets a full-text match that finds the pair and not a name under the
+zone. The `jq` suffix guard is what makes a substring match exact.
+`%25.<zone>` is the same search either way, since crt.sh drops a leading
+`%.` before matching. `deduplicate=Y` folds the two entries one issuance
+leaves in a log into one row. `exclude=expired` is not passed on a
+windowed read: a certificate issued and expired between two checkpoints
+is exactly what the read exists to see. The window is applied locally on
+`not_before`, because the endpoint's `minNotBefore` does not apply to an
+identity search. The columns are the crt.sh id, the issuer's name, the
+certificate's names under the zone — crt.sh lists the identities the
+search matched, not the whole subject alternative name set, which is why
+the guard runs over what it lists — and the not-before date.
+
+**The expected answer** for a zone in `ZONE_ISSUERS` is that every row's
+issuer is a member of that zone's set, and every name is a name the
+declaration carries, in the shape its asker mints: the pair — apex and
+`*.<zone>` in one certificate — from any permitted issuer, since the
+edge mints one for every zone it hosts and the cluster for every zone in
+its scope (§4) and the log does not say which asked; the wildcard
+*alone* for each zone the gateway's ACME scope names
+(`derived.GATEWAY_ACME_ZONES` — today the primary, whose
+`*.<ZONE_PRIMARY>` covers the console and resolver vhosts, and
+`ZONE_SHORT` for `*.<ZONE_LEGACY>` while the legacy census has a row,
+which is the zone the scope sheds at the end of Wave D), since the
+gateway asks for the wildcard and never the apex (§4,
+`gateway/container.py`); and a single name a record block
+(`dns/base.py`, `dns/legacy.py`) or a route row (`conventions/routes.py`)
+declares, which is what the legacy VPS obtains for a name it serves off
+the proxy. A lone `*.<zone>` from a permitted issuer for a zone outside
+that scope is as much a finding as a name nothing declares — only a
+token scoped like the gateway's produces that shape. The log shows
+issuance, not use: a permitted
+issuer's certificate for a declared name is expected even when nothing
+serves it, and the read draws no conclusion from one. The issuer column
+is a distinguished name and the set holds CAA identities, so the
+comparison is to the domain the authority publishes as its CAA identity,
+and membership is by the domain before any parameter
+(`pki.goog; cansignhttpexchanges=yes` is `pki.goog`). The set's members,
+as crt.sh prints them:
+
+-   `O=Let's Encrypt` is `letsencrypt.org`.
+-   `O=Google Trust Services` and `O=Google Trust Services LLC` are
+    `pki.goog`.
+-   `O=Sectigo Limited` is `sectigo.com`, and so is
+    `O=COMODO CA Limited`, the same authority under its former name —
+    why its former identity `comodoca.com` is not in the set and not a
+    finding, and why the set is narrower than what the primary's
+    responses carry, is
+    [rfc-003](../rfc/rfc-003-dns-and-github-stacks.md) §4.4.
+-   `O=SSL Corp` is `ssl.com`.
+
+An intermediate named for its customer maps to its operator's identity,
+not the customer's. An issuer not listed here is resolved from its
+Certification Practice Statement, or from the Cloudflare
+certificate-authorities page `base.py` cites where it is one of the
+edge's. A zone absent from `ZONE_ISSUERS` has no set to compare against;
+its rows say who issues for it, which is what a pin would have to name
+(§1.1) and is the reason it carries none.
+
+**A finding** is a row whose issuer is outside the zone's set, or whose
+name the declaration does not carry. Findings are filed as issues in
+the ops repository (dispatch.md §4), one per distinct issuer-and-names
+pair rather than per row, since a renewal repeats the row every cycle:
+the issue names the issuer and the names and lists its rows' crt.sh ids
+and not-before dates. It is never resolved by widening the set to fit:
+whether the set is behind who legitimately issues, or the certificate
+is one nobody here asked for, is the issue's question.
+
 ## 2. Naming hierarchy (formalizing the existing conventions)
 
 -   **`*.hosts.<zone>` is the anchor namespace** — already the live

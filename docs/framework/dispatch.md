@@ -415,11 +415,14 @@ two-angle review above, and every milestone is bracketed by the
 operator: it **opens with a design RFC** — the milestone's design
 submitted for approval before any implementation is dispatched — and
 **closes with its review-checkpoint issue** — a read-only
-doc-vs-implementation audit of the milestone's areas plus the
-operator's design-level review and acceptance. Each operator pass
-covers one milestone's worth of change, so problems surface while they
-are cheap. Any other major structural change runs the same RFC-first
-sequence. **The process itself is [rfc.md](rfc.md)** — when an RFC is
+doc-vs-implementation audit of the milestone's areas, the per-zone
+Certificate Transparency read beside it
+([declarative/dns.md](../declarative/dns.md) §1.2, a manual procedure
+whose only moment to run is this one), plus the operator's design-level
+review and acceptance. Each operator pass covers one milestone's worth
+of change, so problems surface while they are cheap. Any other major
+structural change runs the same RFC-first sequence. **The process itself
+is [rfc.md](rfc.md)** — when an RFC is
 required and when an ops issue is enough, what one contains, the states
 it moves through and the labels that carry them, the operator's gate,
 amendment after acceptance, and numbering — and this document says
