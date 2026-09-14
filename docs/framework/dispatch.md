@@ -91,6 +91,24 @@ already trusts. A workspace started on some other revision is trusting
 that revision's `mise.toml`, which is a judgment about the branch
 rather than a formality.
 
+**What AGENTS.md repeats from this section is decided by whether the
+step's failure routes an agent here.** AGENTS.md duplicates a form from
+here — the commands, what their failure prints or fails to print, and
+the tell that catches it — only when the failure would not send an agent
+to this section on its own: it is silent, or it reports as something
+else. A failure that announces itself and names its remedy is left to
+this section, and AGENTS.md carries at most the step's name and what it
+is for. That is the split as it stands. The push failures below exit
+zero and push nothing, and the prose checker reads a materialized
+conflict as misspellings rather than as a conflict, so no error routes
+an agent here and AGENTS.md carries both forms whole. The trust failure
+is the opposite case: `mise ERROR Config files in … are not trusted.`
+followed by ``Trust them with `mise trust`.`` — fail-closed, and the
+remedy in the text — so AGENTS.md names `mise trust` in its setup
+sentence with the one clause saying what it is for, that `mise x uv`
+refuses without it, and the rest — what the refusal prints, why a
+workspace is untrusted, what trusting grants — lives here alone.
+
 **Scratch belongs under the workspace's own `.claude/`.** A workspace
 root is a checkout, so a file written there is a repository path and
 the next `jj` command snapshots it into the change; `.gitignore`'s
