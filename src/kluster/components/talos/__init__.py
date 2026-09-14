@@ -160,9 +160,10 @@ def control_plane_patch(*, cert_sans: Sequence[str], secretbox_secret: str | Non
     }
     if secretbox_secret is not None:
         # Encryption at rest for Kubernetes secrets. etcd lives in a $0-trust
-        # tenancy and its snapshots are shipped off-site hourly
-        # (architecture.md §6.5), so the key material has to be stated here
-        # rather than inherited from whatever the generator happened to do.
+        # tenancy, and its snapshots are designed to ship off-site hourly
+        # (storage.md §5; the snapshot is not built — nodes.md §5 Tier 0), so
+        # the key material has to be stated here rather than inherited from
+        # whatever the generator happened to do.
         config['cluster']['secretboxEncryptionSecret'] = secretbox_secret
     return config
 

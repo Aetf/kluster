@@ -923,10 +923,12 @@ are not re-litigated from scratch. §6.5 documents the largest reversal
         (ZeroTier is no longer load-bearing for kubectl).
     4.  What the homelab CP protected — etcd near the data gravity — was
         worth little: when the home site is down, the API has nothing
-        homelab-side to manage anyway, and etcd's durability comes from
-        hourly snapshots + the cold-standby drill in either design.
+        homelab-side to manage anyway, and etcd's durability is designed
+        to come from hourly snapshots + the cold-standby drill in either
+        design.
 -   Residual risks carried consciously: etcd (cluster secrets) lives in a
-    $0-trust tenancy → etcd encryption at rest + hourly snapshots to B2;
+    $0-trust tenancy → etcd encryption at rest + hourly snapshots to B2
+    (the snapshot is designed and not built — nodes.md §5 Tier 0);
     total-tenancy loss → the cold-standby drill runs in reverse
     (bootstrap a temporary single-node CP on the homelab host from the
     latest snapshot, ~30–60 min, nodes.md §5).

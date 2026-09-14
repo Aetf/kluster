@@ -234,7 +234,9 @@ be able to destroy the safety net it lives inside.
 Per nodes.md §5, durability = declarative rebuild + backups + drills:
 
 1.  **etcd**: hourly snapshots from the Talos control plane, shipped to
-    `b2://…/etcd/`, retained ~14 days. Restore path is documented Talos
+    `b2://…/etcd/`, retained ~14 days — an ops-repo workflow, and that
+    repository carries no workflows, so none is taken (nodes.md §5
+    Tier 0). Restore path is documented Talos
     `--recover-from-snapshot` bootstrap, to be drilled both in-place and
     onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
     neither form has run.
