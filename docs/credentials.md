@@ -50,8 +50,8 @@ facts about them.
     ops-repo secret · `kluster` repository secret (the one slot that
     belongs to no stack, and is therefore readable by every workflow in
     the repository — ci.md §3) · **workstation slot** · on-box
-    (delivered by provisioning, e.g. Butane-embedded) · gw-config
-    device secret (pushed to the gateway beside its nspawn units,
+    (delivered by provisioning, e.g. Butane-embedded) · device secret
+    (pushed to the gateway as a file beside its nspawn units,
     physical/gateway.md §1). A row names its channel(s); a
     credential living anywhere else is misplaced.
 
@@ -910,7 +910,7 @@ the row's own command, read out of a stack, or typed in — and every slot
 it lands in, spelled as the closed set of channels §1 rule 6 lists:
 GitHub secret (repository, Environment, name), Pulumi config secret (per
 stack and key), Pulumi state, escrow ciphertext, SealedSecret, on-box,
-workstation slot, gw-config device secret. The CI Environment secret, the
+workstation slot, device secret. The CI Environment secret, the
 ops-repo secret and the `kluster` repository secret are one channel there,
 differing in which repository they name and whether they name an
 Environment. The Pulumi config channel is the **secret** one alone:

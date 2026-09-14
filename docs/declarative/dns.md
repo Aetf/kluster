@@ -341,7 +341,7 @@ plane names:
     same naming move — their `lan.ucw.phd` names become rewrite-only
     names in the public zones — but caddy **keeps issuing its own
     certificates** (DNS-01 with its own zone-scoped Cloudflare token,
-    a gw-config device secret, cluster-infra.md §1.1) rather than
+    a device secret, cluster-infra.md §1.1) rather than
     consuming cert-manager's: the gateway's TLS must keep renewing
     when the cluster is down or mid-rebuild, and pushing certs from
     the cluster to the device would invert that survival dependency.

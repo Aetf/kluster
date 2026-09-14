@@ -219,7 +219,7 @@ def channels_of_every_kind() -> tuple[slots.Channel, ...]:
         slots.SealedSecret('a manifest'),
         slots.OnBox('a file'),
         slots.WorkstationSlot('a-file'),
-        slots.GwConfigSecret('a value'),
+        slots.DeviceSecret('a value'),
     )
 
 

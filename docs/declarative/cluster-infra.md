@@ -142,7 +142,7 @@ Two channels, chosen by who consumes the secret:
 -   Where one external service serves several consumers (Cloudflare),
     issue **separately-scoped tokens per consumer**: one per channel
     above, plus a third, zone-limited token for the UDM caddy's own
-    ACME issuance (dns.md §4) delivered as a gw-config device secret.
+    ACME issuance (dns.md §4) delivered as a device secret.
 
 ### 1.2 Installing a chart: `helm.v4.Chart`
 
@@ -235,8 +235,8 @@ All decided behavior from architecture.md §3, expressed as config:
     Cilium side; **placement fact on top of §1.1**: the referenced
     Secret must live in the namespace named by
     `--bgp-secrets-namespace` (kube-system by default), so its
-    SealedSecret is sealed for that namespace — and a gw-config
-    device secret on the UDM side. The UDM's
+    SealedSecret is sealed for that namespace — and a device
+    secret on the UDM side. The UDM's
     FRR config applies an inbound **prefix-list** (`192.168.71.0/24
     le 32` + the ULA /64 `le 128`, deny the rest) plus a
     `maximum-prefix` cap — without the filter, a compromised worker
