@@ -30,6 +30,14 @@ class in a module it does not name, and a module is covered whole or not at
 all, because a record censused by class alone leaves the next record in the
 same module uncaught.
 
+**A field typed `pulumi.Input[str]` is classified by what it holds, not by the
+`Output` it holds in production.** An `Output`'s repr discloses nothing, but
+the type promises nothing about arriving as one — a test hands over the
+literal — so a field of that type carrying a credential is hidden like any
+other. `container` and `k8s` are here for that class of field: a mounted
+file's contents, a seed's contents, the ACME token, and a produced Secret's
+own data.
+
 **A field that holds a record is classified by what that record prints**, not
 by what it holds: `slots.Context` carries the forge's admin token through a
 `Forge` whose own repr hides it, and the last test here pins that mechanism.
@@ -48,7 +56,8 @@ from typing import cast, final, is_typeddict
 
 import pytest
 
-from kluster.components.gateway import routing
+from kluster.components.gateway import container, routing
+from kluster.lib import k8s
 from kluster.providers.device_files import ssh
 from kluster.scripts.credentials import (
     age,
@@ -118,6 +127,8 @@ MODULES: tuple[ModuleType, ...] = (
     config,
     ssh,
     routing,
+    container,
+    k8s,
 )
 
 CENSUS: dict[type, Census] = {
@@ -214,6 +225,28 @@ CENSUS: dict[type, Census] = {
     ssh.CommandResult: Census('exit_status stdout stderr'),
     ssh.Device: Census('host username private_key host_key port', secret='private_key'),
     ssh.FileStat: Census('owner group mode size kind'),
+    container.BridgedDeclaration: Census('service pin'),
+    # The zone-scoped token the proxy answers DNS-01 challenges with.
+    container.CaddyService: Census('service pin acme_token vhosts legacy', secret='acme_token'),
+    container.ContainerDeclaration: Census('service pin'),
+    # A seed is a service's own configuration.
+    container.InitialState: Census('into content', secret='content'),
+    # With `secret` set, the ACME token or the routing daemon's configuration
+    # holding the BGP password; hidden whichever it is, since the field is one.
+    container.MountedFile: Census('name target content secret', secret='content'),
+    container.OverlayDaemon: Census('service pin'),
+    container.ResolverService: Census('service pin'),
+    container.Rootfs: Census('repository tag digest'),
+    container._AdguardInitialParams: Census('cluster address api_port upstreams'),  # pyright: ignore[reportPrivateUsage]
+    container._CaddyParams: Census(  # pyright: ignore[reportPrivateUsage]
+        'acme_contact zone controller controller_upstream token_path api_port vhosts legacy_zone legacy'
+    ),
+    container._MachineParams: Census(  # pyright: ignore[reportPrivateUsage]
+        'cluster name capability kill_signal kill_gracetime environment bridge host_network state_bind devices binds'
+    ),
+    container._ResolvParams: Census('cluster resolver'),  # pyright: ignore[reportPrivateUsage]
+    # The produced Secret's own data, template holes and all.
+    k8s.SecretTemplate: Census('data type immutable labels annotations', secret='data'),
 }
 
 CENSUSED: list[tuple[str, type, Census]] = sorted(

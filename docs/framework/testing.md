@@ -257,10 +257,19 @@ reports a create it skipped by setting `unknown` on the
 `RegisterResourceResponse`, which the SDK turns into
 `resolve_missing_as_unknown` for that resource's outputs;
 `MockMonitor.RegisterResource` never sets that field, so the real mechanism is
-unreachable from a test. A case models it instead by having the mock return
-`pulumi.UNKNOWN` as a dependency's `id`, which reaches the same `Output` state
-and is a fair proxy for one output of one resource. What the proxy does not
-carry:
+unreachable from a test. A case models it in one of two ways:
+
+-   **A dependency's `id`.** The mock returns `pulumi.UNKNOWN` as the `id` of
+    a resource the subject reads, which reaches the same `Output` state and is
+    a fair proxy for one output of one resource.
+-   **A declined invoke.** The engine gates an invoke on its dependencies
+    having been created and, while one is pending, answers with
+    `ResourceInvokeResponse.unknown` set rather than calling the provider. The
+    mock monitor never sets that field either; `decline_every_invoke` in
+    `tests/mock_monitor.py` makes the run's monitor answer every invoke that
+    way, which is the proxy for a lookup the subject awaits through `resolve`.
+
+Neither proxy carries:
 
 -   **Transitivity.** The engine leaves everything downstream of a skipped
     create unknown; the double leaves unknown exactly the property the mock
@@ -274,6 +283,31 @@ carry:
     the second half is always true. A case that withholds a property
     expecting an unknown therefore passes in a `preview=False` run without
     ever reaching the abort it is named for.
+
+**A nested unknown reads back as the run's own kind, and it is the double
+that makes it so.** An unknown nested in a property the program handed over —
+`imageSourceDetails.sourceUri`, say — is read back off the recorder rather
+than off an `Output`: the mock deserializes the registration's inputs, and
+`rpc.deserialize_property` turns an unknown into an `Unknown` under a preview
+and drops the key otherwise. It does that on an executor thread with no
+Python context of its own, where `is_dry_run()` answers with a process-wide
+default the SDK's setter fixes at the first value set in a context. Left to
+the SDK, the second run of a different kind built in one context — two
+`run_with` calls in one case, say — reads a nested unknown back the first
+run's way, with nothing in the failure naming the cause. The test runner hands
+each case a fresh context, which is why two *cases* of different kinds do not
+show it and why the pin, `tests/test_mock_monitor_unknowns.py`, holds both
+runs in one case. `tests/mock_monitor.py` closes it: the patched
+`RegisterResource` runs the SDK's own under the run's flag, on a copy of the
+thread's context, so a preview reads back an `Unknown` and an update a dropped
+key whatever ran before. The assertion that holds under either kind of run
+says what the case means rather than which shape the SDK chose:
+
+```python
+assert not isinstance(details.get('sourceUri'), str)
+```
+
+That is, no value reached the provider under that key.
 
 ## 4. Fakes and the Ratchet
 

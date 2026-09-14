@@ -27,9 +27,11 @@ environment**, because that is what its own startup scripts read; a drop-in
 written for a network manager the image does not run is a file nobody opens.
 And a container is stopped with **`SIGKILL`**: s6 treats a gentler signal as
 advisory, returns from it with its supervisors still running, and they hold the
-machine's control group open until the next start fails on it. What bounces one
-is `SIGINT`, which s6 handles as a reboot, so a machine's environment may not
-carry the variable that would take that handler away (`S6_CMD_RECEIVE_SIGNALS`).
+machine's control group open until the next start fails on it. What is expected
+to bounce one is `SIGINT`, which `machinectl reboot` sends and s6 handles as a
+reboot — an expectation physical/gateway.md §1 leaves to the first soak — so a
+machine's environment may not carry the variable that would take that handler
+away (`S6_CMD_RECEIVE_SIGNALS`).
 
 **Host networking is the absence of a bridge.** Only a declaration built on a
 bridged census entry can produce a bridge, so the overlay daemon — which must
@@ -40,7 +42,7 @@ creates — cannot acquire one by accident.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from ipaddress import IPv4Address
 from typing import final
 
@@ -177,11 +179,12 @@ S6_KILL_GRACETIME = 0
 
 #: The one s6 variable a machine's environment may never carry, refused by
 #: `nspawn_file` rather than left to be noticed. `machinectl reboot` is the verb
-#: that bounces a machine on this device (physical/gateway.md §1.1) and it works
-#: because s6-linux-init handles `SIGINT` as a reboot. With a non-zero value
-#: here, s6-overlay's `stage0` renames the `.s6-svscan` signal handlers aside --
+#: expected to bounce a machine on this device -- an expectation
+#: physical/gateway.md §1 leaves to the first soak -- and it rests on
+#: s6-linux-init handling `SIGINT` as a reboot. With a non-zero value here,
+#: s6-overlay's `stage0` renames the `.s6-svscan` signal handlers aside --
 #: `SIGINT` among them -- and installs its own forwarder instead, so the verb
-#: would stop bouncing anything and nothing would fail to say so.
+#: would bounce nothing and nothing would fail to say so.
 S6_CMD_RECEIVE_SIGNALS = 'S6_CMD_RECEIVE_SIGNALS'
 
 #: What an image's own network setup reads out of PID 1's environment: the
@@ -227,11 +230,17 @@ class MountedFile:
     and the configuration stays declarable. It is mounted read-only and it is
     this program's on every deployment, which is what separates it from an
     initial-state file.
+
+    `content` does not print. With `secret` set it is the ACME token or the
+    routing daemon's configuration with the BGP password in it; the stack hands
+    it over as an `Output`, which discloses nothing, but a test hands over the
+    literal, and the field is hidden for what it holds rather than for how one
+    of its types prints.
     """
 
     name: str
     target: str
-    content: pulumi.Input[str]
+    content: pulumi.Input[str] = field(repr=False)
     secret: bool = False
 
 
@@ -255,12 +264,16 @@ class InitialState:
     holds nothing but seeds and is the shape the converger copies. So the name
     here is the path the file lands at inside the state directory, and the
     device needs to be told nothing else about it.
+
+    `content` does not print, on the same rule as `MountedFile.content`: what
+    a seed holds is a service's own configuration, and the type carries no
+    promise that it arrives as an `Output`.
     """
 
     #: Where it lands, relative to the service's state directory — and equally
     #: where it is delivered, relative to the machine's initial-state directory.
     into: str
-    content: pulumi.Input[str]
+    content: pulumi.Input[str] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -341,7 +354,10 @@ class CaddyService(BridgedDeclaration):
     `acme_token` is the zone-scoped credential it answers DNS-01 challenges
     with — a device secret, separate from the cluster's issuer on purpose, so
     that two issuers which must survive each other's outage do not share a
-    credential (gateway.md §1).
+    credential (gateway.md §1). It does not print: the stack hands it over as
+    an `Output`, which discloses nothing, but a test hands over the literal,
+    and the field is hidden for what it holds rather than for how one of its
+    types prints.
 
     Its address is injected, the same way the resolvers take theirs: the image
     carries the `net-setup` the AdGuard pair has, the proxy is ordered after it,
@@ -373,7 +389,7 @@ class CaddyService(BridgedDeclaration):
     the file this renders changes when the census does and at no other time.
     """
 
-    acme_token: pulumi.Input[str]
+    acme_token: pulumi.Input[str] = field(repr=False)
     vhosts: tuple[conventions.gateway.BridgedService, ...]
     legacy: tuple[conventions.gateway.LegacyVhost, ...]
 
