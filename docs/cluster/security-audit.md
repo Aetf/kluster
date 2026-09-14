@@ -174,7 +174,7 @@ physical/gateway.md §4.
 ### M3 — No node-local firewall beneath the derived OCI rules
 
 **Attack.** The cloud nodes' primary IPs are public VIPs; the host
-netstack runs apid, kubelet and KubeSpan. OCI security rules are "derived,
+netstack runs kubelet, apid and KubeSpan. OCI security rules are "derived,
 not enumerated" (physical.md §1) — a mis-derived service rule silently
 widens exposure with no second layer.
 

@@ -5,7 +5,7 @@
 
 One person's home infrastructure, declared: a Talos Linux Kubernetes cluster
 spanning an OCI VCN and a homelab LAN with Cilium networking, plus the
-machines around it — the gateway, DNS, the appliance holding Pulumi's own
+surrounding machines — the gateway, DNS, the appliance holding Pulumi's own
 state. Everything is Pulumi Python, applied by CI, and the design decisions
 behind it are written down in `docs/` rather than lost.
 
@@ -23,7 +23,7 @@ Managed with [uv](https://github.com/astral-sh/uv) and
 
 | Path | What |
 | --- | --- |
-| `__main__.py` | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
+| `__main__.py` (repository root) | Pulumi program entrypoint; registers the async `kluster.main.main` via `pulumi.run`. Must stay a real file (a console-script symlink's `sys.exit` would kill the async entrypoint before it runs). |
 | `src/putils/` | The Pulumi framework layer: `Component`, `async_output`/`resolve` (RFC-001), asyncio helpers. |
 | `src/kluster/` | The program itself: `components/` declares the resources area by area, `providers/` talks to the systems Pulumi has no provider for, `stacks/` dispatches, `scripts/` holds the console scripts, and `lib/`, `conventions/` hold what the rest share. |
 | `deploy/` | Deployment material that is not library code — the state-backend appliance's Butane file, its dump script, its operator keys. |
