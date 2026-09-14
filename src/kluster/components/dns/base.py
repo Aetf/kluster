@@ -190,7 +190,8 @@ ZONE_ISSUERS: Mapping[str, tuple[str, ...]] = {
     'ucw.phd': CLOUDFLARE_ISSUERS,
     'jiahui.love': CLOUDFLARE_ISSUERS,
     # jiahui.id is deliberately absent: its apex and `www` are a Google Site,
-    # its certificates come from pki.goog, and it carries no CAA today.
+    # the log shows several authorities issuing for it — the edge's partner
+    # rotation, not one issuer (dns.md §1.1) — and it carries no CAA today.
 }
 
 
