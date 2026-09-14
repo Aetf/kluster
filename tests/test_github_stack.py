@@ -14,6 +14,7 @@ unreachable at exactly the moment it is wanted, which is when this program
 fails to run.
 """
 
+import inspect
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -382,6 +383,19 @@ def test_only_the_repository_that_merges_unattended_offers_auto_merge(stack: For
     assert repositories[conventions.forge.DEPLOYMENT.name]['allowUpdateBranch'] is True
     assert 'allowAutoMerge' not in repositories[conventions.forge.OPS.name]
     assert 'allowUpdateBranch' not in repositories[conventions.forge.OPS.name]
+
+
+def test_the_required_checks_are_a_roll_every_repository_states() -> None:
+    """A census parameter has no default (style/pulumi.md).
+
+    The roll decides whether `main` is protected at all, so a default of
+    "none" is a default of "unguarded": a call site that lost the argument
+    would delete the deployment repository's branch protection with the
+    component raising nothing — only this suite's pins on `main` would notice.
+    The repository that asks for no protection passes the empty roll.
+    """
+    parameter = inspect.signature(ManagedRepository.__init__).parameters['required_checks']
+    assert parameter.default is inspect.Parameter.empty
 
 
 @pytest.mark.asyncio

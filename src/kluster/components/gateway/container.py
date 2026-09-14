@@ -49,6 +49,7 @@ import pulumi
 from kluster import conventions
 from kluster.components.gateway import nspawn
 from kluster.components.gateway.nspawn import NspawnRuntime
+from kluster.components.gateway.persistence import TEMPLATE_PACKAGE
 from kluster.lib import templates
 from kluster.providers.device_files.provider import Connection, DeviceArtifact, DeviceFile
 from putils import Component
@@ -74,7 +75,6 @@ __all__ = (
     'S6_CMD_RECEIVE_SIGNALS',
     'S6_KILL_GRACETIME',
     'SECRET_MODE',
-    'TEMPLATE_PACKAGE',
     'TUN_DEVICE',
     'BridgedDeclaration',
     'CaddyService',
@@ -94,11 +94,6 @@ __all__ = (
     'nspawn_file',
     'resolv_conf',
 )
-
-#: The package `importlib.resources` resolves the `templates/` directory
-#: against, so the rendered files travel with the code that renders them
-#: (rfc-002 §9.1).
-TEMPLATE_PACKAGE = 'kluster.components.gateway'
 
 CONFIG_MODE = '0644'
 SECRET_MODE = '0600'

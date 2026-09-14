@@ -213,6 +213,7 @@ def test_the_shared_base_cannot_be_built_on_its_own() -> None:
         _ = image.TalosArtefact(  # pyright: ignore[reportAbstractUsage]
             'kluster-artefact',
             talos_version=TALOS_VERSION,
+            extensions=(),
             architecture='arm64',
             platform='oracle',
         )

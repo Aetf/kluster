@@ -31,8 +31,11 @@ from kluster.components.backup import BackupBucket
 from kluster.components.cloud import nodes
 from kluster.components.cloud.guardrails import Guardrails
 from kluster.components.gateway import Gateway, access, nspawn, persistence
+from kluster.components.gateway.container import CaddyService
 from kluster.components.gateway.unifi import SiteFirewall
 from kluster.components.overlay import Overlay, flow_rules
+from kluster.components.talos import TalosCluster
+from kluster.components.talos.image import TalosArtefact
 from kluster.lib import workstation
 from kluster.stacks import physical
 
@@ -241,18 +244,30 @@ async def test_the_stack_declares_every_domain_of_the_design(setup: Installation
     assert set(DOMAIN_PROVIDERS) <= families
 
 
-#: The census parameters the rule below was written for, as the component that
-#: receives one and the parameter it arrives on. Stated rather than discovered,
-#: because what makes a table a census is what it says and not how it is typed,
-#: and added to by hand when a component gains one — this program hands down
-#: other rolls that are not listed here.
+#: The census parameters the rule below holds, as the component that receives
+#: one and the parameter it arrives on. Stated rather than discovered, because
+#: what makes a table a census is what it says and not how it is typed, and
+#: added to by hand when a component gains one. Each entry names a parameter
+#: and never its value: the roll itself is `conventions`' or the component's
+#: to state, and a copy here would be a mirror (style/testing.md).
 CENSUS_PARAMETERS = (
     (SiteFirewall, 'static_hosts'),
     (Gateway, 'static_hosts'),
+    (Gateway, 'resolvers'),
+    (Gateway, 'keys'),
+    (CaddyService, 'vhosts'),
+    (CaddyService, 'legacy'),
     (BackupBucket, 'scopes'),
     (Guardrails, 'alert_rules'),
     (Overlay, 'roster'),
     (Overlay, 'managed_routes'),
+    (TalosCluster, 'control_plane_nodes'),
+    (TalosCluster, 'worker_nodes'),
+    (TalosCluster, 'bgp_peers'),
+    # Handed down by the two artefact subclasses rather than by this program:
+    # each states the schematic it is, and the base that renders it takes the
+    # roll with no default to fall back on.
+    (TalosArtefact, 'extensions'),
 )
 
 

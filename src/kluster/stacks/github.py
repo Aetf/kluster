@@ -102,6 +102,11 @@ async def main() -> None:
         conventions.forge.OPS.name,
         entry=conventions.forge.OPS,
         description='Operations for the kluster installation: alert issues, drills, scheduled workflows',
+        # No branch protection: the plan offers none on a private repository
+        # (github.md §2), and the component refuses a non-empty roll here. The
+        # empty roll is passed rather than defaulted so that the decision
+        # reads beside the repository it is about.
+        required_checks=(),
         opts=on_github,
     )
 

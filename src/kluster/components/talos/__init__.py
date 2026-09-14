@@ -345,10 +345,17 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
 
     :param control_plane_nodes: node names, in the order they take the
         cluster; the first one is the node that bootstraps etcd.
-    :param worker_nodes: node names that get a worker configuration.
+    :param worker_nodes: node names that get a worker configuration. Required
+        even when there are none, like every roll a component receives: a
+        default here would let a call site that lost the argument declare a
+        cluster of zero workers, and the only objection would be the BGP
+        check below, which bites only while a peer names the missing worker.
     :param bgp_peers: node name to the subnet allowed to open a BGP session
         with it (the homelab worker's gateway). This is a site fact rather
         than a machine one, so it is part of what the machine boots with.
+        Required like the node rolls above, and the one roll nothing else
+        would catch: a call site that lost it would boot a worker that
+        refuses its gateway's session, and no check or test would object.
 
     A node named in `STATIC_ADDRESSES` also boots with its own address, its
     subnet's prefix and a default route, rather than with whatever a DHCP
@@ -363,9 +370,9 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         endpoint: pulumi.Input[str],
         cert_sans: Sequence[pulumi.Input[str]],
         control_plane_nodes: Sequence[str],
+        worker_nodes: Sequence[str],
         talos_version: str,
-        worker_nodes: Sequence[str] = (),
-        bgp_peers: Mapping[str, pulumi.Input[str]] | None = None,
+        bgp_peers: Mapping[str, pulumi.Input[str]],
         opts: pulumi.ResourceOptions | None = None,
     ) -> None:
         super().__init__(name, opts=opts)
@@ -384,7 +391,7 @@ class TalosCluster(Component, pulumi_type='kluster:physical:TalosCluster'):
         self._endpoint = endpoint
         self._talos_version = talos_version
         self._cert_sans = tuple(cert_sans)
-        self._bgp_peers = dict(bgp_peers or {})
+        self._bgp_peers = dict(bgp_peers)
         unknown = sorted(set(self._bgp_peers) - set(self.roles))
         if unknown:
             raise ValueError(f'BGP peers name nodes that are not in the cluster: {unknown}')
