@@ -115,14 +115,18 @@ class ManagedRepository(Component):
                 # unparented one" -- and the delete would be refused by the
                 # `protect` above anyway. Every resource below is parented on
                 # the repository rather than on the component, so each of them
-                # inherits this alias and keeps its own URN too.
+                # inherits this alias; the protection and the Environments,
+                # renamed to carry the repository's name, carry a name alias
+                # besides, and the engine crosses the two into the URN state
+                # holds.
                 aliases=[pulumi.Alias(parent=pulumi.ROOT_STACK_RESOURCE)],
             ),
         )
 
         #: Everything below hangs off the upstream object rather than off the
         #: component, which is both what these resources are -- properties of
-        #: a repository -- and what makes one alias enough for all of them.
+        #: a repository -- and what lets this one alias carry the move for all
+        #: of them; the two renamed kinds add a name alias of their own.
         on_repository = pulumi.ResourceOptions(parent=self.repository)
 
         # Its own resource rather than the `Repository` field of the same
@@ -153,9 +157,12 @@ class ManagedRepository(Component):
         # `strict` is "the branch must be up to date", without which a green
         # check describes code that was never combined with what is on `main`
         # -- which is exactly what the zero-diff proof claims about.
+        #
+        # The alias is the name state holds this protection under, and it
+        # is dropped once an apply has moved the entry to the new URN.
         self.protection = (
             github.BranchProtection(
-                'main',
+                f'{name}-main',
                 repository_id=self.repository.node_id,
                 pattern='main',
                 required_status_checks=[{'strict': True, 'contexts': list(required_checks)}],
@@ -170,7 +177,9 @@ class ManagedRepository(Component):
                 # however red it is, so what those names are is a decision in
                 # its own right (framework/github.md §3).
                 enforce_admins=True,
-                opts=on_repository,
+                opts=pulumi.ResourceOptions.merge(
+                    on_repository, pulumi.ResourceOptions(aliases=[pulumi.Alias(name='main')])
+                ),
             )
             if required_checks
             else None
@@ -180,9 +189,12 @@ class ManagedRepository(Component):
         # the census says why for each: which branches may deploy into it, and
         # whether a reviewer stands in front of it. Everything else about an
         # Environment is the same in all of them.
+        #
+        # The alias is the name state holds each Environment under, and it is
+        # dropped once an apply has moved the entries to the new URNs.
         self.environments = {
             environment.name: github.RepositoryEnvironment(
-                environment.name,
+                f'{name}-{environment.name}',
                 repository=self.repository.name,
                 environment=environment.name,
                 deployment_branch_policy=(
@@ -198,7 +210,9 @@ class ManagedRepository(Component):
                 # ungated Environment stays a bare one.
                 prevent_self_review=False if environment.gated else None,
                 can_admins_bypass=False if environment.gated else None,
-                opts=on_repository,
+                opts=pulumi.ResourceOptions.merge(
+                    on_repository, pulumi.ResourceOptions(aliases=[pulumi.Alias(name=environment.name)])
+                ),
             )
             for environment in entry.environments
         }

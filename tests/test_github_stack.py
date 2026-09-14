@@ -46,6 +46,19 @@ TOKEN = 'a-fake-github-admin-token-that-opens-nothing'
 #: the signature that means "secret", beside the value itself.
 SECRET = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
 
+#: The one branch protection's logical name: the repository's, then the branch
+#: (style/pulumi.md, a child's name carries its component's).
+PROTECTION = f'{conventions.forge.DEPLOYMENT.name}-main'
+
+
+def environment_name(repository: conventions.forge.Repository, environment: conventions.forge.Environment) -> str:
+    """An Environment's logical name: the repository's, then the Environment's own.
+
+    Two repositories may each carry an Environment of one name, and the URN
+    tells them apart by this prefix alone (style/pulumi.md).
+    """
+    return f'{repository.name}-{environment.name}'
+
 
 class Forge(Recorder):
     """GitHub as far as the program reads it back, which is node ids and nothing else.
@@ -77,7 +90,7 @@ def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
     paths; the `preview` matrix does not, and carries the stack name in its
     check name besides.
     """
-    protection = stack.by_name(BRANCH_PROTECTION)['main']
+    protection = stack.by_name(BRANCH_PROTECTION)[PROTECTION]
 
     assert protection['requiredStatusChecks'] == [{'strict': True, 'contexts': ['checks', 'changes']}]
 
@@ -85,7 +98,7 @@ def test_main_requires_the_two_checks_that_always_run(stack: Forge) -> None:
 def test_the_owner_cannot_walk_around_the_gate(stack: Forge) -> None:
     # The installation has one admin, so an unenforced protection is no
     # protection: it would be bypassed by exactly the person it applies to.
-    protection = stack.by_name(BRANCH_PROTECTION)['main']
+    protection = stack.by_name(BRANCH_PROTECTION)[PROTECTION]
 
     assert protection['enforceAdmins'] is True
     assert protection['allowsForcePushes'] is False
@@ -100,7 +113,9 @@ def test_every_environment_the_census_names_is_declared(stack: Forge) -> None:
     does not name is an Environment nothing fills.
     """
     census = {
-        environment.name for repository in conventions.forge.REPOSITORIES for environment in repository.environments
+        environment_name(repository, environment)
+        for repository in conventions.forge.REPOSITORIES
+        for environment in repository.environments
     }
 
     assert set(stack.by_name(ENVIRONMENT)) == census
@@ -119,7 +134,7 @@ def test_a_branch_policy_is_declared_exactly_where_the_census_asks_for_one(stack
     for repository in conventions.forge.REPOSITORIES:
         for entry in repository.environments:
             main_only = entry.branches is conventions.forge.BranchPolicy.PROTECTED_ONLY
-            declared = environments[entry.name].get('deploymentBranchPolicy')
+            declared = environments[environment_name(repository, entry)].get('deploymentBranchPolicy')
 
             assert declared == ({'protectedBranches': True, 'customBranchPolicies': False} if main_only else None), (
                 entry.name
@@ -129,7 +144,10 @@ def test_a_branch_policy_is_declared_exactly_where_the_census_asks_for_one(stack
 def test_a_reviewer_stands_in_front_of_exactly_the_gated_environments(stack: Forge) -> None:
     environments = stack.by_name(ENVIRONMENT)
     census = {
-        entry.name for repository in conventions.forge.REPOSITORIES for entry in repository.environments if entry.gated
+        environment_name(repository, entry)
+        for repository in conventions.forge.REPOSITORIES
+        for entry in repository.environments
+        if entry.gated
     }
 
     gated = {name for name, inputs in environments.items() if inputs.get('reviewers')}
@@ -311,12 +329,18 @@ def test_each_repository_keeps_the_urn_it_was_declared_at(stack: Forge) -> None:
 
 
 def test_nothing_below_a_repository_moved(stack: Forge) -> None:
-    """The subtree's URNs are preserved by parenting, not by a second alias each.
+    """The subtree's URNs are preserved by parenting, and a renamed child by naming its old name.
 
     Each resource under a repository names the repository as its parent, which
     is both what it is -- a property of that repository -- and what makes the
     one alias above cover it. A resource re-parented onto the component would
     silently need an alias of its own.
+
+    The protection and the Environments carry one alias each besides, naming
+    only the logical name state holds them under: the SDK combines a child's
+    own alias with each alias its parent carries, so that one name is what
+    resolves each of them onto the URN the apply before the rename wrote.
+    Nothing else about the alias is set, because nothing else moved.
     """
     for entry in conventions.forge.REPOSITORIES:
         assert stack.options_of(entry.name, REPOSITORY).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')
@@ -326,18 +350,32 @@ def test_nothing_below_a_repository_moved(stack: Forge) -> None:
         repository = stack.options_of(entry.name, VULNERABILITY_ALERTS).parent
         assert repository.endswith(f'{MANAGED_REPOSITORY}${REPOSITORY}::{entry.name}')
 
-        for typ, name in _below(entry):
+        for typ, name, old_name in _below(entry):
             assert stack.options_of(name, typ).parent == repository, name
-            assert list(stack.options_of(name, typ).aliases) == [], name
+            aliases = list(stack.options_of(name, typ).aliases)
+            if old_name is None:
+                assert aliases == [], name
+                continue
+            assert len(aliases) == 1, name
+            assert aliases[0].spec.name == old_name, name
+            assert (aliases[0].spec.type, aliases[0].spec.stack, aliases[0].spec.project) == ('', '', ''), name
+            assert aliases[0].spec.parentUrn == '' and aliases[0].spec.noParent is False, name
 
 
-def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
-    """Every resource `ManagedRepository` hangs off one repository, by type and name."""
-    below = [(VULNERABILITY_ALERTS, entry.name)]
-    below += [(LABEL, f'{entry.name}-{label.name}') for label in entry.labels]
-    below += [(ENVIRONMENT, environment.name) for environment in entry.environments]
+def _below(entry: conventions.forge.Repository) -> list[tuple[str, str, str | None]]:
+    """Every resource `ManagedRepository` hangs off one repository: type, name, and the name state still holds.
+
+    The third element is the logical name a child had before it carried the
+    repository's, which is what its alias names; `None` where the name never
+    moved.
+    """
+    below: list[tuple[str, str, str | None]] = [(VULNERABILITY_ALERTS, entry.name, None)]
+    below += [(LABEL, f'{entry.name}-{label.name}', None) for label in entry.labels]
+    below += [
+        (ENVIRONMENT, environment_name(entry, environment), environment.name) for environment in entry.environments
+    ]
     if entry is conventions.forge.DEPLOYMENT:
-        below.append((BRANCH_PROTECTION, 'main'))
+        below.append((BRANCH_PROTECTION, PROTECTION, 'main'))
     return below
 
 
