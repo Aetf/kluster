@@ -102,6 +102,7 @@ from kluster.conventions.homelab import (
     HOMELAB_VCPUS,
 )
 from kluster.conventions.identity import CLUSTER_NAME, LABEL_DOMAIN, PHYSICAL, STATE_BACKEND
+from kluster.conventions.outputs import PHYSICAL_OUTPUTS, PhysicalOutputs
 from kluster.conventions.providers import (
     B2_ACCOUNT,
     CLOUDFLARE_ACCOUNT,
@@ -174,6 +175,7 @@ __all__ = (
     'OVERLAY_LABEL',
     'PARKED_ZONES',
     'PHYSICAL',
+    'PHYSICAL_OUTPUTS',
     'POD_CIDR_V4',
     'POD_CIDR_V6',
     'POOL_INTERNET',
@@ -208,6 +210,7 @@ __all__ = (
     'FollowsDedicatedVip',
     'NodeVolumeEntry',
     'OciTenancy',
+    'PhysicalOutputs',
     'RetentionClass',
     'SiteNetwork',
     'Vip',

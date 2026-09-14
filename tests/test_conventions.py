@@ -713,3 +713,31 @@ def test_the_stack_encrypted_apart_is_the_one_the_forge_program_declares() -> No
     from kluster.stacks import github
 
     assert set(pulumi_config.APART) == {github.STACK}
+
+
+# --------------------------------------------------------------------------
+# The stack outputs.
+# --------------------------------------------------------------------------
+# `conventions.PHYSICAL_OUTPUTS` is the one spelling of the `physical` stack's
+# export names; the exporter and every reader take theirs from it. That the
+# program exports the structure's names and nothing else, and that what one
+# program reads the other exports, are held where the programs run
+# (`test_physical_stack`). What is left for the table itself is the relations
+# between its entries.
+
+
+def test_every_continuous_integration_member_has_an_identity_export_and_nothing_else_does() -> None:
+    """The identity table is keyed by the roster, both ways.
+
+    A roster member with no export would join no job, having no secret to be
+    pushed; an export naming a member the roster does not carry would index an
+    identity the overlay never generated, and fail the run there.
+    """
+    assert set(conventions.PHYSICAL_OUTPUTS.ci_identity) == set(conventions.overlay.CI_MEMBERS)
+
+
+def test_no_two_outputs_share_a_name() -> None:
+    """Two fields spelled alike would be one export, the second write winning silently."""
+    names = conventions.PHYSICAL_OUTPUTS.names()
+
+    assert len(names) == len(set(names)), names

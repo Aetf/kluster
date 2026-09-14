@@ -525,9 +525,11 @@ class Minted(SingleValue):
 class StateRead(SingleValue):
     """A stack output, read back out of the state the kit's passphrase opens.
 
-    The output name is this map's half of a contract: the producing program has
-    to export under it, and a map that named nothing would leave that agreement
-    implicit until the day the push found nothing to read.
+    The output name is a contract with the producing program, which has to
+    export under it. A row names it from `conventions` -- the structure the
+    program exports from -- so the two halves are one field; what is left to
+    fail at push time is a program that has not been applied, or an apply that
+    skipped the resource the export reads.
     """
 
     kind: ClassVar[str] = 'state-read'
@@ -863,12 +865,12 @@ ROWS: dict[str, Row] = {
     ),
     'zerotier-identity-physical': Row(
         register='ZT CI member identities (`ci-physical`, `ci-dns`)',
-        source=StateRead(PHYSICAL_STACK, 'ci_zerotier_identity_physical'),
+        source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.ci_identity['ci-physical']),
         targets=_github('ZEROTIER_IDENTITY', ZEROTIER_PHYSICAL),
     ),
     'zerotier-identity-dns': Row(
         register='ZT CI member identities (`ci-physical`, `ci-dns`)',
-        source=StateRead(PHYSICAL_STACK, 'ci_zerotier_identity_dns'),
+        source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.ci_identity['ci-dns']),
         targets=_github('ZEROTIER_IDENTITY', ZEROTIER_DNS),
     ),
     'zerotier-network': Row(
@@ -957,13 +959,13 @@ ROWS: dict[str, Row] = {
     ),
     'talos': Row(
         register='Talos machine secrets + talosconfig',
-        source=StateRead(PHYSICAL_STACK, 'talosconfig'),
+        source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.talosconfig),
         targets=(PulumiState(PHYSICAL_STACK, 'the cluster PKI roots'),),
         pending={'ops-repo secret': _OPS_UNBUILT},
     ),
     'kubeconfig': Row(
         register='kubeconfig',
-        source=StateRead(PHYSICAL_STACK, 'kubeconfig'),
+        source=StateRead(PHYSICAL_STACK, conventions.PHYSICAL_OUTPUTS.kubeconfig),
         # Nothing pending: the `k8s-base` and `apps` programs take it from the
         # `physical` stack through a StackReference, so the register names no
         # secret for this row to be waiting on.

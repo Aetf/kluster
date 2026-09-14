@@ -88,19 +88,6 @@ WORKER_GUA = 'workerGua'
 #: during the ceremony, `workerGua` only after it.
 GATEWAY_BOOTSTRAP_HOST = 'gatewayBootstrapHost'
 
-#: The export each continuous-integration identity's key material leaves under,
-#: by the roster name of the member that carries it. The names are half of a
-#: contract: `credentials derived sync` reads this stack's state by them and
-#: pushes each into the `ZEROTIER_IDENTITY` secret of the Environments whose
-#: jobs join with that identity (credentials.md §3, gateway.md §2.6), which is
-#: one Environment set per identity domain — `physical` and `dns` — because an
-#: identity live in two jobs at once flaps. A roster rename that this mapping
-#: does not follow fails the run rather than quietly renaming the contract.
-CI_IDENTITY_OUTPUTS = {
-    'ci-physical': 'ci_zerotier_identity_physical',
-    'ci-dns': 'ci_zerotier_identity_dns',
-}
-
 #: Static host entries on the gateway's own resolver. Empty, and that is the
 #: design: the device name plane is DHCP-derived and served by that resolver,
 #: while every service is named by its public hostname and steered by the
@@ -355,8 +342,11 @@ async def main() -> None:
 
     ##
     ## The exports: everything another stack or the credential machinery reads
-    ## out of this one (rfc-002 §12).
+    ## out of this one (rfc-002 §12). The names are `conventions.PHYSICAL_OUTPUTS`,
+    ## which every reader asks by — the `dns` StackReference, the state reads of
+    ## `credentials derived sync` — so a rename is one edit both sides see.
     ##
+    outputs = conventions.PHYSICAL_OUTPUTS
 
     # Machine facts only: the downstream stacks read addresses and ids, never
     # conventions — those they share as code.
@@ -364,28 +354,28 @@ async def main() -> None:
     # Both families of the balancer are published, because the cluster anchor
     # in `dns` carries an A and an AAAA; the VIP below is IPv4 only, and that
     # is a property of the address rather than an omission here.
-    pulumi.export('cluster_endpoint', load_balancer.address)
-    pulumi.export('cluster_endpoint_v6', load_balancer.address_v6)
-    pulumi.export('vip1', nodes.reserved_ip.ip_address)
-    pulumi.export('vip1_private', nodes.secondary_ip.ip_address)
-    pulumi.export('node_private_ips', {node: instance.private_ip for node, instance in nodes.instances.items()})
-    pulumi.export('node_public_ips', {node: instance.public_ip for node, instance in nodes.instances.items()})
+    pulumi.export(outputs.cluster_endpoint, load_balancer.address)
+    pulumi.export(outputs.cluster_endpoint_v6, load_balancer.address_v6)
+    pulumi.export(outputs.vip1, nodes.reserved_ip.ip_address)
+    pulumi.export(outputs.vip1_private, nodes.secondary_ip.ip_address)
+    pulumi.export(outputs.node_private_ips, {node: instance.private_ip for node, instance in nodes.instances.items()})
+    pulumi.export(outputs.node_public_ips, {node: instance.public_ip for node, instance in nodes.instances.items()})
 
     # Both are cluster-admin credentials, and both are marked secret at the
     # source; `k8s-base` and `apps` read them from here rather than from a file
     # anybody has to hold.
-    pulumi.export('kubeconfig', day1.kubeconfig)
-    pulumi.export('talosconfig', day1.talosconfig)
+    pulumi.export(outputs.kubeconfig, day1.kubeconfig)
+    pulumi.export(outputs.talosconfig, day1.talosconfig)
 
     # Names, endpoints and credentials, because that is what a consumer of a
     # bucket is configured with (physical.md §0). The per-namespace VolSync and
     # barman keys are not here: the census of namespaces belongs to the stack
     # that declares them, and each arrives as a scope on this bucket when it
     # does. What exists without any application is the etcd snapshot key.
-    pulumi.export('backup_bucket', backup.bucket_name)
-    pulumi.export('backup_endpoint', backup.endpoint)
+    pulumi.export(outputs.backup_bucket, backup.bucket_name)
+    pulumi.export(outputs.backup_endpoint, backup.endpoint)
     pulumi.export(
-        'backup_keys',
+        outputs.backup_keys,
         {scope: {'id': backup.key_id(scope), 'secret': backup.key_secret(scope)} for scope in backup.keys},
     )
 
@@ -395,8 +385,10 @@ async def main() -> None:
     # the daemon starts (`.github/actions/zerotier`). It leaves as a secret,
     # because an export that lost the marking would print a join credential
     # into a deployment log, and it is read back out of state — with
-    # `--show-secrets` — by `credentials derived sync`.
-    for member, output in CI_IDENTITY_OUTPUTS.items():
+    # `--show-secrets` — by `credentials derived sync`. Indexing the overlay by
+    # the roster name the table carries is what makes a roster rename the table
+    # does not follow fail here rather than quietly rename the contract.
+    for member, output in outputs.ci_identity.items():
         pulumi.export(output, pulumi.Output.secret(overlay.identities[member].private_key))
 
 

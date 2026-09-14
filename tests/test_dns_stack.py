@@ -32,11 +32,12 @@ class AppliedPhysical(Recorder):
 
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == 'pulumi:pulumi:StackReference':
+            outputs = conventions.PHYSICAL_OUTPUTS
             return {
                 'outputs': {
-                    'cluster_endpoint': LB_ADDRESS,
-                    'cluster_endpoint_v6': LB_ADDRESS_V6,
-                    'vip1': VIP1_ADDRESS,
+                    outputs.cluster_endpoint: LB_ADDRESS,
+                    outputs.cluster_endpoint_v6: LB_ADDRESS_V6,
+                    outputs.vip1: VIP1_ADDRESS,
                 }
             }
         return {}
