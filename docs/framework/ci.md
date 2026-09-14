@@ -156,6 +156,11 @@ PR      preview.yml:        changes ─→ preview (dns | k8s-base | apps)
                               (its own workflow, not a reader of
                                preview's verdict)
 
+        sdk-regenerate.yml: regenerate ─→ gate ─→ push onto the branch
+                              (renovate's branches touching Pulumi.yaml
+                               only; the pushed head's runs wait for an
+                               approval click, see the bridged-SDK bullet)
+
 merge   deploy.yml:         plan-physical ──zero diff──→ (up-physical skipped)
                                    └───────── diff ────→ up-physical [gate]
                             ──→ up-k8s-base ──needs──→ up-apps
@@ -232,6 +237,62 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     reads as a patch and is suppressed, a new month reads as a minor
     and opens a pull request, and a new year reads as a major and waits
     on the dependency dashboard.
+-   **A bridged-SDK bump is finished on its branch by a workflow, and
+    lands one approval click and one merge later.** The three SDKs
+    under `sdks/` are generated from the `packages:` block of
+    `Pulumi.yaml`, and a test in `checks` holds each committed SDK to
+    the block, so a renovate bump of a bridge or provider version is a
+    red `checks` until `pulumi install` has regenerated the tree.
+    `sdk-regenerate.yml` does that on renovate's branch: it regenerates
+    `sdks/`, re-locks `uv.lock`, runs AGENTS.md's gate step for step on
+    the regenerated tree, and pushes the result onto the branch — a
+    tree that fails the gate is never pushed, and the run is red on the
+    head renovate pushed. The gate runs *there* because the pushed
+    head's own runs wait for a person: the push is made with
+    `GITHUB_TOKEN`, and the `pull_request` runs such a push causes are
+    created in an approval-required state — `checks`, `changes`,
+    `classify` and the regeneration itself all exist on the new head,
+    and **Approve workflows to run** in the merge box, by anyone with
+    write access, starts them (closing and reopening the pull request
+    does too, and is the heavier gesture). A `push` made with the token
+    still starts nothing, which is the property the unattended merge
+    relies on to start no deploy. From the click on, the ordinary route
+    applies — `classify` refuses candidacy because `Pulumi.yaml` is
+    touched — so the merge is a maintainer's after the checks, and the
+    workflow's comment on the pull request says so. What the
+    previewable stacks could prove about such a bump is nothing in any
+    case: all three SDKs render in `physical`, which has no
+    pull-request preview, so a bump surfaces where every provider-SDK
+    bump does — as a diff in `plan-physical` on `main` (the residual
+    accepted under H3 below).
+    **The click repeats whenever `main` advances while the bump is
+    open.** Renovate's `rebaseWhen: auto` resolves to
+    *behind-base-branch* here, because `main`'s protection requires an
+    up-to-date branch, and `gitIgnoredAuthors` naming the workflow's
+    address keeps the branch renovate's own — so on each advance of
+    `main`, renovate rebases the branch from its own commit and the
+    regeneration is dropped; the workflow regenerates on the new head,
+    and that head waits for another click. The alternative — a branch renovate
+    would not touch once the workflow committed to it — is a bump that
+    goes stale instead, and stays stale on a newer release too, which
+    is why the loop is the accepted side.
+    **The unattended route is decided and not built, and it is two
+    slices.** The first is the classifier's: `classify` admitting a
+    `Pulumi.yaml` whose document with `packages` removed is equal at
+    base and head, on renovate's own pull request — a person's edit to
+    the recipe is a new provider, a design change, and keeps the human
+    route — with `checks` already holding `sdks/` to the block. That
+    alone makes a bump one click from `main`: approve, then `checks`,
+    `changes`, `classify`, `prove`, `merge`. It is not a merge route of
+    the regeneration workflow's own, which would be a second copy of
+    `prove` for a proof it cannot improve on. The second removes the
+    click, and with it the loop above: a credential that pushes as
+    something other than `GITHUB_TOKEN` — a GitHub App with
+    `contents: write` on this repository — so that the regeneration's
+    push starts the runs on its own. The trigger App carries
+    `actions: write` alone so that it can start runs and never push
+    code, and adding a pusher is a decision about that partition
+    (credentials.md §3), not a workflow edit.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any

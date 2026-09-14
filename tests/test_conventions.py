@@ -652,6 +652,42 @@ def test_every_login_a_workflow_compares_against_is_one_the_census_names() -> No
     assert read <= named, f'compared against by a workflow and named nowhere: {sorted(read - named)}'
 
 
+#: How a workflow step sets the author its commits carry, and how
+#: `renovate.json5` names the authors whose commits leave a branch renovate's
+#: own. Each is one literal in a file no import reaches.
+COMMIT_EMAIL_IN_A_STEP = re.compile(r"git config user\.email '([^']+)'")
+IGNORED_AUTHORS_IN_RENOVATE = re.compile(r"gitIgnoredAuthors:\s*\[\s*((?:'[^']+',?\s*)+)\]")
+
+
+def test_every_author_a_workflow_commits_as_is_one_renovate_ignores() -> None:
+    """A commit a workflow makes onto a renovate branch must not take the branch away from renovate.
+
+    Renovate leaves a branch alone once someone else has committed to it --
+    no rebase, no move to a newer release -- unless the author is one
+    `gitIgnoredAuthors` names. The regeneration workflow commits onto
+    renovate's branches by design (ci.md §3), so the address it commits with
+    and the address renovate ignores are two spellings of one decision, and a
+    workflow that changed its author would silently strand every bump it
+    finished.
+    """
+    config = (ROOT / 'renovate.json5').read_text()
+    found = IGNORED_AUTHORS_IN_RENOVATE.search(config)
+    assert found is not None, 'renovate.json5 names no gitIgnoredAuthors'
+    ignored = set(re.findall(r"'([^']+)'", found.group(1)))
+    committing = {
+        (_name(path), email)
+        for path in _workflows_and_actions()
+        for email in COMMIT_EMAIL_IN_A_STEP.findall(path.read_text())
+    }
+
+    # The regeneration workflow is the one that commits onto a branch that is
+    # not its own, so a pattern that stopped matching would be silent about
+    # the one case this exists for.
+    assert any(name == 'workflows/sdk-regenerate.yml' for name, _ in committing)
+    stranded = sorted(f'{name} commits as {email}' for name, email in committing if email not in ignored)
+    assert stranded == [], f'commits as an author renovate does not ignore: {stranded}'
+
+
 def test_no_workflow_identifies_an_account_by_id() -> None:
     """`conventions.forge.Author` carries a login and no id, and says why.
 

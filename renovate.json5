@@ -35,6 +35,18 @@
     // block below.
     'sdks/**',
   ],
+  // The regeneration workflow commits onto a renovate branch (framework/ci.md
+  // §3), and a branch someone else has committed to is one renovate leaves
+  // alone: it would neither rebase it nor move it to a newer release. Naming
+  // the workflow's author keeps the branch renovate's own, so a newer release
+  // -- or an advance of `main`, which `rebaseWhen: auto` follows under the
+  // strict protection -- recreates the branch from renovate's commit, dropping
+  // the regeneration, which the workflow then redoes on the new head. The
+  // address is the one the workflow commits with, and a test holds the two
+  // spellings equal.
+  gitIgnoredAuthors: [
+    'github-actions[bot]@users.noreply.github.com',
+  ],
   // Merging is the CI's job, not renovate's: the deploy workflow merges a PR
   // once it has proven the preview is empty (framework/ci.md §3) — a zero-diff
   // proof renovate cannot produce. Two mechanisms racing would also mean
