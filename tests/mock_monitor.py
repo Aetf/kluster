@@ -46,7 +46,7 @@ from pulumi.runtime.proto import resource_pb2
 from pulumi.runtime.stack import wait_for_rpcs
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Mapping
 
 
 #: The engine's own root resource. Every run registers one and no case asks
@@ -297,6 +297,44 @@ class Recorder(pulumi.runtime.Mocks):
             if request.name == rest or not (rest == '' or rest.startswith('-')):
                 misnamed[urn] = component.name
         return misnamed
+
+    def places_claimed_more_than_once(self, place_of: Mapping[str, str]) -> dict[str, list[str]]:
+        """Every place two or more registrations claim, and the URNs that claim it.
+
+        `place_of` maps a resource type to the input that is the one place the
+        resource occupies on its target -- for the device provider, the path a
+        file or a directory sits at and the root an artifact is unpacked to
+        (`device_places.PLACES`). Registrations of a type the map does not name
+        are not read at all. Keyed by the value, valued by the URNs sorted --
+        the order two independent registrations reach the monitor in is the
+        SDK's thread pool's, not the program's, so registration order would
+        make the answer vary between runs of one program. Empty on a run where
+        every place has one resource.
+
+        Read by URN and not by logical name, because a name keeps nothing off a
+        place: a child is named for its component (style/pulumi.md), so two
+        components asking for one path are two names, two URNs -- the engine
+        accepts the run -- and one file on the device that each `create`
+        writes, each refresh reports drifted, and either `delete` removes from
+        under the other. One-place-one-resource is a property of the inputs,
+        and this is the reader that holds it.
+
+        A registration of a listed type whose place is missing or is not a
+        string is refused rather than skipped: skipping would let the very
+        resource the map is about fall out of the census.
+        """
+        claims: dict[str, list[str]] = {}
+        for urn, request in self.registrations.items():
+            place = place_of.get(request.type)
+            if place is None:
+                continue
+            if place not in request.object:
+                raise AssertionError(f'{urn} is a {request.type} with no {place!r} input, so it claims no place')
+            value = request.object[place]
+            if not isinstance(value, str):
+                raise AssertionError(f'{urn} claims {place!r} {value!r}, which is not a place')
+            claims.setdefault(value, []).append(urn)
+        return {value: sorted(urns) for value, urns in claims.items() if len(urns) > 1}
 
     def _component_above(self, request: Any) -> Any | None:
         """The nearest component registration above this one, or `None` under the root alone."""

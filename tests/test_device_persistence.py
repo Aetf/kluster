@@ -27,6 +27,7 @@ from typing import final
 import pulumi
 import pytest
 import pytest_asyncio
+from device_places import PLACES
 from mock_monitor import Recorder, declaring, run_with
 
 from kluster import conventions
@@ -89,6 +90,28 @@ class Neighbours(Component, pulumi_type='test:gateway:Neighbours'):
         super().__init__(name, opts=opts)
         self.shell: DeviceFile = mechanism.executable('example.sh', '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.python: DeviceFile = mechanism.executable('example.py', 'raise SystemExit(0)\n', opts=self.child_opts())
+        self.register_outputs({})
+
+
+#: An executable two components of different types both ask for.
+CONTESTED = 'contested.sh'
+
+
+class Claimant(Component, pulumi_type='test:gateway:Claimant'):
+    """A component asking for `CONTESTED`, of one type."""
+
+    def __init__(self, name: str, *, mechanism: DevicePersistence, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.program: DeviceFile = mechanism.executable(CONTESTED, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
+        self.register_outputs({})
+
+
+class OtherClaimant(Component, pulumi_type='test:gateway:OtherClaimant'):
+    """A component asking for `CONTESTED`, of another type."""
+
+    def __init__(self, name: str, *, mechanism: DevicePersistence, opts: pulumi.ResourceOptions | None = None) -> None:
+        super().__init__(name, opts=opts)
+        self.program: DeviceFile = mechanism.executable(CONTESTED, '#!/bin/sh\nexit 0\n', opts=self.child_opts())
         self.register_outputs({})
 
 
@@ -269,6 +292,30 @@ def test_a_file_is_named_for_the_component_that_asked(monitor: Recorder) -> None
     for kind, file in (('on-boot', SCRIPT), ('bin', PROGRAM), ('unit', UNIT), ('skeleton', DIRECTORY)):
         assert monitor.options_of(f'{CONSUMER}-{kind}-{file}').parent.endswith(f'::{CONSUMER}')
         assert f'{NAME}-{kind}-{file}' not in monitor.names_declared
+
+
+@pytest.mark.asyncio
+async def test_two_components_asking_for_one_path_are_listed_by_the_path_census(
+    monitor: Recorder, mechanism: DevicePersistence
+) -> None:
+    """Two askers of different types are two URNs at one place, and the run is accepted.
+
+    A URN qualifies a name by parent types, and each of these files is named
+    for its own asker besides, so nothing about the registration collides: the
+    engine would `create` both, the second write would overwrite the first,
+    and a delete of either would take the file from under the other. The
+    census over the declared places is what says so, naming the path and both
+    claimants.
+    """
+    async with declaring():
+        first = Claimant('first', mechanism=mechanism)
+        second = OtherClaimant('second', mechanism=mechanism)
+
+    contested = persistence.executable_path(CONTESTED)
+    listed = monitor.places_claimed_more_than_once(PLACES)
+
+    assert set(listed) == {contested}
+    assert listed[contested] == sorted([str(await first.program.urn.future()), str(await second.program.urn.future())])
 
 
 @pytest.mark.asyncio

@@ -198,3 +198,43 @@ async def test_two_components_of_one_type_cannot_hold_one_child_name_between_the
     message = await refusal_of(declare)
 
     assert f'{COMPONENT}${INNER}::held' in message
+
+
+#: Two resource types whose one input is the place each occupies, and one that
+#: is not read: a third type at the same value is not a claim on a place.
+PLACED = 'test:index:Placed'
+ALSO_PLACED = 'test:index:AlsoPlaced'
+UNPLACED = 'test:index:Unplaced'
+PLACE_OF = {PLACED: 'place', ALSO_PLACED: 'spot'}
+
+
+@pytest.mark.asyncio
+async def test_a_place_two_registrations_claim_is_listed_with_both_urns_in_order() -> None:
+    """Read off the inputs by URN, under a map from type to the input that is the place.
+
+    Two types, two names, one place: no identity collides, and the census
+    lists the place against both claimants, sorted. A place with one claimant
+    is not listed, and a type the map does not name is not read -- its value
+    at the contested place is not a claim.
+    """
+    monitor = await run_with(Recorder(), stack='places', project='mock-monitor')
+    async with declaring():
+        first = pulumi.CustomResource(PLACED, 'first', {'place': '/one'}, None)
+        _ = pulumi.CustomResource(PLACED, 'alone', {'place': '/alone'}, None)
+        second = pulumi.CustomResource(ALSO_PLACED, 'second', {'spot': '/one'}, None)
+        _ = pulumi.CustomResource(UNPLACED, 'bystander', {'place': '/one'}, None)
+
+    listed = monitor.places_claimed_more_than_once(PLACE_OF)
+
+    assert listed == {'/one': sorted([str(await first.urn.future()), str(await second.urn.future())])}
+
+
+@pytest.mark.asyncio
+async def test_a_placed_type_registered_without_its_place_is_refused_rather_than_skipped() -> None:
+    """A resource the map is about and the census cannot see is the one failure it must not have."""
+    monitor = await run_with(Recorder(), stack='unplaced', project='mock-monitor')
+    async with declaring():
+        _ = pulumi.CustomResource(PLACED, 'placeless', {}, None)
+
+    with pytest.raises(AssertionError, match="no 'place' input"):
+        _ = monitor.places_claimed_more_than_once(PLACE_OF)
