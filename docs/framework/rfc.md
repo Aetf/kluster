@@ -127,7 +127,7 @@ A bullet list, before anything else, carrying in this order:
 
 *   **Status** — one of the words of §3.1, with the date it was reached.
     For an implemented RFC, the header is also where the content's new
-    homes and any construction deviation are named (§5.3).
+    homes and any decision that moved are named (§5.3).
 *   **Created** — the date the document was first proposed. For a
     promoted design (§1.2) that is the date of the pull request carrying
     the document, and the design's own date belongs in the Status line.
@@ -450,14 +450,19 @@ gives, and a vocabulary sweep is none of them. The name §5.2 admits is
 one that the implementation moved, edited in the pull request that
 moves it.
 
-A decision that moved during construction is recorded **in the status
-header**, not by editing the body: the body stays the text that was
-accepted, and the header says what was built instead and why the
-accepted answer could not stand. The design document carries the truth
-in full; the header carries only enough that a reader of the RFC knows
-not to trust that paragraph.
+A decision that moved during or after construction is recorded **in
+the status header**, not by editing the body: the body stays the text
+that was accepted, and the header says what was built instead and why
+the accepted answer could not stand. The design document carries the
+truth in full; the header carries only enough that a reader of the RFC
+knows not to trust that paragraph. What separates this from §5.4 is
+what moved, not when it was found: a decision that a design document
+now states — one paragraph, settled where §1 lets an ops issue settle
+it — is decoded here; a defect in what the RFC exists to decide is
+argued in a new RFC, which supersedes this one.
 
-The recording ships in the slice that deviates, not later.
+The recording ships in the change that deviates — the slice, while the
+RFC is under construction — not later.
 
 A cross-reference that another document overtakes is decoded the same
 way: an accepted body that cites a section of another document by

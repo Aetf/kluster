@@ -44,6 +44,12 @@
     below (`kluster-ops#204`); framework/github.md §1 carries the
     mechanism. A case over the declaration pins the SDK's marking, so
     such a release fails the gate rather than a state file.
+    **§13's new rule is withdrawn**: the admin token is a config secret in
+    `Pulumi.github.yaml` like every other provider credential, in a stack
+    encrypted apart from the estate passphrase (`kluster-ops#315`); the one
+    store is stated under "Layering" in style/pulumi.md, and
+    framework/github.md §1 carries why that stack is held apart.
+    `mise.toml` materializes no provider credential.
     **§19's slice 7 has the component adopting the `expect-changes`
     label**: it does so on `pulumi-github` 6.14.0 and not from 6.15.0,
     whose create for a label is a plain create, so a create against the
