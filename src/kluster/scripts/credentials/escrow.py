@@ -727,8 +727,10 @@ def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequenc
 
     Several identities are passed rather than one so the run is resumable —
     a re-run finds some files already under the successor and some still
-    under the predecessor, and opens both. The recipients file is written
-    last, so it names what the directory actually holds.
+    under the predecessor, and opens both. `rotate_recovery` is that re-run:
+    it hands over the identity it finds in the successor kit beside the
+    retired one. The recipients file is written last, so it names what the
+    directory actually holds.
     """
     targets = list(recipients if recipients is not None else registry.recipients())
     if not targets:
@@ -753,17 +755,45 @@ def rewrap(registry: Registry, *, identities: Sequence[str], recipients: Sequenc
     return written
 
 
+def holds_recovery(kit: KdbxStore, *, entry: str = RECOVERY_ENTRY) -> bool:
+    """Whether `entry` holds a recovery key: the one field `Vault.open` reads, non-empty."""
+    return kit.has(entry) and bool(kit.get(entry))
+
+
 def rotate_recovery(kit: KdbxStore, successor: KdbxStore, registry: Registry, *, entry: str = RECOVERY_ENTRY) -> None:
     """Put a successor recovery key in the new kit and re-wrap the escrow to it.
 
     The successor is written before the re-wrap, so an interrupted rotation
     leaves the key that the half-re-wrapped registry needs sitting in a kit
-    rather than nowhere.
+    rather than nowhere. The re-run of that interrupted rotation is this same
+    call against the same successor: a key already in the successor's row is
+    the one re-wrapped to, never replaced, because ciphertexts the first run
+    reached are under it and nothing else opens them. The re-wrap is handed
+    both identities either way, which is what makes every mid-way state
+    converge (`rewrap`), and the retired key is read from `kit` -- the one
+    thing a re-run still needs the retired kit's row for.
+
+    The recipient is derived from the identity rather than read from the row,
+    for the reason no OCI row stores a fingerprint: a stored copy could only
+    ever disagree with the key it describes.
+
+    A successor row holding the retired identity itself is refused: nothing
+    would rotate, and the file is the kit in hand or a copy of it.
     """
     retired = kit.get(entry)
-    identity = age.generate()
-    successor.put(entry, identity.public, identity.secret)
-    _ = rewrap(registry, identities=[identity.secret, retired], recipients=[identity.public])
+    if holds_recovery(successor, entry=entry):
+        secret = successor.get(entry)
+        if secret == retired:
+            raise EscrowError(
+                f'{entry!r} in the successor holds the retired key itself; a successor is a new file, '
+                'not the kit being rotated or a copy of it'
+            )
+        log.info('escrow: the successor already holds a recovery key; re-wrapping to it')
+    else:
+        identity = age.generate()
+        successor.put(entry, identity.public, identity.secret)
+        secret = identity.secret
+    _ = rewrap(registry, identities=[secret, retired], recipients=[age.recipient(secret)])
 
 
 def missing(registry: Registry) -> list[str]:
