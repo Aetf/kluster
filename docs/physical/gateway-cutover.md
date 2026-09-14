@@ -42,9 +42,12 @@ not moved.
 
 -   **Every machine directory is replaced.** `/data/custom/machines/<name>`
     is the root filesystem tree itself today; under the declaration that
-    path is the machine's own directory, holding `rootfs/`, `state/`, the
-    `<name>.nspawn` settings, the digest marker and the content stamp
-    (gateway.md §1.1). The whole of today's `machines/` is moved aside in
+    path is the machine's own directory, holding `rootfs/`, its digest
+    marker, `state/`, `initial-state/` where the machine has one, the
+    `<name>.nspawn` settings, the content stamp, and the files the
+    machine mounts (gateway.md §1.1). What makes it a machine to the
+    boot chain is the settings file: nothing on the device is handed a
+    list. The whole of today's `machines/` is moved aside in
     one rename, which takes the three live trees and the three `.old`
     rollback copies the retiring push mechanism left beside them — about
     370 MB — with it. Size does not decide the cost: every move in §4 is
@@ -362,9 +365,10 @@ pulumi up \
 It delivers the boot chain, the unit sources, the executables, the
 routing configuration, the authorized key, and for each machine its
 settings file, its root filesystem, its mounted configuration and
-secrets, and the digest marker naming the pin its tree came from. The
-initial states are no-ops: every state directory that should hold state
-holds it. Post-apply hooks converge and start the machines — writing
+secrets, its initial state where it has one, and the digest marker
+naming the pin its tree came from. Installing the initial states is a
+no-op: every state directory that should hold state holds it.
+Post-apply hooks converge and start the machines — writing
 each machine's content stamp as they do — the overlay member last and
 for the first time (gateway.md §1.1).
 
@@ -409,7 +413,7 @@ The device carries one piece of older residue — a dangling
 `/var/lib/machines/adguard.pre-rename` link and the failed
 `systemd-nspawn@adguard.pre-rename.service` beside it. The first push
 clears the link: `40-machines.sh` retires every link into the machines
-root that the declared set does not name. The failed unit is a runtime
+root whose machine has no settings file behind it. The failed unit is a runtime
 object with no file behind it and goes at the next boot, or to
 `systemctl reset-failed`.
 

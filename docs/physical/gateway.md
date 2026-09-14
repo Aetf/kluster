@@ -311,11 +311,11 @@ Everything a container service is lives in **one directory per machine**
 under `/data/custom/machines`, the persistent root a firmware update
 leaves alone: the root filesystem tree, the digest marker naming the pin
 it came from, the writable state bind-mounted into the container, the
-`<name>.nspawn` settings file, the content stamp, and whatever files
-that machine mounts or is given as initial state. A machine can therefore
-be read,
-moved or deleted whole, and nothing about a service is left somewhere
-else when the service goes.
+`<name>.nspawn` settings file, the content stamp, whatever files that
+machine mounts, and — under `initial-state/`, laid out as the state
+directory it is copied into — whatever it is given as initial state. A
+machine can therefore be read, moved or deleted whole, and nothing about
+a service is left somewhere else when the service goes.
 
 **Two scripts of the boot chain make any of it take effect**, and
 they are deliberately the only mechanism. `30-nspawn-units.sh` mirrors
@@ -329,26 +329,52 @@ this program is not reachable, and both run again as the post-apply
 hook of every file a machine is made of — so the path that recovers a
 device is the path every apply exercises, and it cannot rot unnoticed.
 
-The machine set they act on is **rendered and unordered**: a machine
-absent from it is skipped even if its directory exists, which is what
-keeps a half-migrated or hand-made sibling directory from being
-started, and one that is no longer declared is disabled and unlinked.
-A machine whose root filesystem has not landed yet, or whose settings
-have not, is skipped rather than fatal, because a push writes that
-script before the files it describes — and a machine started without
-its settings would come up on the template unit's defaults, which for
-a bridged service is an interface attached to nothing.
+**Neither script is given a list of machines.** What machines exist is
+what the push left on the disk: a machine is a directory under
+`/data/custom/machines` holding a regular file at `<name>/<name>.nspawn`,
+and both scripts key on that one fact, so what is mirrored and what
+`40-machines.sh` takes for a machine cannot be two different sets — and
+neither can the declaration and a list delivered beside it, because
+there is none. Every other per-machine fact is read the same way, off
+that machine's own directory: what its content stamp covers, and what a
+machine that has never run is seeded with. A directory with no settings
+file is not a machine and is skipped, which is what keeps a
+half-migrated or hand-made sibling directory from being started; a
+machine whose settings file went away is one that is no longer
+declared, and is disabled and unlinked. A machine
+whose root filesystem has not landed yet is skipped rather than fatal,
+because on the push that creates one its files arrive before the tree
+does. The kind is the test and not the name: something at the settings
+path that is not a regular file is a machine the push has not finished
+with, and it is neither read nor started, because both scripts run at
+boot with nobody watching and a read that waits on a named pipe would
+hold the boot chain there.
+
+The set is **unordered**: which machine is actuated when is a
+push-time constraint, expressed in the deployment graph where the
+session is (below), and at boot there is nothing to order. What is fixed
+is the order *inside* one machine's stamp — `40-machines.sh` runs under
+`LC_ALL=C`, because a checksum is over a byte sequence and a glob's
+order is the collation's, and a script run both from systemd at boot and
+over an operator's session would otherwise stamp one unchanged machine
+two different ways and bounce it on every alternation.
 
 **A service is restarted only if a file that defines it changed**, and
 that is why the health of a service here is decided by *files* rather
 than by a probe. The **content stamp** is a file in the machine's
 directory holding a checksum over everything that defines it — its
 settings file, the digest marker of its root filesystem tree, and every
-configuration file it mounts. That set of paths is the machine's
-**stamped set**, and the stamp is the record of what was last acted on;
-comparing the two is how the script tells intended content from
-pushed content without asking the service anything about itself. An
-unchanged stamp plus an active machine means nothing to do.
+other regular file in the machine's directory, which is what that
+machine mounts — leaving out the stamp itself and a write a push still
+has in flight. That set of paths is the machine's **stamped set**, a
+shape of the directory rather than a list anything carries; the stamp
+is the record of what was last acted on, and comparing the two is how
+the script tells intended content from pushed content without asking
+the service anything about itself. An unchanged stamp plus an active
+machine means nothing to do. The initial state is outside the set by
+construction — it sits in a directory of its own, and the stamp walks
+files — because a machine that has run once owns its state, and a
+change to what it was seeded with is never a reason to bounce it.
 
 The stamped set names the root filesystem's **digest marker** rather
 than the tree, because walking a root filesystem to learn it has not

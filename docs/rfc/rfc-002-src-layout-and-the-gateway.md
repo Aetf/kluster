@@ -14,8 +14,9 @@
     the component tree, the per-node capabilities, the roster, the stack's
     configuration surface — in [declarative/physical.md](../declarative/physical.md)
     and [physical/gateway.md](../physical/gateway.md). Where this text and a
-    design document disagree, the design document is right. **Two decisions
-    moved during construction: the endpoint, and §4.3's bridge dependency.**
+    design document disagree, the design document is right. **Decisions that
+    moved during construction: the endpoint, §4.3's bridge dependency, and the
+    rendered machine list of §4.2 and §5.**
     The endpoint: §7.4 composes the session from values `configure` put on the
     provider, and §11 routes `gatewayBootstrapHost` there beside the credential;
     what was built keeps the address a declared resource input, because a
@@ -39,7 +40,27 @@
     this design protects against: a container attached to a bridge that is gone
     talks to nothing until the bridge is back, which is the milder state.
     `After=` stays, because its worst case is having no effect while a bridge
-    that is absent costs a failed start the restart policy retries.
+    that is absent costs a failed start the restart policy retries. **The
+    rendered machine list, 2026-09-14:** §4.2 has the recovery script act on
+    the units the declaration names and on a stamped set named per service,
+    and §5.2 has each `Container` expose that set so that `DeviceServices`
+    renders the script from its children. What is built hands the device no
+    list: a machine is a directory under the
+    machines root holding a settings file, both boot-chain scripts key on that
+    one fact, and the stamped set and the initial state are shapes of the
+    machine's own directory — the initial state delivered under
+    `initial-state/`, laid out as the state directory it is copied into. A
+    rendered list is the same statement the declarations make, delivered as a
+    separate file that lands before or after the files it describes, and a
+    device holding the old list and the new files would act on neither; what
+    the layout has to make harmless instead is a half-delivered directory,
+    which it does by putting the settings file down after the files the
+    machine mounts and before its tree, and taking it away in the reverse
+    order — so a tree never stands without its settings, and settings never
+    without the files they name; the only half-states are a directory that is
+    not yet a machine and a machine whose tree has not landed, which is
+    skipped. The arrangement as built is
+    [physical/gateway.md](../physical/gateway.md) §1.1.
 *   **Created:** 2026-08-28
 *   **Authority:** the style rules (`docs/style/`) are what this document
     obeys; where they are silent, a rule proposed here is marked **new rule**.

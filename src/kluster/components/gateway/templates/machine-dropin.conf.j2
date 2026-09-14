@@ -28,12 +28,15 @@ After={{ bridge_device }}
 # A machine that cannot start retries every five seconds for as long as it is
 # left alone. Two starts in any ten seconds stay inside systemd's default start
 # rate limit, so nothing here ever gives up: `systemctl stop` ends the loop, and
-# through systemd 257 so does `machinectl terminate`, which stops this unit
-# (`--keep-unit` makes it the machine's registration); from 258 it SIGTERMs
-# systemd-nspawn instead and the machine comes back, and `systemctl --version`
-# says which side this box is on. What bounces a machine on either side is
-# `machinectl reboot`: it sends SIGINT, s6 reboots on that, and the Restart=
-# below brings the machine back whatever exit status that path produces, while
-# `machinectl poweroff` signals the container's PID 1, which s6 does not act on.
+# so does `machinectl terminate` on the systemd this device runs -- 247, the
+# reading physical/gateway.md §1 records -- because `--keep-unit` makes this
+# unit the machine's registration and `terminate` stops it. What is expected to
+# bounce a machine is `machinectl reboot`: it sends SIGINT, s6 reboots on that,
+# and the Restart= below brings the machine back whatever exit status that path
+# produces; `machinectl poweroff` is expected to do nothing, because it signals
+# the container's PID 1 with a signal s6 does not handle. The reboot and
+# poweroff verbs are derived rather than measured, and §1 is where the first
+# soak's reading of them lands -- and where a firmware jump onto a newer base
+# is re-read, since a newer systemd moves `terminate`.
 Restart={{ restart }}
 RestartSec={{ restart_delay }}
