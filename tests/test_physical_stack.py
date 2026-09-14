@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 import pulumi
 import pytest
 import pytest_asyncio
+from device_places import DEVICE_TYPE_PREFIX, PLACES
 from mock_monitor import Recorder, declaring, run_with
 
 from oci_conventions import with_compartment, with_tenancy_ocid
@@ -565,6 +566,26 @@ async def test_every_child_carries_its_components_name(setup: Installation) -> N
         await physical.main()
 
     assert setup.children_not_named_for_their_component() == {}
+
+
+@pytest.mark.asyncio
+async def test_no_two_resources_claim_one_place_on_the_device(setup: Installation) -> None:
+    """One path on the device, one resource -- an invariant over the inputs, not over the names.
+
+    Two components asking the mechanism for one `bin/` name, or one declaring a
+    mounted file where another declares its converger, are two URNs at one
+    path: the engine accepts the run, each `create` writes the file, and either
+    `delete` takes it from under the other. Nothing in a name catches that
+    (style/pulumi.md), so the program is read back by the place each device
+    resource claims. The map is held complete first, since a device type it
+    does not name is a type the census cannot see.
+    """
+    async with declaring():
+        await physical.main()
+
+    device_types = {typ for typ in setup.types if typ.startswith(DEVICE_TYPE_PREFIX)}
+    assert device_types <= set(PLACES), device_types - set(PLACES)
+    assert setup.places_claimed_more_than_once(PLACES) == {}
 
 
 @pytest.mark.asyncio
