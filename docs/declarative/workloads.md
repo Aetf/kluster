@@ -112,9 +112,11 @@ per-app number:
     family over VolSync/barman metrics — *any* backup whose last
     success is older than its class threshold alerts; a new backed_pvc
     is covered automatically because the metric labels come from the
-    helper. Restore drills run as unattended automations — monthly
-    VolSync spot-restores among them (operations.md §4): a backup
-    that hasn't restored recently is assumed broken.
+    helper. Restore drills are designed as unattended automations —
+    monthly VolSync spot-restores among them — and none of them runs
+    yet (operations.md §4): a backup that hasn't restored recently is
+    assumed broken, and until the drills run that is the standing
+    assumption about every one.
 
 ## 4. Shaped patterns (the non-trivial apps)
 
@@ -154,8 +156,9 @@ per-app number:
     (storage.md §6). No sidecar, no privileged namespace, and no
     filesystem between the app and its data.
 -   **CNPG-backed app (immich, splitpro, …)**: CNPG `Cluster` on
-    local-path + barman to B2, monthly restore drill inherited from the
-    legacy discipline (storage.md §5). **Major-version policy
+    local-path + barman to B2, a monthly restore drill to be inherited
+    from the legacy discipline (storage.md §5; nothing runs it here
+    yet). **Major-version policy
     (2026-08-24)** — minors ride the normal renovate image-bump flow;
     majors use CNPG's **declarative offline in-place upgrade**
     (operator ≥1.26 — the cluster-infra.md §1 floor): bumping the
@@ -169,7 +172,8 @@ per-app number:
     change must never share a PR with a Postgres major). Major pins
     are **never automerged**: they arrive as ordinary human-reviewed
     deploy PRs, preceded by a verified-fresh barman backup — the
-    drilled restore is the rollback.
+    barman restore is the rollback, and until the monthly drill above
+    runs here it is an undrilled one.
 -   **Static-site template (one component, two content sources)**: a
     single `StaticSite` component — stock static server, multi-vhost
     (one instance serves several hostnames), `route` per zone —

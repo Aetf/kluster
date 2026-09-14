@@ -52,6 +52,16 @@ class NodeVolumeEntry:
     a state nobody can write; a `DEDICATED_VIP_NODE` edit re-declares the
     attachment, and the attachment is protected, so the volume migration that
     implies surfaces as a refusal rather than as a silent break at cutover.
+
+    `mount` is the path the dataset lives at on the node, and the machine
+    configuration that is to mount these volumes (storage.md §6) takes its
+    mount point from this field; nothing in the tree reads it yet. Once it
+    does, a changed value does not carry the dataset along: the volume mounts
+    empty at the new path and the preserved dataset stays at the old one.
+    Changing it is therefore a migration — move the data, then the row — and
+    not an edit. No test holds the value: the party that could contradict it
+    is the node's disk, which the suite cannot reach (docs/style/testing.md),
+    so this sentence is the guard.
     """
 
     node: str | FollowsDedicatedVip
@@ -75,7 +85,8 @@ class NodeVolumeEntry:
 #: the other a replica whose full copy is on the NAS and in every client that
 #: syncs it. The invariants the type cannot carry — a node the fleet declares,
 #: a mount claimed once, at most one volume per node — are held by tests, after
-#: the sentinel resolves.
+#: the sentinel resolves. A row's `mount` is where its dataset already is, and
+#: editing it strands that dataset (`NodeVolumeEntry`); no test can say so.
 NODE_VOLUMES: Mapping[str, NodeVolumeEntry] = {
     'hath-cache': NodeVolumeEntry(node=FOLLOWS_DEDICATED_VIP, size_gb=50, mount='/var/mnt/hath-cache'),
     'syncthing-replica': NodeVolumeEntry(node='cp2', size_gb=110, mount='/var/mnt/syncthing-replica'),

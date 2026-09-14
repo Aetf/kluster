@@ -231,25 +231,28 @@ be able to destroy the safety net it lives inside.
 
 ## 5. Backup architecture (the actual HA mechanism)
 
-Per nodes.md §5, durability = declarative rebuild + backups, drilled:
+Per nodes.md §5, durability = declarative rebuild + backups + drills:
 
 1.  **etcd**: hourly snapshots from the Talos control plane, shipped to
     `b2://…/etcd/`, retained ~14 days. Restore path is documented Talos
-    `--recover-from-snapshot` bootstrap — drilled both in-place and onto a
-    substitute node (the CP cold-standby path, nodes.md §5 Tier 0).
+    `--recover-from-snapshot` bootstrap, to be drilled both in-place and
+    onto a substitute node (the CP cold-standby path, nodes.md §5 Tier 0);
+    neither form has run.
 2.  **Volumes**: VolSync restic backups on every working-state PVC
     (§3.1), same bucket, retention by class
     (declarative/workloads.md §3); restores double as the volume-move
-    mechanism, so the path stays exercised.
+    mechanism, so every move exercises the restore path.
 3.  **CNPG**: barman object-store backups + WAL archiving per database
     cluster (port the legacy barman-plugin setup), monthly automated
-    restore drill (port the legacy drill).
+    restore drill (port the legacy drill; nothing runs it here yet).
 4.  **NAS data**: stays under the NAS's own backup regime — out of
     cluster scope, but media moving onto NAS PVs must not silently drop
     out of that regime. (hath's cache is deliberately outside *every*
     backup regime — §3.3.)
 5.  **Drills are part of the design**: a restore that hasn't run this
-    quarter is assumed broken.
+    quarter is assumed broken. By that rule every restore path the
+    cluster owns on this list is assumed broken today: no drill has run,
+    and nothing schedules one (operations.md §4).
 
 RPO: ≤1 h for etcd, ≤24 h for volumes, ~0 for CNPG (WAL). RTO: rebuild
 either site from Pulumi + backups in ~1–2 h hands-on.
