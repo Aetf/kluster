@@ -75,10 +75,14 @@ from the records:
     while it holds the certificate; declaring it is what makes the
     authorization outlive the edge.
 -   **A zone whose names something outside this installation serves gets
-    no pin invented for it.** jiahui.id is a Google Site, its
-    certificates come from `pki.goog`, and it carries no CAA — so it
-    keeps none. A pin that current issuance does not satisfy is an outage
-    at the next renewal, and no CAA is not a regression from no CAA.
+    no pin invented for it.** jiahui.id is a Google Site, and the log
+    (§1.2) shows several authorities issuing for it rather than one: the
+    pair — apex and `*.jiahui.id` in one certificate — from whichever of
+    the edge's partners its rotation draws, since the edge mints one for
+    every zone it hosts, proxied or not, beside an apex-only certificate
+    from Let's Encrypt. It carries no CAA, so it keeps none. A pin that
+    current issuance does not satisfy is an outage at the next renewal,
+    and no CAA is not a regression from no CAA.
 
 Both tags are written out: `issuewild` does not inherit from `issue`,
 and the LAN-only names are covered by per-zone wildcards (§4).
