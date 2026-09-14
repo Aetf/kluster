@@ -46,26 +46,6 @@ TOKEN = 'a-fake-github-admin-token-that-opens-nothing'
 SECRET = {'4dabf18193072939515e22adb298388d': '1b47061264138c4ac30d75fd1eb44270'}
 
 
-class EveryRegistration(dict[str, Any]):
-    """Every registration request, and not only the last under each logical name.
-
-    The shared recorder keys them by logical name alone, and a repository is
-    declared three times under its own name -- the component, the repository,
-    and its vulnerability alerts -- so the last of the three would be the only
-    one left. The requests are where a resource's *options* are, which is
-    where an alias is, so the cases below need all of them.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        #: In registration order.
-        self.every: list[Any] = []
-
-    def __setitem__(self, name: str, request: Any) -> None:
-        self.every.append(request)
-        super().__setitem__(name, request)
-
-
 class Forge(Recorder):
     """GitHub as far as the program reads it back, which is node ids and nothing else.
 
@@ -73,24 +53,10 @@ class Forge(Recorder):
     knows about the account itself, it knows from the census.
     """
 
-    def __init__(self) -> None:
-        super().__init__()
-        #: The dict the shared recorder writes every registration into, under
-        #: a name of its own so that the list beside it is reachable.
-        self.requests = EveryRegistration()
-        self.registrations = self.requests
-
     def computed(self, args: pulumi.runtime.MockResourceArgs) -> dict[str, Any]:
         if args.typ == REPOSITORY:
             return {'nodeId': f'node_{args.name}', 'fullName': f'{conventions.forge.ACCOUNT.login}/{args.name}'}
         return {}
-
-    def request(self, typ: str, name: str) -> Any:
-        """The registration request of one resource, named by type as well as by name."""
-        found = [request for request in self.requests.every if (request.type, request.name) == (typ, name)]
-        if len(found) != 1:
-            raise AssertionError(f'{typ} {name!r} was registered {len(found)} times, not once')
-        return found[0]
 
 
 @pytest_asyncio.fixture(scope='module', autouse=True)
@@ -189,7 +155,13 @@ def test_merges_are_rebases_only(stack: Forge) -> None:
     Which for noop-automerge is `noreply@github.com`, and a merge commit would
     contradict the linear history the branch protection asks for.
     """
-    for repository in stack.by_name(REPOSITORY).values():
+    repositories = stack.by_name(REPOSITORY)
+
+    # A loop is only a claim about what it visits, so the run is held to the
+    # census before it is walked: a run that declared no repository would
+    # satisfy the loop and nothing else here.
+    assert set(repositories) == {repository.name for repository in conventions.forge.REPOSITORIES}
+    for repository in repositories.values():
         assert repository['allowRebaseMerge'] is True
         assert repository['allowSquashMerge'] is False
         assert repository['allowMergeCommit'] is False
@@ -322,7 +294,7 @@ def test_each_repository_keeps_the_urn_it_was_declared_at(stack: Forge) -> None:
     on the URN it already has.
     """
     for entry in conventions.forge.REPOSITORIES:
-        aliases = list(stack.request(REPOSITORY, entry.name).aliases)
+        aliases = list(stack.options_of(entry.name, REPOSITORY).aliases)
 
         assert len(aliases) == 1, entry.name
         # Everything else left at its default, which reads as "same name, same
@@ -346,16 +318,16 @@ def test_nothing_below_a_repository_moved(stack: Forge) -> None:
     silently need an alias of its own.
     """
     for entry in conventions.forge.REPOSITORIES:
-        assert stack.request(REPOSITORY, entry.name).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')
+        assert stack.options_of(entry.name, REPOSITORY).parent.endswith(f'{MANAGED_REPOSITORY}::{entry.name}')
 
         # The repository's own URN, as its children carry it: the component's
         # type, then the repository's, then the repository's name.
-        repository = stack.request(VULNERABILITY_ALERTS, entry.name).parent
+        repository = stack.options_of(entry.name, VULNERABILITY_ALERTS).parent
         assert repository.endswith(f'{MANAGED_REPOSITORY}${REPOSITORY}::{entry.name}')
 
         for typ, name in _below(entry):
-            assert stack.request(typ, name).parent == repository, name
-            assert list(stack.request(typ, name).aliases) == [], name
+            assert stack.options_of(name, typ).parent == repository, name
+            assert list(stack.options_of(name, typ).aliases) == [], name
 
 
 def _below(entry: conventions.forge.Repository) -> list[tuple[str, str]]:
