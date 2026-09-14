@@ -918,15 +918,27 @@ def test_the_readiness_probe_closes_its_stdin(monkeypatch: pytest.MonkeyPatch) -
     a *successful* probe hangs until the timeout and is reported as no answer.
     On a machine that came up in 90 seconds this looked like packets being
     dropped for as long as the operator was willing to wait.
+
+    The clock is the test's, advanced only by the wait's own `sleep`, so the
+    one-second budget bounds a fake that never answers to a single probe and
+    is not a second of wall time: a process stalled between computing the
+    deadline and checking it -- swap, a contended machine -- cannot decide a
+    case whose subject is the probe's stdin.
     """
     seen: dict[str, object] = {}
+    clock = [0.0]
 
     def fake_run(argv: list[str], **kwargs: object) -> Any:
         seen.update(kwargs)
         seen['argv'] = argv
         return type('Completed', (), {'returncode': 0, 'stderr': ''})()
 
+    def nap(seconds: float) -> None:
+        clock[0] += seconds
+
     monkeypatch.setattr(provision.sp, 'run', fake_run)
+    monkeypatch.setattr(provision.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(provision.time, 'sleep', nap)
 
     assert provision.wait_for_backend('192.0.2.10', timeout=1) is True
     assert seen['stdin'] is provision.sp.DEVNULL
