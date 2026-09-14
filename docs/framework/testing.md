@@ -634,8 +634,37 @@ fix, and the diff is the only artifact that disagrees.
 2.  **Test Outputs**: Await `.future()` (or use `.apply()` /
     `pulumi.Output.all()`) to check values of outputs, as they resolve
     asynchronously; `resolve` is only usable inside `async_output` coroutines.
-3.  **Always Use Timers**: When running unit tests, wrap the execution with a
-    timeout (e.g. `timeout 15` in shell or using a test runner timeout) to
-    prevent hanging tests when coroutines fail to resolve their futures.
+3.  **Always Use Timers**: Run the suite under an outer `timeout` — the form
+    in §1 — so a coroutine that never resolves its futures ends the run as a
+    killed process rather than hanging it.
 4.  **Keep it Fast**: Unit tests should not make network calls or create real
     resources.
+5.  **No Wall-Clock Budgets**: A unit case's outcome never depends on how
+    much real time passes. A budget measured against the real clock is also
+    a budget on the *process*: a machine stalled past it -- swap, a
+    contended runner -- fails the case with a failure that names nothing
+    distinguishing the stall from the defect, and a failure that names
+    nothing is a flake nobody can aim a fix at (Aetf/kluster-ops#243 is the
+    record). Two forms replace it:
+    -   A **bounded wait** in the code under test gets a clock the wait
+        itself advances: patch `time.monotonic` and `time.sleep` together,
+        so the wait's own sleeps or reads move the clock, and a deadline is
+        still reachable without a second of wall time. `unhurried` in
+        `tests/test_oci_iam.py` is the module-wide form; the readiness-probe
+        case in `tests/test_provision.py` is the inline form.
+    -   A **hang guard** is bounded in turns of the event loop --
+        `asyncio.sleep(0)` yields exactly once, whatever the machine is doing
+        -- or left to the `timeout` the gate already runs under (item 3).
+        Never `asyncio.wait_for(…, seconds)`: a guard in turns fails as "not
+        settled after N idle iterations", which no stall of any length can
+        produce, and one in seconds fails as whatever the deadline cut off.
+        A turn bound is sound only for a path the loop alone advances. Under
+        the mocks a resource registration crosses the SDK's executor thread
+        (`tests/mock_monitor.py`, `_RunMonitor`), so around anything that
+        awaits a registered resource's output the turns run out in
+        microseconds while the thread is still working, and the guard fails
+        by how loaded the machine is -- the flake in a new shape. That path
+        is left to the gate's timeout.
+        The one guard that stays in seconds is the `timeout=` handed to
+        `subprocess.run`, where nothing yields to count -- and it fails as
+        `TimeoutExpired` naming its seconds, which is a failure with a name.

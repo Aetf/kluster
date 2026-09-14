@@ -21,6 +21,12 @@ from pulumi.output import Unknown
 import putils
 from putils import Component, async_output, resolve
 
+#: How many turns of the event loop a case gives an input to settle before
+#: calling it hung. A turn is one `asyncio.sleep(0)`, which the loop counts
+#: and the wall clock does not; the bound is an order of magnitude above what
+#: the real path spends, so only a path that never settles reaches it.
+IDLE_TURNS = 100
+
 
 class Engine(Recorder):
     """A monitor that hands every resource an id derived from its name.
@@ -316,8 +322,19 @@ async def test_an_upstream_failure_fails_the_input_rather_than_hanging_it(mocks:
         return await resolve(bad)
 
     out = async_output(consume)
+    # Each `sleep(0)` yields exactly once, so a stalled machine spends the same
+    # number of turns as an idle one, and a hang reports as a hang rather than
+    # as whatever a wall-clock deadline happened to cut off.
+    settled = asyncio.ensure_future(out.future())
+    for _ in range(IDLE_TURNS):
+        if settled.done():
+            break
+        await asyncio.sleep(0)
+    if not settled.done():
+        _ = settled.cancel()
+        pytest.fail(f'the input did not settle after {IDLE_TURNS} idle iterations of the event loop')
     with pytest.raises(RuntimeError, match='upstream boom'):
-        await asyncio.wait_for(out.future(), 5)
+        await settled
 
 
 @pytest.mark.asyncio
