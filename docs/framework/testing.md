@@ -170,11 +170,12 @@ monitor what the run registered.
 When writing unit tests for components using the `putils.Component` base class
 with `async_output`/`resolve` inputs:
 
-### 3.1 What the mock monitor drops
+### 3.1 What the mock monitor drops, and what it lets through
 
-Two things a case may want are not reachable through Pulumi's own mocks, and
-`tests/mock_monitor.py` recovers both by patching `MockMonitor.RegisterResource`
-once, at import, before any Pulumi code runs:
+Three ways Pulumi's own mock monitor answers a registration differently from
+the engine matter to a case, and `tests/mock_monitor.py` closes all three by
+patching `MockMonitor.RegisterResource` once, at import, before any Pulumi
+code runs. Two are things the mock drops that a case may want:
 
 -   **`propertyDependencies`.** During registration the engine is told which
     outputs a resource property depends on; the mock monitor's response drops
@@ -183,7 +184,30 @@ once, at import, before any Pulumi code runs:
 -   **The resource options.** `import`, `ignoreChanges`, `deleteBeforeReplace`
     and `dependsOn` reach no output at all. The patch keeps each registration
     request on the `Recorder` the run was built around, where
-    `Recorder.options_of(name)` and `Recorder.depends_on(name)` read them.
+    `Recorder.options_of(name)` and `Recorder.depends_on(name)` read them, and
+    every request in registration order in `Recorder.requested`.
+
+The third is something the mock lets through that the engine refuses:
+
+-   **A repeated resource identity.** A URN is a resource's identity, and a
+    program that registers one twice is a program the engine stops
+    (`Duplicate resource URN <urn>; try giving it a unique name`). The mock
+    monitor lets the second registration silently replace the first, so a run
+    no engine would accept reads back as a run with one resource in it. The
+    patch refuses the second registration as the engine would, keyed by the
+    URN the mock computes — stack, project, the parent's type, the type,
+    the logical name. That key qualifies by the *immediate* parent's type
+    where the engine carries the whole chain, so the refusal is at worst
+    stricter than the engine's and never laxer; and, like the engine's, it
+    does not carry the parent's *name*, which is why a resource inside a
+    component is conventionally named after the component that holds it.
+
+A suite meets the refusal when one run legitimately wants two of something:
+a variant of a component built beside its baseline, to compare the two. The
+move is to give the variant a distinct logical name — a builder that takes
+the name as a parameter, the way `build_cluster` in
+`tests/test_talos_day1.py` does — not to loosen the refusal, because the
+engine would stop the same run.
 
 The patch belongs in one place because it does not compose: a second module
 capturing "the original" at its own import time would chain onto this one, and
