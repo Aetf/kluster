@@ -7,8 +7,8 @@ the work — how it is dispatched, reviewed, and reported — is
 ## Environment
 
 * ALWAYS use `mise x uv -- uv` to manage python environment of the project
-* ALWAYS use a timer when running tests, to avoid waiting forever when test hangs:
-  `timeout 60 mise x uv -- uv run pytest`
+* ALWAYS run tests under a timer — the `timeout … pytest` form under "The
+  gate" — so a hang ends the case, or the run, instead of waiting forever
 
 ## The gate
 
@@ -18,7 +18,12 @@ except where a bullet says otherwise:
 * `mise x uv -- uv run ruff check` and `ruff format --check`
 * `mise x uv -- uv run basedpyright` — strict, clean
 * `mise x uv -- uv run lint-imports` — the layering contract below
-* `timeout 60 mise x uv -- uv run pytest`
+* `timeout 1200 mise x uv -- uv run pytest` — a per-case bound inside
+  the run (`pytest-timeout`, configured in `pyproject.toml`) fails a hung
+  case by name and lets the run go on to its summary; the outer `timeout`
+  is a hang guard for what that bound cannot reach, an order of magnitude
+  above the run's duration. Which form and why:
+  [docs/framework/testing.md](docs/framework/testing.md) §1.
 * `ltex-cli-plus` on every markdown file touched, one file at a time —
   how it reaches the repository's word lists is under "Writing the
   prose". CI runs it the same way, over the markdown the pull request
@@ -143,9 +148,9 @@ documentation the change makes true ships with it rather than after it.
   - Run it **one file at a time**: given many files at once it hangs
     rather than finishing.
   - Some findings are **artifacts of the checker** and are answered by
-    neither a dictionary entry nor a disabled rule. Both come from the
-    conversion the checker runs before it reads a file: inline code
-    spans become dummy tokens whose length differs from the source.
+    neither a dictionary entry nor a disabled rule. Both kinds below come
+    from the conversion the checker runs before it reads a file: inline
+    code spans become dummy tokens whose length differs from the source.
     - **The first body row of a table whose first cell is a lone code
       span** is misread: every finding on that row lands at a shifted
       offset and reports a fragment of neighboring words, or the dummy

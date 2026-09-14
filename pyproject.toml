@@ -47,6 +47,7 @@ dev = [
     "ruff>=0.15.11",
     "basedpyright>=1.39.10",
     "import-linter>=2.14",
+    "pytest-timeout>=2.4.0",
 ]
 ##
 ## Project management section
@@ -98,6 +99,19 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kluster", "src/putils"]
+
+##
+## Test runner
+##
+[tool.pytest.ini_options]
+# A per-case hang guard, an order of magnitude above the slowest case: a
+# case that hangs fails by name with the stack it hung in, and the run goes
+# on to a summary. The outer `timeout` the gate wraps the run in
+# (docs/framework/testing.md §1) guards what this cannot reach -- collection,
+# and a process that will not exit. The signal method is what keeps the run
+# going past the failed case; the thread method ends the process instead.
+timeout = 60
+timeout_method = "signal"
 
 ##
 ## Formatter and linter

@@ -38,8 +38,8 @@ Managed with [uv](https://github.com/astral-sh/uv) and
 
 ```sh
 mise x uv -- uv sync
-timeout 300 mise x uv -- uv run pytest    # always with a timeout: an
-                                          # unresolved coroutine hangs
+timeout 1200 mise x uv -- uv run pytest   # the outer hang guard; the per-case
+                                          # bound is pyproject.toml's
 mise x uv -- uv run ruff check .
 mise x uv -- uv run basedpyright
 mise x -- pulumi preview --stack <layer>
