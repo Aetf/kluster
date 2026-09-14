@@ -146,6 +146,37 @@ OCI_SEED_ENTRY = entries.SEEDS['oci'].entry
 B2_SEED_ENTRY = entries.SEEDS['b2'].entry
 
 
+def _deliverable(stack: pulumi_config.Stack, *, own: str) -> None:
+    """Refuse a delivery aimed anywhere but a stack of this project that is there to take it.
+
+    The one row that takes a stack by name is the one row that can be aimed
+    wrong, and the mint retires every other token of the row's name once the
+    new one is verified: aimed at a misspelling, it would create that stack in
+    the backend, fill it, and revoke the live credential of the stack that
+    reads it. So the name has to be one the project declares
+    (`pulumi_config.STACKS`), and any stack but the row's own has to exist
+    already -- a mint fills configuration, and creating a stack is that
+    stack's own bring-up rather than a side effect of delivering a token to
+    it. The row's own stack is the exception because its first mint *is* its
+    bring-up (credentials.md §4.1): nothing else creates it, so the push
+    cannot assume it exists.
+
+    Before the kit is opened and before anything is minted, so a refusal here
+    leaves no token live at the provider and no stack in the backend.
+    """
+    if stack.name not in pulumi_config.STACKS:
+        raise pulumi_config.SlotRefused(
+            f'{stack.name!r} is no stack of this project, so nothing would read a token delivered there; '
+            f'the stacks are {", ".join(sorted(pulumi_config.STACKS))}'
+        )
+    if stack.name != own and not stack.exists():
+        raise pulumi_config.SlotRefused(
+            f'the {stack.name} stack does not exist in the state backend, and a mint creates no stack but '
+            f"this row's own ({own}): a delivery aimed elsewhere fills a stack that is already there, and "
+            f'bringing {stack.name} into being is its own bring-up'
+        )
+
+
 def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: str = CLOUDFLARE_SEED_ENTRY) -> None:
     """Mint the zones token from the seed and install it in a stack's config.
 
@@ -157,7 +188,11 @@ def cloudflare_zones(kit: KdbxStore, *, stack: pulumi_config.Stack, seed_entry: 
     and a fact with one home is not copied into a second — so the mint proves
     the account it is about to issue into is that one, and refuses before
     anything exists if it is not (`cloudflare.verify_account`).
+
+    Which stack takes it is the caller's, within limits `_deliverable` holds:
+    a stack of this project, and one that exists unless it is `ZONES_STACK`.
     """
+    _deliverable(stack, own=ZONES_STACK)
     zones = conventions.ALL_ZONES
     log.info('opening the Cloudflare seed from the kit')
     session = cloudflare.Session.from_entry(kit, seed_entry)

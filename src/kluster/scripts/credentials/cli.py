@@ -747,7 +747,10 @@ def build_parser() -> argparse.ArgumentParser:
     _ = zones_mint.add_argument(
         '--stack',
         default=derived.ZONES_STACK,
-        help=f'the stack whose config takes the token (default: {derived.ZONES_STACK})',
+        help=(
+            f'the stack whose config takes the token (default: {derived.ZONES_STACK}); any other must be a '
+            'stack of this project that already exists in the state backend'
+        ),
     )
     _add_bundle_dir(zones_mint)
 
@@ -1039,8 +1042,9 @@ def _stack(
 
     The stack is named by the caller rather than read off `args`, because only
     one row has a stack to choose: the zones token is scoped to zones and can
-    be delivered anywhere, while a row whose credential is named after its
-    consumer can only be delivered to that consumer (`derived`).
+    be delivered to any stack of this project that already exists, while a row
+    whose credential is named after its consumer can only be delivered to that
+    consumer (`derived`).
 
     `registry` reaches the escrow the passphrase is recovered from, and is
     passed by a caller that already holds one so that a run with
