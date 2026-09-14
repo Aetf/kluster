@@ -249,12 +249,13 @@ class CloudNodes(Component):
         is read back through the attachment list.
         """
         instance_id, compartment_id = await resolve(self.dedicated_vip.id, self.dedicated_vip.compartment_id)
-        attachments = await oci.core.get_vnic_attachments_output(
-            compartment_id=compartment_id,
-            instance_id=instance_id,
-            # Parented, which is how an invoke inherits this component's
-            # provider rather than falling to the disabled default one.
-            opts=pulumi.InvokeOptions(parent=self),
-        ).future()
-        assert attachments is not None
+        attachments = await resolve(
+            oci.core.get_vnic_attachments_output(
+                compartment_id=compartment_id,
+                instance_id=instance_id,
+                # Parented, which is how an invoke inherits this component's
+                # provider rather than falling to the disabled default one.
+                opts=pulumi.InvokeOptions(parent=self),
+            )
+        )
         return attachments.vnic_attachments[0].vnic_id

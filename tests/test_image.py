@@ -21,11 +21,14 @@ from typing import Any, cast
 
 import pulumi
 import pulumi.dynamic as dynamic
+import pulumi.runtime.mocks
+import pulumi.runtime.settings
 import pytest
 import pytest_asyncio
 import requests
-from mock_monitor import Recorder, run_with
+from mock_monitor import Recorder, declaring, run_with
 from pulumi.runtime import rpc
+from pulumi.runtime.proto import resource_pb2
 
 from kluster.components.talos import image
 from kluster.providers import talos_factory
@@ -135,6 +138,57 @@ async def test_the_cloud_image_is_still_imported_from_the_factory_url() -> None:
     assert details.source_image_type == 'QCOW2'
     assert details.source_uri == f'{FACTORY}/{CLOUD_SCHEMATIC}/{TALOS_VERSION}/oracle-arm64.qcow2'
     assert await cloud.image.display_name.future() == f'talos-{TALOS_VERSION}-arm64-{CLOUD_SCHEMATIC[:12]}'
+
+
+def decline_every_invoke() -> None:
+    """Answer every invoke the way the engine answers one it cannot service yet.
+
+    An invoke is gated on its dependencies having been created, and while one
+    is pending -- skipped by a `--target`ed update, say -- the engine answers
+    `unknown` in place of a result (`ResourceInvokeResponse.unknown`) rather
+    than calling the provider. Pulumi's mock monitor never sets the field, so
+    the run's monitor is given that answer here. Every token, because the
+    suite's one invoke is the subject.
+    """
+    mock = pulumi.runtime.settings.get_monitor()
+    assert isinstance(mock, pulumi.runtime.mocks.MockMonitor)
+
+    def declined(request: resource_pb2.ResourceInvokeRequest) -> resource_pb2.ResourceInvokeResponse:
+        return resource_pb2.ResourceInvokeResponse(unknown=True)
+
+    mock.Invoke = declined
+
+
+@pytest.mark.asyncio
+async def test_a_factory_lookup_the_engine_declines_leaves_the_source_unknown_rather_than_crashing(
+    factory: Factory,
+) -> None:
+    """The unknown degrades the one input, and nothing surfaces as a traceback.
+
+    Awaiting the lookup through `resolve` is what puts it under the rule every
+    other awaited value in the artefact follows (framework/pulumi.md §1.2): an
+    unknown aborts the coroutine, that input alone becomes unknown, and the
+    rest of the image is declared as it would have been. Awaited directly, the
+    same answer is a `None` for an `assert` to trip over -- a traceback on a
+    run that may have converged everything it was asked to.
+
+    Read off what the program handed the provider rather than off the image's
+    outputs, because the source is nested inside `imageSourceDetails` and the
+    mock's readback of a nested unknown is not the engine's
+    (framework/testing.md §3.3). The mock monitor deserializes on a thread
+    that sees the process-wide default of `dry_run` rather than this run's
+    value, so the unknown arrives as an `Unknown` or as a dropped key by which
+    suite ran first; what holds either way is that no value reached the
+    provider under that key.
+    """
+    decline_every_invoke()
+
+    async with declaring():
+        cloud = build_cloud()
+
+    assert await cloud.image.display_name.is_known() is True
+    details = factory.inputs_of(f'{CLUSTER}-image', 'oci:Core/image:Image')['imageSourceDetails']
+    assert not isinstance(details.get('sourceUri'), str)
 
 
 def test_each_artefact_keeps_its_own_type_token() -> None:
