@@ -72,7 +72,7 @@ above that one.
     value would hide it (`style/python.md`, "Not too DRY").
 -   **A suite that needs one and does not ask** meets whatever the code under
     test raises for an unset variable, which names the variable it wanted.
-    Nothing this masks reaches a stack program any more: a provider credential
+    Nothing this masks reaches a stack program anymore: a provider credential
     is a secret in its own stack's configuration (credentials.md §1 rule 6),
     which a suite supplies with `pulumi.runtime.set_all_config` and which this
     mechanism has no part in.

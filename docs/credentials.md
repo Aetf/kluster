@@ -330,15 +330,15 @@ current, and the older ones stay for as long as anything still answers
 to them — a dump encrypted to a superseded age identity, a certificate
 issued under a superseded CA.
 
-| Label | Escrowed secret | Origin |
+| Escrowed secret | Label | Origin |
 | --- | --- | --- |
-| `pulumi/passphrase` | Pulumi state passphrase | Generated |
-| `github/passphrase` | The `github` stack's own config passphrase (§3) | Generated |
-| `alertmanager/read` | Bearer token the issue-sync poller presents (§3) | Generated |
-| `state-backend/ca` | State-backend CA private key | Generated |
-| `backup/age/<generation>` | age identity for pg_dump encryption | Generated |
-| `github/dispatch-key` | Private key of the dispatch App (§3) | Console |
-| `github/trigger-key` | Private key of the trigger App (§3) | Console |
+| Pulumi state passphrase | `pulumi/passphrase` | Generated |
+| The `github` stack's own config passphrase (§3) | `github/passphrase` | Generated |
+| Bearer token the issue-sync poller presents (§3) | `alertmanager/read` | Generated |
+| State-backend CA private key | `state-backend/ca` | Generated |
+| age identity for pg_dump encryption | `backup/age/<generation>` | Generated |
+| Private key of the dispatch App (§3) | `github/dispatch-key` | Console |
+| Private key of the trigger App (§3) | `github/trigger-key` | Console |
 
 Two things are called a generation on that table, and they are not the
 same: `backup/age/<generation>` names the *backup* generation

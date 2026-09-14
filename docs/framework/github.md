@@ -141,7 +141,7 @@ Two consequences, both load-bearing:
     `drill` Environment is deliberately ungated — its scope is the
     gate (credentials.md §4) — and the ops repo holds no stack.
 
-Nothing in §3 is blocked by the plan any more, and §3 has been applied
+Nothing in §3 is blocked by the plan anymore, and §3 has been applied
 (2026-08-25); what is still console state is there for the reasons §4
 gives, not because the plan forbids it.
 
@@ -225,7 +225,7 @@ in the component. It is the same shape, and the same name, as the
     workflow reads rather than a taxonomy a reader browses, so a hue
     apiece would be meaning nobody put there.
 -   **Branch protection on `main`**: `checks` and `changes` as required
-    status checks, plus "branch must be up to date". Those two run on
+    status checks, plus an up-to-date branch. Those two run on
     every pull request regardless of paths, which is what a required
     check has to do — one that only sometimes runs blocks a pull
     request forever. The `preview` matrix is deliberately **not**
