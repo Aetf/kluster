@@ -48,8 +48,9 @@ documentation the change makes true ships with it rather than after it.
   `deploy/`: **fully type-annotated, and `basedpyright` strict passes clean**.
   Config lives in `pyproject.toml`; the only relaxations are
   `reportAny`/`reportExplicitAny`/`reportUnusedCallResult`, which fight a
-  provider-SDK codebase more than they help. Generated CRD bindings
-  (`packages/crds`) are excluded — they are not ours to annotate.
+  provider-SDK codebase more than they help. Generated bindings —
+  `packages/crds` and the SDKs under `sdks/` — are excluded; they are not
+  ours to annotate.
 * **The source tree is layered, and the layering is a checked contract.**
   `kluster.stacks` → `kluster.components` → `kluster.providers` →
   `kluster.lib` → `kluster.conventions` → `putils`: a layer imports what is
