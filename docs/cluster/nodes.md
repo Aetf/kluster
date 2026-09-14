@@ -212,12 +212,13 @@ is dictated by the fixed platform floor, which free 8 GB shapes simply
 delete as a concern; (b) A1 billing's fungibility turns the free/cheap
 allowance into *three* nodes — buying CP HA and ingress HA that no paid
 single-instance alternative offers at any similar price (§3.2); (c)
-this cluster's Tier-0 posture (§5: everything declarative, drilled
-rebuild, backups off-provider) is precisely the design that makes OCI's
-platform risk survivable — the Vultr fallback (vhp 4 GB, $24, single
-node, ingress-only + homelab CP per architecture.md §6.5's superseded
-layout) is a stack config flip plus a DNS diff, exercised as a drill
-like every other restore path.
+this cluster's Tier-0 posture (§5: everything declarative, a rebuild
+the drill program covers, backups off-provider) is precisely the design
+that makes OCI's platform risk survivable — the Vultr fallback (vhp
+4 GB, $24, single node, ingress-only + homelab CP per architecture.md
+§6.5's superseded layout) is a stack config flip plus a DNS diff; the
+yearly offline day previews the flipped stack config to prove it still
+computes (operations.md §4 — designed; no offline day has run).
 
 ### 3.2 OCI deep dive: commercial model, service landscape, gotchas
 
@@ -472,14 +473,15 @@ by construction; Tier 0 remains the foundation everything else sits on:
     of permanent loss comes from: hourly etcd snapshots shipped to B2
     (off-provider by the storage.md §4 placement rule), VolSync volume
     backups and CNPG barman to the same bucket (storage.md §5), and
-    periodically *drilled* restores. Target: RPO ≤ 1 h, RTO ~1–2 h
-    hands-on. The **cold-standby drill** covers total-cloud-loss
+    periodically *drilled* restores — the drill program of
+    operations.md §4, none of which has run. Target: RPO ≤ 1 h, RTO
+    ~1–2 h hands-on. The **cold-standby drill** covers total-cloud-loss
     (tenancy termination included): bootstrap a temporary single-node CP
     on the homelab host (libvirt) from the latest etcd snapshot in
     ~30–60 min, then rebuild the cloud pool at leisure. (The scratch
     CP VM's ~4 GiB has no standing slack to come from on the 32 GB
-    host — the drill script explicitly squeezes ARC / the worker VM
-    for the duration and restores them after.)
+    host — the drill script, unwritten today, is to squeeze ARC / the
+    worker VM for the duration and restore them after.)
 -   **Tier 1 — workload HA**: apps that support replication run
     multi-replica across the pools (CNPG multi-instance, stateless ×2).
     Even under full CP loss, running workloads keep serving — kubelet
