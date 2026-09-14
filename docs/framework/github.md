@@ -348,10 +348,15 @@ is the other thing to stop on.
 each repository carries an alias naming the URN it had while the stack
 program declared it directly. Without one the preview would be "create
 the parented one, delete the unparented one", and the delete is refused
-by the `protect` above. One alias per repository covers its whole
-subtree: everything the component declares is parented on the
+by the `protect` above. One alias per repository carries the move for
+its whole subtree: everything the component declares is parented on the
 repository rather than on the component, so each of those resources
-inherits the alias and keeps the URN it already has. State carries the
+inherits the alias. The branch protection and the Environments carry a
+second alias of their own, naming the logical name each had before it
+carried the repository's ([style/pulumi.md](../style/pulumi.md)'s
+child-name rule), and the engine crosses the two — the parent's alias
+with the child's old name — into the URN state holds. Both kinds are
+dropped once the apply has moved the entries. State carries the
 unparented URNs today: the apply that moves them under the component is
 the next one.
 
