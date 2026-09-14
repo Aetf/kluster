@@ -12,6 +12,7 @@ no credential can mint the seed and the seed cannot mint its successor.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,9 +125,19 @@ def test_a_seed_that_cannot_see_zones_is_refused_at_adoption(api: FakeApi, kit: 
     # accepts it; the first zone-scoped mint is where it would otherwise fail,
     # long after the console visit that fixes it is over. The refusal names the
     # permission and says the fix is a new token rather than an edited one.
-    with pytest.raises(CredentialRejected, match=cloudflare.ZONE_VISIBILITY_PERMISSION):
+    with pytest.raises(CredentialRejected, match=cloudflare.ZONE_VISIBILITY_PERMISSION) as caught:
         _ = cloudflare.adopt_seed(token=value, seeds=kit, seed_entry=SEED_ENTRY)
     assert not kit.has(SEED_ENTRY)
+    # It states what the seed must carry -- both permissions, spelled as the
+    # dashboard page it sends the operator to spells them -- and names no
+    # command to record the replacement: which command that is belongs to the
+    # caller, and under `kit rotate` the `seed … create` this refusal used to
+    # name would write the token into the retired kit (Aetf/kluster-ops#347).
+    refusal = str(caught.value)
+    assert not re.search(r'seed \S+ create', refusal), refusal
+    assert 'User → API Tokens → Edit' in refusal
+    assert cloudflare.MINTING_PERMISSION not in refusal
+    assert 'fresh token' in refusal
 
 
 def test_a_seed_that_sees_only_another_account_is_refused_before_the_kit_records_it(

@@ -10,6 +10,7 @@ rather than being invented.
 from __future__ import annotations
 
 import functools
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -358,6 +359,50 @@ def test_a_refused_paste_at_the_console_row_is_asked_again(
     assert any(cloudflare.MINTING_PERMISSION in record.message for record in caplog.records)
     # And the walk went on: the row after the console one rotated as usual.
     assert whole.b2_api.named(b2.SEED.name) == [successor.get(entries.SEEDS['b2'].entry, attribute='UserName')]
+
+
+@needs_age
+def test_the_re_ask_at_the_console_row_names_no_command_but_the_paste(
+    kit: KdbxStore,
+    registry: escrow.Registry,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """What a refused paste prints under `rotate` sends the operator back to the prompt and nowhere else.
+
+    The refusal for a token that lists no zone is the one that used to end
+    with a command, `seed cloudflare create` (Aetf/kluster-ops#347). Run while
+    `rotate` waits at this prompt, that command writes the token into the
+    retired kit, the default `--kdbx`, so neither the refusal nor the hint
+    after it may name it: the refusal says what the token must carry, and the
+    hint says the paste goes here.
+    """
+    whole = whole_kit(kit, registry, monkeypatch)
+    successor = KdbxStore.create(tmp_path / 'successor.kdbx', PASSWORD)
+    blind, accepted = console_seed(whole.dashboard), console_seed(whole.dashboard)
+    pastes = _answers(blind, accepted)
+
+    def paste(message: str) -> str:
+        # The fake's zone listing is per account rather than per token, so
+        # the first paste is made blind by the flag and the second is not.
+        whole.dashboard.seed_sees_zones = not whole.dashboard.seed_sees_zones
+        return pastes(message)
+
+    whole.dashboard.seed_sees_zones = True
+    monkeypatch.setattr('getpass.getpass', paste)
+
+    _ = lifecycle.rotate(kit, lambda: successor, prompt=_refuse, registry=registry)
+
+    assert successor.get(entries.SEEDS['cloudflare'].entry) == accepted
+    messages = [record.message for record in caplog.records]
+    refused = next(i for i, message in enumerate(messages) if 'refused, and nothing was stored' in message)
+    refusal, hint = messages[refused], messages[refused + 1]
+    assert cloudflare.ZONE_VISIBILITY_PERMISSION in refusal
+    assert 'paste the new token at this prompt' in hint
+    for line in (refusal, hint):
+        assert not re.search(r'seed \S+ create', line), line
+        assert '`credentials ' not in line, line
 
 
 @needs_age

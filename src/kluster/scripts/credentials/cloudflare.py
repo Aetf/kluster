@@ -357,6 +357,13 @@ class Session:
         answer carries the accounts those zones are in and adoption is held to
         one of them (`verify_seed_account`). Asking a second time could only
         produce a second answer to a question already settled.
+
+        The refusal says what the token must carry and where that is fixed,
+        and names no command: which command records the replacement is the
+        caller's to say, and the callers differ -- `seed cloudflare create`
+        is its own, while `kit rotate` asks for the paste again at its prompt,
+        where that command run meanwhile would write the token into the
+        retired kit.
         """
         visible = self.zones()
         if not visible:
@@ -365,8 +372,9 @@ class Session:
                 'turn a zone name into the id a minted policy names: it is missing '
                 f'{ZONE_VISIBILITY_PERMISSION}, with Zone Resources at all zones. Adding '
                 'that permission to this token in the dashboard does not extend the value '
-                'already in hand -- create a fresh token carrying both permissions, record '
-                'it with `credentials seed cloudflare create`, and delete this one'
+                'already in hand -- the seed has to be a fresh token carrying both '
+                f'User → API Tokens → Edit and {ZONE_VISIBILITY_PERMISSION}, made on that page, '
+                'with this one deleted there once the fresh one is recorded'
             )
         return visible
 
