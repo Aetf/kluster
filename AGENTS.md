@@ -20,14 +20,14 @@ except where a bullet says otherwise:
 * `mise x uv -- uv run lint-imports` — the layering contract below
 * `timeout 60 mise x uv -- uv run pytest`
 * `ltex-cli-plus` on every markdown file touched, one file at a time —
-  where the binary is and how it reaches the repository's word lists is
-  under "Writing the prose". This one runs on a workstation only; CI
-  does not.
+  how it reaches the repository's word lists is under "Writing the
+  prose". CI runs it the same way, over the markdown the pull request
+  changed.
 * a claim the change made false is swept for — not the identifier that
   moved. How to shape the patterns, and what a sweep that found nothing
   owes the pull request, are in
   [docs/style/README.md](docs/style/README.md) under "Comments and
-  docs". This one is a workstation step too; CI does not run it.
+  docs". This one runs on a workstation only; CI does not run it.
 * provider-facing code has one more requirement —
   [dispatch.md](docs/framework/dispatch.md) §1.1
 
@@ -76,16 +76,23 @@ documentation the change makes true ships with it rather than after it.
   no history the reader has to subtract.
 * **Prose is checked like code.** Every markdown file passes
   `ltex-cli-plus` against `.vscode/ltex.dictionary.en-US.txt` and
-  `.vscode/ltex.disabledRules.en-US.txt`. The binary is **not on `PATH`**:
-  it comes with the editor tooling, here as mason's
-  `~/.local/share/nvim/mason/bin/ltex-cli-plus`. It reads neither word
-  list on its own either, so a run is two steps — build a client
-  configuration carrying the contents of both lists, then check one file
-  against it. From the workspace root:
+  `.vscode/ltex.disabledRules.en-US.txt`. The checker is pinned like
+  every other gate tool — in `mise.toml`, since it is the one `uv.lock`
+  cannot carry — so `mise x -- ltex-cli-plus` is the binary, installed
+  by `mise install` and reached the same way on a workstation and in
+  CI. It reads neither word list on its own, so a
+  run is two steps — build a client configuration carrying the contents
+  of both lists, then check one file against it. From the workspace
+  root:
 
       mkdir -p .claude && python3 -c 'import json,pathlib as P;w=lambda n:P.Path(f".vscode/ltex.{n}.en-US.txt").read_text().split();P.Path(".claude/ltex.json").write_text(json.dumps({"dictionary":{"en-US":w("dictionary")},"disabledRules":{"en-US":w("disabledRules")}}))'
-      ~/.local/share/nvim/mason/bin/ltex-cli-plus \
-          --client-configuration=.claude/ltex.json <file.md>
+      mise x -- ltex-cli-plus --client-configuration=.claude/ltex.json <file.md>
+
+  The `checks` workflow runs exactly that, one invocation per markdown
+  file the pull request changed, and any finding fails it — the checker
+  exits non-zero on `info` findings too. A file the change did not touch
+  is not checked there, so a finding an untouched file already carries
+  on `main` surfaces on the first change that touches it.
 
   - Both word-list files are one entry per line with **no comment
     syntax**, and the dictionary is **case-sensitive** — `homelab` and

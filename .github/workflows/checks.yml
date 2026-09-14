@@ -1,8 +1,8 @@
 name: checks
 
 # Everything that can be judged without touching the cloud: formatting, lint,
-# types, unit tests, and the appliance's pinned digests. No secrets, so it runs
-# for forks too.
+# types, unit tests, the appliance's pinned digests, and the prose of the
+# markdown a change touches. No secrets, so it runs for forks too.
 
 on:
   pull_request:
@@ -22,6 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The prose step diffs against the base commit, which a shallow
+          # clone does not have.
+          fetch-depth: 0
 
       - uses: jdx/mise-action@v3
         with:
@@ -57,3 +61,69 @@ jobs:
       # this is what stops a stale hash from reaching the appliance.
       - name: Pinned artefacts
         run: mise x uv -- uv run state-backend pins
+
+      # The prose gate AGENTS.md describes, run the way it says: the two word
+      # lists under `.vscode/` become one client configuration (the checker
+      # reads neither list on its own, and a reference to a list file is
+      # silently dropped, so the words go in whole), and the checker is handed
+      # one file per invocation, because given many at once it hangs rather
+      # than finishing. Only the markdown the event changed is checked -- at
+      # several seconds a file, the whole tree is minutes, and a file the
+      # change did not touch says nothing about the change. Deleted files are
+      # left out (`--diff-filter=d`) since there is nothing to read.
+      #
+      # A step inside this job rather than a job of its own: branch protection
+      # requires the context `checks` by name (`REQUIRED_CHECKS` in the
+      # `github` stack), so a separate job would report and never block.
+      - name: Prose
+        env:
+          # push: the commit `main` moved from. PR: the checkout is GitHub's
+          # merge of the head into `main`, so its first parent is the `main`
+          # the change is being merged onto. Not `pull_request.base.sha`,
+          # which is `main` as of the pull request's creation and never
+          # moves, so the range below would grow by whatever `main` gained
+          # since.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+          # The launcher takes `JAVA_HOME` before the Java the archive
+          # bundles, and the runner image sets it to a Java 17 that cannot
+          # load the checker's class files (compiled for 21). Empty, the
+          # launcher falls back to the bundled runtime and never consults
+          # the `java` on PATH.
+          JAVA_HOME: ''
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/ltex.json"
+          python3 - "$config" <<'PY'
+          import json, pathlib, sys
+          words = lambda name: pathlib.Path(f'.vscode/ltex.{name}.en-US.txt').read_text().split()
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({
+              'dictionary': {'en-US': words('dictionary')},
+              'disabledRules': {'en-US': words('disabledRules')},
+          }))
+          PY
+
+          # No base to diff against (a freshly created branch) means every
+          # markdown file in the tree, and so does a change to what the
+          # checker is or reads -- the pin, the two word lists, this
+          # workflow: a bumped checker or a dropped dictionary word is proven
+          # against the prose it judges, not landed unchecked for the next
+          # change to an affected file to fail on.
+          machinery=(mise.toml .vscode/ltex.dictionary.en-US.txt .vscode/ltex.disabledRules.en-US.txt .github/workflows/checks.yml)
+          if git cat-file -e "${BASE:-none}^{commit}" 2>/dev/null \
+             && [ -z "$(git diff --name-only "$BASE...HEAD" -- "${machinery[@]}")" ]; then
+            files=$(git diff --name-only --diff-filter=d "$BASE...HEAD" -- '*.md')
+          else
+            files=$(git ls-files -- '*.md')
+          fi
+          [ -n "$files" ] || { echo 'no markdown changed'; exit 0; }
+
+          # A checker that hangs must fail the step rather than hold the
+          # required check pending for the job's six-hour default; a file
+          # takes seconds.
+          status=0
+          while IFS= read -r file; do
+            echo "::group::$file"
+            timeout 120 mise x -- ltex-cli-plus --client-configuration="$config" "$file" || status=$?
+            echo '::endgroup::'
+          done <<<"$files"
+          exit "$status"
