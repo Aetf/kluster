@@ -70,6 +70,21 @@
     unqualified, because §5.2 places the set beside the one block that names
     it rather than in `conventions`, where every set a second program agrees
     on lives.
+*   **Updated:** 2026-09-14. §4.4's "Certificate Transparency holds no
+    certificate from `digicert.com` for any of the six zones" is a statement
+    about the certificates valid on the day it was made, and holds of those.
+    The whole log carries expired issuance under that identity on four of
+    the six zones — unlimited-code.works, unlimitedcodeworks.xyz,
+    jiahui.love and jiahui.id — from the edge's earlier partner: the pair,
+    apex and wildcard, from `CloudFlare Inc ECC CA-2` and then
+    `Cloudflare Inc ECC CA-3`, intermediates named for the edge and chained
+    to `Baltimore CyberTrust Root`, whose operator's CAA identity is
+    `digicert.com`, with not-before dates from 2019-01 to 2023-05 and the
+    last expiring in 2024-05. The reasoning stands as written — a CAA set
+    authorizes who issues now, and nothing from that chain is valid — and
+    the sentence is read with that scope (`kluster-ops#353`);
+    declarative/dns.md §1.2 is the read that holds the declaration to the
+    log, and its first read takes valid certificates for the same reason.
 *   **Authority:** the style rules (`docs/style/`) and the design documents are
     what this document obeys. Where they are silent, a rule proposed here is
     marked **new rule**.
