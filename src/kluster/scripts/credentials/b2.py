@@ -536,6 +536,11 @@ def create_seed(*, root: masters.Credential, seeds: KdbxStore, seed_entry: str) 
     return minted.app_key.key_id
 
 
+def holds_seed(store: KdbxStore, entry: str) -> bool:
+    """Whether `entry` is a complete seed row: both halves `Session.from_entry` needs."""
+    return store.has(entry) and bool(store.get(entry, attribute='UserName')) and bool(store.get(entry))
+
+
 def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = None) -> str:
     """Have the seed mint its successor, store it, and delete the old keys.
 
@@ -547,10 +552,28 @@ def rotate_seed(store: KdbxStore, *, seed_entry: str, into: KdbxStore | None = N
     the retired one must stay exactly as it was, so it passes the successor
     explicitly rather than letting this edit the kit it is reading.
 
+    **A successor that already holds a complete row is finished, not minted
+    over.** That is the state a rotation interrupted after its `put` leaves,
+    and once the retirement has reached the predecessor the successor's key is
+    the only live one either kit names. So `into` is tested before `store` is
+    authorized as: the re-run authorizes as the successor's key, deletes every
+    other key of the seed's name, and returns the key id the successor holds.
+    A successor row whose key the account no longer accepts is refused at
+    that authorization, and its repair is `credentials seed b2 create` into
+    that file.
+
     The account is held against `conventions` before any of it, because the
     rotation's second act is to delete every other key of the seed's name: a
     kit re-seeded from another account would sweep that account's keys.
     """
+    if into is not None and holds_seed(into, seed_entry):
+        successor = Session.from_entry(into, seed_entry)
+        verify_account(successor.account_id)
+        kept = into.get(seed_entry, attribute='UserName')
+        log.info('the successor kit already holds a seed key (%s); deleting every other key of that name', kept)
+        retire_others(successor, SEED, keep=kept)
+        return kept
+
     session = Session.from_entry(store, seed_entry)
     verify_account(session.account_id)
     previous = store.get(seed_entry, attribute='UserName')

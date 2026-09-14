@@ -214,6 +214,46 @@ def test_rotation_retires_every_superseded_seed_key(api: FakeApi, kit: KdbxStore
     assert orphan.key_id not in api.keys
 
 
+@pytest.mark.parametrize('predecessor_live', [True, False], ids=['predecessor-live', 'predecessor-retired'])
+def test_rotation_into_a_kit_already_holding_the_successor_mints_nothing(
+    api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore, predecessor_live: bool
+) -> None:
+    previous = _seeded(api, kit)
+    # A rotation that stored its successor and died in its retirement: the
+    # successor kit holds the row, and the account holds the successor's key,
+    # a stray of the seed's name, and the predecessor -- unless the retirement
+    # had reached it, after which the retired kit's row no longer authorizes.
+    stored = api.add_key(b2.SEED.name)
+    memory_kit.put(SEED_ENTRY, stored.key_id, stored.secret)
+    _ = api.add_key(b2.SEED.name)
+    if not predecessor_live:
+        del api.keys[previous]
+    api.calls.clear()
+
+    key_id = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
+
+    assert key_id == stored.key_id
+    assert 'b2_create_key' not in api.calls
+    assert api.named(b2.SEED.name) == [stored.key_id]
+    # The row is untouched, and the retired kit is never written (§4.2).
+    assert memory_kit.get(SEED_ENTRY, attribute='UserName') == stored.key_id
+    assert memory_kit.get(SEED_ENTRY) == stored.secret
+    assert kit.get(SEED_ENTRY, attribute='UserName') == previous
+
+
+def test_a_successor_row_missing_a_half_is_written_over(api: FakeApi, kit: KdbxStore, memory_kit: KdbxStore) -> None:
+    _ = _seeded(api, kit)
+    # Present is not complete: a row the session cannot authorize from is no
+    # key to keep, and treating it as one would refuse a rotation that has
+    # nothing to resume.
+    memory_kit.put(SEED_ENTRY, '', '')
+
+    key_id = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=memory_kit)
+
+    assert memory_kit.get(SEED_ENTRY, attribute='UserName') == key_id
+    assert api.named(b2.SEED.name) == [key_id]
+
+
 def test_a_key_stops_working_the_moment_it_is_deleted(api: FakeApi, kit: KdbxStore) -> None:
     key_id = _seeded(api, kit)
     session = _session(api, kit)
@@ -882,6 +922,14 @@ def _calls_made(operation: Stage, *, prepared: bool, monkeypatch: pytest.MonkeyP
     return faulty.counted - before
 
 
+def _rotate_into(api: FakeApi, kit: KdbxStore, successor: KdbxStore) -> None:
+    _ = b2.rotate_seed(kit, seed_entry=SEED_ENTRY, into=successor)
+
+
+def _rotate_into_a_fresh_kit(api: FakeApi, kit: KdbxStore) -> None:
+    _rotate_into(api, kit, MemoryKit())
+
+
 #: Each b2-touching stage, as (name, stage, whether a seed must exist first).
 STAGES: tuple[tuple[str, Stage, bool], ...] = (
     ('create', _create, False),
@@ -902,7 +950,19 @@ def _stage_calls() -> dict[str, int]:
     return counts
 
 
+def _rotate_into_calls() -> int:
+    """The rotation into a second kit, measured the way `_stage_calls` measures.
+
+    Its own sweep rather than a row of `STAGES`: the stage sweep holds the
+    kit it rotates to `_kit_never_lies`, and a whole-kit rotation retires
+    the key that kit holds by design (§4.2).
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        return _calls_made(_rotate_into_a_fresh_kit, prepared=True, monkeypatch=patch)
+
+
 CALLS = _stage_calls()
+ROTATE_INTO_CALLS = _rotate_into_calls()
 # A stage that measures zero calls loses its entire sweep below and takes no
 # case with it -- the parametrization simply collects fewer, and nothing
 # anywhere reports the stage as unswept. Measuring is what keeps the sweep from
@@ -910,6 +970,7 @@ CALLS = _stage_calls()
 # from reading as a stage with nothing to check. `all` of nothing is true, so
 # the table's own emptiness is stated too.
 assert CALLS and all(CALLS.values()), CALLS
+assert ROTATE_INTO_CALLS, ROTATE_INTO_CALLS
 
 #: One case per (stage, call, crash point): the whole sweep, enumerated from
 #: the measurement above rather than from a number anyone maintains.
@@ -959,3 +1020,46 @@ def test_a_stage_heals_from_a_failure_at_any_call(
     for minted in MANAGED:
         assert len(api.named(minted)) <= 1, f'{name} left an orphaned {minted}'
     assert kit.has(SEED_ENTRY)
+
+
+@pytest.mark.parametrize('when', CRASH_POINTS)
+@pytest.mark.parametrize('failing_call', range(1, ROTATE_INTO_CALLS + 1))
+def test_rotating_into_a_second_kit_heals_from_a_failure_at_any_call(
+    failing_call: int, when: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api = FakeApi()
+    kit = MemoryKit()
+    successor = MemoryKit()
+    _ = Faulty(api).attach(monkeypatch)
+    _create(api, kit)
+    retired = kit.get(SEED_ENTRY, attribute='UserName')
+    _ = Faulty(api, fail_at=failing_call, when=when).attach(monkeypatch)
+
+    with pytest.raises(Interrupted):
+        _rotate_into(api, kit, successor)
+    # Whichever kit the interruption left the live key in, that kit does not
+    # lie about it: the successor names a key the account has or nothing, and
+    # where it names nothing the retired kit's key still authorizes.
+    _survived(successor, api)
+    stored = successor.get(SEED_ENTRY, attribute='UserName') if b2.holds_seed(successor, SEED_ENTRY) else None
+    if stored is None:
+        _kit_never_lies(kit, api)
+    api.calls.clear()
+
+    # The repair is the same command into the same successor.
+    _ = Faulty(api).attach(monkeypatch)
+    _rotate_into(api, kit, successor)
+
+    _survived(successor, api)
+    key_id = successor.get(SEED_ENTRY, attribute='UserName')
+    assert api.named(b2.SEED.name) == [key_id]
+    # A successor that already held its key keeps it, and the re-run mints
+    # nothing: a second mint would leave the key the first run stored as a
+    # stray, or refuse outright once the predecessor is gone.
+    if stored is not None:
+        assert 'b2_create_key' not in api.calls
+        assert key_id == stored
+    else:
+        assert api.calls.count('b2_create_key') == 1
+    # §4.2: the retired kit is never written, whichever path the re-run took.
+    assert kit.get(SEED_ENTRY, attribute='UserName') == retired
