@@ -114,12 +114,14 @@ documentation the change makes true ships with it rather than after it.
     and will not be committed: `.claude/` inside the workspace, which
     `.gitignore` covers and which the recipe above creates.
   - **Confirm the configuration loaded before believing any finding.**
-    Under a working configuration `docs/framework/github.md` reports a
-    handful of `info` findings and nothing else — `ANY_MORE` and
-    `UP_TO_DATE_HYPHEN`, or fewer if someone has since fixed one of them.
-    Thirty-odd findings on that same file means the word lists never
-    reached the checker, and every finding on the file actually under
-    review is then suspect. Skip this check and a misconfigured run reads
+    The control is one file checked under two configurations: the built
+    `.claude/ltex.json`, and a second file holding only `{}`. On a file
+    that is clean on `main` — `docs/framework/github.md` is one — the
+    built configuration reports nothing and the empty one reports dozens
+    of findings, the word lists being all that separates the two runs.
+    Two runs that agree mean the word lists never reached the checker,
+    and every finding on the file actually under review is then
+    suspect. Skip this check and a misconfigured run reads
     as a large, plausible prose regression on a file that is clean,
     inviting the mistaken repair: rewriting correct sentences, or growing
     a word list to silence them.
@@ -141,19 +143,36 @@ documentation the change makes true ships with it rather than after it.
   - Run it **one file at a time**: given many files at once it hangs
     rather than finishing.
   - Some findings are **artifacts of the checker** and are answered by
-    neither a dictionary entry nor a disabled rule nor a reword: it
-    mis-columns inside very long table rows; it reports a fragment of a
-    word as a misspelling; and it produces **sentence-segmentation
-    artifacts**, where a grammar rule fires on a sentence the change never
-    touched. Those come from the conversion the checker runs before it
-    reads a file: inline code spans become dummy tokens whose length
-    differs from the source, and enough of them ahead of a line shift
-    where the checker believes a sentence starts. A mis-columned row and
-    a word fragment give themselves away on sight; a segmentation
-    artifact does not, because the sentence reads fine and the rule name
-    is real. Its tells are that the finding does **not** reproduce on
-    `main`'s copy of the same file, and that it moves or vanishes when
-    unrelated nearby text changes length.
+    neither a dictionary entry nor a disabled rule. Both come from the
+    conversion the checker runs before it reads a file: inline code
+    spans become dummy tokens whose length differs from the source.
+    - **The first body row of a table whose first cell is a lone code
+      span** is misread: every finding on that row lands at a shifted
+      offset and reports a fragment of neighboring words, or the dummy
+      token itself, as a misspelling (`Dummy0 Pu`, `gram entrypo`), and
+      a word the dictionary holds is flagged there all the same. The row's
+      length and any other code spans in it change nothing; a row of the
+      same shape below it passes, and reordering the rows moves the
+      finding to whichever row is first. The cure is the row's shape: a
+      column order that does not lead with the code span, or any text
+      beside the span in that cell. The dictionary is never the answer —
+      the word it trips on is already there, and a fragment added to the
+      list would mask a real misspelling. Nor is muting: the only disable
+      the checker honors in a markdown file is the block-level
+      `<!-- LTeX: enabled=false -->` … `<!-- LTeX: enabled=true -->` pair,
+      each on a line of its own (inline, it is whitespace), and it mutes
+      the table's prose cells too. A misspelling that spans a verb and a
+      bare tool name (`runs apid`) is not this artifact: LanguageTool is
+      offering to merge or split the pair, and the code span the name
+      should have had is the reword.
+    - A **sentence-segmentation artifact** is a grammar rule firing on a
+      sentence the change never touched: enough dummy tokens ahead of a
+      line shift where the checker believes a sentence starts. A
+      fragment gives itself away on sight; a segmentation artifact does
+      not, because the sentence reads fine and the rule name is real. Its
+      tells are that the finding does **not** reproduce on `main`'s copy
+      of the same file, and that it moves or vanishes when unrelated
+      nearby text changes length.
 
 ## Working beside other agents
 

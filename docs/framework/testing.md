@@ -199,8 +199,10 @@ The third is something the mock lets through that the engine refuses:
     the logical name. That key qualifies by the *immediate* parent's type
     where the engine carries the whole chain, so the refusal is at worst
     stricter than the engine's and never laxer; and, like the engine's, it
-    does not carry the parent's *name*, which is why a resource inside a
-    component is conventionally named after the component that holds it.
+    does not carry the parent's *name*, which is why a child's logical name
+    carries the `name` of the component that holds it — the rule under
+    "Resources and their contents" in
+    [style/pulumi.md](../style/pulumi.md).
 
 A suite meets the refusal when one run legitimately wants two of something:
 a variant of a component built beside its baseline, to compare the two. The

@@ -142,7 +142,8 @@ deliberately the only wall (state-backend.md §4); the `pg_dump` is
 age-encrypted before upload (it
 carries every stack's ciphertext + salt). **OS: an immutable,
 auto-updating container OS fully provisioned at create time** (Fedora
-CoreOS preferred — Ignition + podman quadlets; the box is a
+CoreOS, Ignition-provisioned, Postgres a plain unit running `podman run`
+— state-backend.md §§1, 2; the box is a
 zero-maintenance appliance, re-provisioned from config, carrying no
 state pg_dump+refresh can't rebuild). **OCI Container Instances were
 evaluated and rejected**: no persistent storage (15 GB ephemeral only)
