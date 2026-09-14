@@ -4,8 +4,8 @@ The UDM-SE as a system: the home site's router, firewall, ZeroTier
 terminator, and host of the nspawn container services. This document owns *how the
 machine delivers* what the cluster design demands of it; the demands
 themselves live in cluster/ (BGP peering and the `lan` pool —
-architecture.md §3.4; full desired-state absorption — §5.2; ZT
-termination — §5.3) and the declaration mechanics in
+architecture.md §3.4; full desired-state absorption — architecture.md §5.2; ZT
+termination — architecture.md §5.3) and the declaration mechanics in
 declarative/physical.md §4.
 
 ## 1. Roles on the box
