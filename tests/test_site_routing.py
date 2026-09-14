@@ -256,7 +256,7 @@ def test_the_configuration_survives_a_firmware_update_and_the_daemons_copy_does_
     assert config['path'] == f'{conventions.gateway.CUSTOM_ROOT}/{routing.FRR_DIRECTORY}/frr.conf'
     assert config['path'] == routing.FRR_CONFIG
     assert routing.FRR_LIVE_CONFIG.startswith('/etc/')
-    directory = monitor.one(f'{MECHANISM}-skeleton-{routing.FRR_DIRECTORY}')
+    directory = monitor.one(f'{NAME}-skeleton-{routing.FRR_DIRECTORY}')
 
     assert directory.typ == 'pulumi-python:dynamic/device:Directory'
     assert directory.inputs['path'] == persistence.skeleton_path(routing.FRR_DIRECTORY)
@@ -283,8 +283,8 @@ def test_the_converger_is_a_unit_and_an_executable_rather_than_a_boot_chain_scri
     `systemctl status`, and a run that can be repeated outside boot — none of
     which a script in the numeric chain gets.
     """
-    executable = monitor.inputs_of(f'{MECHANISM}-bin-{routing.CONVERGER}')
-    unit = monitor.inputs_of(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')
+    executable = monitor.inputs_of(f'{NAME}-bin-{routing.CONVERGER}')
+    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')
 
     assert executable['path'] == persistence.executable_path(routing.CONVERGER)
     assert executable['mode'] == persistence.SCRIPT_MODE
@@ -308,7 +308,7 @@ def test_the_boot_path_and_the_push_path_are_one_converger(monitor: Recorder) ->
     unnoticed.
     """
     hook = monitor.inputs_of(f'{NAME}-config')['hook']
-    unit = monitor.inputs_of(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')['content']
+    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')['content']
 
     assert persistence.executable_path(routing.CONVERGER) in hook
     assert f'ExecStart={persistence.executable_path(routing.CONVERGER)}' in unit
@@ -339,7 +339,7 @@ def test_the_unit_starts_the_daemon_rather_than_anything_enabling_it(monitor: Re
     condition still pulls in and orders `Wants=`, so it would gate nothing
     while implying that it does.
     """
-    unit = monitor.inputs_of(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')['content']
+    unit = monitor.inputs_of(f'{NAME}-unit-{routing.CONVERGER_UNIT}')['content']
 
     assert f'Wants={routing.FRR_SERVICE}' in unit
     assert f'After={routing.FRR_SERVICE}' in unit
@@ -358,7 +358,7 @@ async def test_the_unit_waits_for_the_configuration_it_is_about_to_start_a_daemo
     daemon comes up with the protocol switched off and is restarted a moment
     later — correct, and a restart nobody needed.
     """
-    depends = monitor.depends_on(f'{MECHANISM}-unit-{routing.CONVERGER_UNIT}')
+    depends = monitor.depends_on(f'{NAME}-unit-{routing.CONVERGER_UNIT}')
 
     assert str(await site.config.urn.future()) in depends
     assert str(await site.converger.urn.future()) in depends

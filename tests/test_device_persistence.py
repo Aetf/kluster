@@ -42,6 +42,7 @@ DEVICE_DIRECTORY = 'pulumi-python:dynamic/device:Directory'
 
 NAME = 'mechanism'
 CONSUMER = 'consumer'
+NEIGHBOURS = 'neighbours'
 HOST = str(conventions.overlay.UDM)
 HOST_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample'
 
@@ -215,10 +216,10 @@ def test_a_file_asked_for_through_the_layer_belongs_to_the_layer_that_asked(moni
     directory the file goes in or what runs afterwards. The mechanism's own
     files stay the mechanism's.
     """
-    for name in (f'{NAME}-on-boot-{SCRIPT}', f'{NAME}-bin-{PROGRAM}', f'{NAME}-unit-{UNIT}'):
+    for name in (f'{CONSUMER}-on-boot-{SCRIPT}', f'{CONSUMER}-bin-{PROGRAM}', f'{CONSUMER}-unit-{UNIT}'):
         assert monitor.options_of(name).parent.endswith(f'::{CONSUMER}'), name
 
-    assert monitor.options_of(f'{NAME}-skeleton-{DIRECTORY}').parent.endswith(f'::{CONSUMER}')
+    assert monitor.options_of(f'{CONSUMER}-skeleton-{DIRECTORY}').parent.endswith(f'::{CONSUMER}')
     assert monitor.options_of(f'{NAME}-on-boot-{persistence.UNITS_SCRIPT}').parent.endswith(f'::{NAME}')
 
 
@@ -229,7 +230,7 @@ def test_an_executable_is_delivered_and_nothing_is_told_about_it(monitor: Record
     beside it is a neighbour this program never looks at, which is what makes
     the directory shared rather than owned.
     """
-    inputs = monitor.inputs_of(f'{NAME}-bin-{PROGRAM}')
+    inputs = monitor.inputs_of(f'{CONSUMER}-bin-{PROGRAM}')
 
     assert inputs['path'] == f'{persistence.BIN_DIR}/{PROGRAM}'
     assert inputs['mode'] == persistence.SCRIPT_MODE
@@ -247,13 +248,48 @@ async def test_two_files_whose_names_share_a_stem_are_two_resources(
     has two files, and the second declaration would silently replace the first.
     """
     async with declaring():
-        _ = Neighbours('neighbours', mechanism=mechanism)
+        _ = Neighbours(NEIGHBOURS, mechanism=mechanism)
 
-    shell = monitor.inputs_of(f'{NAME}-bin-example.sh')
-    python = monitor.inputs_of(f'{NAME}-bin-example.py')
+    shell = monitor.inputs_of(f'{NEIGHBOURS}-bin-example.sh')
+    python = monitor.inputs_of(f'{NEIGHBOURS}-bin-example.py')
 
     assert shell['path'] == f'{persistence.BIN_DIR}/example.sh'
     assert python['path'] == f'{persistence.BIN_DIR}/example.py'
+
+
+def test_a_file_is_named_for_the_component_that_asked(monitor: Recorder) -> None:
+    """The name is read off the parent the URN places the file under, so the two agree by construction.
+
+    A child's logical name carries its component's (style/pulumi.md), and the
+    component a file asked for through the mechanism belongs to is the asker
+    -- so the asker's name is what it carries, with the kind and the file's
+    whole name after it, and the mechanism's own files carry the mechanism's.
+    Nothing here is named for the mechanism on the asker's behalf.
+    """
+    for kind, file in (('on-boot', SCRIPT), ('bin', PROGRAM), ('unit', UNIT), ('skeleton', DIRECTORY)):
+        assert monitor.options_of(f'{CONSUMER}-{kind}-{file}').parent.endswith(f'::{CONSUMER}')
+        assert f'{NAME}-{kind}-{file}' not in monitor.names_declared
+
+
+@pytest.mark.asyncio
+async def test_an_asker_that_is_not_a_component_is_refused_before_anything_is_registered(
+    monitor: Recorder, mechanism: DevicePersistence
+) -> None:
+    """The name comes from the parent, so an `opts` with no component to read it off is refused by the rule.
+
+    Both shapes: no parent at all, and a custom resource as the parent -- a
+    file parented on another file has a URN under a type and no component's
+    name to carry. The refusal is the rule's, by name, and it is before the
+    registration: the run has no such file afterwards.
+    """
+    before = set(monitor.registrations)
+    for opts in (pulumi.ResourceOptions(), pulumi.ResourceOptions(parent=mechanism.units)):
+        with pytest.raises(ValueError, match='named for the component the URN places it under'):
+            _ = mechanism.executable('orphan.sh', '#!/bin/sh\nexit 0\n', opts=opts)
+
+    async with declaring():
+        pass
+    assert set(monitor.registrations) == before
 
 
 def test_a_unit_of_a_kind_the_converger_never_walks_is_refused(mechanism: DevicePersistence) -> None:
@@ -275,7 +311,7 @@ def test_a_script_of_the_chain_runs_itself_once_it_lands(monitor: Recorder) -> N
     hook too — a script this program no longer declares is gone from the device,
     and there is nothing left to run.
     """
-    hook = monitor.inputs_of(f'{NAME}-on-boot-{SCRIPT}')['hook']
+    hook = monitor.inputs_of(f'{CONSUMER}-on-boot-{SCRIPT}')['hook']
 
     assert hook == f'if [ -x {persistence.on_boot_path(SCRIPT)} ]; then {persistence.on_boot_path(SCRIPT)}; fi'
 
@@ -303,7 +339,7 @@ async def test_a_unit_waits_for_the_converger_that_installs_it(monitor: Recorder
     """
     converger = str(await mechanism.units.urn.future())
 
-    assert converger in monitor.depends_on(f'{NAME}-unit-{UNIT}')
+    assert converger in monitor.depends_on(f'{CONSUMER}-unit-{UNIT}')
     assert converger in monitor.depends_on(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
 
 
@@ -319,8 +355,8 @@ async def test_a_file_waits_for_the_directory_it_lands_in(monitor: Recorder, mec
     bin_dir = str(await mechanism.skeleton[persistence.BIN].urn.future())
     unit_dir = str(await mechanism.skeleton[persistence.UNITS].urn.future())
 
-    assert bin_dir in monitor.depends_on(f'{NAME}-bin-{PROGRAM}')
-    assert unit_dir in monitor.depends_on(f'{NAME}-unit-{UNIT}')
+    assert bin_dir in monitor.depends_on(f'{CONSUMER}-bin-{PROGRAM}')
+    assert unit_dir in monitor.depends_on(f'{CONSUMER}-unit-{UNIT}')
     assert unit_dir in monitor.depends_on(f'{NAME}-unit-{persistence.UDM_BOOT_UNIT}')
 
 
@@ -332,7 +368,7 @@ def test_a_unit_is_retired_by_the_delete_that_stops_declaring_it(monitor: Record
     and the same session disables it and removes the live copy — otherwise a
     retired unit would keep running until somebody found it on the device.
     """
-    hook = monitor.inputs_of(f'{NAME}-unit-{UNIT}')['hook']
+    hook = monitor.inputs_of(f'{CONSUMER}-unit-{UNIT}')['hook']
     live = f'{persistence.LIVE_UNIT_DIR}/{UNIT}'
 
     assert f'if [ -e {persistence.unit_source(UNIT)} ]' in hook
@@ -350,7 +386,7 @@ def test_a_directory_arriving_is_not_an_event_anything_is_told_about(monitor: Re
     device waits for. Refusing to remove one somebody filled is the provider's,
     and is asserted there.
     """
-    assert monitor.inputs_of(f'{NAME}-skeleton-{DIRECTORY}').get('hook') is None
+    assert monitor.inputs_of(f'{CONSUMER}-skeleton-{DIRECTORY}').get('hook') is None
 
 
 ##
@@ -445,12 +481,12 @@ def test_a_drop_in_lands_beside_the_unit_it_amends_and_belongs_to_the_caller(mon
     the unit, and comes back as a resource of the component that asked, exactly
     as every other kind does.
     """
-    inputs = monitor.inputs_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
+    inputs = monitor.inputs_of(f'{CONSUMER}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
 
     assert inputs['path'] == f'{persistence.UNIT_SOURCE_DIR}/{TEMPLATE_UNIT}.d/{DROPIN}'
     assert inputs['mode'] == persistence.FILE_MODE
     assert inputs['owner'] == conventions.gateway.SSH_USER
-    assert monitor.options_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}').parent.endswith(f'::{CONSUMER}')
+    assert monitor.options_of(f'{CONSUMER}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}').parent.endswith(f'::{CONSUMER}')
 
 
 @pytest.mark.asyncio
@@ -465,7 +501,7 @@ async def test_a_drop_in_waits_for_the_converger_that_installs_it(
     """
     converger = str(await mechanism.units.urn.future())
     unit_dir = str(await mechanism.skeleton[persistence.UNITS].urn.future())
-    edges = monitor.depends_on(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
+    edges = monitor.depends_on(f'{CONSUMER}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')
 
     assert converger in edges
     assert unit_dir in edges
@@ -481,7 +517,7 @@ def test_a_drop_in_comes_off_the_unit_by_the_delete_that_stops_declaring_it(moni
     drop-in in them, on both sides, because nothing else would ever take them
     away.
     """
-    hook = monitor.inputs_of(f'{NAME}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')['hook']
+    hook = monitor.inputs_of(f'{CONSUMER}-dropin-{TEMPLATE_UNIT}.d/{DROPIN}')['hook']
     source = persistence.dropin_source(TEMPLATE_UNIT, DROPIN)
     live = f'{persistence.live_dropin_dir(TEMPLATE_UNIT)}/{DROPIN}'
 

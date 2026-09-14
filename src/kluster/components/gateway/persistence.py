@@ -23,11 +23,15 @@ and this module owns it:
 **The layers above reach the mechanism through methods here, and the resource
 they get back is theirs.** Each call is one device resource at a path this
 module decides, with the mode and the post-apply hook that path implies, parented
-to the component that asked for it: the path and hook discipline belong to this
-layer, the resource belongs to the layer that needs it. That is why they are
-methods returning a child rather than constructor parameters — a caller would
-otherwise have to re-learn the path rules, or hand its content down to a
-component that has no idea what it is.
+to the component that asked for it and named for that component
+(style/pulumi.md): the path and hook discipline belong to this layer, the
+resource belongs to the layer that needs it. That is why they are methods
+returning a child rather than constructor parameters — a caller would otherwise
+have to re-learn the path rules, or hand its content down to a component that
+has no idea what it is. The name keeps nothing off a path: two components
+asking for one file are two resources at one place, and what refuses that is
+the path census the physical program is held to (`tests/test_physical_stack.py`),
+not the URN.
 
 **The package list is the exception, and is constructor data.**
 `10-packages.sh` is one rendered file whose content has to be complete when the
@@ -368,6 +372,26 @@ def udm_boot_unit() -> str:
     return templates.load(TEMPLATE_PACKAGE, f'templates/{UDM_BOOT_UNIT}')
 
 
+def _asker(opts: pulumi.ResourceOptions) -> str:
+    """The name of the component that asked for a resource, read off the `opts` it handed over.
+
+    A child's logical name carries the `name` of the component the URN places
+    it under (style/pulumi.md), and the URN places it under `opts.parent`; so
+    the name is read off that one fact rather than passed beside it, and the
+    two cannot disagree. An `opts` whose parent is not a component — none, or
+    a custom resource — is refused here, before anything is registered: the
+    rule has no name to give such a resource, and a file parented on a custom
+    resource is a shape no layer above the mechanism declares.
+    """
+    parent = opts.parent
+    if not isinstance(parent, Component):
+        raise ValueError(
+            f'a device resource is named for the component the URN places it under (style/pulumi.md), '
+            f'so `opts` must carry a component as its parent; it carries {parent!r}'
+        )
+    return parent.pulumi_resource_name
+
+
 class DevicePersistence(Component):
     """The boot chain, the custom root's skeleton, and the way in for the layers above."""
 
@@ -552,7 +576,7 @@ class DevicePersistence(Component):
         otherwise.
         """
         return DeviceDirectory(
-            f'{self.pulumi_resource_name}-skeleton-{name}',
+            f'{_asker(opts)}-skeleton-{name}',
             connection=self._connection,
             path=skeleton_path(name),
             mode=DIRECTORY_MODE,
@@ -574,14 +598,15 @@ class DevicePersistence(Component):
     ) -> DeviceFile:
         """One file of the mechanism, however it was asked for.
 
-        The kind and the file's own name — suffix included — are what name the
-        resource, exactly as they are what decide the path. So two callers
-        asking for one path collide on one Pulumi name and are refused at
-        declaration time, while two files that merely share a stem stay two
-        resources.
+        The resource is named for the component that asked (`_asker`), the
+        kind, and the file's own name — suffix included — so that two files
+        that merely share a stem stay two resources, and `…-bin-x.sh` and
+        `…-unit-x.service` stay apart. The name refuses nothing about the
+        path: two components asking for one file register two URNs at one
+        place, and the path census over the program is what catches that.
         """
         return DeviceFile(
-            f'{self.pulumi_resource_name}-{kind}-{name}',
+            f'{_asker(opts)}-{kind}-{name}',
             connection=self._connection,
             path=path,
             content=content,
