@@ -8,7 +8,7 @@ this file is how to operate it.
 
 | Path | What |
 | --- | --- |
-| `butane.yaml.j2` (template) | The machine, whole: Postgres quadlet, PKI, `pg_hba`, age recipients, the dump timer, the reboot window. |
+| `butane.yaml.j2` (template) | The machine, whole: the Postgres unit (`podman run` under systemd), PKI, `pg_hba`, age recipients, the dump timer, the reboot window. |
 | `state-dump.py` | What that timer runs — `pg_dump` → `pg_restore --list` → age → B2, standard library only. |
 | `operator-keys.txt` | SSH keys for diagnosis (`state-backend ssh`). The box is never configured by hand, and a key absent here means no access until the next re-provision. |
 
