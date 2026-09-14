@@ -34,7 +34,7 @@ read it.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 
 import pulumi
 
@@ -51,6 +51,26 @@ from putils import Component
 #: The declaration types the stack program builds a `Gateway` out of are
 #: re-exported here, so that wiring the gateway is one import.
 __all__ = ('CaddyService', 'Gateway', 'OverlayDaemon', 'PublicKey', 'ResolverService', 'Rootfs', 'RoutingSession')
+
+
+def url_host(host: str) -> str:
+    """`host` as a URL's authority spells it.
+
+    The two doors read one value, and they spell an IPv6 literal differently:
+    an SSH session takes it bare, a URL takes it in brackets. The value stays
+    the shape the device is dialed with — bare, which is also the only shape
+    the stack's `gatewayBootstrapHost` guard admits — and the URL is the one
+    place that adds the brackets. An IPv4 literal and a name are the same in
+    both spellings. A zoned literal (`fe80::1%eth0`) is not a shape the
+    bring-up ceremony offers: `ip_address` admits it, but a URL wants the zone
+    escaped and the provider's parser refuses it unescaped, and no address a
+    gateway is dialed at is link-local (physical/gateway.md §2.5).
+    """
+    try:
+        literal = ip_address(host)
+    except ValueError:
+        return host
+    return f'[{host}]' if isinstance(literal, IPv6Address) else host
 
 
 class Gateway(Component):
@@ -162,7 +182,7 @@ class Gateway(Component):
             # controller answers on the gateway itself. Recording it separately
             # would be a second copy of one fact, free to disagree with the
             # first.
-            api_url=f'https://{host}',
+            api_url=f'https://{url_host(host)}',
             site=site,
             worker_gua=worker_gua,
             static_hosts=static_hosts,

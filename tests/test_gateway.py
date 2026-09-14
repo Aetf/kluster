@@ -50,33 +50,37 @@ async def monitor() -> Controller:
     return await run_with(Controller(), stack='physical')
 
 
+def declare(name: str, host: str) -> Gateway:
+    """The whole device, the way the stack program declares it."""
+    return Gateway(
+        name,
+        host=host,
+        caddy=container.CaddyService(
+            service=conventions.gateway.CADDY,
+            pin=pin(conventions.gateway.CADDY),
+            acme_token=ACME_TOKEN,
+            vhosts=conventions.gateway.RESOLVERS,
+            legacy=conventions.gateway.LEGACY_VHOSTS,
+        ),
+        resolvers=tuple(
+            container.ResolverService(service=resolver, pin=pin(resolver)) for resolver in conventions.gateway.RESOLVERS
+        ),
+        overlay_daemon=container.OverlayDaemon(
+            service=conventions.gateway.OVERLAY, pin=pin(conventions.gateway.OVERLAY)
+        ),
+        routing=routing.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
+        keys=(CI_KEY,),
+        site=SITE,
+        worker_gua=None,
+        static_hosts={},
+    )
+
+
 @pytest_asyncio.fixture(scope='module', autouse=True)
 async def gateway(monitor: Controller) -> Gateway:
-    """The whole device, declared once the way the stack program declares it."""
+    """The device every case below reads, declared once."""
     async with declaring():
-        device = Gateway(
-            NAME,
-            host=HOST,
-            caddy=container.CaddyService(
-                service=conventions.gateway.CADDY,
-                pin=pin(conventions.gateway.CADDY),
-                acme_token=ACME_TOKEN,
-                vhosts=conventions.gateway.RESOLVERS,
-                legacy=conventions.gateway.LEGACY_VHOSTS,
-            ),
-            resolvers=tuple(
-                container.ResolverService(service=resolver, pin=pin(resolver))
-                for resolver in conventions.gateway.RESOLVERS
-            ),
-            overlay_daemon=container.OverlayDaemon(
-                service=conventions.gateway.OVERLAY, pin=pin(conventions.gateway.OVERLAY)
-            ),
-            routing=routing.RoutingSession(neighbour=conventions.HOMELAB_NODE_IPV4, password=BGP_PASSWORD),
-            keys=(CI_KEY,),
-            site=SITE,
-            worker_gua=None,
-            static_hosts={},
-        )
+        device = declare(NAME, HOST)
     return device
 
 
@@ -173,6 +177,24 @@ def test_the_gateway_declares_one_machine_per_service_and_nothing_else(monitor: 
 
     assert trees == {nspawn.rootfs_path(service.name) for service in conventions.gateway.SERVICES}
     assert written == {service.name for service in conventions.gateway.SERVICES}
+
+
+@pytest.mark.asyncio
+async def test_an_ipv6_host_is_bracketed_in_the_controller_url_and_an_ipv4_host_is_not(monitor: Controller) -> None:
+    """One value, two spellings: the URL brackets what the SSH session dials bare.
+
+    The stack's `gatewayBootstrapHost` guard admits exactly what `ip_address`
+    parses, which is a bare IPv6 literal and not a bracketed one, so the
+    bracketing has to happen where the URL is built rather than in the value.
+    Both directions are pinned: the brackets appear for a v6 literal, and
+    nothing is added for a v4 one.
+    """
+    async with declaring():
+        _ = declare('v6', '2001:db8::1')
+        _ = declare('v4', '192.0.2.1')
+
+    assert monitor.inputs_of('v6-firewall-unifi', 'pulumi:providers:unifi')['apiUrl'] == 'https://[2001:db8::1]'
+    assert monitor.inputs_of('v4-firewall-unifi', 'pulumi:providers:unifi')['apiUrl'] == 'https://192.0.2.1'
 
 
 def test_the_type_token_the_cutover_targets_by_is_the_one_the_runbook_spells() -> None:
