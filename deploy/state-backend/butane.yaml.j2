@@ -66,6 +66,31 @@ storage:
         inline: |
 {{ server_key | indent(10, true) }}
 
+    # --- The box's SSH identity, minted by the same render (§1) ----------
+    # Delivered rather than generated on the box, so that the launch can
+    # record the public half in the instance's metadata before the box boots
+    # and `state-backend ssh` can refuse anything else: first contact with
+    # this machine is never trust-on-first-use. Fedora CoreOS uses what is
+    # here as-is -- `sshd-keygen@.service` carries
+    # `ConditionFileNotEmpty=|!/etc/ssh/ssh_host_%i_key`, so it runs only for
+    # a key type whose file is missing or empty, and the other types it does
+    # generate are the ones the client is told not to accept.
+    #
+    # The public half is written too, and not because sshd needs it: the
+    # console banner's fingerprints are read from these `.pub` files, and
+    # that banner is the one channel for checking the pin against something
+    # the Ignition never touched.
+    - path: /etc/ssh/ssh_host_ed25519_key
+      mode: 0600
+      contents:
+        inline: |
+{{ ssh_host_key | indent(10, true) }}
+    - path: /etc/ssh/ssh_host_ed25519_key.pub
+      mode: 0644
+      contents:
+        inline: |
+          {{ ssh_host_key_pub }}
+
     # Certificate authentication is the only way in over TCP: a client
     # certificate's CN is the role it becomes. The local socket is trusted
     # because reaching it already means being root on this box — the image's
