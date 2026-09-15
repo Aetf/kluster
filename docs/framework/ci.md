@@ -244,9 +244,9 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     and opens a pull request, and a new year reads as a major and waits
     on the dependency dashboard.
 -   **A bridged-SDK bump is finished on its branch by a workflow, and
-    lands one approval click and one merge later.** The three SDKs
-    under `sdks/` are generated from the `packages:` block of
-    `Pulumi.yaml`, and a test in `checks` holds each committed SDK to
+    lands one approval click later.** The three SDKs under `sdks/` are
+    generated from the `packages:` block of `Pulumi.yaml`, and a test
+    in `checks` holds each committed SDK to
     the block, so a renovate bump of a bridge or provider version is a
     red `checks` until `pulumi install` has regenerated the tree.
     `sdk-regenerate.yml` does that on renovate's branch: it regenerates
@@ -262,15 +262,25 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     write access, starts them (closing and reopening the pull request
     does too, and is the heavier gesture). A `push` made with the token
     still starts nothing, which is the property the unattended merge
-    relies on to start no deploy. From the click on, the ordinary route
-    applies — `classify` refuses candidacy because `Pulumi.yaml` is
-    touched — so the merge is a maintainer's after the checks, and the
-    workflow's comment on the pull request says so. What the
-    previewable stacks could prove about such a bump is nothing in any
-    case: all three SDKs render in `physical`, which has no
-    pull-request preview, so a bump surfaces where every provider-SDK
-    bump does — as a diff in `plan-physical` on `main` (the residual
-    accepted under H3 below).
+    relies on to start no deploy. From the click on, nobody else is
+    needed: `classify` admits `Pulumi.yaml` when the author is
+    `renovate[bot]` and the document with `packages` removed is equal
+    at base and head — compared **parsed**, not by hunk, so a comment
+    and a reordering of keys do not count while an edit to any other
+    key does, `versions:` above all. A person's edit to the recipe is a
+    new provider, a design change, and keeps the human route.
+    `classify` has no checkout and reads both revisions through the
+    API. The admission rests on `checks` rather than on a second
+    judgment of its own: `checks` already holds each `sdks/<name>` to
+    the block and `uv.lock` to the tree, so "regenerated cleanly" is a
+    required check. The bump then takes the proven route like any other
+    — `checks`, `changes`, `classify`, `prove`, `merge` — because what
+    it actually changes, `sdks/` and `uv.lock`, is code. What `prove`
+    can say about such a bump is nothing in any case: the three SDKs
+    render only in `physical`, which has no pull-request preview, so
+    `prove` cannot see a bump's diff, and it surfaces where every
+    provider-SDK bump does — as a diff in `plan-physical` on `main`
+    (the residual accepted under H3 below).
     **The click repeats whenever `main` advances while the bump is
     open.** Renovate's `rebaseWhen: auto` resolves to
     *behind-base-branch* here, because `main`'s protection requires an
@@ -282,23 +292,16 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     would not touch once the workflow committed to it — is a bump that
     goes stale instead, and stays stale on a newer release too, which
     is why the loop is the accepted side.
-    **The unattended route is decided and not built, and it is two
-    slices.** The first is the classifier's: `classify` admitting a
-    `Pulumi.yaml` whose document with `packages` removed is equal at
-    base and head, on renovate's own pull request — a person's edit to
-    the recipe is a new provider, a design change, and keeps the human
-    route — with `checks` already holding `sdks/` to the block. That
-    alone makes a bump one click from `main`: approve, then `checks`,
-    `changes`, `classify`, `prove`, `merge`. It is not a merge route of
-    the regeneration workflow's own, which would be a second copy of
-    `prove` for a proof it cannot improve on. The second removes the
-    click, and with it the loop above: a credential that pushes as
-    something other than `GITHUB_TOKEN` — a GitHub App with
-    `contents: write` on this repository — so that the regeneration's
-    push starts the runs on its own. The trigger App carries
-    `actions: write` alone so that it can start runs and never push
-    code, and adding a pusher is a decision about that partition
-    (credentials.md §3), not a workflow edit.
+    **What is left is the click itself** (kluster-ops#366), and
+    with it the loop above: a credential that pushes as something other
+    than `GITHUB_TOKEN` — a GitHub App with `contents: write` on this
+    repository — so that the regeneration's push starts the runs on its
+    own. The trigger App carries `actions: write` alone so that it can
+    start runs and never push code, and adding a pusher is a decision
+    about that partition (credentials.md §3), not a workflow edit. A
+    merge route of the regeneration workflow's own is not part of it
+    and never was: it would be a second copy of `prove`, for a proof it
+    cannot improve on.
 -   **Plan-pinning (`preview --save-plan` / `up --plan`) is deliberately
     not adopted** initially: it would guarantee merge applies exactly the
     reviewed plan, but adds plan-artifact plumbing and hard-fails on any
@@ -404,18 +407,22 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
     never used): a preview **executes the PR's Python with provider
     credentials**, so who can trigger one is a security boundary, not
     a convenience setting. **noop-automerge's *candidacy* is by path,
-    not by author**: any pull request touching neither `src/` nor
-    `Pulumi.*` is a candidate, which is renovate's lockfile and pin
-    traffic in practice but is not restricted to it — the gate that
-    matters is the zero-diff proof, and an `expect-changes` label opts
-    a pull request out of the whole path. A candidate that touches
+    with one admission that asks who as well**: any pull request
+    touching neither `src/` nor `Pulumi.*` is a candidate, which is
+    renovate's lockfile and pin traffic in practice but is not
+    restricted to it — and so is a renovate bump of `Pulumi.yaml`'s
+    `packages:` block, which is the generator's recipe rather than
+    stack configuration (the bridged-SDK bullet above). The gate that
+    matters is the zero-diff proof either way, and an `expect-changes`
+    label opts a pull request out of the whole path. A candidate that touches
     nothing but documentation, `.vscode/` or `.gitignore` — the same
     deny-list the preview filter uses — **may skip the proof and merge
     on the required checks alone**: no stack program reads those paths,
     so an empty preview of them is a ceremony rather than evidence. That
     reasoning does not retire, because which files a stack program
-    reads is not a phase. **That route, and only that route, also tests
-    the author**: skipping the proof skips the last thing holding a
+    reads is not a phase. **That route tests the author for a
+    reason of its own**: skipping the proof skips the last thing
+    holding a
     documentation change until somebody read it, and dispatch.md §3
     says no pull request merges reviewed by nobody but its author — a
     rule aimed at `AGENTS.md` and `docs/` above all. So it is open to
