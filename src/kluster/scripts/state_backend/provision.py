@@ -40,8 +40,8 @@ from typing import Any, NoReturn, cast
 import oci
 
 from ... import conventions
-from ..credentials import oci_slot
-from . import settings
+from ..credentials import oci_slot, workstation
+from . import config, settings
 
 log = logging.getLogger(__name__)
 
@@ -488,6 +488,40 @@ def reserved_address(clients: OciClients) -> str:
     return str(public_ip.ip_address)
 
 
+def pin_options(known_hosts: Path) -> list[str]:
+    """The `ssh` options that hold a connection to one host key and to nothing else.
+
+    A named list rather than an argument vector built inline, so that a test
+    can drive a real OpenSSH client with the options the tool actually execs
+    with: a second copy written in a test would only ever prove that the copy
+    works.
+
+    Each one is load-bearing:
+
+    -   `UserKnownHostsFile` and `GlobalKnownHostsFile` -- the pin is the only
+        answer this connection accepts, so neither the operator's file nor the
+        machine's can supply a competing entry, and the tool writes neither.
+    -   `StrictHostKeyChecking=yes` -- no trust-on-first-use and no prompt: an
+        unknown or wrong key ends the connection instead of being written down.
+    -   `HostKeyAlgorithms` -- the box also holds the host key types
+        `sshd-keygen` generated for itself, and naming the pinned algorithm is
+        what stops a wrong answer from steering the client onto one of those.
+
+    `CheckHostIP` adds nothing: the connection dials the reserved address
+    literally, and the entry is keyed by it.
+    """
+    return [
+        '-o',
+        f'UserKnownHostsFile={known_hosts}',
+        '-o',
+        'GlobalKnownHostsFile=/dev/null',
+        '-o',
+        'StrictHostKeyChecking=yes',
+        '-o',
+        'HostKeyAlgorithms=ssh-ed25519',
+    ]
+
+
 def ssh(clients: OciClients, command: Sequence[str]) -> NoReturn:
     """Log in to the appliance, or run one command on it.
 
@@ -495,11 +529,30 @@ def ssh(clients: OciClients, command: Sequence[str]) -> NoReturn:
     configured by hand, and the only apply path is re-provision. This exists
     so that reading a log does not start with looking up an address.
 
+    **The host key is pinned, and first contact is not trust-on-first-use.**
+    The pin comes from the running instance's metadata over the authenticated
+    control plane -- the same channel the converge reads the bill of
+    materials from -- and goes into a `known_hosts` file of the tool's own
+    that the client is pointed at exclusively. It is re-read on every exec
+    rather than trusted from disk, which is what makes the check right on a
+    workstation that did not perform the last replace.
+
     Replaces this process rather than wrapping it, so an interactive session
     gets a real terminal and the exit status is ssh's own.
     """
     address = reserved_address(clients)
-    argv = ['ssh', f'core@{address}', *command]
+    pin = host_key_pin(clients)
+    known_hosts = config.write_known_hosts(workstation.bundle_dir(), address=address, public_key=pin)
+    argv = ['ssh', *pin_options(known_hosts), f'core@{address}', *command]
+    # `os.execvp` replaces this process, so what a failure means has to be
+    # said before the connection rather than after it.
+    log.info(
+        'pinning %s to the host key OCI records for the running instance (%s); a refusal means the box '
+        'answering is not the one that metadata describes -- either it was replaced since this read, '
+        'or something is interposed on the path',
+        address,
+        pin,
+    )
     log.info('%s', ' '.join(argv))
     os.execvp('ssh', argv)
 
@@ -635,6 +688,13 @@ DUMP_KEY_METADATA = 'kluster_dump_key_id'
 #: component is re-derived from the repository and compared for equality,
 #: while this one is compared against the clock (`config.renewal_due`).
 EXPIRY_METADATA = 'kluster_server_cert_expiry'
+#: The public half of the SSH host key the Ignition this box booted with
+#: delivered. Beside the digest map for the same reason the expiry is: it is
+#: not compared against the repository but read for its value, here by the one
+#: command that connects to the box over SSH (`ssh`). A launch metadata entry
+#: rather than a constant in `conventions`, because this box is cattle and the
+#: key is a fact about the instance rather than about the repository.
+HOST_KEY_METADATA = 'kluster_ssh_host_key'
 
 
 @dataclass(frozen=True)
@@ -691,21 +751,30 @@ def terminate_instance(clients: OciClients, instance_id: str) -> None:
     )
 
 
-def forget_host_key(address: str) -> None:
-    """Drop the terminated box's host key from the operator's known_hosts.
+def host_key_pin(clients: OciClients) -> str:
+    """The SSH host key the running box was launched holding.
 
-    The address is reserved and the box is cattle, so every replace hands the
-    same address a freshly generated host key -- and ssh, correctly, refuses
-    the next login as a possible man-in-the-middle. The identity that changed
-    is the one this command just destroyed, so forgetting it here is the
-    honest bookkeeping; the alternative is an operator pasting `ssh-keygen -R`
-    from an alarming error message on every re-provision.
+    Read over the signed control plane rather than from the box, which is the
+    whole of its value: it is what the box is about to be checked against, so
+    a copy the box itself supplied would check nothing. Whoever can rewrite it
+    to match a rogue machine is an OCI principal with instance-update on the
+    compartment, which is root-equivalent for this box already (§1).
+
+    A box that records none is refused rather than trusted. Silence is the
+    state the pin exists to rule out, and a box launched before this was
+    recorded is one replace to fix.
     """
-    if shutil.which('ssh-keygen') is None:  # pragma: no cover - ssh is a hard dependency of `ssh`
-        return
-    removal = sp.run(['ssh-keygen', '-R', address], capture_output=True, text=True, timeout=30)
-    if removal.returncode == 0:
-        log.info('removed the old host key for %s from known_hosts', address)
+    instance = find_instance(clients)
+    if instance is None:
+        raise RuntimeError(f'no running {_name("vm")}; has the appliance been provisioned?')
+    metadata: dict[str, Any] = dict(getattr(instance, 'metadata', None) or {})
+    pin = str(metadata.get(HOST_KEY_METADATA) or '')
+    if not pin:
+        raise RuntimeError(
+            f'{_name("vm")} records no SSH host key, so there is nothing to hold the box to: a box built '
+            'before the pin was recorded is replaced with `state-backend provision --replace`'
+        )
+    return pin
 
 
 def ensure_instance(
@@ -718,8 +787,15 @@ def ensure_instance(
     digests: dict[str, str],
     dump_key_id: str,
     server_cert_expiry: str,
+    ssh_host_key_pub: str,
 ) -> str:
-    """Launch the box, or return the one already running."""
+    """Launch the box, or return the one already running.
+
+    `ssh_host_key_pub` must be the public half of the key the `ignition`
+    beside it carries, which is to say both must come from one `config.machine`
+    call: a pin taken from a second render names a key this box was never
+    given, and every later `state-backend ssh` refuses the box it describes.
+    """
     compute = clients.compute
     instance = find_instance(clients)
     if instance is not None:
@@ -750,6 +826,7 @@ def ensure_instance(
                     CONFIG_METADATA: json.dumps(digests, sort_keys=True),
                     DUMP_KEY_METADATA: dump_key_id,
                     EXPIRY_METADATA: server_cert_expiry,
+                    HOST_KEY_METADATA: ssh_host_key_pub,
                 },
                 # Legacy IMDS serves the machine config without authentication.
                 instance_options=oci.core.models.InstanceOptions(are_legacy_imds_endpoints_disabled=True),

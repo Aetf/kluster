@@ -11,19 +11,25 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
 import builtins
 import datetime as dt
 import functools
+import gzip
 import importlib
 import importlib.util
 import json
 import logging
+import shutil
 import types
+import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from memory_kit import MemoryKit
 
 from kluster import conventions
@@ -239,7 +245,9 @@ class _Recorder:
         #: before this.
         self.buckets_converged: int = 0
         self.launched_metadata: dict[str, str] = {}
-        self.forgotten: list[str] = []
+        #: Every host-key pin the run placed on this machine, as the address
+        #: it was written against.
+        self.pinned: list[tuple[Path, str, str]] = []
         self.dumped: list[Path] = []
         #: Where each dump was taken from. Unrecorded, `--bundle` could be
         #: dropped on the way down and nothing would notice.
@@ -287,11 +295,25 @@ def _expiry(days: int) -> str:
 FRESH = _expiry(1000)
 
 
-def _built_from(digests: dict[str, str], *, dump_key_id: str = 'key-id', expiry: str = FRESH) -> dict[str, str]:
+#: The public half of the SSH host key a render hands the launch. Written out
+#: rather than minted, because no case below is about the key's contents --
+#: what they are about is that this exact value reaches the launch, the
+#: metadata, and the `known_hosts` file the tool writes.
+PIN = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplefbb1a7'
+
+
+def _built_from(
+    digests: dict[str, str],
+    *,
+    dump_key_id: str = 'key-id',
+    expiry: str = FRESH,
+    host_key: str = PIN,
+) -> dict[str, str]:
     return {
         provision.CONFIG_METADATA: json.dumps(digests, sort_keys=True),
         provision.DUMP_KEY_METADATA: dump_key_id,
         provision.EXPIRY_METADATA: expiry,
+        provision.HOST_KEY_METADATA: host_key,
     }
 
 
@@ -329,12 +351,23 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
             recorder.order.append('terminate')
 
         def launch(
-            *_args: object, digests: dict[str, str], dump_key_id: str, server_cert_expiry: str, **_kwargs: object
+            *_args: object,
+            digests: dict[str, str],
+            dump_key_id: str,
+            server_cert_expiry: str,
+            ssh_host_key_pub: str,
+            **_kwargs: object,
         ) -> str:
             recorder.launched += 1
-            recorder.launched_metadata = _built_from(digests, dump_key_id=dump_key_id, expiry=server_cert_expiry)
+            recorder.launched_metadata = _built_from(
+                digests, dump_key_id=dump_key_id, expiry=server_cert_expiry, host_key=ssh_host_key_pub
+            )
             recorder.order.append('launch')
             return 'ocid1.instance.new'
+
+        def write_known_hosts(directory: Path, *, address: str, public_key: str) -> Path:
+            recorder.pinned.append((directory, address, public_key))
+            return directory / config.KNOWN_HOSTS_FILE
 
         # The session is what the account check reads, so it is the one thing
         # the stand-in has to carry; `conventions` records the same account
@@ -359,12 +392,13 @@ def converge(monkeypatch: pytest.MonkeyPatch) -> Any:
         monkeypatch.setattr(provision, 'find_instance', find)
         monkeypatch.setattr(provision, 'terminate_instance', terminate)
         monkeypatch.setattr(provision, 'ensure_instance', launch)
-        monkeypatch.setattr(provision, 'forget_host_key', recorder.forgotten.append)
         monkeypatch.setattr(provision, 'attach_reserved_ip', _returning(None))
         monkeypatch.setattr(provision, 'wait_for_backend', _returning(True))
         monkeypatch.setattr(cli, '_write_dump', write_dump)
         monkeypatch.setattr(config, 'machine', _returning(object()))
         monkeypatch.setattr(config, 'render_ignition', _returning('ignition'))
+        monkeypatch.setattr(config, 'host_public_key', _returning(PIN))
+        monkeypatch.setattr(config, 'write_known_hosts', write_known_hosts)
         monkeypatch.setattr(config, 'expires_at', _returning(FRESH))
         monkeypatch.setattr(config, 'renewal_due', functools.partial(config.renewal_due, now=NOW))
         monkeypatch.setattr(config, 'digests', _returning(dict(CURRENT)))
@@ -555,8 +589,8 @@ def test_a_seed_for_another_account_is_refused_before_anything_is_created(
 def test_the_converge_hands_the_launch_what_the_box_must_carry(converge: Any) -> None:
     """One half of the loop that lets a box built now read as current later.
 
-    This is the wiring only — that `_provision` computes the three values and
-    passes them down. That the launch then *stores* them is a property of
+    This is the wiring only — that `_provision` computes the values and passes
+    them down. That the launch then *stores* them is a property of
     `ensure_instance`, which this fixture replaces, and has its own test.
     """
     recorder = _Recorder(instance_exists=False)
@@ -566,6 +600,9 @@ def test_the_converge_hands_the_launch_what_the_box_must_carry(converge: Any) ->
     assert provision.instance_config(
         type('Instance', (), {'metadata': recorder.launched_metadata})()
     ) == provision.InstanceConfig(digests=CURRENT, dump_key_id='key-id', server_cert_expiry=FRESH)
+    # Outside `InstanceConfig`, which is what the converge compares: this one
+    # is read for its value, by the one command that connects over SSH.
+    assert recorder.launched_metadata[provision.HOST_KEY_METADATA] == PIN
 
 
 def test_a_drifted_box_is_reported_and_left_standing(converge: Any, caplog: pytest.LogCaptureFixture) -> None:
@@ -905,18 +942,31 @@ def _returning_raise(message: str) -> Callable[..., Any]:
     return stub
 
 
-def test_replacing_forgets_the_destroyed_box_s_host_key(converge: Any) -> None:
-    """The reserved address outlives the box, so ssh sees an identity change.
+def test_a_run_that_built_a_box_leaves_its_pin_beside_the_bundle(converge: Any) -> None:
+    """The operator's next `state-backend ssh` has the answer without a fetch.
 
-    Which it reports as a possible man-in-the-middle -- on a machine the
-    command in front of it just destroyed.
+    The reserved address outlives the box, so a replace hands the same address
+    a different identity. Writing the one this run delivered is what keeps the
+    change from being something an operator has to decide about.
     """
     recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
     converge(recorder)
 
     _ = _run(replace=True)
 
-    assert recorder.forgotten == ['192.0.2.10']
+    assert [(address, public_key) for _directory, address, public_key in recorder.pinned] == [('192.0.2.10', PIN)]
+
+
+def test_a_run_that_built_no_box_writes_no_pin(converge: Any) -> None:
+    # Nothing about the box changed, and `ssh` re-reads the pin from the
+    # instance's metadata on every exec -- so a file written here could only
+    # ever restate what the box already says.
+    recorder = _Recorder(instance_exists=True, metadata=_built_from(CURRENT))
+    converge(recorder)
+
+    assert _run() == 0
+
+    assert recorder.pinned == []
 
 
 def test_the_readiness_probe_closes_its_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1355,6 +1405,7 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box(monkeypatch: pytes
         digests=CURRENT,
         dump_key_id='key-id',
         server_cert_expiry=FRESH,
+        ssh_host_key_pub=PIN,
     )
 
     assert instance_id == 'ocid1.instance.launched'
@@ -1362,6 +1413,7 @@ def test_a_launch_puts_the_whole_bill_of_materials_on_the_box(monkeypatch: pytes
     assert json.loads(metadata[provision.CONFIG_METADATA]) == CURRENT
     assert metadata[provision.DUMP_KEY_METADATA] == 'key-id'
     assert metadata[provision.EXPIRY_METADATA] == FRESH
+    assert metadata[provision.HOST_KEY_METADATA] == PIN
     # And the loop closes: what the launch wrote is what the reader gets back.
     assert provision.instance_config(type('Instance', (), {'metadata': metadata})()) == provision.InstanceConfig(
         digests=CURRENT, dump_key_id='key-id', server_cert_expiry=FRESH
@@ -1444,3 +1496,219 @@ def test_a_certificate_already_dead_says_so() -> None:
 def test_an_expiry_that_is_not_a_date_is_read_as_no_expiry_at_all() -> None:
     # A value nothing can parse is the same evidence as no value: none.
     assert config.renewal_due('the day after tomorrow', now=NOW) is not None
+
+
+# -- the box's SSH identity: minted at render, delivered, pinned at exec ------
+
+needs_butane = pytest.mark.skipif(shutil.which('butane') is None, reason='butane is not on PATH (mise x -- ...)')
+
+#: The address every case in this section renders and dials.
+PINNED_ADDRESS = '192.0.2.10'
+
+HOST_KEY_FILE = '/etc/ssh/ssh_host_ed25519_key'
+
+
+class _Execed(Exception):
+    """What stands in for `os.execvp` never returning."""
+
+
+def _machine() -> config.Machine:
+    roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
+    return config.machine(roots, address=PINNED_ADDRESS, dump_key_id='key-id', dump_key='secret', bucket_id='bucket')
+
+
+def _delivered(ignition: str, path: str) -> tuple[str, int]:
+    """One file the rendered Ignition writes, as its text and its mode.
+
+    Butane encodes an inline file as a `data:` URL and gzips it once it is
+    worth gzipping, so a case that read the JSON straight would be asserting
+    against whichever of the two shapes the value happened to take.
+    """
+    document: Any = json.loads(ignition)
+    for entry in document['storage']['files']:
+        if entry['path'] != path:
+            continue
+        head, _, body = str(entry['contents']['source']).partition(',')
+        raw = base64.b64decode(body) if head.endswith(';base64') else urllib.parse.unquote_to_bytes(body)
+        if entry['contents'].get('compression') == 'gzip':
+            raw = gzip.decompress(raw)
+        return raw.decode(), int(entry['mode'])
+    raise AssertionError(f'the rendered Ignition writes no {path}')
+
+
+def _public_half(private_key: str) -> str:
+    key = serialization.load_ssh_private_key(private_key.encode(), password=None)
+    assert isinstance(key, Ed25519PrivateKey)
+    return (
+        key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH,
+        )
+        .decode()
+    )
+
+
+def test_the_host_key_minted_at_every_render_is_not_drift() -> None:
+    """Otherwise every converge would report drift and ask to replace the box.
+
+    The key is random per render like the server key beside it, so digesting
+    its value would make the bill of materials describe the render rather than
+    the machine -- and a converge that always finds drift is a converge that
+    always rebuilds.
+    """
+    roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
+    ask = functools.partial(config.digests, roots, address=PINNED_ADDRESS, dump_key_id='key-id', bucket_id='bucket')
+
+    assert config.drift(ask(), ask()) == []
+
+
+@needs_butane
+def test_the_ignition_delivers_the_host_key_the_machine_carries() -> None:
+    """The box gets its identity from the render rather than generating one.
+
+    Which is what lets the launch record a pin for a box that has not booted
+    yet. The public half rides along because the console banner's fingerprints
+    are read from the `.pub` file, and that banner is the one way to check the
+    pin against something the Ignition never touched.
+    """
+    built = _machine()
+
+    ignition = config.render_ignition(built)
+
+    private_key, mode = _delivered(ignition, HOST_KEY_FILE)
+    # The file, not the value: an OpenSSH private key file ends in a newline.
+    assert private_key == built.ssh_host_key + '\n'
+    assert mode == 0o600
+    public_key, public_mode = _delivered(ignition, f'{HOST_KEY_FILE}.pub')
+    assert public_key.strip() == config.host_public_key(built)
+    assert public_mode == 0o644
+
+
+@needs_butane
+def test_the_pin_the_launch_records_is_the_key_the_ignition_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pin from a second render is a box locked out of its own diagnosis path.
+
+    Both facts have to come off one `config.machine` call: the Ignition
+    carries the private half, the launch metadata carries the public one, and
+    nothing downstream can tell a pin on the wrong key from an interposer.
+    """
+    monkeypatch.setattr(provision, 'ensure_image', _returning('image'))
+    # Which availability domain offers the shape is a question for OCI.
+    monkeypatch.setattr(provision, '_shape_domain', _returning('phx-ad-1'))
+    compute = _Compute()
+    clients = cast('Any', type('Clients', (), {'compute': compute, 'compartment_id': 'ocid1.compartment.test'})())
+    roots = config.Roots(ca=pki.Authority.from_pem(pki.generate_ca_key()), age_recipients=('age1example',))
+
+    launched = cli._launch_box(  # pyright: ignore[reportPrivateUsage]
+        clients,
+        roots,
+        dump_key=b2.AppKey(key_id='key-id', key='key-secret'),
+        placement=provision.Placement(vcn_id='vcn', subnet_id='subnet'),
+        nsg_id='nsg',
+        reserved=provision.ReservedAddress(id='ip-id', address=PINNED_ADDRESS),
+        bucket_id='bucket-id',
+    )
+
+    metadata = cast('dict[str, str]', compute.launched.metadata)
+    private_key, _mode = _delivered(base64.b64decode(metadata['user_data']).decode(), HOST_KEY_FILE)
+
+    assert metadata[provision.HOST_KEY_METADATA] == _public_half(private_key)
+    assert launched.host_public_key == _public_half(private_key)
+
+
+def _running(pin: str) -> Any:
+    """A compartment holding the appliance, at the address every case dials."""
+    instance = type(
+        'Instance',
+        (),
+        {
+            'display_name': f'{settings.NAME}-vm',
+            'lifecycle_state': 'RUNNING',
+            'metadata': {provision.HOST_KEY_METADATA: pin} if pin else {},
+        },
+    )()
+    return cast(
+        'Any',
+        type(
+            'Clients',
+            (),
+            {
+                'compute': _PagedCompute([[instance]]),
+                'network': _Network([_ip(f'{settings.NAME}-ip', PINNED_ADDRESS)]),
+                'compartment_id': 'ocid1.compartment.test',
+            },
+        )(),
+    )
+
+
+@pytest.fixture
+def execed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[list[str]]:
+    """`ssh` argv instead of an `ssh` process, with the slot under `tmp_path`."""
+    captured: list[list[str]] = []
+
+    def execvp(file: str, args: Sequence[str]) -> None:
+        assert file == 'ssh'
+        captured.append(list(args))
+        raise _Execed
+
+    monkeypatch.setattr(provision.os, 'execvp', execvp)
+    monkeypatch.setattr(workstation, 'directory', lambda: tmp_path / '.credentials')
+    return captured
+
+
+def test_ssh_holds_the_box_to_the_key_its_instance_metadata_records(execed: list[list[str]], tmp_path: Path) -> None:
+    """First contact is not trust-on-first-use: a wrong answer is refused.
+
+    Every option here is load-bearing. Without the strict setting the client
+    accepts an unknown key and writes it down; without a file of its own it
+    would consult whatever this machine already trusts; without the algorithm
+    the box's other host key types are answers the pin does not cover.
+    """
+    with pytest.raises(_Execed):
+        provision.ssh(_running(PIN), ['journalctl', '-u', 'postgres'])
+
+    argv = execed[0]
+    options = [argv[index + 1] for index, token in enumerate(argv) if token == '-o']
+    assert 'StrictHostKeyChecking=yes' in options
+    assert 'GlobalKnownHostsFile=/dev/null' in options
+    assert 'HostKeyAlgorithms=ssh-ed25519' in options
+    assert argv[-4:] == ['core@192.0.2.10', 'journalctl', '-u', 'postgres']
+
+    named = [option.removeprefix('UserKnownHostsFile=') for option in options if 'UserKnownHostsFile=' in option]
+    assert len(named) == 1
+    known_hosts = Path(named[0])
+    # The tool's own file, in the slot that holds this box's client bundle --
+    # never the operator's, which the tool neither reads nor writes.
+    assert known_hosts == tmp_path / '.credentials' / 'state-backend' / config.KNOWN_HOSTS_FILE
+    assert known_hosts.read_text() == f'{PINNED_ADDRESS} {PIN}\n'
+
+
+def test_the_refusal_is_framed_before_the_connection_is_made(
+    execed: list[list[str]], caplog: pytest.LogCaptureFixture
+) -> None:
+    """`os.execvp` replaces the process, so afterwards there is nobody to explain.
+
+    And the explanation has two halves that lead to different actions: the box
+    was replaced since the pin was read, or something is interposed on the
+    path. A line naming only one of them sends the reader down one of them.
+    """
+    caplog.set_level(logging.INFO)
+
+    with pytest.raises(_Execed):
+        provision.ssh(_running(PIN), [])
+
+    framing = [message for message in caplog.messages if 'interposed' in message]
+    assert len(framing) == 1
+    assert 'replaced' in framing[0]
+    assert PIN in framing[0]
+
+
+def test_a_box_that_records_no_host_key_is_refused_rather_than_trusted() -> None:
+    """Silence is the state the pin exists to rule out.
+
+    A box built before the pin was recorded would otherwise fall back to the
+    behaviour this replaced: whatever answers at the address is the box.
+    """
+    with pytest.raises(RuntimeError, match='records no SSH host key'):
+        _ = provision.host_key_pin(_running(''))

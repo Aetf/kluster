@@ -17,6 +17,7 @@ import logging
 import sys
 import tempfile
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from kluster.conventions import CompartmentMissing
@@ -252,6 +253,19 @@ def _rebuild_reasons(
     return reasons
 
 
+@dataclass(frozen=True)
+class LaunchedBox:
+    """The box a launch created, and the SSH identity it was built with.
+
+    The pin travels with the instance id because it is only worth anything as
+    the public half of the key that same render delivered: carried apart, the
+    file this run writes could describe a different box.
+    """
+
+    instance_id: str
+    host_public_key: str
+
+
 def _launch_box(
     clients: provision.OciClients,
     roots: config.Roots,
@@ -261,8 +275,8 @@ def _launch_box(
     nsg_id: str,
     reserved: provision.ReservedAddress,
     bucket_id: str,
-) -> str:
-    """Render this commit's machine around `dump_key` and launch it. Returns the instance id.
+) -> LaunchedBox:
+    """Render this commit's machine around `dump_key` and launch it.
 
     The push half of the dump key's delivery: the key's only consumer is the
     box, and the box comes into being holding it, because B2 discloses an
@@ -270,9 +284,11 @@ def _launch_box(
     handed one afterwards.
     """
     log.info('rendering the Ignition config for %s', reserved.address)
-    # One machine, rendered once: the Ignition the box boots with and the
-    # expiry recorded beside it have to describe the same certificate, and
-    # a second `config.machine` call would issue a second one.
+    # One machine, rendered once: three facts about the box have to come from
+    # the same render. The Ignition it boots with, the expiry recorded beside
+    # it, and the SSH host key recorded beside that -- a second
+    # `config.machine` call would issue a second certificate and mint a second
+    # host key, and the box would be pinned to a key it never held.
     built = config.machine(
         roots,
         address=reserved.address,
@@ -281,10 +297,11 @@ def _launch_box(
         bucket_id=bucket_id,
     )
     ignition = config.render_ignition(built)
+    host_public_key = config.host_public_key(built)
     log.info('[6/7] converging the custom image — a release not imported yet takes the better part of an hour')
     image_id = provision.ensure_image(clients)
     log.info('[7/7] launching the instance')
-    return provision.ensure_instance(
+    instance_id = provision.ensure_instance(
         clients,
         subnet_id=placement.subnet_id,
         nsg_id=nsg_id,
@@ -293,7 +310,9 @@ def _launch_box(
         digests=config.digests(roots, address=reserved.address, dump_key_id=dump_key.key_id, bucket_id=bucket_id),
         dump_key_id=dump_key.key_id,
         server_cert_expiry=config.expires_at(built),
+        ssh_host_key_pub=host_public_key,
     )
+    return LaunchedBox(instance_id=instance_id, host_public_key=host_public_key)
 
 
 def _provision(
@@ -352,6 +371,8 @@ def _provision(
     # instruction. `None` covers both the run that destroyed nothing and the
     # `--no-dump` run, which have different last words.
     taken: Path | None = None
+    #: The box this run launched, or None on the run that left one standing.
+    launched: LaunchedBox | None = None
     # Set the moment the old box starts going away, not when the decision is
     # made: everything after that point owes the operator the closing
     # instruction, including the paths that raise. The `finally` below is what
@@ -383,7 +404,6 @@ def _provision(
                 log.warning('replacing %s — 5432 goes away until the new box answers', existing.id)
                 destroyed = True
                 provision.terminate_instance(clients, str(existing.id))
-                provision.forget_host_key(reserved.address)
             # Minting is deliberately on this side of the branch. B2 returns an
             # application key's secret once, so the box's copy cannot be read back
             # and re-used, and minting a replacement revokes what the box is
@@ -396,7 +416,7 @@ def _provision(
             # `deliver` and the predecessor is retired only once the box holding
             # the successor exists -- the order every mint in that package has
             # (`credentials/delivery.py`).
-            _, instance_id = pending.deliver(
+            _, launched = pending.deliver(
                 lambda dump_key: _launch_box(
                     clients,
                     roots,
@@ -407,11 +427,20 @@ def _provision(
                     bucket_id=bucket_id,
                 )
             )
+            instance_id = launched.instance_id
         provision.attach_reserved_ip(clients, instance_id=instance_id, public_ip_id=reserved.id)
 
         slot = workstation.bundle_dir()
         config.write_client_bundle(config.client_bundle(roots.ca, name='operator', address=reserved.address), slot)
         log.info('operator certificate bundle written to %s', slot)
+        if launched is not None:
+            # The pin for the box this run built, placed where
+            # `state-backend ssh` reads it, so the first diagnosis after a
+            # replace needs no fetch of its own. A run that launched nothing
+            # writes none: the box did not change, and `ssh` re-reads the pin
+            # from the instance's metadata on every exec regardless.
+            known_hosts = config.write_known_hosts(slot, address=reserved.address, public_key=launched.host_public_key)
+            log.info('host key pin for %s written to %s', reserved.address, known_hosts)
 
         if not provision.wait_for_backend(reserved.address):
             log.error(
