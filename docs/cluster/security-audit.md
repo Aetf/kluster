@@ -303,6 +303,24 @@ root. The host key is pinned, as a constant in `conventions` rather
 than a configuration secret: a public key is not one, and a pin a
 preview shows is a pin a reviewer can check. *Lives in* physical.md §4.
 
+### L4.1 — first contact is never trust-on-first-use
+
+L4 above is one instance of a rule, and the rule is what the next SSH
+channel should inherit rather than decide again: **any SSH session this
+repository's code opens to a machine this repository provisions
+verifies the host key against a value obtained over a channel the
+session itself is not, and refuses anything else. No such session
+accepts a key it is seeing for the first time, and none of them writes
+the operator's `known_hosts`.** What differs between channels is where
+that value travels, and that follows from what the machine is. A pet's
+key identity is a fact of the repository and rides in `conventions`,
+where a preview shows it and a reviewer checks it (L4). Cattle's is a
+fact about an instance, so it rides in that instance's launch metadata,
+read back over the provider's signed API — which is what the
+state-backend appliance does, minting the key in the same render that
+writes the Ignition delivering it. *Lives in* physical/state-backend.md
+§1.
+
 ### L5 — Confine CI ZeroTier members by tag
 
 A leaked CI join credential otherwise joins the home network with

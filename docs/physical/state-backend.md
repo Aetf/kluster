@@ -62,11 +62,7 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     finding an IP. Note the key set is
     `deploy/state-backend/operator-keys.txt`: a workstation whose key
     is not in it cannot reach the box at all, which is a re-provision
-    to fix, not an `ssh-copy-id`. The address is reserved, and the box
-    is cattle, so each replace gives the same address a new host key
-    and ssh reports a possible man-in-the-middle; the replace path
-    therefore drops the destroyed box's key from `known_hosts` itself.
-    The
+    to fix, not an `ssh-copy-id`. The
     no-drift rule is what makes "the repo describes the box" true. What
     tests that claim today is a converge an operator runs by hand, which
     compares the box's bill of materials against the commit (below);
@@ -74,6 +70,49 @@ oraclecloud`, x86_64), the qcow2 imports as a custom image
     provisioning a scratch box from the same commit, and is not built —
     the ops repository carries no workflows, so no pass of it has
     happened.
+-   **First contact with the box is not trust-on-first-use.** The
+    address is reserved, and the box is cattle, so every replace hands
+    the same address a machine with a different SSH identity — and the
+    one machine whose compromise reaches every stack's state is the
+    last place to answer that with "type yes". So the identity is
+    minted rather than discovered: the `config.machine` call that
+    produces the Ignition mints an ed25519 host key as one more field
+    of the render, the Ignition delivers it as
+    `/etc/ssh/ssh_host_ed25519_key`, and the launch records its public
+    half in the instance's metadata beside the digest map. Fedora
+    CoreOS uses a delivered key as it stands — `sshd-keygen@.service`
+    runs only for a key type whose file is missing or empty — so
+    nothing on the box overwrites it.
+    Both facts must come from **one** render, which is why the
+    Ignition and the pin are taken from the same `Machine`: a pin
+    minted by a second call names a key the box was never given, and
+    every later login refuses the box it describes.
+-   **`state-backend ssh` reads the pin back and holds the box to it.**
+    The public half comes from the running instance's metadata over the
+    authenticated OCI control plane — the channel the converge already
+    treats as the one place that cannot drift from the box — and goes
+    into a `known_hosts` file of the tool's own beside the client
+    bundle, which the client is pointed at exclusively and under strict
+    checking. A wrong or unknown key is refused rather than written
+    down. Re-read on every exec rather than trusted from disk, so it is
+    right on a workstation that did not perform the last replace.
+    Because it is read at exec time a refusal cannot mean a stale local
+    file, and the run says both of its readings before it connects: the
+    box was replaced between the read and the dial, or something is
+    interposed on the path. The operator's own `~/.ssh/known_hosts` is
+    neither read nor written, so a bare `ssh core@<address>` outside
+    the tool is unpinned by definition and the answer to it is
+    `state-backend ssh`.
+    Whoever can instead rewrite that metadata to match a rogue box is
+    an OCI principal with instance-update on this compartment, which is
+    root-equivalent for the box already — the same posture "Secrets
+    ride Ignition" rests on, and one the network path adds nothing to.
+    The private half lives in the render and the Ignition and nowhere
+    else: it is escrowed nowhere, because a lost host key orphans
+    nothing and costs one replace, and a per-instance key dies with the
+    instance whose Ignition carried it rather than staying recoverable
+    from every generation's `user_data` forever. Rotating it is
+    `provision --replace`, like the server key beside it.
 -   **The box decides that by carrying its own bill of materials.**
     At launch, the instance's metadata records a digest per component
     of what it was built from — the Butane file, the operator keys,
@@ -640,7 +679,13 @@ failure is cheap:
 4.  **Open the tunnel**: `ssh -L 5432:127.0.0.1:5432 core@<scratch
     address>` with the operator key. The workstation's public key has to
     be in `deploy/state-backend/operator-keys.txt`, which is the file
-    the render put on the box (§1). Where 5432 is taken locally, forward
+    the render put on the box (§1). **This login is trust-on-first-use,
+    on purpose.** The pin of §1 rides an instance launched by
+    `provision`, and this box is launched by hand from a rendered file,
+    so nothing recorded a pin for it; what rides inside the tunnel is
+    libpq under `verify-full` against the escrowed CA, which an
+    interposer does not reach. The tunnel is transport here, not
+    trust. Where 5432 is taken locally, forward
     another port and rewrite it in the bundle's `backend-url` below.
 5.  **Write a scratch client bundle**: `state-backend bundle operator
     --address 127.0.0.1 --directory <scratch>/bundle`. **`--directory`
