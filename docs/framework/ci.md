@@ -177,6 +177,34 @@ weekly  drift.yml:          drift (physical | dns | k8s-base | apps)
                               (workflow_dispatch only, fired from the ops repo)
 ```
 
+-   **The prose gate is what makes `checks` long, and one file per
+    invocation is a measured constraint rather than caution.**
+    `ltex-cli-plus` checks the markdown a pull request changed, one file
+    per invocation under a 120-second bound. A change to the checker or
+    to what it reads — the `mise.toml` pin, either `.vscode/` word list,
+    `checks.yml` itself — is checked against **every** markdown file in
+    the tree instead, so that a bumped checker or a dropped dictionary
+    word is proven against the prose it judges rather than landing for
+    the next change to an affected file to fail on. That whole-tree pass
+    is where the cost sits: a file is five to eight seconds on a
+    workstation and longer on a runner, nearly all of it the checker's
+    startup rather than the document's length, which puts a tree of this
+    size at minutes — and a checker that stalls adds its whole bound on
+    top of that. **Batching is the obvious remedy, and it does not
+    hold.** Four files per invocation runs the tree in a third of the
+    time; eight at once is where the checker stops. Handed the eight
+    that include this repository's two longest documents it makes no
+    further progress and is killed at the bound, while those same eight
+    as two invocations of four finish in under ten seconds each — and
+    other eight-file batches of the same tree pass, so the cliff follows
+    what is in a batch rather than how many files are in it, and no
+    batch size stays safe as documents grow. The serial cost is
+    accepted. What it buys is a bound that fires per file and a log that
+    says so: the step tells `timeout`'s exit 124 from the checker's own
+    exit 3 for findings, and prints the stalled file and the elapsed
+    seconds as an annotation, so a kill names its file the way a finding
+    does.
+
 -   **Merge side runs `up` only — except `physical`, which gets a plan
     job** (2026-08-24, superseding the pure-up shape): for
     dns/k8s-base/apps, `pulumi up --yes` performs its own preview as

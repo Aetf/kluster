@@ -69,9 +69,11 @@ jobs:
       # lists under `.vscode/` become one client configuration (the checker
       # reads neither list on its own, and a reference to a list file is
       # silently dropped, so the words go in whole), and the checker is handed
-      # one file per invocation, because given many at once it hangs rather
-      # than finishing. Only the markdown the event changed is checked -- at
-      # several seconds a file, the whole tree is minutes, and a file the
+      # one file per invocation, because a batch large enough stops making
+      # progress and dies at the bound instead of finishing -- the cost of
+      # the serial form, and why batching is not the way out of it, are in
+      # framework/ci.md §3. Only the markdown the event changed is checked --
+      # at several seconds a file, the whole tree is minutes, and a file the
       # change did not touch says nothing about the change. Deleted files are
       # left out (`--diff-filter=d`) since there is nothing to read.
       #
@@ -123,10 +125,25 @@ jobs:
           # A checker that hangs must fail the step rather than hold the
           # required check pending for the job's six-hour default; a file
           # takes seconds.
+          #
+          # What the kill costs the reader is the file's name: findings carry
+          # their path, a kill carries nothing, and the fold it happened
+          # inside is closed. So the two are told apart by exit code -- 124 is
+          # `timeout`'s and nothing else's -- and the timeout branch prints
+          # the file and the elapsed seconds on one line outside the fold,
+          # as an annotation so it also reaches the run summary. `limit` is
+          # read by the bound and by the message, so the two cannot drift.
+          limit=120
           status=0
           while IFS= read -r file; do
             echo "::group::$file"
-            timeout 120 mise x -- ltex-cli-plus --client-configuration="$config" "$file" || status=$?
+            started=$SECONDS
+            rc=0
+            timeout "$limit" mise x -- ltex-cli-plus --client-configuration="$config" "$file" || rc=$?
             echo '::endgroup::'
+            if [ "$rc" -eq 124 ]; then
+              echo "::error file=$file::ltex-cli-plus timed out on $file after $((SECONDS - started))s (bound ${limit}s)"
+            fi
+            [ "$rc" -eq 0 ] || status=$rc
           done <<<"$files"
           exit "$status"
