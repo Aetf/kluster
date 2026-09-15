@@ -217,9 +217,9 @@ CENSUS: dict[type, Census] = {
     config.ClientBundle: Census('name address ca_cert cert key', secret='key'),
     config.Machine: Census(
         'operator_keys postgres_uid postgres_image database ci_role operator_role ca_cert server_cert '
-        'server_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id b2_prefix '
-        'dump_script dump_schedule reboot_day reboot_time reboot_window_minutes',
-        secret='server_key b2_dump_key',
+        'server_key ssh_host_key age_recipients age_url age_sha256 b2_dump_key_id b2_dump_key b2_bucket_id '
+        'b2_prefix dump_script dump_schedule reboot_day reboot_time reboot_window_minutes',
+        secret='server_key ssh_host_key b2_dump_key',
     ),
     config.Roots: Census('ca age_recipients'),
     ssh.CommandResult: Census('exit_status stdout stderr'),

@@ -22,6 +22,7 @@ from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from kluster.lib import config as lib_config
@@ -45,6 +46,10 @@ CA_FILE = 'ca.crt'
 CERT_FILE = 'client.crt'
 KEY_FILE = 'client.key'
 URL_FILE = 'backend-url'
+#: The tool's own host-key pin, beside the bundle for the same box. Its own
+#: file rather than the operator's `~/.ssh/known_hosts`: nothing but
+#: `state-backend ssh` reads it, and nothing else may write it.
+KNOWN_HOSTS_FILE = 'known_hosts'
 
 #: The libpq variables that carry a bundle's three files. Standard names, read
 #: by libpq itself and by the driver Pulumi's Postgres backend uses, which is
@@ -285,6 +290,13 @@ class Machine:
     #: Random at every issuance (pki.py), so it describes this render rather
     #: than this machine.
     server_key: str = _digested(Digested.NEVER)
+    #: The box's SSH identity, in OpenSSH's own private-key format, minted
+    #: fresh by every render like the server key above and delivered the same
+    #: way. `NEVER` for the same two reasons, and for one more: its public
+    #: half is what `ssh` pins the connection against, and a digest of the
+    #: private one in cloud metadata would buy nothing towards that.
+    #: Rotating it is `provision --replace`.
+    ssh_host_key: str = _digested(Digested.NEVER)
     age_recipients: tuple[str, ...] = _digested()
     age_url: str = _digested()
     age_sha256: str = _digested()
@@ -301,8 +313,20 @@ class Machine:
     reboot_window_minutes: int = _digested()
 
     def parameters(self) -> dict[str, Any]:
-        """The names the Butane template's expressions use."""
-        return {spec.name: getattr(self, spec.name) for spec in fields(self)}
+        """The names the Butane template's expressions use.
+
+        The fields, plus the one value the template needs that is *derived*
+        from a field rather than stored beside it: the host key's public half,
+        which the box carries as `ssh_host_key_pub` so that its fingerprint
+        reaches the console banner. Derived rather than carried, because a
+        second field could hold the public half of a different key than the
+        private one beside it -- and because it is minted per render, so a
+        field would have to be excluded from the digest map by hand
+        (`digests`).
+        """
+        values = {spec.name: getattr(self, spec.name) for spec in fields(self)}
+        values['ssh_host_key_pub'] = host_public_key(self)
+        return values
 
 
 def machine(
@@ -324,6 +348,12 @@ def machine(
     # asking the CA twice would hand the box a certificate its key does not
     # match -- and a box whose TLS key is wrong answers nothing.
     server = roots.ca.issue_server(address, now=now)
+    # The box's SSH identity is minted here rather than generated on the box,
+    # which is what lets the launch record a pin for it before it boots. It is
+    # this render's alone: every caller that needs the public half derives it
+    # from this value (`host_public_key`), so a pin can never describe a key
+    # the box was not given.
+    host_key = Ed25519PrivateKey.generate()
     return Machine(
         operator_keys=operator_keys(),
         postgres_uid=settings.POSTGRES_UID,
@@ -334,6 +364,13 @@ def machine(
         ca_cert=roots.ca.certificate().cert_pem.decode().strip(),
         server_cert=server.cert_pem.decode().strip(),
         server_key=server.key_pem.decode().strip(),
+        ssh_host_key=host_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.OpenSSH,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        .decode()
+        .strip(),
         age_recipients=roots.age_recipients,
         age_url=settings.AGE_URL,
         age_sha256=settings.AGE_SHA256,
@@ -383,6 +420,33 @@ def render_ignition(values: Machine) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f'butane rejected the config:\n{proc.stderr}')
     return proc.stdout
+
+
+def host_public_key(values: Machine) -> str:
+    """The `ssh-ed25519 AAAA...` line for the host key this machine carries.
+
+    What the launch records as the box's pin and what a `known_hosts` entry
+    holds, derived from the private half rather than stored beside it: there
+    is one value, so the pin cannot be the public half of a key the box was
+    never given. A render is the only place both exist at once, which is why
+    this takes the machine rather than building one -- a second `machine`
+    call would mint a second key, and pin the box to the one it did not get.
+
+    The type is checked rather than assumed: `load_ssh_private_key` answers
+    for every algorithm OpenSSH has, and only this one is what the client is
+    told to accept (`provision.ssh`).
+    """
+    key = serialization.load_ssh_private_key(values.ssh_host_key.encode(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise TypeError(f'the machine carries a {type(key).__name__} host key, and ed25519 is what is pinned')
+    return (
+        key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.OpenSSH,
+            format=serialization.PublicFormat.OpenSSH,
+        )
+        .decode()
+    )
 
 
 def expires_at(values: Machine) -> str:
@@ -537,3 +601,22 @@ def write_client_bundle(bundle: ClientBundle, directory: Path) -> None:
     key_path.chmod(0o600)
     _ = (directory / URL_FILE).write_text(bundle.url() + '\n')
     log.info('wrote client bundle to %s', directory)
+
+
+def write_known_hosts(directory: Path, *, address: str, public_key: str) -> Path:
+    """Place the box's host-key pin where `state-backend ssh` reads it.
+
+    One line -- the address the client dials, then the key it must answer
+    with -- in the slot that already holds the client bundle for this box.
+    The file is the tool's own: `ssh` is pointed at it and at nothing else,
+    so the operator's `~/.ssh/known_hosts` is neither read nor written, and
+    an entry some earlier bare login left there decides nothing.
+
+    Rewritten whole rather than appended to. The address is reserved and the
+    box is cattle, so exactly one identity is ever correct for it, and a
+    second line would be a second answer this file accepts.
+    """
+    _ = workstation.secret_dir(directory)
+    path = directory / KNOWN_HOSTS_FILE
+    _ = path.write_text(f'{address} {public_key}\n')
+    return path

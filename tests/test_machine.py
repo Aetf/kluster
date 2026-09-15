@@ -74,13 +74,21 @@ def test_the_dump_key_secret_is_outside_the_bill_of_materials(roots: config.Root
     assert 'b2_dump_key' not in _digests(roots)
 
 
-def test_every_field_but_the_two_secrets_is_compared(roots: config.Roots) -> None:
+def test_every_field_but_the_secrets_is_compared(roots: config.Roots) -> None:
     # Each field declares its own digest treatment, so a field added to the
     # machine is compared unless it says otherwise, and neither a rename nor a
     # new field can quietly drop a component out of the comparison.
     compared = set(_digests(roots)) - {'butane'}
 
-    assert compared == {spec.name for spec in fields(config.Machine)} - {'server_key', 'b2_dump_key'}
+    secrets = {'server_key', 'b2_dump_key', 'ssh_host_key'}
+    assert compared == {spec.name for spec in fields(config.Machine)} - secrets
+
+
+def test_the_ssh_host_key_is_outside_the_bill_of_materials(roots: config.Roots) -> None:
+    # Minted fresh by every render, like the server key: digesting it would
+    # make every converge see drift. What a box is held to is its *public*
+    # half, which the launch records beside the digest map rather than in it.
+    assert 'ssh_host_key' not in _digests(roots)
 
 
 def test_the_certificate_the_box_gets_matches_the_key_it_gets(roots: config.Roots) -> None:
