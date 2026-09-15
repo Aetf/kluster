@@ -1030,9 +1030,7 @@ def _kit(args: argparse.Namespace) -> KdbxStore:
     return KdbxStore.from_env(args.kdbx)
 
 
-def _stack(
-    args: argparse.Namespace, store: KdbxStore, name: str, registry: escrow.Registry | None = None
-) -> pulumi_config.Stack:
+def _stack(args: argparse.Namespace, store: KdbxStore, name: str, registry: escrow.Registry) -> pulumi_config.Stack:
     """The config slot a derived row is pushed into.
 
     Opened with the same two variables a `pulumi` run needs, recovered with the
@@ -1047,9 +1045,10 @@ def _stack(
     consumer (`derived`).
 
     `registry` reaches the escrow the passphrase is recovered from, and is
-    passed by a caller that already holds one so that a run with
-    `--escrow-dir` opens the directory it was pointed at rather than the
-    default beside it.
+    required rather than defaulted: every caller already holds the one
+    `--escrow` named, and a signature that let one be left out would open the
+    checkout's own `escrow/` instead of the directory the run was pointed at,
+    silently and only for the commands that forgot.
     """
     return pulumi_config.Stack(
         name=name,
@@ -1281,15 +1280,15 @@ def main(argv: list[str] | None = None) -> int:
             # The minted rows, one command per row (`_stack` is the slot most
             # of them are pushed into).
             case ('derived', derived.ZONES_ROW, 'mint'):
-                derived.cloudflare_zones(store, stack=_stack(args, store, args.stack), seed_entry=args.entry)
+                derived.cloudflare_zones(store, stack=_stack(args, store, args.stack, registry), seed_entry=args.entry)
             case ('derived', derived.GATEWAY_ACME_ROW, 'mint'):
                 _ = derived.cloudflare_gateway_acme(
-                    store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry
+                    store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry
                 )
             case ('derived', derived.OCI_PHYSICAL_ROW, 'mint'):
                 _ = derived.oci_physical(
                     store,
-                    stack=_stack(args, store, derived.PHYSICAL_STACK),
+                    stack=_stack(args, store, derived.PHYSICAL_STACK, registry),
                     compartment_id=args.compartment,
                     seed_entry=args.entry,
                 )
@@ -1300,7 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
                 _ = derived.oci_state_backend(store, compartment_id=args.compartment, seed_entry=args.entry)
             case ('derived', derived.B2_MANAGEMENT_ROW, 'mint'):
                 _ = derived.b2_management(
-                    store, stack=_stack(args, store, derived.PHYSICAL_STACK), seed_entry=args.entry
+                    store, stack=_stack(args, store, derived.PHYSICAL_STACK, registry), seed_entry=args.entry
                 )
             # The device rows: no mint, so the command is the console steps
             # plus the push. Which stack takes it comes from the row rather
@@ -1310,7 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
                 device = devices.DEVICES[member]
                 _ = devices.deliver(
                     device,
-                    stack=_stack(args, store, device.stack),
+                    stack=_stack(args, store, device.stack, registry),
                     given={field.name: getattr(args, field.dest) for field in device.fields},
                 )
             # The escrowed rows. generate -> escrow -> push: the value reaches

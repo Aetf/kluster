@@ -16,11 +16,17 @@ identifier is that row name with `_` for `-`. A row's `repair` action is the one
 derived — it exists for one row and does one thing — so it is named here, and
 the walk still proves it is reachable. The handlers themselves are stubbed; what is under test
 is the dispatch, not what the dispatch calls.
+
+The same walk carries a second property: the global `--escrow` reaches every
+command that opens an escrow. Which those are is read off the handlers'
+signatures rather than listed, so neither half of that census is a list of
+names anyone has to keep.
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import io
 import types
 from collections.abc import Callable, Iterator
@@ -175,6 +181,10 @@ class Dispatch:
     def __init__(self) -> None:
         self.reached: list[str] = []
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+        #: The real signature of each handler, taken before it is replaced, so
+        #: that what a stub was handed can be read by parameter name rather
+        #: than by position.
+        self.signatures: dict[str, inspect.Signature] = {}
 
     def stub(self, name: str, result: Any = None) -> Callable[..., Any]:
         def record(*args: Any, **kwargs: Any) -> Any:
@@ -183,6 +193,27 @@ class Dispatch:
             return result
 
         return record
+
+    def registries(self, calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]]) -> list[tuple[str, Any]]:
+        """The escrow each of these calls was handed, by handler name.
+
+        Which handlers open an escrow is read off their own signatures rather
+        than listed here: the directory `--escrow` names travels as a
+        parameter called `registry`, so a handler that has one is a handler
+        the census below covers, and one written later is covered with it.
+        Defaults are applied, because a caller that passes nothing is exactly
+        the failure the census exists to catch — it reads as `None`, which is
+        the handler's own instruction to open the checkout's `escrow/`.
+        """
+        given: list[tuple[str, Any]] = []
+        for name, args, kwargs in calls:
+            signature = self.signatures[name]
+            if 'registry' not in signature.parameters:
+                continue
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            given.append((name, bound.arguments['registry']))
+        return given
 
     def install(self, monkeypatch: pytest.MonkeyPatch, kit: KdbxStore) -> None:
         handlers: tuple[tuple[types.ModuleType, str, Any], ...] = (
@@ -225,10 +256,16 @@ class Dispatch:
         )
         for module, attribute, result in handlers:
             name = f'{module.__name__.rsplit(".", 1)[-1]}.{attribute}'
+            self.signatures[name] = inspect.signature(getattr(module, attribute))
             monkeypatch.setattr(module, attribute, self.stub(name, result))
         # A vault that opens nothing: what is under test is the dispatch, and
         # a real one would want a real recovery key.
+        self.signatures['store.get'] = inspect.signature(KdbxStore.get)
         monkeypatch.setattr(KdbxStore, 'get', self.stub('store.get', 'a-secret'))
+        # The underlying function rather than the bound classmethod, because
+        # the stub replacing it is bound the same way and so is recorded with
+        # `cls` among its arguments.
+        self.signatures['escrow.Vault.open'] = inspect.signature(cli.escrow.Vault.__dict__['open'].__func__)
         monkeypatch.setattr(cli.escrow.Vault, 'open', classmethod(self.stub('escrow.Vault.open', _Vault())))
         methods: tuple[tuple[str, Any], ...] = (
             ('entries', []),
@@ -238,12 +275,15 @@ class Dispatch:
             ('unlock_with', None),
         )
         for attribute, result in methods:
+            self.signatures[f'store.{attribute}'] = inspect.signature(getattr(KdbxStore, attribute))
             monkeypatch.setattr(KdbxStore, attribute, self.stub(f'store.{attribute}', result))
         # `kit rotate` creates the successor database, and `kit bootstrap`
         # creates the kit when there is none; neither should write a file here.
         # Opening is recorded too, so that which of the two `rotate`'s
         # destination reaches can be told apart.
+        self.signatures['store.create'] = inspect.signature(KdbxStore.create)
         monkeypatch.setattr(KdbxStore, 'create', self.stub('store.create', kit))
+        self.signatures['store.from_env'] = inspect.signature(KdbxStore.from_env)
         monkeypatch.setattr(KdbxStore, 'from_env', self.stub('store.from_env', kit))
         monkeypatch.setattr('getpass.getpass', lambda _prompt='': PASSWORD)
         # `derived <row> recover` refuses to print a secret to a terminal,
@@ -561,3 +601,34 @@ def test_seed_create_dispatches_the_row_the_member_names(dispatch: Dispatch) -> 
     assert not rest
     assert args[0] is entries.SEEDS['oci']
     assert kwargs['entry'] == entries.SEEDS['oci'].entry
+
+
+def test_every_command_that_opens_an_escrow_opens_the_one_it_was_pointed_at(
+    dispatch: Dispatch, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--escrow` sits in front of every subject, so it has to reach all of them.
+
+    A census over the parser's leaves rather than over a list of the commands
+    that open one: a command that opens the escrow without carrying the
+    registry there reads the checkout's own `escrow/` while the operator is
+    pointed at a second tree, silently and only for that command. The walk is
+    what makes a subcommand written later hold to this without anyone editing
+    this file.
+    """
+    elsewhere = tmp_path / 'second-tree' / 'escrow'
+    pointed_at = escrow.Registry(root=elsewhere)
+
+    opened: list[tuple[str, str, Any]] = []
+    for argv in commands():
+        # Each leaf gets the pipe of its own that the parametrized walk gets
+        # from its fixture: a row whose value is read from standard input
+        # reaches nothing once an earlier command has drained it.
+        monkeypatch.setattr('sys.stdin', io.StringIO('a-value'))
+        seen = len(dispatch.calls)
+        _ = cli.main(['--escrow', str(elsewhere), *argv])
+        opened.extend((' '.join(argv), name, registry) for name, registry in dispatch.registries(dispatch.calls[seen:]))
+
+    # A census that reached no such handler at all would hold nothing while
+    # still passing, which is the one way this stops being a property.
+    assert opened
+    assert opened == [(command, name, pointed_at) for command, name, _ in opened]
