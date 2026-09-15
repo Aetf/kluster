@@ -498,6 +498,24 @@ def pin_options(known_hosts: Path) -> list[str]:
 
     Each one is load-bearing:
 
+    -   `-F /dev/null` -- **no client configuration participates in this
+        connection at all.** The cut is stated that way rather than as a list
+        of directives to fear, because suppressing the two known-hosts files
+        alone leaves the rest of `ssh_config` in force and two of its
+        directives defeat the pin outright. `ControlMaster`/`ControlPath`:
+        one bare `ssh core@<address>` outside the tool -- the mistake the
+        runbook already anticipates -- leaves a multiplexing master, and a
+        later pinned exec that sees the same configuration attaches to that
+        socket and runs *with no host-key verification performed at all*.
+        `KnownHostsCommand`: a command the configuration names supplies
+        trusted keys, and its answer is accepted alongside the pinned file.
+        `-F` suppresses the system-wide configuration as well as the user's,
+        which is what makes this a cut rather than an enumeration: every
+        directive not on this command line is back at its default. That is
+        the cost too: conveniences an operator keeps in `ssh_config` --
+        `IdentityFile`, `ProxyJump`, `ServerAliveInterval` -- do not apply
+        here either, so anything this connection needs is named on the
+        command line or it does not happen.
     -   `UserKnownHostsFile` and `GlobalKnownHostsFile` -- the pin is the only
         answer this connection accepts, so neither the operator's file nor the
         machine's can supply a competing entry, and the tool writes neither.
@@ -511,6 +529,8 @@ def pin_options(known_hosts: Path) -> list[str]:
     literally, and the entry is keyed by it.
     """
     return [
+        '-F',
+        '/dev/null',
         '-o',
         f'UserKnownHostsFile={known_hosts}',
         '-o',
@@ -533,8 +553,9 @@ def ssh(clients: OciClients, command: Sequence[str]) -> NoReturn:
     The pin comes from the running instance's metadata over the authenticated
     control plane -- the same channel the converge reads the bill of
     materials from -- and goes into a `known_hosts` file of the tool's own
-    that the client is pointed at exclusively. It is re-read on every exec
-    rather than trusted from disk, which is what makes the check right on a
+    that the client is pointed at exclusively, with no client configuration
+    of any kind in force (`pin_options`). It is re-read on every exec rather
+    than trusted from disk, which is what makes the check right on a
     workstation that did not perform the last replace.
 
     Replaces this process rather than wrapping it, so an interactive session

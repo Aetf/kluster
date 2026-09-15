@@ -1663,12 +1663,16 @@ def test_ssh_holds_the_box_to_the_key_its_instance_metadata_records(execed: list
     Every option here is load-bearing. Without the strict setting the client
     accepts an unknown key and writes it down; without a file of its own it
     would consult whatever this machine already trusts; without the algorithm
-    the box's other host key types are answers the pin does not cover.
+    the box's other host key types are answers the pin does not cover; and
+    without `-F /dev/null` the client still reads a configuration whose
+    `ControlMaster` or `KnownHostsCommand` decides the question instead
+    (`test_ssh_pin.py` holds that one against a live client).
     """
     with pytest.raises(_Execed):
         provision.ssh(_running(PIN), ['journalctl', '-u', 'postgres'])
 
     argv = execed[0]
+    assert argv[argv.index('-F') + 1] == '/dev/null'
     options = [argv[index + 1] for index, token in enumerate(argv) if token == '-o']
     assert 'StrictHostKeyChecking=yes' in options
     assert 'GlobalKnownHostsFile=/dev/null' in options
