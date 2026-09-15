@@ -84,10 +84,16 @@ that can root the gateway is not the frictionless-apps layer). PRs get
 no physical preview at all. Previews run only for same-repo branches
 (`pull_request`, never `pull_request_target`; fork PRs get no
 secrets). noop-automerge merges unattended only a pull request that
-touches neither `src/` nor `Pulumi.*`, and only behind a zero-diff
-preview on every stack a pull request previews (`dns`, `k8s-base`,
-`apps`); `physical` is proven only after the merge, in `plan-physical`
-(Residual below). The one class that skips that proof is a change no
+touches neither `src/` nor `Pulumi.*`, with one admission: a renovate
+bump of `Pulumi.yaml`'s `packages:` block, which is the bridged-SDK
+generator's recipe rather than stack configuration and no stack
+program's input. That one tests the author as well as the path — it
+asks for `renovate[bot]` and for a document that is equal at base and
+head once `packages` is removed — and ci.md §3 is where it is stated.
+A candidate merges either way only behind a zero-diff preview on every
+stack a pull request previews (`dns`, `k8s-base`, `apps`); `physical`
+is proven only after the merge, in `plan-physical` (Residual below).
+The one class that skips that proof is a change no
 stack program reads (documentation, `.vscode/`, `.gitignore`) opened by
 renovate itself, which has no rendering for a preview to compare, and a
 fork's pull request is refused by name. Secret scanning + push

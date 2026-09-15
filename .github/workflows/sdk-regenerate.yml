@@ -21,13 +21,14 @@ name: sdk-regenerate
 # starts nothing, which is the property the unattended merge relies on to
 # start no deploy.)
 #
-# **After the click, the ordinary route applies.** `classify` refuses
-# candidacy because `Pulumi.yaml` is touched, so the merge is a maintainer's
-# after the checks; the comment this workflow leaves says so. What removes
-# the manual merge is an admission in `classify` for a `Pulumi.yaml` changed
-# only in `packages:` on renovate's own pull request; what removes the click
-# is a credential that pushes as something other than `GITHUB_TOKEN`. Both
-# are decided and neither is built here (ci.md §3).
+# **After the click, nothing further is asked of anyone.** A bump that leaves
+# `Pulumi.yaml` changed only in `packages:` is a noop-automerge candidate on
+# renovate's own pull request, so it merges unattended once its runs have
+# started and gone green; `noop-automerge.yml` is where that is decided and
+# ci.md §3 is where the rule is stated. The comment this workflow leaves says
+# as much, which is why the click is the one thing it asks for. What removes
+# the click is a credential that pushes as something other than
+# `GITHUB_TOKEN` -- decided and not built (ci.md §3).
 #
 # **Recognised by outcome, not by parsing.** The block is regenerated whenever
 # a renovate branch touches `Pulumi.yaml` at all, and a regeneration that
@@ -168,6 +169,6 @@ jobs:
           cat > "$RUNNER_TEMP/comment.md" <<EOF
           Regenerated \`sdks/\` from the \`packages:\` block and pushed $(cat "$RUNNER_TEMP/pushed"); the gate passed on that tree in [this run]($RUN_URL).
 
-          The push was made with the workflow token, so that head's runs wait for approval: select **Approve workflows to run** in the merge box to start them. \`classify\` then refuses candidacy because \`Pulumi.yaml\` is touched, and the merge is yours once the checks are green (framework/ci.md §3).
+          The push was made with the workflow token, so that head's runs wait for approval: select **Approve workflows to run** in the merge box to start them. That click is the only thing this bump still needs from a person: a \`Pulumi.yaml\` changed only in \`packages:\` on a renovate pull request is a noop-automerge candidate, so once the required checks and the zero-diff proof are green it merges on its own (framework/ci.md §3). If either goes red the merge is yours, on a run that says why.
           EOF
           gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"
